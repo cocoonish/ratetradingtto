@@ -343,7 +343,7 @@ def test_each_calculator_has_one_home():
     assert [s["id"] for s in by["calc"]["sections"]] == ["conv", "pos", "bond"] and by["calc"]["sections"][0]["panels"][0] == "B7"
     # the quote matrices: the Forward page's own sheet now, a summary (borrowed) on the desk page
     kot = next(s for s in by["forward"]["sections"] if s["id"] == "kot")
-    assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF6"]
+    assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF8", "EKF6", "EKF9"]
     assert not any(p.get("sheet") == "EK_FWD" and not p.get("borrowed") for p in by["masa"]["panels"])
     eks = panel("masa", "EKS")
     assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A2:N14"       # (row 2: the matrix's curve)

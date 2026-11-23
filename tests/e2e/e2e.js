@@ -2026,8 +2026,8 @@ async function clipAfter(page, action) {
     await stripCols(13);
     await open(page, 'forward');
     await tab(page, 'kot');
-    check('the forward quote matrices: USDTRY, EURTRY, then the way back of each - the Forward page\'s "Kotasyon" tab',
-      await order(['EKF1', 'EKF5', 'EKF2', 'EKF6']));
+    check('the forward quote matrices: USDTRY, EURTRY, then the ways back of each (by points, by a rate) - the Forward page\'s "Kotasyon" tab',
+      await order(['EKF1', 'EKF5', 'EKF2', 'EKF8', 'EKF6', 'EKF9']));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('... and the desk\'s TRY rate is the matrix\'s OIS + the spread (1M bid: OIS − 150 bp)', Math.abs(tryBidDesk - (ois1m - 1.5)) < 0.011,
       { tryBidDesk, ois1m });
@@ -2055,6 +2055,14 @@ async function clipAfter(page, action) {
     await typeInto(page, 'EK_FWD!D20', pts);
     await waitCell(page, 'EK_FWD!K20', 't.trim() !== ""');
     check('points typed by hand show their spread over OIS', Math.abs(trNumber(await cellText(page, 'EK_FWD!K20')) + 300) <= 1, await cellText(page, 'EK_FWD!K20'));
+    // the way back by a rate (FAİZ → SPREAD): the matrix's 1M bid TRY rate typed by hand reads its spread and its points
+    const fzRate = (await cellText(page, 'EK_FWD!M5')).trim();
+    const fzWant = { sp: trNumber(await cellText(page, 'EK_FWD!D5')), pts: trNumber(await cellText(page, 'EK_FWD!H5')), ois: trNumber(await cellText(page, 'EK_FWD!L5')) };
+    await typeInto(page, 'EK_FWD!D133', fzRate);
+    await waitCell(page, 'EK_FWD!I133', 't.trim() !== ""');
+    const fz = { sp: trNumber(await cellText(page, 'EK_FWD!G133')), pts: trNumber(await cellText(page, 'EK_FWD!I133')), ois: trNumber(await cellText(page, 'EK_FWD!F133')) };
+    check('a TRY rate typed by hand (FAİZ → SPREAD) reads its spread over OIS and its points: the matrix\'s 1M bid rate gives back its spread and points',
+      Math.abs(fz.sp - fzWant.sp) <= 1 && Math.abs(fz.pts - fzWant.pts) <= 3 && Math.abs(fz.ois - fzWant.ois) < 0.006, { fzRate, fz, fzWant });
     // EURTRY: the same matrix, taking the USDTRY one's curve and spreads until it is given its own
     check('the EURTRY matrix follows the USDTRY one\'s curve and spreads', (await cellText(page, 'EK_FWD!B101')).trim() === 'Bootstrap'
       && (await cellText(page, 'EK_FWD!D103')).trim() === '-300' && (await cellText(page, 'EK_FWD!E103')).trim() === '-150',
@@ -3072,6 +3080,48 @@ async function clipAfter(page, action) {
       fwdAll >= 100 && fwd0 < 40 && (await fwdShown()) === fwdAll, { fwd0, fwdAll });
     await page.click('.panel[data-panel="BK1"] .grow-all');
     check('... and back to the filled ones', (await fwdShown()) === fwd0);
+    // the way back in bulk: two value dates pasted, then the table's own USDTRY / EURTRY forwards pasted into the new
+    // columns read back the TRY rate they were priced with (RET mid: no manual rate)
+    await page.evaluate(() => navigator.clipboard.writeText('15.01.2027\r\n15.04.2027\r\n'));
+    await (await cellHandle(page, 'EK_BULK!B5')).click();
+    await page.keyboard.press('Control+v');
+    await waitCell(page, 'EK_BULK!P6', 't.trim() !== ""');
+    const bulkN = [(await cellText(page, 'EK_BULK!N5')).trim(), (await cellText(page, 'EK_BULK!N6')).trim()];
+    const bulkP = [(await cellText(page, 'EK_BULK!P5')).trim(), (await cellText(page, 'EK_BULK!P6')).trim()];
+    for (const [col, vals] of [['R', bulkN], ['T', bulkP]]) {
+      await page.evaluate((t) => navigator.clipboard.writeText(t), vals.join('\r\n') + '\r\n');
+      await (await cellHandle(page, 'EK_BULK!' + col + '5')).click();
+      await page.keyboard.press('Control+v');
+    }
+    await waitCell(page, 'EK_BULK!U6', 't.trim() !== ""');
+    const bulkBack = {};
+    for (const c of ['G5', 'G6', 'S5', 'S6', 'U5', 'U6']) bulkBack[c] = trNumber(await cellText(page, 'EK_BULK!' + c));
+    check('Toplu fiyatlama: two outrights pasted (the table\'s own USDTRY and EURTRY forwards) read back their implied TRY rate - the RET mid they were priced with',
+      [5, 6].every((r) => Math.abs(bulkBack['S' + r] - bulkBack['G' + r]) < 0.01 && Math.abs(bulkBack['U' + r] - bulkBack['G' + r]) < 0.01)
+      && bulkN.every((t) => /\d,\d{4}$/.test(t)), { bulkN, bulkP, bulkBack });
+    // points -> rate (proposal #2): FORWARD STARTING SWAP's own "Manuel" FS points typed back read its TRY fwd-fwd %; ÇAPRAZ
+    // FORWARD's own manual USDTRY forward typed back reads its TRY rate
+    await typeInto(page, 'Forward!C167', '08.12.2026');
+    await typeInto(page, 'Forward!C168', '08.03.2027');
+    await typeInto(page, 'Forward!C169', '40,5');
+    await waitCell(page, 'Forward!I179', 't.trim() !== ""');
+    const fsPts = (await cellText(page, 'Forward!I179')).trim();
+    await typeInto(page, 'Forward!I181', fsPts);
+    await waitCell(page, 'Forward!E181', 't.trim() !== ""');
+    const fsBack = { rate: trNumber(await cellText(page, 'Forward!E181')), ois: (await cellText(page, 'Forward!P181')).trim() };
+    await (await cellHandle(page, 'Forward!C197')).click();          // (a drop-down cell: Enter opens its list)
+    await page.keyboard.press('Enter');
+    await page.click('.menu button:text-is("USD")');
+    await waitCell(page, 'Forward!C197', 't.trim() === "USD"');
+    await typeInto(page, 'Forward!F200', '41');
+    await waitCell(page, 'Forward!Q200', 't.trim() !== ""');
+    const crossFwd = (await cellText(page, 'Forward!Q200')).trim();
+    await typeInto(page, 'Forward!R200', crossFwd);
+    await waitCell(page, 'Forward!S200', 't.trim() !== ""');
+    const crossBack = trNumber(await cellText(page, 'Forward!S200'));
+    check('Forward starting swap: its own FS points typed back ("Elle puan → faiz") read its TRY fwd-fwd % and the bp over OIS mid; '
+      + 'Çapraz forward: its own USDTRY forward typed back reads its TRY rate',
+      Math.abs(fsBack.rate - 40.5) < 0.006 && /^[+−-]?\d/.test(fsBack.ois) && Math.abs(crossBack - 41) < 0.001, { fsPts, fsBack, crossFwd, crossBack });
     // DİBS Canlı: the value dates side by side, the day's tape, the bond's card
     await open(page, 'dibslive');
     await page.waitForSelector('.panel[data-panel="L1"] table.grid');
