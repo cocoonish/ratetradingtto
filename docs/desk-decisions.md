@@ -941,6 +941,46 @@ Code: `tto/extras.py` (`_tto_tarih`, `_tarih_formulas`; `_tto_viop_price`, `viop
 `tto/views/10_masa.json` (TAF, TAFH). Tests: `tests/test_toplufaiz.py`, `tests/test_viopfra.py` (the Fiyat section), the
 browser test's checks after "VİOP target: the FRA's curve".
 
+### TOPLU FORWARD → işlem: "İşleme al" (24.11.2026)
+
+Offered to the desk (as relayed, in English) and approved - the desk: **"3 ekle"**:
+
+> "Book trades straight from TOPLU FORWARD. The bulk table prices up to 100 valörs, but unlike the other forward tables
+> it has no right-click İşlem gir. Proposal: add İşlem gir to its rows, plus Tutar and Yön columns and an 'İşleme al'
+> button that books every filled row at once. It would use Excel'den yapıştır's preview and its all-or-nothing save."
+
+- **Right click → İşlem gir** on a row's prices: USDTRY fwd / puan (N / O), EURTRY fwd / puan (P / Q), the typed forwards
+  (R / T) and their İma TRY % (S / U, a TRY-rate price of their pair). Each price is its own column's pair (the hint's
+  `"pairs"`), the valör the row's own B; mid or typed prices, so no side comes chosen.
+- **Per-row inputs**, personal and empty at the start, after the way back's R..U on cells no input ever stood on: V
+  Parite (USDTRY / EURTRY, blank = USDTRY), W Yön (AL / SAT; B / S, Alış / Satış taken), X Tutar (the pair's first
+  currency, `10m`), Y Karşı taraf.
+- **"İşleme al"** (the table's header): every row with a Tutar opens in Excel'den yapıştır on FX Forward - the same
+  preview, the same "N satırı kaydet" (no new save path: one transaction, today's book, the dialog's permissions). A row
+  with a valör and no Tutar is left out, the dialog says how many; a Tutar without a Yön or a valör is an error row,
+  never saved.
+- **The price is what the row shows**, to its last digit:
+  - a forward typed in the row's pair's own column (R for USDTRY, T for EURTRY): *Forward kur* = it;
+  - else **USDTRY**: *TRY faizi* = the rate the row used - Manuel TRY % (L) if typed, else RET mid % (G). The blotter's
+    TRY-rate pricing of USDTRY is the workbook's own bulk row (`Forward!N163`), the formula of N: the booked forward is N
+    (tested to 1e-9, in fact to the last bits);
+  - else **EURTRY**: *Forward kur* = the row's EURTRY fwd (P). The blotter's TRY-rate pricing of EURTRY takes the EUR rate
+    as the middle of the interpolated EUR bid and ask (`Forward!AD27`); P takes Bloomberg's interpolated EUR **MID**
+    (`Forward!AD7:AD26` through K). The two give the same forward only while each MID is the exact middle of its bid and
+    ask - so in the replay file (all 20 EUR nodes), not guaranteed live (2 of the 20 USD nodes of the same file are not).
+    The table's outright is booked so the trade is P; the blotter backs the trade's TRY rate out of it on its EUR rate.
+  - The note says where: `TOPLU FORWARD · RET mid %`, `TOPLU FORWARD · Manuel TRY %`, `TOPLU FORWARD · elle forward`.
+- **After a successful save the booked rows' Tutar is emptied** ("N işlem kaydedildi; tutarları temizlendi"), so a second
+  press cannot book them twice; valör, rates, Parite, Yön and Karşı taraf stay, an error row keeps its Tutar. The browser
+  does it right after the save (`/api/reset` of those cells, found by the paste's "Satır" column, the table's row): the
+  save stands either way; if the reset fails the toast says so and the Tutar is to be deleted by hand.
+
+Code: `tto/views/30_forward.json` (BK1's `"trade"` and `"action": "toplu-islem"`, the V..Y inputs), `tto/tradehint.py`
+(`pairs`, `pair_at`), `tto/extras.py` (`BULK_PAIR` … `BULK_CPT`), `tto/entry.py` (`bulk_forward_paste`,
+`bulk_forward_price`), `Service.bulk_from_forward` (`GET /api/blotter/bulk/toplu-forward`), `blotterentry.js`
+(`bookBulkForward`, `openBulk`'s `from`). Tests: `tests/test_toplu_islem.py`, `tests/test_tradehint.py`
+(`test_a_bulk_row_of_either_pair`), the browser test's checks after "Toplu fiyatlama: two outrights pasted".
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`
