@@ -1291,6 +1291,10 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
 
 Left out (with the reason): the RET tables and RET adil değer (shared, not this group's); Fiyatlama's optional new kinds;
 Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye endeksli and the hidden copies (survey).
+**VİOP's gold calculator** (`EK_XAU` A38:E63) is left for the desk: its contract columns roll, and on a roll only the
+column's typed VİOP bid / ask go (`rowkeys.GOLD_PRICES`), the rest stays with the column - a value typed there two-way
+(a forward, points or a theoretical price belong to the contract; a rate may stay with the column) needs the desk's
+rule of which survive a roll.
 
 Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_STORES`, `viop_fx_implied`,
 `_tto_viop_tw`), `tto/views/90_calc.json`, `70_dv01.json`, `40_viop.json` (`"twoway"`, helper tables B36 / B11s / VT1),

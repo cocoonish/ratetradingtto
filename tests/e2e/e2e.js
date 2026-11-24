@@ -2215,7 +2215,9 @@ async function clipAfter(page, action) {
     check('... S2 picked: OIS FRA and Hedef faiz are S2\'s (Hedef faiz = FRA − 150 bp) and say "S2 · Hawkish"',
       Math.abs(picked.fra - s2 * 100) < 0.006 && Math.abs(picked.rate - (s2 * 100 - 1.5)) < 0.006 && Math.abs(picked.fra - trNumber(fra0)) > 0.05
       && picked.head === 'OIS FRA · S2 · Hawkish' && picked.fraTip.startsWith('OIS FRA, S2 · Hawkish eğrisinden (Bootstrap (piyasa): ' + fra0)
-      && picked.rateTip === 'Hedef faiz = OIS FRA (S2 · Hawkish) − 150 bp', picked);
+      // (Hedef faiz is worked out from the Hedef değer typed - two-way, 24.11.2026: the tooltip says so first, its own line follows)
+      && picked.rateTip.split('\n').pop() === 'Hedef faiz = OIS FRA (S2 · Hawkish) − 150 bp'
+      && picked.rateTip.startsWith('Hesaplanan: bu satırda yazılan değer Hedef değer · P331'), picked);
     await page.reload();
     await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     await tab(page, 'main');
@@ -2302,8 +2304,22 @@ async function clipAfter(page, action) {
       shown: (await cellText(page, 'VIOP!P332')).trim(), tip: await titleOf('VIOP!Q332'), curve: (await cellText(page, 'VIOP!Z332')).trim() };
     check('VİOP Target: type "Fiyat" and the row\'s own far limit price - the implied TRY rate is the row\'s rate (1e-9), the far limit the price, '
       + 'and it says so', Math.abs(asPrice.rate - asFra.rate) < 1e-9 && asPrice.text === asFra.text && Math.abs(asPrice.far - asFra.far) < 1e-9
-      && /^\d\d,\d{4,}/.test(asPrice.shown) && asPrice.curve === '' && asPrice.tip.startsWith('Hedef faiz = uzak kontrat fiyatı '),
+      && /^\d\d,\d{4,}/.test(asPrice.shown) && asPrice.curve === '' && asPrice.tip.split('\n').pop().startsWith('Hedef faiz = uzak kontrat fiyatı '),
       { asFra, asPrice, typedFar });
+    // VİOP Target two-way (24.11.2026): the far limit typed in its own column on an FRA+bp row - the rate it implies is the
+    // row's (the same as the Fiyat type gave), Hedef değer its bp over OIS FRA (the type stays), the far limit marked (✎)
+    await pick('VIOP!O332', 'FRA+bp');
+    await waitCell(page, 'VIOP!O332', 't.trim() === "FRA+bp"');
+    await typeInto(page, 'VIOP!S332', typedFar);
+    await page.waitForFunction(() => window.tto.findCell('VIOP!S332').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    await waitCell(page, 'VIOP!Q332', 't.trim() !== ""');
+    const vtTwFar = { rate: await cellV('VIOP!Q332'), value: await cellV('VIOP!P332'), fra: await cellV('VIOP!W332'),
+      anchor: await page.evaluate(() => window.tto.findCell('VIOP!S332').classList.contains('anchor')),
+      worked: await titleOf('VIOP!P332'), tip: await titleOf('VIOP!Q332') };
+    check('... VİOP Target is two-way: the far limit typed in its own column on an FRA+bp row gives the rate it implies (as the Fiyat type did, 1e-9), '
+      + 'Hedef değer its bp over OIS FRA in the row\'s type, the far limit marked and the others worked out from it',
+      Math.abs(vtTwFar.rate - asPrice.rate) < 1e-9 && Math.abs(vtTwFar.value - (vtTwFar.rate - vtTwFar.fra) * 10000) < 1e-6 && vtTwFar.anchor
+      && /Hesaplanan: bu satırda yazılan değer Uzak limit · S332/.test(vtTwFar.worked) && /yazılan uzak limit fiyatı/.test(vtTwFar.tip), vtTwFar);
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!L332', 'VIOP!M332', 'VIOP!N332', 'VIOP!O332', 'VIOP!P332'] });
     await waitCell(page, 'VIOP!Q332', 't.trim() === ""');
 
@@ -2402,6 +2418,28 @@ async function clipAfter(page, action) {
       Object.values(moveVol).every((t) => t === vol0) && vol0 === '19,00%', { moveTyped, moveVol, vol0 });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Calculators!O44', 'Calculators!O46', 'Calculators!O48'] });
     await waitCell(page, 'Calculators!O44', 't.trim() === ""');
+    // Hesaplayıcılar two-way (24.11.2026: "tüm tablolar bu şekilde olmalı"): Implied Move's own upper bound typed in place -
+    // the vol follows, the bound marked (✎) and the others worked out from it; Delete: the file's 19 % again
+    const imTwRead = () => page.evaluate(() => {
+      const one = (r) => { const td = window.tto.findCell(r); return { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' }; };
+      const note = document.querySelector('#content .panel[data-panel="B23"] .note');
+      return { vol: one('Calculators!O39'), up: one('Calculators!O41'), low: one('Calculators!O42'), note: note ? note.textContent : '' };
+    });
+    await typeInto(page, 'Calculators!O41', '43');
+    await waitCell(page, 'Calculators!O39', 't.trim() !== "19,00%"');
+    await page.waitForFunction(() => window.tto.findCell('Calculators!O41').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const imTwA = await imTwRead();
+    const imTwSpot = trNumber(await cellText(page, 'Calculators!O36'));
+    check('Hesaplayıcılar → Implied Move is two-way: the upper bound typed stays, the vol follows ((43 / Spot − 1) / √(Gün / Gün Basis)), the '
+      + 'bound marked as the typed value, the vol and the lower bound worked out from it; the note says so',
+      trNumber(imTwA.up.t) === 43 && imTwA.up.anchor && /Yazdığınız değer/.test(imTwA.up.tip) && !imTwA.vol.anchor && /Upper Bound · O41/.test(imTwA.vol.tip)
+      && Math.abs(trNumber(imTwA.vol.t) - (43 / imTwSpot - 1) / 0.5 * 100) < 0.006 && /hangisini yazarsanız o kalır/.test(imTwA.note), imTwA);
+    await (await cellHandle(page, 'Calculators!O40')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'Calculators!O39', 't.trim() === "19,00%"');
+    const imTwB = await imTwRead();
+    check('... Delete on a value worked out (the move): the calculator back to its default (19 %), nothing marked',
+      imTwB.vol.t === '19,00%' && !imTwB.up.anchor && !imTwB.vol.anchor, imTwB);
 
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
@@ -3124,6 +3162,26 @@ async function clipAfter(page, action) {
       && Math.abs(swpt1.options.payer.breakeven - (swpt1.strike + swpt1.options.payer.running_bp * 1e-4)) < 1e-12
       && (await page.textContent('#swpt-be-payer')) === swptPct(swpt1.options.payer.breakeven),
     { swptYear, vol: swpt1.vol, swptOpts, be: swpt1.options.payer.breakeven });
+    // two-way (24.11.2026): the payer's own running premium typed in its cell gives the vol back (5 bp/day), the cell marked
+    // (✎) and the bp/day box no longer the typed one
+    const swptPrem = String(swpt1.options.payer.running_bp).replace('.', ',');
+    await page.click('#swpt-options tr[data-row="running_bp"] td:nth-child(2)');
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type(swptPrem);
+    await page.keyboard.press('Enter');
+    await swptSource('Payer prim');
+    const swptTw = await page.evaluate(() => {
+      const td = document.querySelector('#swpt-options tr[data-row="running_bp"] td:nth-child(2)');
+      return { t: td.textContent, anchor: td.classList.contains('tw-anchor'), day: document.getElementById('swpt-vol-day').value,
+        dayMark: document.getElementById('swpt-vol-day').classList.contains('tw-anchor'),
+        dayOut: (document.querySelector('#swpt-vol-day-out .v') || {}).textContent || '' };
+    });
+    check('Swaption is two-way: the payer\'s own running premium typed in its cell gives the vol back (5,00 bp/day), the cell marked as the '
+      + 'typed value, the vol boxes showing what it gives', swptTw.t === swptPrem && swptTw.anchor && !swptTw.dayMark && swptTw.day === ''
+      && swptTw.dayOut.trim() === '5,00', swptTw);
+    await page.fill('#swpt-vol-day', '5');
+    await page.press('#swpt-vol-day', 'Enter');
+    await swptSource('bp/gün');
     await shot(page, '16c-swaption');
     // the recorded month's closes reach 1Y: a 3M × 9M forward has realized vols, and the 60 changes' (the 21 there are) prices
     await page.click('#swpt-vol-reset');
@@ -6403,6 +6461,22 @@ async function clipAfter(page, action) {
     check('... a stop on the entry is refused with the reason (the direction comes from the stop)', /stop girişe eşit olamaz/.test(propErr), propErr);
     await page.fill('#prop-stop', '44,55');
     await page.waitForFunction(() => /2M USD/.test((document.getElementById('prop-size') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => null);
+    // two-way (24.11.2026): the size typed in place of the loss - the loss at the stop follows; the size marked, the loss
+    // box emptied and showing what the size gives; the loss typed again: the size rounded down, the mark back on the loss
+    await page.fill('#prop-size-in', '2,5m');
+    await page.waitForFunction(() => /Stopta kayıp 500\.000 TRY/.test((document.getElementById('prop-real') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => null);
+    const propTw = await page.evaluate(() => ({ real: (document.getElementById('prop-real') || {}).textContent || '',
+      size: (document.getElementById('prop-size') || {}).textContent || '', sizeMark: document.getElementById('prop-size-in').classList.contains('tw-anchor'),
+      loss: document.getElementById('prop-loss').value, lossHint: document.getElementById('prop-loss').placeholder,
+      lossMark: document.getElementById('prop-loss').classList.contains('tw-anchor') }));
+    await page.fill('#prop-loss', '500k');
+    await page.waitForFunction(() => /2M USD/.test((document.getElementById('prop-size') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => null);
+    const propTwBack = await page.evaluate(() => ({ size: document.getElementById('prop-size-in').value, hint: document.getElementById('prop-size-in').placeholder,
+      lossMark: document.getElementById('prop-loss').classList.contains('tw-anchor'), sizeMark: document.getElementById('prop-size-in').classList.contains('tw-anchor') }));
+    check('Prop is two-way: a size typed (2,5M) gives the loss at the stop (500.000 TRY), the size marked (✎) and the loss box showing what it gives; '
+      + 'the loss typed again stands, the size box showing its 2M', /Stopta kayıp 500\.000 TRY/.test(propTw.real) && /2,5M USD/.test(propTw.size)
+      && propTw.sizeMark && !propTw.lossMark && propTw.loss === '' && propTw.lossHint === '500.000' && propTwBack.lossMark && !propTwBack.sizeMark
+      && propTwBack.size === '' && propTwBack.hint === '2m', { propTw, propTwBack });
     // the risk of one's own tab: today's K/Z from "MTM yenile", a limit, the room left = limit − today's loss − the stops.
     // (The tab's two trades are dated the replay's day and were entered after today's close, if one was taken: their
     // "Günlük" is unknown, as the Trades page shows it - a USDTRY short dealt today has its own, from its inception.)
