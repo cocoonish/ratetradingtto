@@ -81,8 +81,8 @@ def test_the_windows_are_mpc_ois_rows_with_the_period_before_each(service):
             assert ppk(service, u, "I", r) == start - spot > 0
             assert ppk(service, u, "H", r) == pytest.approx((math.exp(-cell(service, "OIS_MAIN!BK%d" % w, u)) - 1) * 365 / (start - spot), rel=1e-15)
         assert ppk(service, u, "J", r) == pytest.approx(on365(ppk(service, u, "H", r), ppk(service, u, "I", r)), rel=1e-15)
-        # nothing typed: no step; the market's own step beside it
-        assert ppk(service, u, ex.PPK_RATE, r) is None and ppk(service, u, "K", r) == "" and ppk(service, u, "L", r) == ""
+        # nothing typed: no step; the market's own step beside it (the rate's cell: its two-way default, nothing)
+        assert ppk(service, u, ex.PPK_RATE, r) == "" and ppk(service, u, "K", r) == "" and ppk(service, u, "L", r) == ""
         on_mkt = on365(ppk(service, u, "F", r), ppk(service, u, "E", r))
         assert ppk(service, u, "M", r) == pytest.approx((on_mkt - ppk(service, u, "J", r)) * 1e4, abs=1e-9)
     for k in range(PAIRS):
@@ -91,7 +91,7 @@ def test_the_windows_are_mpc_ois_rows_with_the_period_before_each(service):
         assert ppk(service, u, "R", r) == cell(service, "OIS_MAIN!B%d" % (ex.PPK_PAIRS[0] + k), u)
         assert ppk(service, u, "Q", r) == ppk(service, u, "B", r + 1)                              # the later window's meeting
         assert ppk(service, u, "W", r) == ppk(service, u, "M", r + 1)
-        assert ppk(service, u, ex.PPK_SPREAD, r) is None and ppk(service, u, "T", r) == "" and ppk(service, u, "V", r) == ""
+        assert ppk(service, u, ex.PPK_SPREAD, r) == "" and ppk(service, u, "T", r) == "" and ppk(service, u, "V", r) == ""
 
 
 def test_a_windows_rate_gives_broker_chats_step_and_goes_back(service):
@@ -279,34 +279,40 @@ def test_the_typed_cells_belong_to_their_meetings_row(service):
     assert where(tto, "EK_PPK!G3") == ("tcmb", "typed", 0, "G") and where(tto, "EK_PPK!G18") == ("tcmb", "typed", 15, "G")
     assert where(tto, "EK_PPK!S17") == ("tcmb", "typed", 14, "S")
     assert where(tto, "EK_PPK!L5") == ("tcmb", "computed", 2, "L") and where(tto, "EK_PPK!V3")[1] == "computed"
-    for ref in ("EK_PPK!G2", "EK_PPK!N3", "EK_PPK!O3", "EK_PPK!X3", "EK_PPK!A1"):                 # headers, the gap
+    # (two-way: an O/N, a step or a later rate typed is kept in its store - typed per meeting too)
+    assert where(tto, "EK_PPK!Z5") == ("tcmb", "typed", 2, "Z") and where(tto, "EK_PPK!AA17") == ("tcmb", "typed", 14, "AA")
+    for ref in ("EK_PPK!G2", "EK_PPK!N3", "EK_PPK!O3", "EK_PPK!X3", "EK_PPK!A1", "EK_PPK!Y2", "EK_PPK!AD3"):    # headers, the gaps
         assert where(tto, ref) is None, ref
     assert mt.follows(tto, *tto.cell("EK_PPK!G3")) and not mt.follows(tto, *tto.cell("EK_PPK!L3"))
     assert where(sofr, "SOFR_FOMC!AB76") == ("fed", "typed", 2, "AB") and where(sofr, "SOFR_FOMC!AD83") == ("fed", "computed", 9, "AD")
     assert where(sofr, "SOFR_FOMC!AB73") is None and where(sofr, "SOFR_FOMC!AF74") is None
     assert {"AA", "AB", "AC", "AD", "AE"} <= set(mt.FED.columns())
-    # the registry and the sheets agree: every input of a row is typed, every formula of a row computed
+    assert where(sofr, "SOFR_FOMC!AG74") == ("fed", "typed", 0, "AG") and where(sofr, "SOFR_FOMC!AJ83") == ("fed", "typed", 9, "AJ")
+    # the registry and the sheets agree: every input of a row is typed (the rate and the spread - two-way, a formula
+    # default each - and the two-way stores), every other formula of a row computed
     sh = tto.model.sheet(ex.PPK_SHEET)
+    typed = (ex.PPK_RATE, ex.PPK_SPREAD) + ex.PPK_TW_WINDOW + ex.PPK_TW_PAIR
     for k in range(WINDOWS):
         r = ex.PPK_FIRST + k
-        for col in "ABCDEFGHIJKLMPQRSTUVW":
-            if col in "PQRSTUVW" and k >= PAIRS:
+        for col in "ABCDEFGHIJKLMPQRSTUVW" + "YZ" + "".join(ex.PPK_TW_PAIR):
+            if (col in "PQRSTUVW" or col in ex.PPK_TW_PAIR) and k >= PAIRS:
                 continue
-            kind = where(tto, "%s!%s%d" % (ex.PPK_SHEET, col, r))[1]
-            is_formula = parse_a1("%s%d" % (col, r)) in sh.fml
-            assert kind == ("computed" if is_formula else "typed"), (col, r)
-            assert (col in (ex.PPK_RATE, ex.PPK_SPREAD)) == (not is_formula)
+            ref = "%s!%s%d" % (ex.PPK_SHEET, col, r)
+            kind = where(tto, ref)[1]
+            assert kind == ("typed" if tto.cell(ref) in tto.inputs else "computed"), (col, r)
+            assert (col in typed) == (tto.cell(ref) in tto.inputs), (col, r)
+            assert (parse_a1("%s%d" % (col, r)) in sh.fml) == (col not in ex.PPK_TW_WINDOW + ex.PPK_TW_PAIR), (col, r)
     for r in range(ex.FOMC_BACK_ROWS[0], ex.FOMC_BACK_ROWS[1] + 1):
-        for col in ex.FOMC_BACK_COLS:
-            is_formula = parse_a1("%s%d" % (col, r)) in sofr.model.sheet("SOFR_FOMC").fml
-            assert where(sofr, "SOFR_FOMC!%s%d" % (col, r))[1] == ("computed" if is_formula else "typed")
-            assert (col == ex.FOMC_BACK_RATE) == (not is_formula)
+        for col in ex.FOMC_BACK_COLS + ex.FOMC_TW:
+            ref = "SOFR_FOMC!%s%d" % (col, r)
+            assert where(sofr, ref)[1] == ("typed" if sofr.cell(ref) in sofr.inputs else "computed")
+            assert (col in (ex.FOMC_BACK_RATE,) + ex.FOMC_TW) == (sofr.cell(ref) in sofr.inputs)
 
 
 def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
-    """A PPK calendar change, the roll and a pasted FOMC list: the rate / spread typed for a window (and an "Elle değer"
-    over its step) stay with the meeting that starts the window; one whose meeting left is set aside; no formula is
-    taken there."""
+    """A PPK calendar change, the roll and a pasted FOMC list: the rate / spread typed for a window (and a step typed - the
+    table is two-way: kept in its store) stay with the meeting that starts the window; one whose meeting left is set aside;
+    no formula is taken there."""
     svc = make_service(tmp_path)
     try:
         h = svc.history
@@ -316,7 +322,7 @@ def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
         assert [cell(svc, "OIS_MAIN!P%d" % r) for r in (10, 11, 12)] == [float(date_to_serial(dt.date(*d))) for d in
                                                                           ((2026, 12, 10), (2027, 1, 21), (2027, 3, 18))]
         put(svc, a, {"EK_PPK!G3": "36,5", "EK_PPK!G4": "35", "EK_PPK!S5": "-25"})          # slots 0, 1, 2
-        put(svc, a, {"EK_PPK!L5": "12,5"}, allow_adhoc=True)                                # an "Elle değer" over slot 2's step
+        put(svc, a, {"EK_PPK!L5": "12,5"}, allow_adhoc=True)                                # slot 2's step typed (two-way: its store Z5)
         res = svc.set_inputs(a, "tto", [{"ref": "EK_PPK!G6", "value": "=OIS_MAIN!D87"}])
         assert "toplantı takvimiyle kayan hücre" in res["errors"][0]
         step = cell(svc, "EK_PPK!L4", a)
@@ -324,10 +330,10 @@ def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
         start = h.meetings()
         res = h.set_calendar(a, ["11.02.2027"] + start[:-1])
         assert res["parked"]["meetings"] == []
-        assert mine() == {"EK_PPK!G3": 0.365, "EK_PPK!G4": 0.35, "EK_PPK!S6": -25.0, "EK_PPK!L6": 12.5}
+        assert mine() == {"EK_PPK!G3": 0.365, "EK_PPK!G4": 0.35, "EK_PPK!S6": -25.0, "EK_PPK!Z6": 12.5}
         assert cell(svc, "EK_PPK!B6", a) == float(date_to_serial(dt.date(2027, 3, 18)))           # the spread's first window
         assert cell(svc, "EK_PPK!B5", a) == float(date_to_serial(dt.date(2027, 2, 11)))           # the new meeting: nothing typed
-        assert cell(svc, "EK_PPK!S5", a) is None and cell(svc, "EK_PPK!T5", a) == ""
+        assert cell(svc, "EK_PPK!S5", a) == "" and cell(svc, "EK_PPK!T5", a) == ""
         # the 21.01.2027 window ends at the new meeting now: the same rate, another window - another step
         assert cell(svc, "EK_PPK!D4", a) == cell(svc, "OIS_MAIN!C85", a) == float(date_to_serial(dt.date(2027, 2, 12)))
         assert cell(svc, "EK_PPK!L4", a) != pytest.approx(step, abs=1e-6)
@@ -340,7 +346,7 @@ def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
         svc.bump()
         res = h.roll_calendar(a)
         assert res["rolled"] == ["2026-12-10"] and res["parked"]["meetings"] == ["2026-12-10"]
-        assert mine() == {"EK_PPK!G3": 0.35, "EK_PPK!S5": -25.0, "EK_PPK!L5": 12.5}
+        assert mine() == {"EK_PPK!G3": 0.35, "EK_PPK!S5": -25.0, "EK_PPK!Z5": 12.5}
         assert mt.parked(svc.store)["tcmb"]["2026-12-10"]["user"] == {a: {"EK_PPK!G": 0.365}}
         assert cell(svc, "EK_PPK!B3", a) == float(date_to_serial(dt.date(2027, 1, 21))) and cell(svc, "EK_PPK!G3", a) == 0.35
         assert isinstance(cell(svc, "EK_PPK!L3", a), float)
@@ -403,7 +409,7 @@ def test_the_page_shows_them(service):
     assert one["title"] == "MPC OIS → PPK ADIMI" and two["title"] == "MPC SPREAD → PPK ADIMI"
     assert "error" not in one and "error" not in two
     first = dict(zip(one["data"]["c"], one["data"]["rows"][one["data"]["r"].index(ex.PPK_FIRST)]))
-    assert first["G"].get("i") == "u" and "i" not in first["L"] and first["A"]["t"].startswith("MPC1→2")
+    assert first["G"].get("i") == "u" and first["L"].get("i") == "u" and "i" not in first["J"] and first["A"]["t"].startswith("MPC1→2")
     first = dict(zip(two["data"]["c"], two["data"]["rows"][two["data"]["r"].index(ex.PPK_FIRST)]))
     assert first["S"].get("i") == "u" and first["P"]["t"] == "MPC1 / MPC2"
     fra = panels["B21"]["data"]

@@ -266,14 +266,14 @@
    "scope": "user",
    "group": "ppk-rate",
    "kind": "pct",
-   "label": "'MPC OIS (elle)': a meeting window's OIS rate typed (%), to read the PPK step it prices (goes with its meeting)"
+   "label": "'MPC OIS (elle)': a meeting window's OIS rate typed (%), to read the PPK step it prices (goes with its meeting; two-way: formula default - the rate an O/N or a step typed in its row gives)"
   },
   {
    "range": "EK_PPK!S3:S17",
    "scope": "user",
    "group": "ppk-spread",
    "kind": "number",
-   "label": "'Elle spread (bp)': an MPC spread typed (the later window − the earlier, bp), to read the later window's rate and the PPK step it prices (goes with its meeting)"
+   "label": "'Elle spread (bp)': an MPC spread typed (the later window − the earlier, bp), to read the later window's rate and the PPK step it prices (goes with its meeting; two-way: formula default - the spread the later rate, O/N or step typed in its row gives)"
   },
   {
    "range": "AE81:AG81",
@@ -323,6 +323,36 @@
    "group": "ois-35",
    "kind": "auto",
    "label": "bucket index, type, coupon count – masanın ortak verisi"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "ppk-window",
+   "sheet": "EK_PPK",
+   "label": "MPC OIS → PPK ADIMI",
+   "note": "İki yönlü: MPC OIS (elle), O/N eşdeğeri ya da ima PPK adımı - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır boşalır). Yazdığınız değer toplantısıyla gider.",
+   "members": [
+    {"name": "MPC OIS (elle)", "range": "G3:G18"},
+    {"name": "O/N eşdeğeri", "range": "K3:K18", "store": "Y3:Y18", "kind": "pct",
+     "label": "'O/N eşdeğeri' typed in MPC OIS → PPK ADIMI (two-way: the window's rate and step follow; goes with its meeting)"},
+    {"name": "İma PPK adımı", "range": "L3:L18", "store": "Z3:Z18", "kind": "number",
+     "label": "'İma PPK adımı (bp)' typed in MPC OIS → PPK ADIMI (two-way: the window's rate and O/N follow; goes with its meeting)"}
+   ]
+  },
+  {
+   "id": "ppk-spread",
+   "sheet": "EK_PPK",
+   "label": "MPC SPREAD → PPK ADIMI",
+   "note": "İki yönlü: elle spread, sonraki dönemin faizi, O/N eşdeğeri ya da ima PPK adımı - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır boşalır). Yazdığınız değer satırın ilk döneminin toplantısıyla gider.",
+   "members": [
+    {"name": "Elle spread", "range": "S3:S17"},
+    {"name": "MPCk+1 dönemi (ima)", "range": "T3:T17", "store": "AA3:AA17", "kind": "pct",
+     "label": "'MPCk+1 dönemi (ima)' typed in MPC SPREAD → PPK ADIMI: the later window's rate (two-way: the spread, O/N and step follow; goes with its meeting)"},
+    {"name": "O/N eşdeğeri", "range": "U3:U17", "store": "AB3:AB17", "kind": "pct",
+     "label": "'O/N eşdeğeri' typed in MPC SPREAD → PPK ADIMI (two-way: the later window's rate, the spread and the step follow; goes with its meeting)"},
+    {"name": "İma PPK adımı", "range": "V3:V17", "store": "AC3:AC17", "kind": "number",
+     "label": "'İma PPK adımı (bp)' typed in MPC SPREAD → PPK ADIMI (two-way: the later window's rate, its O/N and the spread follow; goes with its meeting)"}
+   ]
   }
  ],
  "panels": [
@@ -519,6 +549,15 @@
    "title": "MPC SPREAD → PPK ADIMI",
    "hidden": false,
    "note": "Bir MPC spread'ini (sonraki dönem − önceki dönem, bp; MPC SPREAD'deki gibi) \"Elle spread\" sütununa yazın: sonraki dönemin faizi = önceki dönemin piyasa faizi (MPC OIS'in \"Piyasa (bootstrap)\"ı) + spread ve bu faizin sonraki dönemin toplantısında fiyatladığı PPK adımı (bp) - MPC OIS → PPK ADIMI'yla aynı hesap, aynı taban (önceki dönemin piyasa faizinin O/N eşdeğeri), Broker Chat'inkiyle aynı. Yazdığınız spread satırın ilk döneminin toplantısıyla gider."
+  },
+  {
+   "id": "PPKY",
+   "type": "table",
+   "sheet": "EK_PPK",
+   "range": "Y1:AC18",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · MPC OIS / MPC SPREAD → PPK ADIMI: iki yönlü hücrelerin yazılan değerleri"
   },
   {
    "id": "B16",
