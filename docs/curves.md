@@ -155,7 +155,8 @@ The setting is Ayarlar → "Eğri interpolasyonu", per user:
 
 **What a PPK user's setting changes** (`tto/interp.py`, extras' `INTERP_SHEET` section):
 - Motor's node pars (`F89:F130`), so everything that reads `BOOT_*` follows: OIS pages, Masa (its date-to-date block's
-  Bootstrap row, and EK_TARIH's, which reuses the block's formulas), VİOP, DİBS RV.
+  Bootstrap row, and EK_TARIH's, which reuses the block's formulas - with the spreads of a quote typed there: the
+  block's box over `MASA!D62:D68`, a row's Kote % over the row's rates), VİOP, DİBS RV.
 - The offshore names `OFF_GUN` / `OFF_LNDF` / `OFF_SL`, which then read `EK_INTERP!I:K`.
 - ASW row 65's ln DF.
 - Trades' MTM, carry, coupons and P&L (`tradebook.FOLLOW_CURVE = True`). Desk close snapshots are kept on both curves.
@@ -211,6 +212,16 @@ The desk's list of points each curve is built from, one list for OIS and one for
   - a dated, started or forward-starting swap, and a bond, goes through `split_weights` at its date, by days, against
     tenor ends rolled as the swaps' are (`tradevalue.risk_split`). A forward-starting swap is first turned into two spot
     swaps as Günlük İşlemler does a meeting-dated one (`blotter.mpc_summary_rows`).
+
+## A spread over a TRY OIS curve, and the way back
+
+- **The desk's spread is added to the ACT/360 simple rate** of the chosen TRY OIS curve: MASA's date-to-date block
+  (`MASA!F62:F68 = D + I60/10000`, its note `B69`), EK_TARIH's "+ spread (360)", the forward quote matrices (`EK_FWD`,
+  spot → value date).
+- **The ways back read a quote in the same convention:** the block's box (`EK_TARIH!C110`) and the Forward page's
+  FAİZ → SPREAD take an ACT/360 simple rate, so the spread found, typed back, gives the quote.
+- **EK_TARIH's Kote % is read in the basis the table shows** (ACT/360, ACT/365 or O/N (360)); its difference to a curve is
+  in that basis too. Only with ACT/360 is it the row's spread (desk decision 24.11.2026).
 
 ## Fiyatlama (`tto/pricing.py`)
 

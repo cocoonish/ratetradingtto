@@ -941,6 +941,36 @@ Code: `tto/extras.py` (`_tto_tarih`, `_tarih_formulas`; `_tto_viop_price`, `viop
 `tto/views/10_masa.json` (TAF, TAFH). Tests: `tests/test_toplufaiz.py`, `tests/test_viopfra.py` (the Fiyat section), the
 browser test's checks after "VİOP target: the FRA's curve".
 
+### Ways back: a quote's spread, a forward price's repo, a move's vol (24.11.2026)
+
+Fourteen pricing tools that worked one way only were listed to the desk; the desk answered "1-2-3-4-5-6-7-8-11-11-13",
+then (as relayed) "I meant 11-12". Three of them were built here, as they were put to the desk (in English, as relayed):
+
+> 1. "On Masa's TARİH ARASI FAİZ and on the bulk version, type the rate someone quotes for a broken date and see its
+>    spread over each curve. It's the date-to-date version of the Forward page's FAİZ → SPREAD."
+> 8. "On the Forward page's bond carry calculator, type a buy/sell-back price and read the implied repo."
+> 12. "Implied Move: move → vol on Hesaplayıcılar, to turn a straddle breakeven into a vol."
+
+Each is the exact inverse of what its block computes: the result typed back into the block gives the value typed. No
+Bloomberg request; new inputs per user, blank to start with, on cells no input ever stood on.
+
+**Choices made while building them** (said in README; ask the desk before changing):
+- **Tarih arası faiz → spread, the block** (Masa → Faiz · PPK, *TARİH ARASI FAİZ → SPREAD*, a box under the block,
+  `EK_TARIH!B109:I114`): one quote for the block's own dates, **ACT/360 simple** - the block adds its spread to the
+  ACT/360 rate ("spread ACT/360 basit orana eklenir", `MASA!B69`). Spread over each of the seven curves = quote − the
+  curve's period rate (`MASA!D62:D68`); typed into `MASA!I60` it makes that curve's "Dönem + spread (360)" the quote.
+  A box of its own, not a column of the block: the block's input row is full (B60:N60), and a box keeps the quote beside
+  its label.
+- **Toplu tarih arası faiz → spread** (`EK_TARIH` N:P): a row's **Kote %**, read in the **basis the table shows** (the
+  "Gün esası" selector; the header says which), less the chosen curve's and **Bootstrap**'s rate as the row shows them.
+  Not all seven curves: the table is already wider than a screen, so the chosen curve (the one "+ spread (360)" is
+  priced on) and Bootstrap (Murex's curve); the seven at once are in the box above for one date pair. With ACT/360 the
+  chosen curve's spread, typed as the row's spread, makes "+ spread (360)" the quote; with ACT/365 or O/N the difference
+  is in that basis (quote − the rate shown), not the row's ACT/360 spread.
+
+Code: `tto/extras.py` (`_tto_tarih`, `_tarih_back`, `TARIH_QUOTE`, `TARIH_VS`, `TARIH_BACK`), `tto/views/10_masa.json`
+(TAFS, TAF). Tests: `tests/test_toplufaiz.py` (the quote's spreads), the browser test's "ways back" checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

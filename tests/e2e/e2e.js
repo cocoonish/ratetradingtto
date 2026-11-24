@@ -2276,8 +2276,9 @@ async function clipAfter(page, action) {
       sameAsBlock.push({ r, ok: [...'EFGHIJKLM'].every((c) => typeof got.v[c] === 'number' && Math.abs(got.v[c] - want.v[c]) < 1e-12)
         && [...'FGHIJKLM'].every((c) => got.t[c] === want.t[c] && /%$/.test(got.t[c])), got, want });
     }
-    check('Masa → Faiz · PPK: TOPLU TARİH ARASI FAİZ right after TARİH ARASI FAİZ, its empty rows out of the way; two pairs pasted from Excel '
-      + 'fill two rows', ratesTab.slice(0, 2).join(' ') === 'B9 TAF' && taf0 < 10 && taf1 === taf0 + 2, { ratesTab, taf0, taf1 });
+    check('Masa → Faiz · PPK: TOPLU TARİH ARASI FAİZ right after TARİH ARASI FAİZ (and its box, TARİH ARASI FAİZ → SPREAD), its empty rows '
+      + 'out of the way; two pairs pasted from Excel fill two rows', ratesTab.slice(0, 3).join(' ') === 'B9 TAFS TAF' && taf0 < 10
+      && taf1 === taf0 + 2, { ratesTab, taf0, taf1 });
     check('... each pasted row is the desk block for the same dates and spread: days, every curve\'s ACT/360 rate and MPC ima + spread '
       + '(to 1e-12, and as shown)', sameAsBlock.every((x) => x.ok), sameAsBlock);
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['MASA!C60', 'MASA!E60', 'MASA!I60', 'EK_TARIH!B5', 'EK_TARIH!C5',
@@ -2305,6 +2306,63 @@ async function clipAfter(page, action) {
       { asFra, asPrice, typedFar });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!L332', 'VIOP!M332', 'VIOP!N332', 'VIOP!O332', 'VIOP!P332'] });
     await waitCell(page, 'VIOP!Q332', 't.trim() === ""');
+
+    // ------------------------------------------------------------------ the ways back of 24.11 (items 1, 8, 12)
+    console.log('ways back (24.11): a broken-date quote -> its spread over the curves');
+    await open(page, 'masa');
+    await tab(page, 'rates');
+    // TARİH ARASI FAİZ → SPREAD (the block's box): the block's own MPC ima + spread (360) typed as the quote reads back the
+    // block's spread over MPC ima, every curve's spread is the quote less its period rate, and a spread typed into the block
+    // gives the quote back
+    await waitCell(page, 'MASA!F62', 't.trim() !== ""');
+    const boxQuote = (await cellText(page, 'MASA!F62')).trim();
+    await typeInto(page, 'EK_TARIH!C110', boxQuote);
+    await waitCell(page, 'EK_TARIH!C113', 't.trim() !== ""');
+    const boxQ = await cellV('EK_TARIH!C110');
+    const boxSpreads = [];
+    for (const [k, c] of [...'CDEFGHI'].entries()) {
+      boxSpreads.push({ c, s: await cellV('EK_TARIH!' + c + '113'), d: await cellV('MASA!D' + (62 + k)), t: (await cellText(page, 'EK_TARIH!' + c + '113')).trim() });
+    }
+    const boxBack = {};
+    for (const [k, x] of boxSpreads.entries()) {
+      await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'MASA!I60', value: x.s }] });
+      boxBack[x.c] = await cellV('MASA!F' + (62 + k));
+    }
+    check('Masa → Faiz · PPK: TARİH ARASI FAİZ → SPREAD - the block\'s own MPC ima + spread (360) typed as the quote reads its spread over '
+      + 'MPC ima (−150 bp), each curve\'s spread is the quote less its period rate, each typed into the block\'s spread gives the quote back (1e-9)',
+      Math.abs(boxSpreads[0].s + 150) < 0.51 && /^[+−-]?\d+,\d$/.test(boxSpreads[0].t)
+      && boxSpreads.every((x) => typeof x.s === 'number' && Math.abs(x.s - (boxQ - x.d) * 10000) < 1e-9 && Math.abs(boxBack[x.c] - boxQ) < 1e-9),
+      { boxQuote, boxQ, boxSpreads, boxBack });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['MASA!I60', 'EK_TARIH!C110'] });
+    await waitCell(page, 'EK_TARIH!C110', 't.trim() === ""');       // (an empty spread cell is under its label's text: not found)
+    // TOPLU TARİH ARASI FAİZ: two rows' own "+ spread (360)" pasted as a column of quotes read back their spreads over the chosen
+    // curve (−100, and the general −150); Bootstrap's beside
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'EK_TARIH!B5', value: '15.12.2026' },
+      { ref: 'EK_TARIH!C5', value: '15.03.2027' }, { ref: 'EK_TARIH!D5', value: '-100' }, { ref: 'EK_TARIH!B6', value: '04.01.2027' },
+      { ref: 'EK_TARIH!C6', value: '05.07.2027' }] });
+    for (const r of [5, 6]) {                           // (the rows as the server has them now: their days on the page)
+      await waitCell(page, 'EK_TARIH!E' + r, 't.trim() === ' + JSON.stringify(String(await cellV('EK_TARIH!E' + r))));
+    }
+    const plusTexts = [(await cellText(page, 'EK_TARIH!M5')).trim(), (await cellText(page, 'EK_TARIH!M6')).trim()];
+    await page.evaluate(async (text) => {
+      const g = window.tto.state.page.items.get('TAF').grid;
+      const mod = await import('/static/js/grid.js');
+      const i = g.data.r.indexOf(5), j = g.data.c.indexOf('N');
+      await mod.pasteText(g, { grid: g, top: i, left: j, bottom: i, right: j }, text);
+    }, plusTexts.join('\r\n') + '\r\n');
+    await waitCell(page, 'EK_TARIH!O6', 't.trim() !== ""');
+    const bulkQ = {};
+    for (const ref of ['N5', 'N6', 'O5', 'O6', 'P5', 'P6', 'K5', 'K6']) bulkQ[ref] = await cellV('EK_TARIH!' + ref);
+    const bulkHead = [];
+    for (const c of 'NOP') bulkHead.push((await cellText(page, 'EK_TARIH!' + c + '4')).trim());
+    check('... TOPLU TARİH ARASI FAİZ: two rows\' own + spread (360) pasted as a column of quotes (Kote %) read back their spreads over the '
+      + 'chosen curve (−100, the general −150) and give their spread over Bootstrap beside',
+      Math.abs(bulkQ.O5 + 100) < 0.51 && Math.abs(bulkQ.O6 + 150) < 0.51
+      && [5, 6].every((r) => Math.abs(bulkQ['P' + r] - (bulkQ['N' + r] - bulkQ['K' + r]) * 10000) < 1e-9)
+      && bulkHead.join(' | ') === 'Kote % (ACT/360) | Kote − MPC ima (bp) | Kote − Bootstrap (bp)', { plusTexts, bulkQ, bulkHead });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_TARIH!B5', 'EK_TARIH!C5', 'EK_TARIH!D5', 'EK_TARIH!N5',
+      'EK_TARIH!B6', 'EK_TARIH!C6', 'EK_TARIH!N6'] });
+    await waitCell(page, 'EK_TARIH!M5', 't.trim() === ""');
 
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {
