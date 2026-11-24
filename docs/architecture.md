@@ -82,6 +82,47 @@ priority:
 - **Which cells are inputs** is declared by the view JSON's `inputs[]` (`Service._setup`), so editing a view JSON
   changes which cells can be typed in.
 
+### Two-way tables (`tto/twoway.py`)
+
+The desk, 24.11.2026: "hangisine ben girdiysem diğerini hesaplasın ... Genel olarak tablolar bu şekilde olmalı
+karışıklık olmaması için" - every value of a table's row can be typed; the one typed last stands, the others are worked
+out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY) is the first table on it
+([desk-decisions.md](desk-decisions.md#forward-kotasyon-iki-yönlü-24112026)).
+
+- **Declaration** (the view JSON's `"twoway"`, schema in `tto/views/__init__.py`): a group of same-shaped ranges of one
+  sheet, its members. The cells at one place of every member are a **row-side** (a value date's bid).
+- **Stores.** What is typed into a member is kept in its store: a blank range of the member's shape (FORWARD
+  KOTASYON: hidden columns `AN:AS` of the same rows), declared as an input by `TwoWay` - not in `inputs[]`. The member's
+  own cells are formulas: `IF(ISBLANK(<store>), <worked out>, <store>)`. At most one member keeps what is typed in its
+  own cells (no store, **in place**): the table's input from before, whose formula default is the value the other stores
+  give - so the values users typed there keep their meaning, with no move (FORWARD KOTASYON's spread, `D5:E14`).
+- **Writes** (`Service._set_inputs`, through `TwoWay.expand`): a member's item goes to its store; once its value is
+  taken (parsed, or a formula accepted) the row-side's other stores are cleared in the same write - **the last typed
+  wins**. A value refused clears nothing. In one write (a paste) each row-side takes its last value; a blank beside it
+  clears nothing; a row-side that is only blanked goes back to its default (all its stores cleared). `applied` counts
+  what the user typed, not the stores the mechanism cleared.
+- **Resets** (`/api/reset` with refs: "Kendi girdimi sil", "formüle dön"): a two-way cell stands for its whole row-side
+  (`TwoWay.widen`). "Girdilerimi sıfırla", scenarios (save / load) and "Girdilerim" need nothing: the stores are
+  ordinary inputs ("Girdilerim" names a store by its member's cell).
+- **Formulas** (`inputformula.py`): accepted on the store; a cycle - a formula reading a member of its own row-side - is
+  refused, and its reason names the member's cells (`TwoWay.said`), not the stores.
+- **The page** (`Renderer.cell`, `twoway.mark`): a member is an input (`i`), modified (`m`) when its store holds a value;
+  the anchor gets `an` (the members worked out from it), the others of an anchored row-side `ao` (the anchor's name and
+  cell). The browser draws the anchor bold with ✎ (`grid.js` `cellClass` / `tipOf`, `app.css` `td.in.anchor`); the
+  group's `note` goes under every table showing its members (`TwoWay.note_for`). `/api/cell` gives `input.twoway`.
+- **Temporary copies** (`copies.py`): a member's store is the copy's input; a member typed in a copy writes its store and
+  the copy's own empty values for the row-side's other stores (`TwoWay.copy_write`); Delete in a copy takes the
+  row-side's values away (it follows the table again). Limit: the engine's copy layer cannot unset a value the table holds,
+  so an in-place member typed in the table cannot go back to its formula in a copy - typing another member of that
+  row-side there is refused with the reason.
+- **Values typed over a member before it was two-way** ("Elle değer" at the member's own cell): its row-side's anchor,
+  moved to the store once when the user's values are read (`TwoWay.adopt`, logged); such cells are never declared
+  "Elle değer" inputs at the start (`_declare_saved_cells`).
+- **Adopting it** (the module's docstring has the full list): the builder writes the stores and the members' formulas
+  (the table's inverse formulas: one implementation, as `extras.fwd_outright` / `fwd_rate`); the view declares the group;
+  the tests cover each member typed -> the others, exact round trips, the last typed wins, Delete, a paste, a scenario,
+  the values typed before - and rows that move (`meetings.py`, `rowkeys.py`) must move the stores too.
+
 ## Books and the formula engine
 
 | Book id | File | Recorded (replay pins add-in cells to saved values) | Main sheets |
@@ -196,7 +237,7 @@ The module docstring's list of sheets is incomplete; `_BUILDERS` is the full lis
 
 | Group | Modules |
 |---|---|
-| Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
+| Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `twoway` (two-way tables), `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption`), `bonds` (catalog) |
 | Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |

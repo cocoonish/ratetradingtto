@@ -4,6 +4,7 @@ from __future__ import annotations
 import colorsys
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import twoway
 from .books import Book
 from .xl import numfmt
 from .xl.errors import E_NUM, XlError
@@ -331,6 +332,14 @@ class Renderer(object):
         if ft:
             out["f"] = ft
         d = book.inputs.get((si, rc))
+        tw = book.twoway.get((si, rc)) if book.twoway else None
+        key = (si, rc)
+        if tw is not None and not tw.store:
+            # a member of a two-way table (tto/twoway.py): an input whose value is kept in its store
+            key = tw.store_cell
+            d = book.inputs.get(key)
+        else:
+            tw = None
         if d is not None and d.group == "adhoc" and not (overlay is not None and (si, rc) in overlay):
             d = None                               # typed over by hand ("elle değer"): an input only for whoever did
         if d is not None:
@@ -338,10 +347,12 @@ class Renderer(object):
             opts = book.options_for(si, rc, calc)
             if opts:
                 out["o"] = opts
-            if overlay is not None and (si, rc) in overlay:
-                out["m"] = 1                       # modified by this user
-            elif shared_values is not None and rc in shared_values[si]:
+            if overlay is not None and key in overlay and (tw is None or overlay[key] is not None):
+                out["m"] = 1                       # modified by this user (a two-way member: its store holds a value)
+            elif shared_values is not None and key[1] in shared_values[key[0]] and (tw is None or shared_values[key[0]][key[1]] is not None):
                 out["m"] = 2                       # shared value differs from the workbook
+            if tw is not None:
+                twoway.mark(book, tw, overlay, shared_values, out)
             if numfmt.is_percent_format(fmt):
                 out["ik"] = "pct"
             elif out.get("k") == "d" or d.kind == "date":

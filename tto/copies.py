@@ -166,12 +166,16 @@ class Copies(object):
             except (KeyError, ValueError):
                 return "%s: aralık okunamadı" % q.get("id")
             for cell in found:
+                h = book.twoway.get(cell)
+                if h is not None and h.redirected:
+                    cell = h.store_cell                  # (a two-way table's member: its store is the copy's input)
                 d = book.inputs.get(cell)
                 if d is None or d.group in ("adhoc", "adhoc-shared"):
                     continue
                 if d.scope == "shared":
                     return "ortak girdisi var (%s)" % book.ref(*cell)
-                cells.append(cell)
+                if cell not in cells:
+                    cells.append(cell)
         if not cells:
             return "kişisel girdisi yok"
         return _Table(v, p, book, leads, cells)
@@ -393,8 +397,18 @@ class Copies(object):
         values = dict(cp.values)
         errors: List[str] = []
         applied = skipped = 0
-        for it in items:
+        # a two-way table (twoway.py): a member into its store, its row's other stores the copy's own empty values; a
+        # row only blanked follows the table again
+        tw = self.svc.twoway
+        expanded, clears, blanked = tw.expand(book, items)
+        clears = [c for c in clears if c in t.cells and c not in ro]
+        if clears:
+            tw.copy_clear(book, clears, values)
+            applied += blanked
+        table = None
+        for it, h, said in expanded:
             ref = it.get("ref") if isinstance(it, dict) else None
+            shown = said if h is not None else ref
             try:
                 si, rc = book.cell(ref)
             except (KeyError, ValueError, AttributeError, TypeError):
@@ -405,23 +419,34 @@ class Copies(object):
                 if lenient:
                     skipped += 1
                 else:
-                    errors.append("%s: %s" % (ref, ro.get((si, rc)) or NOT_HERE))
+                    errors.append("%s: %s" % (shown, ro.get((si, rc)) or NOT_HERE))
                 continue
             if isinstance(raw, str) and raw.strip().startswith("="):
-                errors.append("%s: %s" % (ref, FORMULA))
+                errors.append("%s: %s" % (shown, FORMULA))
                 continue
             d = book.inputs[(si, rc)]
             sheet = book.model.sheets[si]
-            xf = sheet.styles.get(rc, 0)
+            fsi, frc = h.member_cell if h is not None else (si, rc)      # (a two-way member: read in its cell's format)
+            xf = book.model.sheets[fsi].styles.get(frc, 0)
             fmt = book.model.numfmts[xf] if xf < len(book.model.numfmts) else "General"
             try:
                 val = parse_input(raw, numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt), d.kind,
                                   book.options_for(si, rc, calc), lang, d.aliases)
             except InputError as exc:
-                errors.append("%s: %s" % (ref, exc))
+                errors.append("%s: %s" % (shown, exc))
                 continue
             key = book.ref(si, rc)
-            if val is None and rc in sheet.fml:
+            if h is not None:
+                if val is None:
+                    tw.copy_clear(book, [(si, rc)], values)
+                else:
+                    if table is None:
+                        table = self.svc._overlay(user, book)
+                    why = tw.copy_write(book, h, _to_json(val), values, table)
+                    if why:
+                        errors.append("%s: %s" % (shown, why))
+                        continue
+            elif val is None and rc in sheet.fml:
                 values.pop(key, None)                    # a formula default: the table's value again
             else:
                 values[key] = _to_json(val)
@@ -438,12 +463,14 @@ class Copies(object):
         cp = self.find(user, cid)
         t = self.tables[(cp.view, cp.panel)]
         if isinstance(refs, list) and refs:
-            gone = set()
+            cells: List[Tuple[int, int]] = []
             for ref in refs:
                 try:
-                    gone.update(t.book.ref(*c) for c in t.book.cells_of(ref))
+                    cells.extend(t.book.cells_of(ref))
                 except (KeyError, ValueError, AttributeError, TypeError):
                     continue
+            # (a two-way table's cell: its whole row follows the table again)
+            gone = {t.book.ref(*c) for c in self.svc.twoway.widen(t.book, cells)}
             values = {k: v for k, v in cp.values.items() if k not in gone}
         else:
             values = {}
@@ -513,11 +540,14 @@ class Copies(object):
                 if not isinstance(r, int) or not isinstance(col, str) or not letter.match(col) or si is None:
                     continue
                 key = (si, r * COLS + col_to_index(col))
+                h = book.twoway.get(key)
+                if h is not None and h.redirected:
+                    key = h.store_cell                   # (a two-way table's member: its store is the copy's input)
                 why = ro.get(key) if key in t.cells else NOT_HERE
                 if why:
-                    for k in ("i", "o", "m", "ik", "ff", "fe"):
+                    for k in ("i", "o", "m", "ik", "ff", "fe", "an", "ao"):
                         cell.pop(k, None)
                     cell["ro"] = why
-                elif key in own:
+                elif key in own and (h is None or own[key] is not None):
                     cell.pop("ff", None)                 # (the copy's own value: no formula of the table's)
                     cell.pop("fe", None)

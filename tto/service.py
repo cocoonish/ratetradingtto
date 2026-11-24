@@ -428,6 +428,10 @@ class Service(object):
             for ref in ("Forward!D2", "Forward!B163", "Forward!L163"):
                 if tto.input_def(*tto.cell(ref)) is None:       # (declared by the page: as it says - a date's tenor)
                     tto.declare(ref, scope="user", group="fwd-pricer", view="forward")
+        # the two-way tables (twoway.py): every value of a row can be typed, the last typed stands - their stores
+        # declared as inputs now, before anything saved is read
+        from .twoway import TwoWay
+        self.twoway = TwoWay(self)
         asw = self.books.get("asw")
         if asw is not None and ex.FXC_SHEET in asw.model.sheet_index and "ASW" in asw.model.sheet_index:
             # the OIS quotes the ASW curve is built from are swapped for the FX swap curve in a calculation of its
@@ -539,8 +543,10 @@ class Service(object):
                 cell = book.cell(ref)
             except (KeyError, ValueError):
                 continue
-            if cell in book.inputs or cell in self._retired_cells(book):
-                continue                       # (a page's input already - shared ones included -, or one that moved)
+            if cell in book.inputs or cell in self._retired_cells(book) or cell in book.twoway:
+                # (a page's input already - shared ones included -, one that moved, or a two-way table's cell: a value
+                # typed over it before is its row's typed value - twoway.TwoWay.adopt)
+                continue
             cells.setdefault(bid, []).append(cell)
         for bid, found in cells.items():
             self.books[bid].declare_cells(found, scope="user", group="adhoc")
@@ -1380,7 +1386,10 @@ class Service(object):
             fresh = []
             retired = self._retired_cells(book)
             dropped = []
-            for (bid, ref), val in self.store.user_inputs(user, book.id).items():
+            rows = self.store.user_inputs(user, book.id)
+            if book.twoway:
+                rows = self.twoway.adopt(user, book, rows)   # (a value typed over a two-way cell before: its row's)
+            for (bid, ref), val in rows.items():
                 try:
                     cell = book.cell(ref)
                 except (KeyError, ValueError):
@@ -2123,6 +2132,11 @@ class Service(object):
                 # columns hidden in Excel stay out of the way until the helper tables are asked for
                 entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
                 self._mark_formulas(entry["data"], book, sheet, user if overlay else None)
+                if book.twoway:
+                    # a two-way table (twoway.py): what its cells do, said under it
+                    tw_note = self.twoway.note_for(book, sheet, p["range"])
+                    if tw_note and tw_note not in (entry.get("note") or ""):
+                        entry["note"] = (entry["note"] + " " if entry.get("note") else "") + tw_note
                 if p.get("tips"):
                     _cell_tips(entry["data"], book, calc, sheet, p["tips"])
                 if p.get("lift", True):
@@ -2227,6 +2241,11 @@ class Service(object):
         rows = {r: i for i, r in enumerate(data["r"])}
         cols = {c: j for j, c in enumerate(data["c"])}
         for (r, c), e in marks.items():
+            h = book.twoway.get((si, r * COLS + c)) if book.twoway else None
+            if h is not None and h.store and not h.member.own:
+                mr, mc = divmod(h.member_cell[1], COLS)    # (a two-way store's formula: shown on its member's cell)
+                if mr in rows and index_to_col(mc) in cols:
+                    r, c = mr, mc
             i, j = rows.get(r), cols.get(index_to_col(c))
             if i is None or j is None:
                 continue
@@ -2475,19 +2494,27 @@ class Service(object):
             calc, overlay = layer, layer.overlay
         loc = numfmt.get_locale(locale or self.settings.locale)
         cell = self.renderers[book.id].cell(calc, si, r, c, loc, overlay)
-        d = book.inputs.get((si, rc))
+        key = (si, rc)
+        tw = book.twoway.get(key)
+        if tw is not None and tw.redirected:
+            key = tw.store_cell                            # (a two-way member: its value is kept in its store)
+        d = book.inputs.get(key)
         sheet = book.model.sheets[si]
         base = sheet.consts.get(rc)
         inp = None if d is None else {"scope": d.scope, "label": d.label, "kind": d.kind}
+        if inp is not None and tw is not None and not tw.store:
+            a = tw.group.anchor(tw.pos, overlay, book.engine.input_value)
+            inp["twoway"] = {"group": tw.group.label, "member": tw.member.name,
+                             "anchor": None if a is None else {"member": a.name, "ref": book.ref(*a.cells[tw.pos])}}
         if inp is not None and cp is not None:
             t = self.copies.tables.get((cp.view, cp.panel))
-            why = None if t is None else (self.copies.readonly(t).get((si, rc)) if (si, rc) in t.cells else "kopyanın girdisi değil")
+            why = None if t is None else (self.copies.readonly(t).get(key) if key in t.cells else "kopyanın girdisi değil")
             inp["copy"] = cp.n
             if why:
                 inp["readonly"] = why
-            elif (si, rc) in layer.overlay:
+            elif layer.overlay.get(key, _NOT_SET) is not _NOT_SET and (tw is None or layer.overlay[key] is not None):
                 inp["own"] = True                          # (the copy's own value; else the table's)
-        e = self.formulas.entry(user, book.id, si, rc) if (self.formulas is not None and inp is not None) else None
+        e = self.formulas.entry(user, book.id, *key) if (self.formulas is not None and inp is not None) else None
         if e is not None and not inp.get("own"):
             inp["formula"] = cell["ff"] = e.text           # (an input typed as a formula: its text, its value in "cell")
             if e.error:
@@ -2758,6 +2785,8 @@ class Service(object):
         whenever what it reads changes; refused - with the reason among the errors - as that module says.
         A change of the trading list (DİBS RV's ISINs) takes the ASW list and Tüm Kâğıtlar along (``follow``:
         :meth:`_follow_trading`).
+        A cell of a two-way table (twoway.py) is kept in its member's store and empties the row's other typed value -
+        the last typed wins; a row only blanked goes back to its default.
         """
         user = self.require_user(user)
         res = self.et.call_at(EngineThread.WRITE, self._set_inputs, user, book_id, items, allow_adhoc, lang or self.settings.locale, lenient)
@@ -2784,15 +2813,41 @@ class Service(object):
         typed_dates: Dict[str, Dict[str, Any]] = {}      # dates typed as a shortcut: ref -> {typed, date, text}
         # a drop-down list Excel reads from a range (VİOP target's contracts, L97:X97) holds what those cells hold now
         calc = self._calc(user, book)
-        for it in items:
+        # a two-way table's cells (twoway.py): each into its member's store - the last value of a row-side only -, the
+        # row-side's other stores emptied once that value is taken; a row-side the write only blanks: all of its stores
+        expanded, tw_clear, tw_blank = self.twoway.expand(book, items)
+        quiet: set = set()                               # (stores the two-way tables emptied: not counted as written)
+        for cell in tw_clear:
+            d = book.inputs.get(cell)
+            (shared_clear if d is not None and d.scope == "shared" else user_clear).append(cell)
+            quiet.add(cell)
+
+        def siblings(tw) -> None:
+            # the member typed is its row-side's value now: the row-side's other stores go
+            for cell in tw.siblings():
+                d = book.inputs.get(cell)
+                if d is not None and d.scope == "shared":
+                    shared_vals.pop(cell, None)
+                    shared_forms.pop(cell, None)
+                    if cell not in shared_clear:
+                        shared_clear.append(cell)
+                else:
+                    user_vals.pop(cell, None)
+                    user_forms.pop(cell, None)
+                    if cell not in user_clear:
+                        user_clear.append(cell)
+                quiet.add(cell)
+
+        for it, tw, said in expanded:
             ref = it.get("ref")
+            shown = said if tw is not None else ref        # (a two-way member's: the cell typed into, not its store)
             try:
                 si, rc = book.cell(ref)
             except (KeyError, ValueError, AttributeError):
                 errors.append("%s: hücre bulunamadı" % ref)
                 continue
             raw = it.get("value")
-            typed_dates.pop(str(ref), None)               # (typed again in the same write: the last one counts)
+            typed_dates.pop(str(shown), None)             # (typed again in the same write: the last one counts)
             if isinstance(raw, str) and raw.strip().startswith("="):
                 # a formula: checked (Bloomberg, a cycle, a cell that takes no formula ...) and evaluated over its scope
                 d = book.inputs.get((si, rc))
@@ -2803,7 +2858,7 @@ class Service(object):
                     val, ent = self.formulas.accept(user, book, si, rc, d, raw, calc,
                                                     list(user_forms.values()) + list(shared_forms.values()))
                 except FormulaError as exc:
-                    errors.append("%s: %s" % (ref, exc))
+                    errors.append("%s: %s" % (shown, self.twoway.said(book, str(exc))))
                     continue
                 if ent.scope:
                     user_vals[(si, rc)] = val
@@ -2815,6 +2870,8 @@ class Service(object):
                     shared_forms[(si, rc)] = ent
                     if (si, rc) in shared_clear:
                         shared_clear.remove((si, rc))
+                if tw is not None:
+                    siblings(tw)
                 continue
             user_forms.pop((si, rc), None)                # (a value typed after a formula in one write: the value)
             shared_forms.pop((si, rc), None)
@@ -2839,7 +2896,10 @@ class Service(object):
                 book.declare(book.ref(si, rc), scope="user", group="adhoc")
                 d = book.inputs[(si, rc)]
             sheet = book.model.sheets[si]
-            fmt = book.model.numfmts[sheet.styles.get(rc, 0)] if sheet.styles.get(rc, 0) < len(book.model.numfmts) else "General"
+            # (a two-way member's value is read in its own cell's format: its store keeps it)
+            fsi, frc = tw.member_cell if tw is not None else (si, rc)
+            fxf = book.model.sheets[fsi].styles.get(frc, 0)
+            fmt = book.model.numfmts[fxf] if fxf < len(book.model.numfmts) else "General"
             options = book.options_for(si, rc, calc)
             if (isinstance(raw, str) and d.kind not in ("amount", "list") and (d.kind == "date" or numfmt.is_date_format(fmt))
                     and shortcuts.date_shortcut(raw) is not None and not _names_an_option(raw, options, d.aliases)):
@@ -2848,31 +2908,33 @@ class Service(object):
                 pending = dict(shared_vals)
                 pending.update(user_vals)                         # (a start typed in the same block counts)
                 try:
-                    day = self._shortcut_date(user, book, si, rc, d, raw, calc, pending)
+                    day = self._shortcut_date(user, book, fsi, frc, d, raw, calc, pending)
                 except (KeyError, ValueError, TypeError, OverflowError) as exc:
-                    errors.append("%s: kısayol anlaşılamadı: %r (%s)" % (ref, raw, exc))
+                    errors.append("%s: kısayol anlaşılamadı: %r (%s)" % (shown, raw, exc))
                     continue
                 if day is not None:
                     text = serial_to_date(day).strftime("%d.%m.%Y")
-                    typed_dates[str(ref)] = {"typed": " ".join(raw.split()), "date": day, "text": text}
+                    typed_dates[str(shown)] = {"typed": " ".join(raw.split()), "date": day, "text": text}
                     raw = text                                    # (a list of days kept as text takes it as its item)
             try:
                 val = parse_input(raw, numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
                                   d.kind, options, lang, d.aliases)
             except InputError as exc:
-                errors.append("%s: %s" % (ref, exc))
+                errors.append("%s: %s" % (shown, exc))
                 continue
             if d.scope == "shared":
-                if val is None and rc in sheet.fml:
+                if val is None and (rc in sheet.fml or tw is not None):
                     shared_clear.append((si, rc))      # a desk input with a formula default: the formula, for everybody
                 else:
                     shared_vals[(si, rc)] = val
-            elif val is None and (rc in sheet.fml or d.group == "adhoc"):
+            elif val is None and (rc in sheet.fml or d.group == "adhoc" or tw is not None):
                 # blanking a formula default = back to the formula; blanking a value typed over any other cell
-                # ("elle değer") = back to what the workbook holds there
+                # ("elle değer") = back to what the workbook holds there; a two-way store: empty again
                 user_clear.append((si, rc))
             else:
                 user_vals[(si, rc)] = val
+            if tw is not None:
+                siblings(tw)
         calendar = None
         typed_n = 0
         for cid, typed in keyed.items():
@@ -2938,7 +3000,8 @@ class Service(object):
         if calendar:
             self._note_private()                        # (what was typed per meeting moved, for everybody)
             self.warm()
-        res: Dict[str, Any] = {"applied": len(shared_vals) + len(shared_clear) + len(user_vals) + len(user_clear) + typed_n,
+        res: Dict[str, Any] = {"applied": len(shared_vals) + sum(1 for c in shared_clear if c not in quiet) + len(user_vals)
+                               + sum(1 for c in user_clear if c not in quiet) + typed_n + tw_blank,
                                "errors": errors}
         if typed_dates:
             res["shortcuts"] = typed_dates               # what was typed as a shortcut, for the cell's tooltip
@@ -3059,7 +3122,7 @@ class Service(object):
         for i, row in enumerate(matrix):
             for j, cellv in enumerate(row):
                 key = (si, (r0 + i) * COLS + c0 + j)
-                if key in book.inputs or allow_adhoc:
+                if key in book.inputs or key in book.twoway or allow_adhoc:     # (a two-way member: into its store)
                     items.append({"ref": "%s!%s" % (sheet, a1(key[1])), "value": cellv})
                 else:
                     skipped += 1
@@ -3089,6 +3152,7 @@ class Service(object):
                     cells.extend(book.cells_of(ref))
                 except (KeyError, ValueError):
                     continue
+            cells = self.twoway.widen(book, cells)          # (a two-way table's cell: its row back to its default)
         n = 0
         res: Dict[str, Any] = {}
         if shared:
@@ -3177,6 +3241,10 @@ class Service(object):
                         continue                       # an input that moved: dropped when the values are loaded
                     d = book.inputs.get(cell)
                     item["label"] = d.label if d else ""
+                    h = book.twoway.get(cell)
+                    if h is not None and h.store:
+                        item["ref"] = book.ref(*h.member_cell)       # (a two-way table's: the cell it was typed into)
+                        item["store"] = ref
                     if (bid, ref) in formulas:
                         item["formula"] = formulas[(bid, ref)]
                         now = self._overlays.get((user, bid), {}).get(cell, _NOT_SET)
