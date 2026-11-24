@@ -40,7 +40,7 @@ Notes on the offshore curve:
 
 - **TRY OIS:**
   - pages: OIS · PPK (and its FRA lists - these are OIS only), Masa, Forward, DV01 Risk, Carry & Roll, VİOP,
-    DİBS RV / Tüm Kâğıtlar, Manuel Tahvil;
+    DİBS RV / Tüm Kâğıtlar (and DİBS RV's ways back: a typed ASW / DM, a switch level -> the clean price), Manuel Tahvil;
   - the OIS mid of Borsa Swap;
   - Trades' OIS MTM;
   - Fiyatlama's OIS and FRA;
@@ -57,8 +57,9 @@ Notes on the offshore curve:
   - RET's "offshore" base;
   - ASW FX's 18M point;
   - the interpolation chart's "Offshore" view.
-- **ASW sheet's own curve:** DİBS ASW's "ASW" column, its fitted curve and history. With EK_FX's quotes in it, it is
-  also the "ASW FX" column (next section).
+- **ASW sheet's own curve:** DİBS ASW's "ASW" column, its fitted curve and history, and its "ASW → temiz fiyat" (a typed
+  ASW's clean price: on this curve, never on ASW FX's). With EK_FX's quotes in it, it is also the "ASW FX" column (next
+  section).
 
 ---
 

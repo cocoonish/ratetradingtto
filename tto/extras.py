@@ -2506,6 +2506,398 @@ def _tto_rv_frn(model: Model) -> None:
         b.set("D4", "Tip (S/T/F/E/B)", like="D4")
 
 
+# ---------------------------------------------------------------------------------------------- bonds the other way round
+# The desk, 24.11.2026 (its answer to the list of tools that worked one way only: "1-2-3-4-5-6-7-8-11-11-13"): a level
+# typed gives the clean price it means, each the exact inverse of what its page works out the other way - the page's own
+# cells, read back:
+#
+# * DİBS ASW: an ASW typed -> the clean price, on the ASW sheet's own OIS curve (its R = (P − O) / Q · 100 solved for
+#   the clean price L; not ASW FX, the same sheet on the FX swap implied rates);
+# * DİBS RV: an ASW (a fixed coupon bond, a bill) or a DM (a TLREF floater) typed -> the clean price, on DİBS RV's TRY
+#   OIS curve (its EH and its DM solver's EL:EN solved for the clean price);
+# * DİBS RV's SWITCH / PAIR: a switch level typed (a yield or an ASW / DM difference, bp) -> the Al leg's clean price,
+#   the Sat leg at the market (the table's own G / I solved for the Al leg's price);
+# * Manuel Tahvil: an ISIN -> the bond's terms as the defaults of the inputs (``_manuel_isin``), so its "Hedef → temiz
+#   fiyat" prices a typed yield, ASW, Z or DM of that bond straight away.
+
+def _need_empty(model: Model, sheet: str, rng: str) -> None:
+    """The cells an addition takes: nothing in the workbook there (no formula, no value)."""
+    sh = model.sheet(sheet)
+    r1, c1, r2, c2 = parse_range(rng)
+    for rc in list(sh.fml) + [rc for rc, v in sh.consts.items() if v not in (None, "")]:
+        r, c = divmod(rc, COLS)
+        if r1 <= r <= r2 and c1 <= c <= c2:
+            raise ValueError("%s!%s%d boş değil" % (sheet, index_to_col(c), r))
+
+
+def _literal(v: Any) -> str:
+    """A workbook constant as a formula's literal (the default an input keeps without what replaces it)."""
+    if v is None:
+        return '""'
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, (int, float)):
+        return repr(float(v))
+    return '"%s"' % str(v).replace('"', '""')
+
+
+ASW_BACK_NAME = "ASW'den temiz fiyat"
+#: ASW: the ASW typed (bp), the clean price it means, that − the clean price in use (L), why there is none
+ASW_BACK = ("V", "W", "X", "Y")
+ASW_LIST = (7, 56)                       # the bonds' rows of the ASW sheet (B7:B56)
+
+
+def asw_clean_from_asw(r: int, asw: str) -> str:
+    """A formula's text: the clean price at which the ASW sheet's row ``r`` has the ASW ``asw`` (bp) - its own
+    R = (P − O) / Q · 100 with O = (L + N) · (1 + TLREF · (spot − valör) / 365), solved for the clean price L: the PV of
+    the cash flows on the sheet's own OIS curve (P), its annuity (Q), the accrued (N) and the carry to the sheet's spot
+    do not depend on the price."""
+    return "($P{r}-({a})/100*$Q{r})/(1+$E$4*($C$4-$M{r})/365)-$N{r}".format(r=r, a=asw)
+
+
+def _asw_back_check(model: Model) -> None:
+    _need_sheets(model, "ASW")
+    for r in range(ASW_LIST[0], ASW_LIST[1] + 1):
+        _need_formula(model, "ASW", "R%d" % r, "($P{r}-$O{r})/$Q{r}*100".format(r=r))
+        _need_formula(model, "ASW", "O%d" % r, "($L{r}+$N{r})*(1+$E$4*($C$4-$M{r})/365)".format(r=r))
+        _need_formula(model, "ASW", "BB%d" % r, "N($L{r})>0".format(r=r))         # (a row is worked out once it has a price)
+        _need_formula(model, "ASW", "U%d" % r, '"Fiyat yok"')
+    _need_captions(model, (("ASW", "R6", "ASW (bp)"), ("ASW", "L6", "Temiz"), ("ASW", "U6", "Durum")))
+    _need_empty(model, "ASW", "%s1:%s%d" % (ASW_BACK[0], ASW_BACK[-1], ASW_LIST[1] + 5))
+
+
+def _asw_back(model: Model) -> None:
+    """DİBS ASW: an ASW typed per bond (each user's own) -> the clean price it means (``asw_clean_from_asw``), its
+    difference to the clean price the table uses, and why a row gives none.  The page shows them in a table of their own
+    under the bonds' table (``views/61_asw.json``, "ASW → temiz fiyat")."""
+    b = SheetBuilder(model, "ASW")
+    typed, clean, diff, why = ASW_BACK
+    b.row("%s6" % typed, ["Hedef ASW (bp)", "Temiz (hedef ASW'den)", "Fark (temiz)", "Not"], like="U6")
+    for r in range(ASW_LIST[0], ASW_LIST[1] + 1):
+        f = {"r": r, "v": typed, "w": clean}
+        b.input("%s%d" % (typed, r), None, fmt="0.0")
+        b.set("%s%d" % (clean, r), '=IFERROR(IF(AND($BB{r},ISNUMBER(${v}{r})),{p},""),"")'.format(
+            p=asw_clean_from_asw(r, "$%s%d" % (typed, r)), **f), like="L%d" % r)
+        b.set("%s%d" % (diff, r), '=IF(AND(ISNUMBER(${w}{r}),N($L{r})>0),${w}{r}-$L{r},"")'.format(**f), fmt="0.000")
+        # why none: a TLREF / CPI bond (its ASW is not worked out here), a bond with no price (its row is not worked out
+        # until it has one - any price will do: the answer does not depend on it), else the table's own status
+        b.set("%s%d" % (why, r), ('=IF(OR($B{r}="",NOT(ISNUMBER(${v}{r})),ISNUMBER(${w}{r})),"",IF($H{r}="T","TLREF endeksli: DM → '
+                                  'temiz fiyat DİBS RV\'de",IF($H{r}="E","TÜFE endeksli: ASW yok",IF(AND(ISNUMBER($AZ{r}),'
+                                  'N($L{r})=0),"Fiyat yok: Manuel temiz\'e bir fiyat yazın - sonuç ona bağlı değil",$U{r}))))'
+                                  ).format(**f), color=NOTE_COLOR)
+
+
+RV_BACK_NAME = "DİBS RV ASW / DM'den fiyat"
+#: DİBS RV: the ASW / DM typed (bp), the clean price it means, that − the clean price in use (O), what it came from / why
+RV_BACK = ("BK", "BL", "BM", "BN")
+RV_LIST = (5, 54)                        # the bonds' rows of DİBS RV (A5:A54)
+#: 1 where the row's place is at or before the column's: MMULT of a row of 24 by it adds the row up to each place.  A
+#: floater's discount factors at its forwards + DM are products over its periods, Π 1 / (1 + (fw + DM) · τ) - the logs
+#: added up period by period, as DİBS RV's own blocks do (OP:PM at DM 0, QL:RI, SH:TE)
+RUNNING_SUM = "--({%s}<={%s})" % (";".join(str(k) for k in range(1, 25)), ",".join(str(k) for k in range(1, 25)))
+
+
+def rv_at(where: Any) -> Callable[[str], str]:
+    """DİBS RV's cells of one bond, for a formula on DİBS RV: ``where`` its row (the row's own cells) or the text of a
+    formula giving its place in the list (the switch's MATCH: INDEX over the list's rows).  ``at("CW")`` a cell,
+    ``at("ID:JA")`` the row's block."""
+    first, last = RV_LIST
+
+    def at(cols: str) -> str:
+        a, _, b = cols.partition(":")
+        if isinstance(where, int):
+            return "$%s%d:$%s%d" % (a, where, b, where) if b else "%s%d" % (a, where)
+        if b:
+            return "INDEX($%s$%d:$%s$%d,%s,0)" % (a, first, b, last, where)
+        return "INDEX($%s$%d:$%s$%d,%s)" % (a, first, a, last, where)
+    return at
+
+
+def rv_clean_from_yield(at: Callable[[str], str], y: str) -> str:
+    """A formula's text: the clean price at which a DİBS RV bond has the BIST simple yield ``y`` (a fraction) - its own
+    yield inverted: a bill / zero coupon bond 100 / (1 + y · days / 365) (DT), else its cash flows at (1 + y / f) a period
+    (the solver's DT:DX: Σ CF · (1 + y / f)^−x, the dirty price at the valör); less the accrued."""
+    return ('IF({cr}="B",100/(1+({y})*{dr}/365),SUMPRODUCT({cf},(1+({y})/{cu})^(-{x})))-{cw}'
+            .format(cr=at("CR"), y=y, dr=at("DR"), cf=at("ID:JA"), cu=at("CU"), x=at("LV:MS"), cw=at("CW")))
+
+
+def rv_clean_from_asw(at: Callable[[str], str], asw: str) -> str:
+    """... the ASW ``asw`` (bp) of a fixed coupon bond or a bill: EH = (PV on the OIS curve − dirty at the OIS spot) /
+    annuity · 100 solved for the dirty price, back to the valör by the funding factor, less the accrued."""
+    return "({eg}-({a})*{ee}/100)/{dd}-{cw}".format(eg=at("EG"), a=asw, ee=at("EE"), dd=at("DD"), cw=at("CW"))
+
+
+def rv_clean_from_dm(at: Callable[[str], str], dm: str) -> str:
+    """... the DM ``dm`` (bp) of a TLREF floater: its cash flows (the projected coupons) discounted period by period at
+    the forwards + DM, Σ CF · Π 1 / (1 + (fw + DM) · τ) - the price DİBS RV's DM solver (EL:EN) solves against, as
+    Manuel Tahvil's J13 discounts its own -, back to the valör by the funding factor, less the accrued."""
+    return ("SUMPRODUCT({cf},EXP(-MMULT(LN(1+({fw}+({d})/10000)*{tau}),{tri})))/{dd}-{cw}"
+            .format(cf=at("ID:JA"), fw=at("NR:OO"), d=dm, tau=at("JZ:KW"), tri=RUNNING_SUM, dd=at("DD"), cw=at("CW")))
+
+
+def _rv_pricing_check(model: Model) -> None:
+    """The DİBS RV formulas the ways back invert: the ASW, the DM solver and its blocks, the yield solver, the bill's
+    yield, the funding factor and the dirty price, on every row of the list."""
+    _need_sheets(model, "DİBS RV")
+    for r in range(RV_LIST[0], RV_LIST[1] + 1):
+        for addr, text in (("EH", "(EG{r}-DI{r})/EE{r}*100"), ("DI", "DH{r}*DD{r}"), ("DH", "DB{r}+CW{r}"),
+                           ("DD", "1+OIS_MAIN!$J$2*($F$2-DC{r})/365"), ("EG", "SUMPRODUCT($ID{r}:$JA{r},$JB{r}:$JY{r})"),
+                           ("EL", "SUMPRODUCT($ID{r}:$JA{r},EXP(-$OP{r}:$PM{r}))-DI{r}"),
+                           ("EN", "SUMPRODUCT($ID{r}:$JA{r},EXP(-$SH{r}:$TE{r}))-DI{r}"),
+                           ("OP", "0+IF((1<=DO{r}),LN(1+(NR{r}+N(0))*JZ{r})"), ("PM", "IF((24<=DO{r}),LN(1+(OO{r}+N(0))*KW{r})"),
+                           ("DT", "(100/DH{r}-1)*365/DR{r}"), ("DX", "SUMPRODUCT($ID{r}:$JA{r},(1+DW{r}/CU{r})^(-$LV{r}:$MS{r}))-DH{r}"),
+                           ("S", "DX{r}"), ("Z", "ROUND(EN{r}*10000,1)"), ("O", "DB{r}")):
+            _need_formula(model, "DİBS RV", "%s%d" % (addr, r), text.format(r=r))
+
+
+def _rv_back_check(model: Model) -> None:
+    _rv_pricing_check(model)
+    _need_captions(model, (("DİBS RV", "Z4", "ASW (S/B) / DM (T) bp"), ("DİBS RV", "O4", "Kullanılan temiz"),
+                           ("DİBS RV", "BE4", "Durum")))
+    _need_empty(model, "DİBS RV", "%s1:%s%d" % (RV_BACK[0], RV_BACK[-1], RV_LIST[1] + 2))
+
+
+def _rv_back(model: Model) -> None:
+    """DİBS RV: an ASW / DM typed per bond (each user's own) -> the clean price it means: a fixed coupon bond's or a
+    bill's ASW (``rv_clean_from_asw``), a TLREF floater's DM (``rv_clean_from_dm``); an FRN has no DM and a CPI linker
+    no ASW (said).  Beside it its difference to the clean price in use and what it came from; the page shows them in a
+    table of their own after the bonds' table (``views/60_dibs.json``, "ASW / DM → temiz fiyat")."""
+    b = SheetBuilder(model, "DİBS RV")
+    typed, clean, diff, how = RV_BACK
+    b.row("%s4" % typed, ["Hedef ASW / DM (bp)", "Temiz (hedeften)", "Fark (temiz)", "Not (hedef)"], like="BE4")
+    for r in range(RV_LIST[0], RV_LIST[1] + 1):
+        at = rv_at(r)
+        x = "$%s%d" % (typed, r)
+        f = {"r": r, "x": x, "w": "$%s%d" % (clean, r)}
+        b.input("%s%d" % (typed, r), None, fmt="0.0")
+        b.set("%s%d" % (clean, r), ('=IFERROR(IF(AND(DG{r},ISNUMBER({x})),IF($D{r}="T",{dm},IF(OR($D{r}="S",$D{r}="B"),{asw},"")),""),"")'
+                                    ).format(dm=rv_clean_from_dm(at, x), asw=rv_clean_from_asw(at, x), **f), like="O%d" % r)
+        b.set("%s%d" % (diff, r), '=IF(AND(ISNUMBER({w}),N($O{r})>0),{w}-$O{r},"")'.format(**f), fmt="0.000")
+        b.set("%s%d" % (how, r), ('=IF(OR($A{r}="",NOT(ISNUMBER({x}))),"",IF(ISNUMBER({w}),IF($D{r}="T","DM\'den","ASW\'den"),'
+                                  'IF($D{r}="F","FRN: DM yok - yalnız fiyatla izlenir",IF($D{r}="E","TÜFE: reel getiri, ASW yok",'
+                                  'IF(DG{r},"hesaplanamadı",IF($BE{r}="Fiyat yok","Fiyat yok: Manuel temiz\'e bir fiyat yazın - sonuç '
+                                  'ona bağlı değil",$BE{r}))))))').format(**f), color=NOTE_COLOR)
+
+
+SW_BACK_NAME = "DİBS RV switch seviyesinden fiyat"
+SW_ROWS = (64, 75)                       # SWITCH / PAIR's pairs (A Sat, B Al, C Sat nominal)
+#: the yield level typed (bp), the Al leg's clean price at it, the ASW / DM level typed (bp), the Al leg's clean price at
+#: it, the Al leg's clean price now, why a level gives none
+SW_BACK = ("U", "V", "W", "X", "Y", "Z")
+SW_NOTE = 78                             # the table's note on the ways back (its own note is row 77)
+
+
+def _sw_parts(r: int) -> Dict[str, str]:
+    """The texts of the switch row ``r``'s pieces, as its own formulas write them: the pair found, each leg's place,
+    yield (S) and ASW / DM (Z)."""
+    sat, al = "MATCH($A{r},$A$5:$A$54,0)".format(r=r), "MATCH($B{r},$A$5:$A$54,0)".format(r=r)
+    return {"ok": "AND($A{r}<>\"\",$B{r}<>\"\",ISNUMBER({s}),ISNUMBER({a}))".format(r=r, s=sat, a=al), "sat": sat, "al": al,
+            "s_sat": "INDEX($S$5:$S$54,%s)" % sat, "s_al": "INDEX($S$5:$S$54,%s)" % al,
+            "z_sat": "INDEX($Z$5:$Z$54,%s)" % sat, "z_al": "INDEX($Z$5:$Z$54,%s)" % al}
+
+
+def _rv_switch_back_check(model: Model) -> None:
+    _rv_pricing_check(model)
+    _need_captions(model, (("DİBS RV", "A63", "Sat (ISIN)"), ("DİBS RV", "B63", "Al (ISIN)"),
+                           ("DİBS RV", "G63", "Getiri farkı (basit, bp)"), ("DİBS RV", "I63", "ASW/DM farkı (bp)")))
+    for r in range(SW_ROWS[0], SW_ROWS[1] + 1):
+        p = {"a": "MATCH($A%d,$A$5:$A$54,0)" % r, "b": "MATCH($B%d,$A$5:$A$54,0)" % r}
+        _need_formula(model, "DİBS RV", "G%d" % r, "(INDEX($S$5:$S$54,%(b)s)-INDEX($S$5:$S$54,%(a)s))*10000" % p)
+        _need_formula(model, "DİBS RV", "I%d" % r, "(INDEX($Z$5:$Z$54,%(b)s)-INDEX($Z$5:$Z$54,%(a)s))*1" % p)
+    _need_empty(model, "DİBS RV", "%s%d:%s%d" % (SW_BACK[0], SW_ROWS[0] - 2, SW_BACK[-1], SW_NOTE))
+    _need_empty(model, "DİBS RV", "A%d:T%d" % (SW_NOTE, SW_NOTE))
+
+
+def _rv_switch_back(model: Model) -> None:
+    """DİBS RV's SWITCH / PAIR: a switch level typed per pair (each user's own) -> the Al leg's clean price, the Sat leg
+    at the market - the table's own differences solved for the Al leg's price: a yield level is Al − Sat BIST simple
+    yield (G: the Al leg's yield is the Sat leg's + the level, ``rv_clean_from_yield``), an ASW / DM level Al − Sat ASW /
+    DM as the page shows them (I: the Sat leg's ASW / DM - a fixed coupon bond's or a bill's ASW, a TLREF floater's DM -
+    + the level is the Al leg's, ``rv_clean_from_asw`` / ``rv_clean_from_dm``).  The pair's rows are typed (its ISINs
+    in the row): what is typed for a pair stays with it when the bond list moves the bonds."""
+    b = SheetBuilder(model, "DİBS RV")
+    y_lvl, y_px, a_lvl, a_px, now, why = SW_BACK
+    b.row("%s63" % y_lvl, ["Getiri seviyesi (bp)", "Al temiz (getiri seviyesinden)", "ASW/DM seviyesi (bp)",
+                           "Al temiz (ASW/DM seviyesinden)", "Al temiz (şimdi)", "Seviye notu"], like="T63")
+    for r in range(SW_ROWS[0], SW_ROWS[1] + 1):
+        p = _sw_parts(r)
+        at = rv_at(p["al"])
+        yl, al_ = "$%s%d" % (y_lvl, r), "$%s%d" % (a_lvl, r)
+        f = dict(p, r=r, yl=yl, al_=al_, yp="$%s%d" % (y_px, r), ap="$%s%d" % (a_px, r))
+        b.input("%s%d" % (y_lvl, r), None, fmt="0.0")
+        b.input("%s%d" % (a_lvl, r), None, fmt="0.0")
+        b.set("%s%d" % (y_px, r), '=IFERROR(IF(AND({ok},ISNUMBER({yl}),ISNUMBER({s_sat}),ISNUMBER({s_al})),{px},""),"")'.format(
+            px=rv_clean_from_yield(at, "%s+%s/10000" % (p["s_sat"], yl)), **f), like="O5")
+        lvl = "%s+%s" % (p["z_sat"], al_)
+        b.set("%s%d" % (a_px, r), ('=IFERROR(IF(AND({ok},ISNUMBER({al_}),ISNUMBER({z_sat}),ISNUMBER({z_al})),IF({kind}="T",{dm},{asw}),'
+                                   '""),"")').format(kind=at("D"), dm=rv_clean_from_dm(at, lvl), asw=rv_clean_from_asw(at, lvl), **f),
+              like="O5")
+        b.set("%s%d" % (now, r), '=IF(AND({ok},OR(ISNUMBER({yl}),ISNUMBER({al_}))),INDEX($O$5:$O$54,{al}),"")'.format(**f), like="O5")
+        b.set("%s%d" % (why, r), ('=IF(NOT({ok}),"",TRIM(IF(AND(ISNUMBER({yl}),NOT(ISNUMBER({yp}))),"Getiri: "&IF(ISNUMBER({s_sat}),'
+                                  '"Al","Sat")&" bacağının getirisi yok (TLREF / FRN ya da fiyatı yok). ","")&IF(AND(ISNUMBER({al_}),'
+                                  'NOT(ISNUMBER({ap}))),"ASW/DM: "&IF(ISNUMBER({z_sat}),"Al","Sat")&" bacağının ASW / DM\'i yok '
+                                  '(FRN / TÜFE ya da fiyatı yok).","")))').format(**f), color=NOTE_COLOR)
+    b.set("A%d" % SW_NOTE, "Seviye → Al fiyatı: Sat bacağı piyasada kalır (kullanılan temiz fiyatının basit getirisi / ASW-DM'i: G ve I "
+                           "sütunlarındaki), Al bacağı yazılan seviyeden çözülür. Getiri seviyesi = Al − Sat BIST basit getirisi (bp); "
+                           "ASW/DM seviyesi = Al − Sat ASW / DM (bp; DİBS RV'nin TRY OIS eğrisine göre - sabit kuponlu ve bono ASW, "
+                           "TLREF'li DM; FRN ve TÜFE'de yok). Al temiz, Al bacağının Manuel temiz'ine yazılınca G / I tam o seviyeyi "
+                           "gösterir.", like="A77")
+
+
+MAN_NAME = "Manuel Tahvil ISIN"
+MAN_SHEET = "Manuel Tahvil"
+MAN_ISIN = 17                            # the ISIN's row of "Girdiler": A its caption, B the ISIN typed, C what it did
+MAN_HELP = ("AL", "AM")                  # the helper block (captions, values) from row MAN_ISIN: what the ISIN finds
+#: the inputs the ISIN gives a default (each keeps the workbook's own without an ISIN): valör, maturity, frequency, kind
+#: of coupon, fixed coupon, TLREF margin, TLREF lag, clean price, the current period's realized index
+MAN_FILLED = ("B3", "B7", "B8", "B10", "B11", "B12", "B13", "B14", "B15")
+MAN_PERIODS = (24, 63)                   # the period table: a TLREF floater's known coupon of the current period (H)
+_MAN_ROWS = ("isin", "rv", "uni", "kind", "priced", "mat", "cpn", "freq", "margin", "known", "index", "price", "source",
+             "valor", "fill", "period", "status", "label", "typed")
+_MAN_CAPTIONS = {"isin": "ISIN", "rv": "DİBS RV satırı", "uni": "Tüm Kâğıtlar satırı", "kind": "Tür", "priced": "DİBS RV fiyatlıyor",
+                 "mat": "Vade", "cpn": "Sabit kupon (yıllık %)", "freq": "Kupon frekansı (yılda)", "margin": "Ek getiri (dönemsel %)",
+                 "known": "Bilinen kupon (dönemsel %)", "index": "Cari dönem gerçekleşen endeks (%)", "price": "Temiz fiyat",
+                 "source": "Fiyatın kaynağı", "valor": "Valör", "fill": "Koşullar dolar", "period": "Cari dönem (sıra)",
+                 "status": "Durum", "label": "Kâğıt", "typed": "Elle yazılan (önce gelir)"}
+
+
+def _man_cell(key: str) -> str:
+    return "$%s$%d" % (MAN_HELP[1], MAN_ISIN + 1 + _MAN_ROWS.index(key))
+
+
+def _manuel_isin_check(model: Model) -> None:
+    _need_sheets(model, MAN_SHEET, "DİBS RV", UNI_SHEET)
+    _need_captions(model, ((MAN_SHEET, "A3", "Valör"), (MAN_SHEET, "A7", "Vade"), (MAN_SHEET, "A8", "Kupon frekansı (yılda)"),
+                           (MAN_SHEET, "A10", "Varsayılan tip (S / D)"), (MAN_SHEET, "A11", "Varsayılan sabit kupon (yıllık %)"),
+                           (MAN_SHEET, "A12", "Varsayılan ek getiri (dönemsel %)"), (MAN_SHEET, "A13", "TLREF gecikme (iş günü)"),
+                           (MAN_SHEET, "A14", "Temiz fiyat"), (MAN_SHEET, "A15", "Cari dönem gerçekleşen endeks getirisi (%)"),
+                           (MAN_SHEET, "H9", "Hedef → temiz fiyat")))
+    _need_formula(model, MAN_SHEET, "B3", "WORKDAY(TODAY(),1,Motor!$A$361:$A$523)")
+    sh = model.sheet(MAN_SHEET)
+    for addr in MAN_FILLED[1:-1]:
+        if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) in (None, ""):
+            raise ValueError("%s!%s bir sabit değil" % (MAN_SHEET, addr))
+    _need_empty(model, MAN_SHEET, "B15:B15")
+    _need_empty(model, MAN_SHEET, "H%d:H%d" % MAN_PERIODS)
+    for k, r in enumerate(range(MAN_PERIODS[0], MAN_PERIODS[1] + 1)):
+        if sh.consts.get(parse_a1("A%d" % r)) != float(k + 1):
+            raise ValueError("%s!A%d dönem sırası değil" % (MAN_SHEET, r))
+    # the period table reads a known coupon first; the current period is the first one paid after the valör
+    _need_formula(model, MAN_SHEET, "R24", 'IF(H24<>"",H24,')
+    _need_formula(model, MAN_SHEET, "AJ18", "IF($B$15<>\"\",$B$15/100,")
+    _need_empty(model, MAN_SHEET, "A%d:C%d" % (MAN_ISIN, MAN_ISIN + 4))
+    _need_empty(model, MAN_SHEET, "%s%d:%s%d" % (MAN_HELP[0], MAN_ISIN, MAN_HELP[1], MAN_ISIN + 1 + len(_MAN_ROWS)))
+    # DİBS RV's cells of a bond read: its kind (F an FRN), maturity, coupon, frequency, TLREF margin, known coupon, the
+    # realized index part of the accrued, the clean price in use, its valör
+    for addr, text in (("D5", "CR5"), ("E5", "CT5"), ("CY5", "N(CX5)/100/CU5"), ("DP5", "$H5"), ("DQ5", "CW5-CY5"),
+                       ("O5", "DB5"), ("P5", "DC5"), ("DG5", "N(DB5)>0")):
+        _need_formula(model, "DİBS RV", addr, text)
+
+
+def _manuel_isin(model: Model) -> None:
+    """Manuel Tahvil: a bond picked by its ISIN (each user's own, B17) gives the inputs its terms as their defaults - what
+    a user types over one is theirs and comes first; Delete brings the bond's back.  The catalog's maturity and coupon
+    (Tüm Kâğıtlar: kept by ISIN); from the bond's DİBS RV row when it is on the trading list Bloomberg's frequency and
+    TLREF margin, the clean price in use and its valör, a floater's known coupon - typed there or its fixed first coupon
+    - and the realized index part of its accrued; off the list semi-annual, the middle of Tüm Kâğıtlar' bid / ask, else
+    today's last trade there.  A fixed coupon bond anywhere on the list; a TLREF floater only on the trading list; a
+    bill / zero coupon bond (Manuel Tahvil's yield is the coupon bonds' rule), an FRN, a CPI linker are refused with the
+    reason, as an ISIN the list does not know.  Without an ISIN every input keeps the workbook's own default."""
+    sh = model.sheet(MAN_SHEET)
+    b = SheetBuilder(model, MAN_SHEET)
+    c = _man_cell
+    rv, uni = "'DİBS RV'!$%s$5:$%s$54", "%s!$%%s$%d:$%%s$%d" % (UNI_SHEET, UNI_FIRST, UNI_LAST)
+
+    def R(col: str) -> str:                         # the bond's DİBS RV cell
+        return "INDEX(%s,%s)" % (rv % (col, col), c("rv"))
+
+    def U(col: str) -> str:                         # ... its Tüm Kâğıtlar cell
+        return "INDEX(%s,%s)" % (uni % (col, col), c("uni"))
+
+    d = {"S": "fixed", "T": "float", "F": "frn", "E": "cpi", "B": "bill"}
+    rv_kind = '""'
+    for code, kind in reversed(list(d.items())):
+        rv_kind = 'IF(%s="%s","%s",%s)' % (R("D"), code, kind, rv_kind)
+    # (a cell of a row not found is an error: every guard below is an IF, which reads only the branch it takes - an
+    # AND would read its error)
+    two_sided = "AND(ISNUMBER(%s),ISNUMBER(%s))" % (U("I"), U("J"))
+    last_today = "AND(ISNUMBER(%s),%s=TODAY())" % (U("K"), U("L"))
+    by_catalog = 'IF(ISNUMBER(%s),ROUND(%s*100,6),"")' % (U("D"), U("D"))
+    f = {
+        "isin": '=SUBSTITUTE(UPPER(TRIM($B$%d&""))," ","")' % MAN_ISIN,
+        "rv": '=IF(%s="","",IFERROR(MATCH(%s,%s,0),""))' % (c("isin"), c("isin"), rv % ("A", "A")),
+        "uni": '=IF(%s="","",IFERROR(MATCH(%s,%s,0),""))' % (c("isin"), c("isin"), uni % ("A", "A")),
+        # the catalog's kind (Tüm Kâğıtlar), else DİBS RV's for a bond it has data of
+        "kind": '=IF(%s="","",IF(IFERROR(%s&"","")<>"",%s&"",IF(ISNUMBER(%s),IF(ISNUMBER(%s),%s,""),"")))' % (
+            c("isin"), U(UNI_KIND), U(UNI_KIND), c("rv"), R("CT"), rv_kind),
+        "priced": "=IF(ISNUMBER(%s),%s=TRUE,FALSE)" % (c("rv"), R("DG")),
+        "mat": '=IF(ISNUMBER(%s),%s,IF(ISNUMBER(%s),IF(ISNUMBER(%s),%s,""),""))' % (U("E"), U("E"), c("rv"), R("CT"), R("CT")),
+        # (the catalog's - a fixed coupon never changes -, else Bloomberg's on DİBS RV)
+        "cpn": '=IF(ISNUMBER(%s),%s,IF(ISNUMBER(%s),IF(N(%s)>0,%s,""),""))' % (
+            by_catalog, by_catalog, c("rv"), R("CS"), R("CS")),
+        "freq": "=IF(ISNUMBER(%s),IF(N(%s)>0,%s,2),2)" % (c("rv"), R("CU"), R("CU")),
+        "margin": "=IF(ISNUMBER(%s),N(%s),0)" % (c("rv"), R("CY")),
+        "known": '=IF(ISNUMBER(%s),%s,"")' % (c("rv"), R("DP")),
+        "index": '=IF(%s,IF(%s="float",%s,""),"")' % (c("priced"), c("kind"), R("DQ")),
+        "price": '=IF(%s,%s,IF(ISNUMBER(%s),IF(%s,(%s+%s)/2,IF(%s,%s,"")),""))' % (
+            c("priced"), R("O"), c("uni"), two_sided, U("I"), U("J"), last_today, U("K")),
+        "source": '=IF(%s,"DİBS RV · kullanılan temiz",IF(NOT(ISNUMBER(%s)),"",IF(%s,"Tüm Kâğıtlar · bid / ask ortası",'
+                  '"Tüm Kâğıtlar · bugünkü son işlem")))' % (c("priced"), c("price"), two_sided),
+        "valor": '=IF(%s,%s,"")' % (c("priced"), R("P")),
+        # (TODAY, not the valör: the valör's default reads this)
+        "fill": '=AND(%s<>"",ISNUMBER(%s),N(%s)>TODAY(),OR(AND(%s="fixed",ISNUMBER(%s)),AND(%s="float",ISNUMBER(%s))))' % (
+            c("isin"), c("mat"), c("mat"), c("kind"), c("cpn"), c("kind"), c("rv")),
+        "period": '=COUNTIF($C$%d:$C$%d,"<="&$B$3)+1' % MAN_PERIODS,
+        "label": '=IF(ISNUMBER(%s),%s&"",IF(ISNUMBER(%s),TEXT(%s,"dd.mm.yy"),""))' % (c("uni"), U("B"), c("mat"), c("mat")),
+        # what a user typed over a default the bond gives (theirs comes first)
+        "typed": ('=IF(NOT(%(fill)s),"",TRIM(IF(N($B$7)<>N(%(mat)s),"vade ","")&IF(N($B$8)<>N(%(freq)s),"frekans ","")'
+                  '&IF(UPPER($B$10&"")<>IF(%(kind)s="float","D","S"),"tip ","")&IF(N($B$11)<>IF(%(kind)s="fixed",N(%(cpn)s),0),'
+                  '"kupon ","")&IF(N($B$12)<>IF(%(kind)s="float",N(%(margin)s),0),"ek getiri ","")&IF(AND(ISNUMBER(%(price)s),'
+                  'N($B$14)<>N(%(price)s)),"fiyat ","")&IF(AND(ISNUMBER(%(valor)s),N($B$3)<>N(%(valor)s)),"valör","")))') % {
+            k: c(k) for k in _MAN_ROWS},
+    }
+    ok = ('%(label)s&" · "&IF(%(kind)s="float","TLREF + %%"&TEXT(%(margin)s,"0.00")&" ek getiri (dönemsel) · "&IF(ISNUMBER(%(known)s),'
+          '"cari dönemin kuponu %%"&TEXT(%(known)s,"0.00")&" (bilinen, dönemsel)","cari dönemin kuponu gerçekleşen endeksten"),'
+          '"sabit %%"&TEXT(%(cpn)s,"0.00"))&" · yılda "'
+          '&%(freq)s&" kupon · "&IF(ISNUMBER(%(price)s),"fiyat: "&%(source)s,"fiyat yok: Temiz fiyat\'ı yazın (Hedef → temiz fiyat '
+          'fiyatsız da çalışır)")&IF(%(typed)s<>""," · elle yazılan (önce gelir): "&%(typed)s,"")') % {k: c(k) for k in _MAN_ROWS}
+    f["status"] = ('=IF(%(isin)s="","Kâğıdın ISIN\'i: vadesi, kuponu, frekansı ve fiyatı girdilere gelir (yazdığınız değer önce '
+                   'gelir)",IF(AND(NOT(ISNUMBER(%(rv)s)),NOT(ISNUMBER(%(uni)s))),"ISIN kâğıt listesinde yok (Tüm Kâğıtlar, DİBS RV)",'
+                   'IF(%(kind)s="","Kâğıdın türü henüz bilinmiyor (Bloomberg\'den bekleniyor)",IF(OR(%(kind)s="bill",%(kind)s="zero"),'
+                   '"Bono / kuponsuz: Manuel Tahvil kuponlu kâğıt içindir (getirisi kupon kuralıyla) - DİBS ASW / DİBS RV\'deki ASW → '
+                   'temiz fiyat tablolarını kullanın",IF(%(kind)s="cpi","TÜFE\'ye endeksli: reel kupon ve endeks - Manuel Tahvil '
+                   'fiyatlamaz",IF(%(kind)s="frn","FRN: TLREF dışı endeks - Manuel Tahvil fiyatlamaz",IF(AND(%(kind)s="float",'
+                   'NOT(ISNUMBER(%(rv)s))),"TLREF\'e endeksli: kupon payı ve bilinen kupon DİBS RV\'den gelir - kâğıdı trading '
+                   'listesine ekleyin (☆)",IF(NOT(ISNUMBER(%(mat)s)),"Vadesi bilinmiyor",IF(N(%(mat)s)<=TODAY(),"Vadesi geçmiş",'
+                   'IF(NOT(%(fill)s),"Kuponu bilinmiyor: koşullar gelmedi",') % {k: c(k) for k in _MAN_ROWS} + ok + "))))))))))"
+    b.set("%s%d" % (MAN_HELP[0], MAN_ISIN), "ISIN'den (Girdiler'in B%d'si)" % MAN_ISIN, bold=True)
+    for key in _MAN_ROWS:
+        r = MAN_ISIN + 1 + _MAN_ROWS.index(key)
+        b.set("%s%d" % (MAN_HELP[0], r), _MAN_CAPTIONS[key])
+        b.set("%s%d" % (MAN_HELP[1], r), f[key], fmt=DATE if key in ("mat", "valor") else ("0.0000" if key in ("price",) else None))
+    # the ISIN's row of Girdiler
+    b.set("A%d" % MAN_ISIN, "ISIN", like="A16")
+    b.input("B%d" % MAN_ISIN, None, align="center")
+    b.set("C%d" % MAN_ISIN, "=" + c("status"), like="C16")
+    # the inputs' defaults: the bond's terms, else what the workbook has
+    fill, kind = c("fill"), c("kind")
+    was = {a: (formula_of(model, MAN_SHEET, a) if parse_a1(a) in sh.fml else _literal(sh.consts.get(parse_a1(a))))
+           for a in MAN_FILLED}
+    b.patch("B3", "=IF(AND(%s,ISNUMBER(%s)),%s,%s)" % (fill, c("valor"), c("valor"), was["B3"]))
+    b.patch("B7", "=IF(%s,%s,%s)" % (fill, c("mat"), was["B7"]))
+    b.patch("B8", "=IF(%s,%s,%s)" % (fill, c("freq"), was["B8"]))
+    b.patch("B10", '=IF(%s,IF(%s="float","D","S"),%s)' % (fill, kind, was["B10"]))
+    b.patch("B11", '=IF(%s,IF(%s="fixed",%s,0),%s)' % (fill, kind, c("cpn"), was["B11"]))
+    b.patch("B12", '=IF(%s,IF(%s="float",%s,0),%s)' % (fill, kind, c("margin"), was["B12"]))
+    b.patch("B13", "=IF(AND(%s,%s=\"float\"),'DİBS RV'!$V$2,%s)" % (fill, kind, was["B13"]))
+    # (a bond without a price: none, rather than the file's - the targets' clean prices do not need one)
+    b.patch("B14", '=IF(%s,IF(ISNUMBER(%s),%s,""),%s)' % (fill, c("price"), c("price"), was["B14"]))
+    b.set("B15", '=IF(AND(%s,%s="float",ISNUMBER(%s)),%s,"")' % (fill, kind, c("index"), c("index")), like="B15")
+    for r in range(MAN_PERIODS[0], MAN_PERIODS[1] + 1):
+        b.set("H%d" % r, '=IF(AND(%s,%s="float",$A%d=%s,ISNUMBER(%s)),%s,"")' % (fill, kind, r, c("period"), c("known"), c("known")),
+              like="H%d" % r)
+
+
 # ---------------------------------------------------------------------------------------------- carry path
 CARRY_SHEET = "EK_CARRY"
 #: the TLREF path the carry engine compounds over the horizon: the value of the choice, and what it is
@@ -4236,7 +4628,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx), (ASW_HIST_NAME, _asw_hist_check, _asw_hist),
-            (INTERP_ASW_NAME, _asw_interp_check, _asw_interp)),
+            (INTERP_ASW_NAME, _asw_interp_check, _asw_interp), (ASW_BACK_NAME, _asw_back_check, _asw_back)),
     # (the holiday sheet and the FX value dates first: the forward tables below date their tenors on its calendars)
     "tto": ((HOL_SHEET, _holidays_check, _tto_holidays), (FX_DATE_NAME, _fx_dates_check, _tto_fx_dates),
             (OIS_SPOT_NAME, _ois_spot_check, _tto_ois_spot),
@@ -4249,6 +4641,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
             ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),
+            # (the ways back of the bonds: after the FRN, whose kind "F" they refuse a DM; Manuel Tahvil reads Tüm Kâğıtlar)
+            (RV_BACK_NAME, _rv_back_check, _rv_back), (SW_BACK_NAME, _rv_switch_back_check, _rv_switch_back),
+            (MAN_NAME, _manuel_isin_check, _manuel_isin),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),

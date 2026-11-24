@@ -2511,6 +2511,73 @@ async function clipAfter(page, action) {
       && pick2.on.join() === 'OIS' && pick2.title === pick0.title, { pick0, pick1, pick2, n3 });
     await shot(page, '12-asw');
 
+    // ------------------------------------------------------------------ bonds the other way round (the desk, 24.11.2026)
+    console.log('bonds the other way round: ASW / DM / switch level -> clean price, Manuel Tahvil ISIN');
+    const ktCell = async (book, ref) => ((await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=' + book + '&ref=' + encodeURIComponent(ref))).json || {}).cell || {};
+    const ktV = async (book, ref) => (await ktCell(book, ref)).v;                  // a number's value
+    const ktT = async (book, ref) => String((await ktCell(book, ref)).t || '').trim();   // a text cell's (its value is its text)
+    const ktTyped = (v) => String(v).replace('.', ',');           // a figure typed as the desk types it (full precision)
+    const ktRow = async (book, list, first, isin) => {
+      for (let r = first; r < first + 50; r++) if ((await ktT(book, list + r)) === isin) return r;
+      throw new Error(isin + ' not on ' + list + first + '…');
+    };
+    const ktReset = [['asw', []], ['tto', []]];
+    try {
+      // DİBS ASW: a bond's own ASW typed in "ASW → temiz fiyat" gives back its own clean price
+      const ktA = await ktRow('asw', 'ASW!B', 7, 'TRT150328T24');
+      const ktAswOn = await panelsOnPage(page);
+      ktReset[0][1].push('ASW!V' + ktA);
+      await typeInto(page, 'ASW!V' + ktA, ktTyped(await ktV('asw', 'ASW!R' + ktA)));
+      await waitCell(page, 'ASW!W' + ktA, 't.trim() !== ""');
+      const ktAsw = { got: await ktV('asw', 'ASW!W' + ktA), clean: await ktV('asw', 'ASW!L' + ktA), shown: (await cellText(page, 'ASW!W' + ktA)).trim(),
+        table: (await cellText(page, 'ASW!L' + ktA)).trim(), diff: (await cellText(page, 'ASW!X' + ktA)).trim() };
+      check('DİBS ASW: "ASW → temiz fiyat" right under the bonds\' table - a bond\'s own ASW typed gives back its own clean price (1e-9, '
+        + 'and as shown), the difference 0', ktAswOn[ktAswOn.indexOf('tbl') + 1] === 'aswters' && Math.abs(ktAsw.got - ktAsw.clean) < 1e-9
+        && ktAsw.shown === ktAsw.table && /^-?0,000$/.test(ktAsw.diff), { ktAswOn, ktAsw });
+      // DİBS RV: a TLREF floater's own DM typed in "ASW / DM → temiz fiyat" gives back its clean price
+      await open(page, 'dibs');
+      const ktF = await ktRow('tto', 'DİBS RV!A', 5, 'TRT090130T12');
+      const ktRvOn = await panelsOnPage(page);
+      ktReset[1][1].push('DİBS RV!BK' + ktF);
+      await typeInto(page, 'DİBS RV!BK' + ktF, ktTyped((await ktV('tto', 'DİBS RV!EN' + ktF)) * 10000));
+      await waitCell(page, 'DİBS RV!BL' + ktF, 't.trim() !== ""');
+      const ktDm = { got: await ktV('tto', 'DİBS RV!BL' + ktF), clean: await ktV('tto', 'DİBS RV!O' + ktF), how: (await cellText(page, 'DİBS RV!BN' + ktF)).trim() };
+      check('DİBS RV: "ASW / DM → temiz fiyat" after the bonds\' table - a TLREF floater\'s own DM typed gives back its clean price (1e-9), '
+        + 'said from its DM', ktRvOn[ktRvOn.indexOf('B3') + 1] === 'B3r' && Math.abs(ktDm.got - ktDm.clean) < 1e-9 && ktDm.how === 'DM\'den',
+      { ktRvOn, ktDm });
+      // SWITCH / PAIR: the pair's own yield difference typed as the level gives the Al leg's own clean price
+      ktReset[1][1].push('DİBS RV!A64', 'DİBS RV!B64', 'DİBS RV!C64', 'DİBS RV!U64');
+      await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'DİBS RV!A64', value: 'TRT150328T24' },
+        { ref: 'DİBS RV!B64', value: 'TRT130928T38' }, { ref: 'DİBS RV!C64', value: '10' }] });
+      await waitCell(page, 'DİBS RV!G64', 't.trim() !== ""');
+      await typeInto(page, 'DİBS RV!U64', ktTyped(await ktV('tto', 'DİBS RV!G64')));
+      await waitCell(page, 'DİBS RV!V64', 't.trim() !== ""');
+      const ktAl = await ktRow('tto', 'DİBS RV!A', 5, 'TRT130928T38');
+      const ktSw = { got: await ktV('tto', 'DİBS RV!V64'), al: await ktV('tto', 'DİBS RV!O' + ktAl), now: await ktV('tto', 'DİBS RV!Y64'),
+        shown: (await cellText(page, 'DİBS RV!V64')).trim(), alShown: (await cellText(page, 'DİBS RV!Y64')).trim() };
+      check('DİBS RV · SWITCH / PAIR: the pair\'s own yield difference typed as the level gives the Al leg\'s own clean price (1e-9), '
+        + 'beside it its price now', Math.abs(ktSw.got - ktSw.al) < 1e-9 && ktSw.now === ktSw.al && ktSw.shown === ktSw.alShown, ktSw);
+      // Manuel Tahvil: an ISIN fills the bond's terms; its own ASW as the target gives back its clean price
+      await open(page, 'manuel');
+      ktReset[1][1].push('Manuel Tahvil!B17', 'Manuel Tahvil!I11');
+      await typeInto(page, 'Manuel Tahvil!B17', 'TRT150328T24');
+      await waitCell(page, 'Manuel Tahvil!C17', 't.startsWith("15.03.28 · sabit %36,80")');
+      const ktMan = { mat: (await cellText(page, 'Manuel Tahvil!B7')).trim(), cpn: await ktV('tto', 'Manuel Tahvil!B11'),
+        price: await ktV('tto', 'Manuel Tahvil!B14'), rv: await ktV('tto', 'DİBS RV!O' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24')),
+        status: (await cellText(page, 'Manuel Tahvil!C17')).trim() };
+      await typeInto(page, 'Manuel Tahvil!I11', ktTyped(await ktV('tto', 'Manuel Tahvil!F15')));
+      await waitCell(page, 'Manuel Tahvil!J11', 't.trim() !== ""');
+      ktMan.back = await ktV('tto', 'Manuel Tahvil!J11');
+      check('Manuel Tahvil: the ISIN fills the bond\'s terms (maturity, coupon, DİBS RV\'s clean price) and says so; its own ASW as the target '
+        + 'gives back its clean price (1e-9)', ktMan.mat === '15.03.2028' && ktMan.cpn === 36.8 && ktMan.price === ktMan.rv
+        && /fiyat: DİBS RV · kullanılan temiz$/.test(ktMan.status) && Math.abs(ktMan.back - ktMan.price) < 1e-9, ktMan);
+    } catch (err) {
+      check('bonds the other way round: the checks ran to their end', false, String((err && err.stack) || err));
+    } finally {
+      for (const [book, refs] of ktReset) if (refs.length) await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book, refs });
+      await open(page, 'asw');                                    // (the page the next checks found here before)
+    }
+
     // ------------------------------------------------------------------ history: matrix, meeting pricing, calendar
     console.log('history: end-of-day matrix, meeting pricing, calendar');
     // the server fills the history of the recorded month in the background (about a minute after its start)

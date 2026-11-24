@@ -64,8 +64,9 @@ def _col(letters: str) -> int:
     return col_to_index(letters)
 
 
-#: the lists of bonds.  DİBS RV's rows run on in DİBS Trading's (EK_DIBS: the same rows); DİBS ASW's are B:U and its
-#: helper columns (LR there is the holiday list); Eurobond Kotaları's own bid / ask (C, D) stay with their row
+#: the lists of bonds.  DİBS RV's rows run on in DİBS Trading's (EK_DIBS: the same rows) - its typed ASW / DM (BK) too;
+#: DİBS ASW's are B:U, the typed ASW and its price (V:Y) and its helper columns (LR there is the holiday list); Eurobond
+#: Kotaları's own bid / ask (C, D) stay with their row
 LISTS: Tuple[RowList, ...] = (
     RowList("dibs", "tto", "DİBS RV", "A", 5, 54, "shared", "DİBS RV", {"DİBS RV": (2, _ALL, ()), "EK_DIBS": (1, _ALL, ())}),
     RowList("asw", "asw", "ASW", "B", 7, 56, "shared", "DİBS ASW", {"ASW": (_col("C"), _col("EF"), ())}),

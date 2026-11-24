@@ -186,8 +186,10 @@ priority:
 
 Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01, the calculators' ways back
 written beside their blocks (the Forward sheet's points → rate, bond carry's price → repo `Forward!U71:V72`, Implied
-Move's move → vol `Calculators!N44:O49`) and others. The module docstring's list of sheets is incomplete; `_BUILDERS` is
-the full list.
+Move's move → vol `Calculators!N44:O49`), the bonds' ways back (24.11.2026: a typed level -> the clean price, on the
+workbook sheets' own free cells: `ASW!V:Y`, `DİBS RV!BK:BN`, SWITCH / PAIR's `DİBS RV!U:Z`, Manuel Tahvil's ISIN `B17`
+with its helper block `AL17:AM36` and the inputs' defaults it gives; [desk-decisions.md](desk-decisions.md)) and others.
+The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 ## Module map
 

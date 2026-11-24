@@ -1089,6 +1089,58 @@ Code: `tto/extras.py` (`_tto_tarih`, `_tarih_back`, `TARIH_QUOTE`, `TARIH_VS`, `
 `30_forward.json` (B24), `90_calc.json` (B23). Tests: `tests/test_toplufaiz.py` (the quote's spreads), `tests/test_hesap_ters.py`,
 the browser test's "ways back" checks.
 
+### Kâğıtlar tersinden: a level typed -> the clean price (24.11.2026)
+
+Fourteen pricing tools that worked one way only were listed to the desk; the answer:
+
+> "1-2-3-4-5-6-7-8-11-11-13"
+
+Items 5, 6 and 7 are the bonds' (as offered, in the coordinator's words): "5. DİBS ASW: ASW → price. Type 'ASW + x' and
+get the clean price; for floaters on DİBS RV, a DM → the price." · "6. Switch level → price. On DİBS RV's SWITCH / PAIR,
+type the quoted switch level and see the leg's price." · "7. Manuel Tahvil: ISIN box. It fills in the bond's terms, so a
+typed ASW or yield gives the price straight away."
+
+- **What was built.** Each answer is the exact inverse of what its page works out the other way, on the page's own cells
+  (typed back as the bond's manual clean price, the price gives back the level to 1e-9):
+  - **DİBS ASW** "ASW → temiz fiyat" (its own table under the bonds' table; `ASW!V:Y`): an ASW (bp) -> the clean price, the
+    sheet's own `R = (P − O) / Q · 100` solved for `L`.
+  - **DİBS RV** "ASW / DM → temiz fiyat" (its own table after the bonds' table; `DİBS RV!BK:BN`): a fixed coupon bond's or a
+    bill's ASW (`EH` inverted), a TLREF floater's DM (its cash flows discounted at the forwards + DM period by period, the
+    price DİBS RV's DM solver `EL:EN` solves against - as Manuel Tahvil's DM target discounts).
+  - **SWITCH / PAIR** (`DİBS RV!U:Z`): a yield level (Al − Sat BIST simple yield, as `G`) or an ASW / DM level (Al − Sat
+    ASW / DM as the page shows them, as `I`) -> the Al leg's clean price.
+  - **Manuel Tahvil** ISIN (`B17`): the bond's terms as the inputs' defaults - maturity and fixed coupon from the catalog
+    (Tüm Kâğıtlar), frequency, TLREF margin and lag, the current period's known coupon or realized index, the clean price
+    and valör from its DİBS RV row (off the trading list: Tüm Kâğıtlar' bid / ask middle, else today's last trade).
+- **Conventions settled while building it** (the request did not say; ask the desk before changing):
+  - "ASW + x" is read as **an ASW level typed in bp** (−50, 25), not as a spread over today's ASW.
+  - **Which curve**: DİBS ASW's on the ASW sheet's own OIS curve (not ASW FX); DİBS RV's (and the switch's) on DİBS RV's TRY
+    OIS curve. The two pages give the same bond two ASWs, as before; each reverse is its own page's.
+  - **The switch**: the Sat leg stays at the market (its yield / ASW-DM at the clean price in use), the Al leg is solved;
+    the ASW / DM level is against the Sat leg's ASW / DM as the page shows it (0.1 bp), as `I` is. A yield level needs
+    both legs' yields (none for TLREF / FRN legs), an ASW / DM level both legs' ASW / DM (none for FRN / CPI).
+  - **DİBS RV's typed level is an ASW for fixed coupon bonds and bills, a DM for TLREF floaters** - one column, as the
+    page's own "ASW / DM" column; an FRN has no DM (the bond list's rule of 15.11 above: an FRN has no DM, only a price),
+    a CPI linker no ASW: said on the row.
+  - **A bond with no price** is not worked out by either sheet (their rows need a price): any manual clean price makes it,
+    and the answer does not depend on it (said on the row).
+  - **Manuel Tahvil's ISIN** fills defaults: a value typed over one comes first and is named in C17 ("elle yazılan (önce
+    gelir)"); Delete brings the bond's back; without an ISIN every input is the workbook's own. Bills and zero coupon bonds
+    are refused (Manuel Tahvil's yield is the coupon bonds' rule, Σ CF / (1 + s/f)^(k−1+w), not BIST's bill yield - a bill
+    typed there would get a wrong price; DİBS ASW / DİBS RV price them), as are FRNs (not TLREF), CPI linkers, a TLREF
+    floater off the trading list (its margin and known coupon are DİBS RV's), a coupon bond without a coupon and an ISIN
+    the list does not know. A bond with no market price gets no clean price (C17 says so; the targets need none).
+- **No new Bloomberg request**: every figure comes from cells the pages already have (Manuel Tahvil's fallback price reads
+  Tüm Kâğıtlar' existing bid / ask / last trade cells).
+- **Rows move**: DİBS ASW's and DİBS RV's typed levels are on the bonds' rows and go with their ISIN (`rowkeys`); the
+  switch's levels belong to the pair typed by ISIN in their row; Manuel Tahvil finds its bond by ISIN. (In replay each DİBS
+  RV row keeps the Bloomberg answers recorded for it, so a moved bond's answers there are its new row's; on the desk they
+  follow the ISIN.)
+
+Code: `tto/extras.py` ("bonds the other way round": `_asw_back`, `_rv_back`, `_rv_switch_back`, `_manuel_isin`,
+`asw_clean_from_asw`, `rv_clean_from_yield` / `_asw` / `_dm`), `tto/views/61_asw.json` (aswters), `60_dibs.json` (B3r, B4),
+`62_manuel.json` (B2, B10). Tests: `tests/test_kagitters.py`, the browser test's "bonds the other way round" checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`
