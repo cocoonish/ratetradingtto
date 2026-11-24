@@ -297,9 +297,9 @@ def test_a_pasted_column_and_a_scenario(svc):
 def test_values_typed_before_keep_their_meaning(svc):
     """What users typed before this change: a hub typed when it was the page's input (Volatilite, Basit, the DF ...) is
     its calculator's typed value now - moved to its store once, reading the same; a value typed over a computed cell
-    ("Elle değer") likewise; one typed as an input formula keeps its value (the formula goes: the cell is no input of
-    its own any more - inputformula's rule, said in the log); the top band's Forward and DV01's shocks, in place, read as
-    they did."""
+    ("Elle değer") likewise; one typed as an input formula moves with its formula into the store and stays live (the
+    mechanism's adoption of old formulas, cift-yon 2d651fe - it used to keep only the value); the top band's Forward and
+    DV01's shocks, in place, read as they did."""
     u = svc.login("hy eski")["user"]
     svc.store.set_user_inputs(u, "tto", {CALC + "!O39": 0.27, CALC + "!O12": 0.5, CALC + "!R38": 0.9, CALC + "!O15": 0.66,
                                          CALC + "!AA10": 55.5, "DV01_RISK!E70": 7.0, CALC + "!C54": 99.0},
@@ -311,7 +311,7 @@ def test_values_typed_before_keep_their_meaning(svc):
     assert cell(svc, CALC + "!O39", u) == 0.27 and cell(svc, CALC + "!O40", u) == pytest.approx(0.27 * 0.5)
     assert cell(svc, CALC + "!R38", u) == 0.9 and cell(svc, CALC + "!O15", u) == 0.66 and cell(svc, CALC + "!C54", u) == 99.0
     assert cell(svc, CALC + "!AA10", u) == 55.5 and cell(svc, "DV01_RISK!E70", u) == 7.0
-    assert ("tto", CALC + "!AQ54") not in svc.store.user_formulas(u)
+    assert svc.store.user_formulas(u).get(("tto", CALC + "!AQ54")) == "=Calculators!O36+60.35"     # (the formula, live)
     _, m = panel(svc, u, "calc", "B23")
     assert m["O39"]["an"] == "Implied Move, Upper Bound, Lower Bound, Move By Pips" and m["O39"]["m"] == 1
     assert m["O41"]["ao"] == "Volatilite · O39" and m["O41"]["i"] == "u"

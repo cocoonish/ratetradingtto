@@ -1408,8 +1408,8 @@ own formulas and their exact inverses; Delete on any cell of the block: its defa
   `AM`, `Q` of the members' rows; helper tables IY1–IY2): in a temporary copy any member can be typed, also where the
   table itself has another one typed (twoway.py's limit concerns a member kept in place). What users typed into the
   drivers before is the block's typed value (moved once to its store, `twoway.TwoWay.adopt`); a formula typed into a
-  driver before goes (the cell is no input now) and its value stays; a temporary copy opened before keeps a typed driver
-  under the old cell, which it no longer reads (typed again in the copy, it stands).
+  driver before moves with it and stays live, and a temporary copy opened before keeps its typed driver too (moved to
+  the copy's store when the copy is read) - the mechanism's fixes of 24.11.2026 (cift-yon 2d651fe).
 - **Kept in place** (tables that are not copyable, no value moves): the bond carry's Carry (`V61`; its default blank as
   before - a formula's "" now, which Carry Maliyet reads as 0, as it read the blank), TRY OIS w/Spread's Spread (`P58`),
   the OIS mid's shift (`O27`). B/E, Px Drop and the daily drop in `X67`, `Y70`, `Z70` (helper IY3), the tenors in
@@ -1472,8 +1472,8 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
   stay the page's inputs in place.
 - **Values typed before keep their meaning**: a hub typed when it was the page's input (Volatilite, Basit, the DF ...) is
   its calculator's typed value at the user's next read (moved to its store once: `TwoWay.adopt`). An input formula typed
-  there keeps its value and loses its formula (the cell is no input of its own any more - inputformula's rule, logged);
-  a temporary copy opened before this version follows the table at that cell (type it again in the copy).
+  there moves with its value into the store and stays live, and a temporary copy opened before this version keeps its
+  value there too (both logged; the mechanism's fixes of 24.11.2026, cift-yon 2d651fe).
 - **No guard added**: an inverse with no answer shows Excel's error, as the blocks' own formulas do (a move with zero days,
   a P&L with no position: `#DIV/0!`); a bound on the wrong side of the spot gives a negative vol (the formula solved).
 - Nothing typed: every calculator shows what it showed (the file's values, the market's forward).

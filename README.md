@@ -1668,8 +1668,8 @@ bloğu varsayılanına döndürür. Hesap bloğun kendi formülleri ve tam tersl
 Geçici kopyalarda (Interest 2 SP … Repo, Forward DV01) her değer kopyanın kendisinde de yazılabilir - tabloda başka bir değer
 yazılmış olsa bile. Bu özellikten önce TRY, SP, all-in, O/N, çeviricilerin sol faizi ve Tutar'a yazdıklarınız aynen durur ve
 bloklarının yazılanıdır (gizli bir sütuna bir kez taşınır: `AL` / `AM` / `Q`, yardımcı tablolarda görünür); o hücrelere
-formül yazılmışsa değeri kalır, formülü kalkar (hücre artık girdi değil). Bu sürümden önce açılmış bir geçici kopyada o
-hücrelere yazılan değeri kopya artık okumaz: kopyada yeniden yazın. Tahvil carry'nin Carry'si ve iki spread yazıldıkları
+formül yazılmışsa formülüyle birlikte taşınır ve canlı kalır; bu sürümden önce açılmış bir geçici kopyada o hücrelere
+yazılan değer de kopyanın yazılanı olur. Tahvil carry'nin Carry'si ve iki spread yazıldıkları
 yerde kalır. Yeni bir Bloomberg isteği yok.
 
 **Implied Move: hareketten vol** (masa, 24.11.2026, 12. madde: bir straddle başabaşını vole çevirmek; Hesaplayıcılar →
@@ -1708,10 +1708,10 @@ yazılınca aynı sayılar çıkar.
 Hiçbir şey yazılmamışken her hesaplayıcı eskisi gibidir (dosyanın değerleri). Yazılan değer hesaplayıcının kendi sütununda
 saklanır (Calculators `AH:AT`, her biri üyesinin satırında; DV01_RISK `G69:G71`; Yardımcı tablolarda görünür).
 **Önceden yazdığınız** girdiler (Volatilite, Basit, DF, Interest …) o hesaplayıcının yazılanı olur ve aynen okunur; böyle
-bir girdiye **formül** yazılmışsa değeri kalır, formülü gider (hücre artık kendi başına girdi değil; günlüğe yazılır).
+bir girdiye **formül** yazılmışsa formülüyle birlikte taşınır ve canlı kalır (günlüğe yazılır).
 **Geçici kopyada** her hesaplayıcı tam iki yönlüdür: tabloda yazılan bir değer kopyada başka bir değerin yazılmasını
-engellemez. Bu sürümden önce açılmış bir kopyada hesaplayıcının eski girdisine (Volatilite, Basit …) yazılmış değer kopyanın
-olmaktan çıkar: kopya o hücrede tabloyu izler, yeniden yazılabilir.
+engellemez. Bu sürümden önce açılmış bir kopyada hesaplayıcının eski girdisine (Volatilite, Basit …) yazılmış değer de kopyanın
+yazılanı olur (kopya okunurken bir kez taşınır).
 
 **Realized Vol · Carry.** İki bölümü vardır; ikisi de dashboard'un günlük kapanış tarihçesini (Gün Sonu Matrisi'nin
 kullandığı depo) kullanır.
