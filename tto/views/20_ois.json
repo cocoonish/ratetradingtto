@@ -255,6 +255,20 @@
    "label": "'Başl. bacağı dolum', 'Bitiş bacağı dolum'"
   },
   {
+   "range": "EK_PPK!G3:G18",
+   "scope": "user",
+   "group": "ppk-rate",
+   "kind": "pct",
+   "label": "'MPC OIS (elle)': a meeting window's OIS rate typed (%), to read the PPK step it prices (goes with its meeting)"
+  },
+  {
+   "range": "EK_PPK!S3:S17",
+   "scope": "user",
+   "group": "ppk-spread",
+   "kind": "number",
+   "label": "'Elle spread (bp)': an MPC spread typed (the later window − the earlier, bp), to read the later window's rate and the PPK step it prices (goes with its meeting)"
+  },
+  {
    "range": "AE81:AG81",
    "scope": "shared",
    "group": "ois-33",
@@ -467,6 +481,16 @@
    }
   },
   {
+   "id": "PPK1",
+   "type": "table",
+   "sheet": "EK_PPK",
+   "range": "A1:M18",
+   "title": "MPC OIS → PPK ADIMI",
+   "hidden": false,
+   "wide": true,
+   "note": "Bir toplantı döneminin (MPC OIS'teki satır: toplantının etkin gününden sonrakininkine) swap faizini \"MPC OIS (elle)\" sütununa yazın: fiyatladığı PPK adımı (bp) - faizin O/N eşdeğeri (ACT/365, her gün bileşik: 365·((1 + r·gün/365)^(1/gün) − 1)) − önceki dönemin piyasa faizinin O/N eşdeğeri. Önceki dönem: MPC OIS'in bir önceki satırının \"Piyasa (bootstrap)\" faizi; ilk dönemde OIS spot'tan ilk toplantıya bootstrap stub'ı. Piyasa Bootstrap'tır (Murex'in MTM'i); Ayarlar'da PPK basamak seçtiyseniz sizin eğriniz - MPC OIS tablosu gibi. Broker Chat'in toplantı swap'ı satırlarına yazdığı ima adımla aynı hesap, aynı sayı. \"Piyasanın adımı\": dönemin kendi piyasa faiziyle aynı hesap. Yazdığınız faiz toplantısıyla gider: takvim değişince ya da toplantı geçince o toplantının döneminde kalır."
+  },
+  {
    "id": "B14",
    "type": "table",
    "title": "MPC İŞLEMLERİ → KOVA DV01 ($)",
@@ -479,6 +503,15 @@
    "title": "MPC SPREAD – MPCk vs MPCk+1",
    "range": "A101:K117",
    "hidden": false
+  },
+  {
+   "id": "PPK2",
+   "type": "table",
+   "sheet": "EK_PPK",
+   "range": "P1:W17",
+   "title": "MPC SPREAD → PPK ADIMI",
+   "hidden": false,
+   "note": "Bir MPC spread'ini (sonraki dönem − önceki dönem, bp; MPC SPREAD'deki gibi) \"Elle spread\" sütununa yazın: sonraki dönemin faizi = önceki dönemin piyasa faizi (MPC OIS'in \"Piyasa (bootstrap)\"ı) + spread ve bu faizin sonraki dönemin toplantısında fiyatladığı PPK adımı (bp) - MPC OIS → PPK ADIMI'yla aynı hesap, aynı taban (önceki dönemin piyasa faizinin O/N eşdeğeri), Broker Chat'inkiyle aynı. Yazdığınız spread satırın ilk döneminin toplantısıyla gider."
   },
   {
    "id": "B16",
@@ -592,8 +625,10 @@
     "B6",
     "B7",
     "B13",
+    "PPK1",
     "B14",
     "B15",
+    "PPK2",
     "B16",
     "B22"
    ]
