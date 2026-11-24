@@ -162,7 +162,8 @@ BUDGET_WARN = 0.70
 #: Bloomberg's own daily limit ("Daily capacity reached", category LIMIT): nothing is asked until one probe, this long
 #: after the day changed, answers (then again this often while it does not)
 PROBE_AFTER = 3600.0
-#: the status counts the quotes polled and the keys fed by the stream at most this often (seconds)
+#: the keys are looked over for what is due again (and the status's counts of the quotes polled and the keys fed by the
+#: stream) at most this often (seconds)
 SCAN_EVERY = 1.0
 
 #: Identifier types the Excel add-in accepts *after* an identifier - "TRT150328T24 ISIN", with a pricing source
@@ -1223,13 +1224,14 @@ class BloombergProvider(Provider):
         day's budget is below ``BUDGET_WARN``."""
         now = self._now()
         with self._lock:
+            # (once a second at most - nothing here is due to the second, and the helper's worker turns 4 times a second -,
+            # or more often when the poll interval is shorter: a test's)
+            scan = now - self._scan_at >= min(SCAN_EVERY, self.price_poll / 2.0) or now < self._scan_at
+            if not scan:
+                return
+            self._scan_at = now
             open_ = self._desk_open(now)
             tier = self._tier()
-            scan = now - self._scan_at >= SCAN_EVERY or now < self._scan_at
-            if not scan and (tier > 0 or not open_):
-                return
-            if scan:
-                self._scan_at = now
             today = self._day_no
             polled = {"value": 0, "empty": 0, "stopped": 0}
             fed = 0
@@ -1248,9 +1250,8 @@ class BloombergProvider(Provider):
                     it.state = "queued"
                     it.why = why
                     self._queue.append(key)
-            if scan:
-                self._polled = polled
-                self._fed_now = fed
+            self._polled = polled
+            self._fed_now = fed
 
     def _due(self, key: Tuple, it: _Item, now: float, today: int) -> Optional[str]:
         """Why a key that is not a quote is asked again now (its kind), or None (lock held)."""

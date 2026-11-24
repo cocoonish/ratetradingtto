@@ -483,6 +483,7 @@ def test_a_security_that_appears_on_a_new_day_is_found(server):
         now[0] += 86400.0                                                  # midnight has passed
         assert wait_for(lambda: p.hits_day == dt.date.fromtimestamp(now[0]))
         p.get_bdp(bid)                                                     # (a page reads it on the new day)
+        now[0] += 5.0                                                      # (the clock goes on: the keys are looked over)
         assert wait_for(lambda: p.get_bdp(bid) != INVALID_SECURITY)
         assert wait_for(lambda: p.status()["subscriptions"] == 1)
         assert wait_for(lambda: p.get_bdp(bid) == 3301.5)                  # the first paint of the new subscription
@@ -881,6 +882,7 @@ def test_a_restart_the_same_day_does_not_ask_bloomberg_again_what_it_answered(se
         assert wait_for(lambda: again.hits_day == dt.date.fromtimestamp(now[0]))
         for k in keys[:2]:
             again.get_bdp(k)
+        now[0] += 5.0                                                       # (the clock goes on: the keys are looked over)
         assert wait_for(lambda: "MATURITY" in [f for r in server.requests[asked:] for f in r["fields"]])
         assert again.status()["kinds"] == {"static": 1, "daily": 1}         # (the quote streams: not asked)
     finally:
