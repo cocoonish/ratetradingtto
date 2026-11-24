@@ -37,8 +37,8 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
 
 | Step | What happens | Where |
 |---|---|---|
-| Launch | `run.bat` (opens Anaconda first when it finds one: `Scripts\activate.bat`, `TTO_CONDA`) / `run.sh` → `python -m tto`. Subcommands: `import-workbook`, `check-bloomberg`, `yonetici`, `check-fx`, `yedekten-don`. | `tto/__main__.py:280-291` |
-| Run | `bundled.enable()` → logging → `create_app` → `uvicorn.run` | `__main__.py:130-153` |
+| Launch | `run.bat` (opens Anaconda first when it finds one: `Scripts\activate.bat`, `TTO_CONDA`) / `run.sh` → `python -m tto`. Subcommands: `import-workbook`, `check-bloomberg`, `yonetici`, `check-fx`, `yedekten-don`, `kurtar`. | `tto/__main__.py` `main` |
+| Run | `bundled.enable()` → the data folder's lock (`datadir.DataLock`; refused: exit 3, before the database is opened) → logging → `create_app` → `uvicorn.run` → the lock given back | `__main__.py` `cmd_run` |
 | Mode | `--mode auto` (default), `live` or `replay`, or env `TTO_MODE`. Auto falls back to replay when Bloomberg is unreachable and sets only `mode_note`. | `service.py:367-380` |
 | Host / port | Default `0.0.0.0:1057` (env `TTO_HOST`, `TTO_PORT`). Ports 5000 and 5001 are refused in code. | `config.py:8-9,108-115` |
 | Data | `--data-dir`, else env `TTO_DATA_DIR`, else `<install>/data`. The DB is `tto.db`; logs and backups sit beside it. | `config.py:31,51,57` |
@@ -303,7 +303,7 @@ The module docstring's list of sheets is incomplete; `_BUILDERS` is the full lis
 | Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption` - `vol_unit` also a premium or breakeven, `<kind>:<measure>`, two-way), `bonds` (catalog) |
 | Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
-| Ops | `ops` (log, backups, freshness), `progress` |
+| Ops | `ops` (log, backups, freshness), `progress`, `datadir` (one dashboard per data folder, the network drive), `recover` (`kurtar`: a damaged database read back) |
 
 ## Store (`tto/store.py`)
 
@@ -355,6 +355,68 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
   alarm checks and the quant's engine read queued behind it.
 - **A damaged file** whose history cannot be read at the start still opens (`ops.check_database` says so); its history
   is then read from the file, as before.
+
+### The file itself: one dashboard, the journal mode, a damaged file
+
+Why (24.11.2026, [desk-decisions.md](desk-decisions.md#one-dashboard-per-data-folder-on-the-computers-own-disk-24112026)):
+the install and its `data` sat on a mapped share, the dashboard was opened from a second computer on the same folder,
+and the file came back "database disk image is malformed". SQLite's WAL needs every process on one host (the `-shm`
+file is shared memory) and does not work over a network filesystem.
+
+- **One dashboard per data folder** (`tto/datadir.py`, `data/tto.lock`):
+  - `cmd_run` takes the lock before anything opens the database and gives it back when uvicorn returns; refused, it
+    prints who holds the folder (computer, user, port, since when) and exits 3. `yedekten-don` and `kurtar` hold it
+    while they change the database (`_command_lock`); `kurtar --dene` only looks (`check_free`).
+  - The lock is a JSON file made with an exclusive create (`O_CREAT | O_EXCL`: atomic on an SMB share too) - no lock of
+    the operating system is relied on across hosts. A heartbeat thread (`tto-kilit`) rewrites it every `BEAT_EVERY`
+    (15 s) in place, through one handle that first checks the token (on Windows nobody can rename it away meanwhile).
+  - Stale: on the same host when its pid is gone (`pid_running`: `OpenProcess` / `GetExitCodeProcess` - never
+    `os.kill(pid, 0)` on Windows, signal 0 is CTRL_C_EVENT) or its heartbeat is `FRESH` (60 s) old by this host's
+    clock. Another host's clock is not ours: its lock is watched for `WATCH` (35 s) and only a heartbeat that does not
+    move is stale. A stale lock is renamed aside, checked to be the one judged, removed, and the lock made again; the
+    caller logs `took_over_text`.
+  - A clean exit removes the lock only while it is still this process's token. A dashboard whose lock another took
+    over (its heartbeat could not be written for a minute) is told at its next heartbeat (`on_lost` →
+    `__main__._stop_on_lost` → `_thread.interrupt_main()`: the same graceful stop as Ctrl+C).
+  - The status (`Ops.folder_status`, the badge's window: `#status-dblock`) shows the lock the process holds
+    (`settings.data_lock`; `None` for a service the tests build).
+- **The journal mode** (`Store.__init__`): `datadir.on_network_drive(path)` - Windows: a `\\server\share` path (also
+  `\\?\UNC\…`), or a drive letter whose `GetDriveTypeW` is DRIVE_REMOTE, also through a link (`realpath`); elsewhere
+  never - picks `journal_mode=DELETE`, else WAL; `Store.network` / `Store.journal_mode` say which. On a network drive
+  the connection's busy timeout is 30 s (the nightly backup's reader holds a rollback-journal file while it copies it).
+  `Ops.check_folder` (at the start, after `check_database`) prints the loud console line and logs it;
+  `Ops.folder_status` puts `datadir.NETWORK_WARNING` in the status (`#status-dbfolder`, red). `restore` moves a
+  leftover `-journal` with the file it replaces: beside the backup it would roll pages into it.
+- **A damaged file: `python -m tto kurtar <file>`** (`tto/recover.py`; the desk's steps in README, *Veritabanı
+  bozulursa*). The damaged file is copied to a scratch folder (with its `-wal` / `-journal`; without them when its
+  table list does not read with them) and opened before the database - a file whose table list SQLite cannot read
+  leaves the database untouched. Each table is read in key order in chunks; at a damaged spot one row at a time
+  (`LIMIT 1`: Python's sqlite3 before 3.11 loses the row before an error while it iterates), then past it - a rowid
+  doubling and halving back; a table without rowid tries the database's keys, the keys its own indexes give and its
+  key's last column moved on (a day, a number), then the next group of its first columns, and reads backwards from the
+  row found (an index b-tree keeps rows in its inner pages: the one above a damaged leaf cannot be reached forwards).
+  The tables' indexes name the rows that could not be read. The rows are checked against the database's declarations
+  (NOT NULL, a column's type, JSON, dates) and merged in one transaction, after a copy of the database
+  (`tto.db.kurtarma-oncesi-<time>`, dropped when nothing changed); `--dene` runs it on a copy of the database. What
+  each table does (`recover.RULES` - a table of the store without a rule fails `tests/test_kurtar.py`):
+
+  | Table(s) | A row the database lacks | A row both have |
+  |---|---|---|
+  | `users`, `sessions` | added (by name / token) | kept (an account's change of the day is said, not taken) |
+  | `user_inputs`, `shared_inputs`, `scenarios`, `blotter_snapshots` | added (by user + book + cell, book + cell, user + name, day) | the later `updated_at` |
+  | `trades`, `tradebook`, `trade_templates`, `agenda_rules` | added with its number | the same row when its number and birth (`created_at`, `created_by`) agree: the later `updated_at` |
+  | `feedback`, `agenda` | added with its number | as above, by `done_at` (done on the day) |
+  | `broker_quotes` | added with its number | `deleted` only ever goes on: taken when the damaged file's is |
+  | `chat`, `ret_history`, `ret_fair_log`, `tradebook_log` | added with its number | kept |
+  | `tradebook_closes`, `mpc_values` | a day's set added only when the database has none of that day | kept |
+  | `agenda_rule_days`, `agenda_snoozes`, `tradebook_close_days`, `mpc_days`, `hist_values`, `watch_closes` | added by key | kept |
+  | `kv` | added | kept - except `KV_MERGE`, merged entry by entry: `bbg.hits` (later day / larger count), `hist.fetch` (each series' later record), `fx.hist.asked` (each series' later time), `fiyatyukleme.eurobonds` (ISINs added): today's Bloomberg requests are not made again |
+  | `bbg_answers` | added | the later `fetched` |
+
+  A number the database gave another row meanwhile (the dashboard ran on the backup before the recovery) gives the
+  damaged file's row a new number above every number of both files; `tradebook_log.trade`, `tradebook_closes.trade`,
+  `agenda_rule_days.rule` and `agenda_snoozes.rule` follow it, and a child whose parent is nowhere is left. A table of
+  a later version without a rule: rows added by its primary key, none changed.
 
 ## Pages
 

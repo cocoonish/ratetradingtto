@@ -13,6 +13,8 @@
 * **Settings the desk may tune** (``ops.settings`` in the store; the administrators change them on the alarms
   page): the market hours, how long without a tick counts as stale, and Bloomberg's hours (``bbg_open`` /
   ``bbg_close``: when it may be asked again - the provider's quiet hours, ``marketdata/bloomberg.py``).
+* **The data folder** (datadir.py): on a network drive the database runs without its write-ahead log - said loud at
+  the start (console, log) and in the status, red; the status also shows the lock of one dashboard per data folder.
 * **The database.**  ``PRAGMA quick_check`` at every start (a failure is said on the console, in the log, in the
   status); every day at ``--backup-time`` (17:30) an online copy to ``--backup-dir`` (``data/backups``) as
   ``tto-YYYY-MM-DD.db``, the newest 30 kept - and a second copy of it in ``--backup-copy-dir`` (another drive:
@@ -50,6 +52,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from . import config as _config
+from .datadir import NETWORK_WARNING
 from .deskalarms import SYSTEM
 
 log = logging.getLogger("tto.ops")
@@ -337,7 +340,8 @@ def open_failed(settings, exc: BaseException) -> str:
     last = backups(settings.backup_dir)
     return ("Veritabanı açılamadı (%s): %s. Dosya bozulmuş olabilir. %s" % (
         settings.db_path, exc, ("En son yedek: %s – dashboard kapalıyken 'python -m tto yedekten-don \"%s\"' ile ona dönülür "
-                                "(şimdiki dosya yanında saklanır)." % (last[0]["path"], last[0]["path"])) if last
+                                "(şimdiki dosya yanında saklanır; ondan okunabilenler sonra 'python -m tto kurtar' ile "
+                                "eklenir)." % (last[0]["path"], last[0]["path"])) if last
         else "Yedek klasöründe (%s) yedek yok – yöneticiler dashboard'da başka bir klasör seçtiyse yedekler oradadır."
         % settings.backup_dir))
 
@@ -387,6 +391,7 @@ class Ops(object):
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.db_check: Optional[Dict[str, Any]] = None      # the check of the database file at the start
+        self.folder: Optional[Dict[str, Any]] = None        # where the data folder is (check_folder, at the start)
         self.backup_error: Optional[Dict[str, Any]] = None  # the last backup that failed (until one succeeds)
         self._backup_tried = 0.0
         self._fallback_tried = 0.0                          # when the chosen folder was last tried for the days that wait
@@ -530,7 +535,8 @@ class Ops(object):
             last = backups(self.backup_conf()["dir"])
             text = "VERİTABANI DENETİMİ BAŞARISIZ (%s): %s. Kayıtlar eksik ya da okunamaz olabilir. %s" % (
                 self.svc.settings.db_path, "; ".join(found[:3]),
-                ("En son yedek: %s – dashboard kapalıyken 'python -m tto yedekten-don' ile ona dönülür." % last[0]["path"])
+                ("En son yedek: %s – dashboard kapalıyken 'python -m tto yedekten-don' ile ona dönülür, sonra 'python -m tto "
+                 "kurtar' bozuk dosyadan okunabilenleri ekler (README: \"Veritabanı bozulursa\")." % last[0]["path"])
                 if last else "Yedek yok.")
             log.error(text)
             try:
@@ -540,6 +546,30 @@ class Ops(object):
         else:
             log.info("veritabanı denetimi tamam (%.2f sn): %s", self.db_check["seconds"], self.svc.settings.db_path)
         return self.db_check
+
+    def check_folder(self) -> Dict[str, Any]:
+        """Where the data folder is (at the start): on a network drive the database runs without its write-ahead log
+        (store.py, datadir.py) - said loud on the console and in the log; the status shows it red."""
+        store = self.svc.store
+        self.folder = {"network": bool(getattr(store, "network", False)), "journal": getattr(store, "journal_mode", None)}
+        if self.folder["network"]:
+            text = ("%s (%s). Bu açılışta veritabanı WAL yerine DELETE günlük kipinde çalışıyor: WAL ağ sürücüsünde çalışmaz."
+                    % (NETWORK_WARNING, self.svc.settings.data_dir))
+            log.warning(text)
+            try:
+                print("!" * 100 + "\nUYARI: " + text + "\n" + "!" * 100, flush=True)     # the console of the desk machine
+            except Exception:  # noqa: BLE001 - a console that cannot print
+                pass
+        return self.folder
+
+    def folder_status(self) -> Dict[str, Any]:
+        """The data folder as the status shows it: on a network drive (the warning) or not, the journal mode, and the
+        lock of one dashboard per data folder (held by the dashboard's own process: ``settings.data_lock``)."""
+        out = dict(self.folder or {})
+        out["warning"] = NETWORK_WARNING if out.get("network") else None
+        lock = getattr(self.svc.settings, "data_lock", None)
+        out["lock"] = lock.info() if lock is not None else None
+        return out
 
     def backup_now(self, day: Optional[_dt.date] = None, by: Optional[str] = None) -> Dict[str, Any]:
         """An online copy of the database as ``tto-<day>.db`` (today's) in the backup folder (that day's earlier copy
@@ -815,9 +845,10 @@ class Ops(object):
             copy = {"dir": os.path.abspath(second), "count": len(copies), "last": copies[0] if copies else None,
                     "error": state.get("error") if state.get("failed_days") else None,
                     "failed_nights": len(state.get("failed_days") or [])}
-        return {"check": self.db_check, "backup": {"dir": conf["dir"], "count": len(found), "last": found[0] if found else None,
-                                                   "error": self.backup_error, "time": conf["time"],
-                                                   "keep": BACKUP_KEEP, "copy": copy, "fallback": self.fallback_view(conf)}}
+        return {"check": self.db_check, "folder": self.folder_status(),
+                "backup": {"dir": conf["dir"], "count": len(found), "last": found[0] if found else None,
+                           "error": self.backup_error, "time": conf["time"],
+                           "keep": BACKUP_KEEP, "copy": copy, "fallback": self.fallback_view(conf)}}
 
     # ================================================================== the backup: the administrators' choice
     def saved_backup(self) -> Dict[str, Any]:

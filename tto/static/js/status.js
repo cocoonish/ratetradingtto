@@ -127,7 +127,31 @@ export async function openStatus(status) {
   const chk = db.check;
   if (chk) {
     head.appendChild(line('Veritabanı denetimi', chk.ok ? 'tamam (açılışta, ' + num(chk.seconds, 2) + ' sn)'
-      : 'BAŞARISIZ: ' + (chk.problems || []).slice(0, 3).join('; ') + ' – en son yedeğe dönmek için README: "Yedekten dönme"', chk.ok ? '' : 'bad'));
+      : 'BAŞARISIZ: ' + (chk.problems || []).slice(0, 3).join('; ') + ' – en son yedeğe dönüp okunabilenleri geri almak için README: "Veritabanı bozulursa"', chk.ok ? '' : 'bad'));
+  }
+  // the data folder (datadir.py): on a network drive the database can be damaged (red), and the lock that keeps one
+  // dashboard per data folder
+  const fold = db.folder || {};
+  if (fold.network) {
+    const net = line('Veri klasörü', fold.warning + ' (bu açılışta günlük kipi: ' + (fold.journal || '?').toUpperCase() + ')', 'bad');
+    net.id = 'status-dbfolder';
+    head.appendChild(net);
+  } else if (fold.journal) {
+    const own = line('Veri klasörü', 'bilgisayarın kendi diskinde (günlük kipi: ' + fold.journal.toUpperCase() + ')');
+    own.id = 'status-dbfolder';
+    head.appendChild(own);
+  }
+  const lk = fold.lock;
+  if (lk) {
+    const lost = lk.lost;
+    const text = lost
+      ? 'BAŞKA BİR DASHBOARD\'A GEÇTİ (' + (lost.host || '?') + (lost.started ? ', açılışı ' + lost.started : '') + ') – bu dashboard kapanıyor'
+      : 'bu dashboard tutuyor · ' + lk.host + ' · açılışı ' + lk.since + (lk.beat ? ' · son işaret ' + lk.beat.slice(11) : '')
+        + (lk.failing ? ' · ' + lk.failing.slice(11) + ' itibarıyla YAZILAMIYOR (veri klasörüne ulaşılamıyor)' : '')
+        + (lk.took_over ? ' · açılışta eski kilit devralındı (' + (lk.took_over.host || '?') + ': ' + lk.took_over.why + ')' : '');
+    const el = line('Tek dashboard kilidi', text, lost || lk.failing ? 'bad' : '');
+    el.id = 'status-dblock';
+    head.appendChild(el);
   }
   const bk = db.backup || {};
   if (bk.dir) {

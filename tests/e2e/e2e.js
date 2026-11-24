@@ -6961,6 +6961,19 @@ async function clipAfter(page, action) {
     check('Ctrl+K: a command it cannot read says what it expected; Enter runs nothing', /"1x" vade olarak okunamadı/.test(cmdErr)
       && errKept.text === 'işlem gir usdtry 1x 10mn' && !errKept.modal && errKept.page === pageWas, { cmdErr, errKept, pageWas });
 
+    // ------------------------------------------------------------------ the data folder (the badge's window): its disk, the lock
+    console.log('data folder');
+    await page.click('#mode-badge');
+    await page.waitForSelector('#status-dblock', { timeout: 20000 });
+    const dbLines = await page.evaluate(() => ({ folder: (document.getElementById('status-dbfolder') || {}).textContent || '',
+      folderBad: !!(document.getElementById('status-dbfolder') || { classList: { contains: () => true } }).classList.contains('bad'),
+      lock: document.getElementById('status-dblock').textContent, lockBad: document.getElementById('status-dblock').classList.contains('bad') }));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('status-dblock'), null, { timeout: 10000 }).catch(() => null);
+    check('status window: the data folder on this computer\'s own disk (WAL), the one-dashboard lock held by this dashboard',
+      /kendi diskinde/.test(dbLines.folder) && /WAL/.test(dbLines.folder) && !dbLines.folderBad && /bu dashboard tutuyor/.test(dbLines.lock)
+      && !dbLines.lockBad, dbLines);
+
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
     // (an entry with tabs: each of its pages)
