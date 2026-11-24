@@ -412,6 +412,7 @@ file is shared memory) and does not work over a network filesystem.
   | `agenda_rule_days`, `agenda_snoozes`, `tradebook_close_days`, `mpc_days`, `hist_values`, `watch_closes` | added by key | kept |
   | `kv` | added | kept - except `KV_MERGE`, merged entry by entry: `bbg.hits` (later day / larger count), `hist.fetch` (each series' later record), `fx.hist.asked` (each series' later time), `fiyatyukleme.eurobonds` (ISINs added): today's Bloomberg requests are not made again |
   | `bbg_answers` | added | the later `fetched` |
+  | `bbg_usage` | added | the later `day` (each key's count; the day's total is kv's `bbg.hits`, merged above) |
 
   A number the database gave another row meanwhile (the dashboard ran on the backup before the recovery) gives the
   damaged file's row a new number above every number of both files; `tradebook_log.trade`, `tradebook_closes.trade`,

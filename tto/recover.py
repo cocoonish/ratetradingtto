@@ -119,6 +119,9 @@ RULES = (
     Rule("agenda_snoozes", "ajanda ertelemeleri", "erteleme", key=("user", "rule", "day"), parent=("rule", "agenda_rules")),
     Rule("kv", "ayarlar ve kayıtlar (kv)", "kayıt", key=("key",), json=("value",)),
     Rule("bbg_answers", "Bloomberg'in bugünkü cevapları", "cevap", key=("key",), newer="fetched", day="day"),
+    # (each key's count of the day, for the status window's breakdown: the later day wins - the day's total, which the
+    # budget reads, is kv's bbg.hits, merged by _bbg_hits)
+    Rule("bbg_usage", "Bloomberg'in bugünkü istek sayıları", "anahtar", key=("key",), newer="day", day="day"),
     Rule("hist_values", "günlük tarihçe", "kapanış", key=("series", "day"), history=True, day="day"),
     Rule("watch_closes", "izleme kapanışları", "kapanış", key=("subject", "day"), history=True, day="day"),
     Rule("mpc_days", "PPK fiyatlama geçmişi", "gün", key=("day",), history=True, day="day"),
