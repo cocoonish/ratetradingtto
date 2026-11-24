@@ -81,6 +81,10 @@ priority:
   `user_inputs` table plus `engine.set_user_inputs`.
 - **Which cells are inputs** is declared by the view JSON's `inputs[]` (`Service._setup`), so editing a view JSON
   changes which cells can be typed in.
+- **Delete in a table** (`grid.js` `clearSelectionValues`) is the same write with blank values, not `/api/reset`.
+- **Order:** the browser sends each write at once, without waiting for the one before (a cell typed shows its text
+  until the refresh comes). They are applied in the order they reach the engine queue (`tests/test_scenario_order.py`,
+  `tests/test_page_after_write.py`).
 
 ### Two-way tables (`tto/twoway.py`)
 
@@ -225,6 +229,18 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   - It is a priority queue: WRITE 0, HEADER 1, VIEW 2, BACKGROUND 3.
   - `s.et.call(fn)` runs inline if already on it, otherwise it blocks.
   - HTTP handlers never touch an engine directly.
+  - **A WRITE job moves the generation before the next job runs** (`EngineThread(wrote=Service._wrote)`); the writer's
+    `bump` tells the pages afterwards, from its own thread. A WRITE job that changed nothing says so
+    (`et.wrote_nothing()`: the input formulas' round after every generation, the market loop's tick with nothing new).
+    - Why (24.11.2026): a page made between a write and its `bump` (the refresh the previous write's answer started)
+      took the generation from before the write and made what the write changed. The browser had that generation, so
+      it took the page for unchanged - and every later answer too, since a panel keeps the generation it was first made
+      in while it stays the same. DİBS RV's bond moved to another row kept its price on the old row on the page; typed
+      back there, nothing was sent (it was what the page showed), and the next Delete took the bond and its price off
+      the list (`tests/test_page_after_write.py`).
+    - A cache answered by generation (`_render_job`, `_header_job`) reads it on the engine thread when its job starts.
+    - What changes outside the engine thread (a store table a panel appends: the broker chat) still has that window
+      until its `bump`: the panel's next change brings it.
   - A job on it never reads the history from SQLite: the store answers those reads from memory (see Store below). A
     query of many rows on it would hold every page and the alarm checks while a long calculation runs elsewhere.
 - **The market loop** applies changed market keys on the engine thread. It then bumps `gen` and notifies listeners at

@@ -438,6 +438,8 @@ class InputFormulas(object):
             # values that followed what they read - the market, the clock, an input whose own write told the desk
             # already: a market move for the pages kept (an entry or a change of a formula is a desk change itself)
             self.svc.bump(market=True)
+        else:
+            self.svc.et.wrote_nothing()               # (a round after every generation: no new one of its own)
 
     def settle(self) -> bool:
         """Calculation thread: every formula whose reads changed evaluated again - the desk's first (a user's own may read
