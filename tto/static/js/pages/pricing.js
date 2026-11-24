@@ -1,6 +1,7 @@
 // Fiyatlama: one instrument at any start and maturity - TRY OIS, FRA, XCCY, FX forward - priced on the desk's TRY curves
 // both ways (the user's own "Eğri interpolasyonu" first, the other beside): the mid, the DV01 bucket by bucket (each
-// pillar's quote +1 bp, the curve built again on the same method) and, with a price typed, the NPV (tto/pricing.py).
+// pillar's quote +1 bp, the curve built again on the same method; beside each bucket its quote, the hedge's rate) and,
+// with a price typed, the NPV (tto/pricing.py).
 // The price box holds what "Fiyat tipi" says: a rate (an FX forward's outright or points) - or an NPV in TL or $ or an
 // upfront in bp, and the rate that prices to it is solved on the user's curve.  "Toplu fiyatlama" prices a list of lines
 // the same way, off the same curves.  What is typed is the user's own - kept with the account, per asset (switching back
@@ -300,12 +301,20 @@ export class PricingPage {
 
   drawBuckets(d) {
     const [m1, m2] = d.methods;
+    // each bucket's quote: the rate its +1 bp moves, the hedge's - one column, both curves give it back at its maturity
+    const off = d.family === 'off';
+    const quoteTip = off
+      ? 'Kovanın offshore kotası - eğrinin kurulduğu, +1 bp\'nin kaydırdığı kota: TRYI (FX swap ima) tek dönem basit ACT/360, XCCY yıllık ACT/360 par'
+      : 'Kovanın OIS kotası - eğrinin kurulduğu, +1 bp\'nin kaydırdığı kota: 3 aya kadar tek dönem basit, sonra çeyreklik par, ACT/365';
     const t = h('table', { class: 'plain', id: 'pr-buckets' },
-      h('tr', null, h('th', { class: 'l' }, 'Kova'), h('th', { title: 'Eğriniz' }, METHOD[m1]), h('th', null, METHOD[m2])));
+      h('tr', null, h('th', { class: 'l' }, 'Kova'), h('th', { id: 'pr-buckets-quote', title: quoteTip }, off ? 'Offshore kotası' : 'OIS kotası'),
+        h('th', { title: 'Eğriniz' }, METHOD[m1]), h('th', null, METHOD[m2])));
     for (const r of d.buckets.rows) {
       const tr = h('tr', { class: r.pillar ? null : 'soft' });
       tr.dataset.bucket = r.name;
       tr.appendChild(h('td', { class: 'l', title: r.pillar ? (isNum(r.day) ? 'Kotanın günü: ' + serialDate(d.spot + r.day) : '') : d.texts.short }, r.name));
+      tr.appendChild(isNum(r.quote) ? h('td', { class: 'pr-quote' }, pct(r.quote, 4))
+        : h('td', { class: 'pr-quote soft', title: d.texts.short || null }, '–'));
       for (const m of [m1, m2]) {
         const v = r.dv01[m];
         tr.appendChild(r.pillar ? h('td', { class: tone(v, 2) === 'pos' ? 'buy' : tone(v, 2) === 'neg' ? 'sell' : null }, signed(v, 2))
@@ -314,11 +323,12 @@ export class PricingPage {
       t.appendChild(tr);
     }
     const tot = d.buckets.total;
-    t.appendChild(h('tr', { class: 'pkg', id: 'pr-buckets-total' }, h('td', null, 'Toplam'),
+    t.appendChild(h('tr', { class: 'pkg', id: 'pr-buckets-total' }, h('td', null, 'Toplam'), h('td', null, ''),
       h('td', { style: { textAlign: 'right' } }, signed(tot[m1], 2)), h('td', { style: { textAlign: 'right' } }, signed(tot[m2], 2))));
     clear(this.bucketBody).appendChild(t);
     this.bucketNote.textContent = (d.family === 'ois' ? 'OIS kovaları (masanınki): her kota +1 bp, eğri aynı yöntemle yeniden. '
       : 'Offshore eğrinin kotaları (FX swap ≤9A, XCCY 1Y–10Y): her kota +1 bp, eğri aynı yöntemle yeniden. ')
+      + 'Kota: kovanın piyasa kotası - hedge\'in yapılacağı faiz (iki eğri de onu kendi vadesinde aynen verir). '
       + '+ = faizler yükselince kazanır.';
   }
 

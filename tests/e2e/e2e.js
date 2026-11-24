@@ -3174,10 +3174,17 @@ async function clipAfter(page, action) {
     const prApi = async (who) => (await api(page, who || 'ayşe yilmaz', 'GET', '/api/pricing')).json;
     const prPct = (v) => (v * 100).toFixed(4).replace('.', ',') + '%';
     const prFix = (v, d) => (v > 0 ? '+' : '') + v.toFixed(d).replace('.', ',');
+    // (the DV01 cells of each bucket: after Kova and its quote)
     const prBuckets = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#pr-buckets tr[data-bucket]')]
-      .map((tr) => [tr.dataset.bucket, [...tr.children].slice(1).map((td) => td.textContent)])));
+      .map((tr) => [tr.dataset.bucket, [...tr.children].slice(2).map((td) => td.textContent)])));
+    // each bucket's quote (the desk, 24.11.2026): the cell right after Kova, under a header naming the curve
+    const prQuotes = () => page.evaluate(() => ({ head: (document.getElementById('pr-buckets-quote') || {}).textContent,
+      cells: Object.fromEntries([...document.querySelectorAll('#pr-buckets tr[data-bucket]')].map((tr) => [tr.dataset.bucket, tr.children[1].textContent])) }));
+    const prCellV = async (ref) => ((await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell || {}).v;
     const prMenu = await page.evaluate(() => window.tto.state.pages.filter((p) => p.group === 'TRY Faiz').map((p) => p.id));
     const prB0 = await prBuckets();
+    const prQ0 = await prQuotes();
+    const prA0 = await prApi();
     check('Fiyatlama: in TRY Faiz right after OIS · PPK; it opens on a TRY OIS 1Y - both curves\' mids, the desk\'s OIS buckets ON … 10Y '
       + '(ON / 1W / 2W no quote of the curve: –)', prMenu[0] === 'ois' && prMenu[1] === 'fiyatlama' && /^TRY OIS 1Y · PAY/.test(await prLabel())
       && Object.keys(prB0).join(' ') === 'ON 1W 2W 1M 2M 3M 6M 9M 1Y 18M 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y' && prB0.ON[0] === '–'
@@ -3193,12 +3200,24 @@ async function clipAfter(page, action) {
     const prXSched = await page.evaluate(() => [...document.querySelectorAll('#pr-schedule tr')].slice(1, -1)
       .map((tr) => [...tr.children].map((td) => td.textContent)));
     const prXb = await prBuckets();
+    const prXq = await prQuotes();
     check('... a 2Y3M XCCY received: three coupons back from the maturity, the short one first (3M, 12M, 12M; ACT/360), the mid both ways, '
       + 'the offshore curve\'s buckets (− for the receiver), the far ones 0', prXSched.length === 3
       && prXSched.map((r) => r[1] + '>' + r[2] + ':' + r[3]).join(' ') === '04.11.2026>04.02.2027:92 04.02.2027>04.02.2028:365 04.02.2028>05.02.2029:367'
       && (await page.textContent('#pr-mid .v')) === prPct(prX.mid.boot) && (await page.textContent('#pr-mid-other .v')) === prPct(prX.mid.ppk)
       && Math.abs(prX.mid.boot - 0.4062) < 0.001 && prXb['XCCY 2Y'][0].startsWith('-') && prXb['XCCY 5Y'][0] === '0,00' && prXb['XCCY 5Y'][1] === '0,00'
       && prX.buckets.total.boot < 0, { prXSched, mid: prX.mid, prXb });
+    // the desk (24.11.2026): "Bu fiyatlama kısmına bunları ayırdığımızda denk gelen faizleri de yazalım"
+    const prQ1Y = (prA0.buckets.rows.find((r) => r.name === '1Y') || {}).quote;
+    const prQX2 = (prX.buckets.rows.find((r) => r.name === 'XCCY 2Y') || {}).quote;
+    const prOis1Y = await prCellV('OIS_MAIN!B14');
+    const prXccy2Y = await prCellV('Forward!E126');
+    check('... beside each bucket its quote, the rate its +1 bp moves (the hedge\'s): TRY OIS 1Y\'s 1Y bucket the 1Y OIS quote (OIS_MAIN!B14) '
+      + 'under "OIS kotası", ON / 1W / 2W –; the XCCY\'s "XCCY 2Y" the offshore curve\'s 2Y quote (Forward!E126) under "Offshore kotası"',
+      prQ0.head === 'OIS kotası' && typeof prQ1Y === 'number' && Math.abs(prQ1Y - prOis1Y) < 1e-15 && prQ0.cells['1Y'] === prPct(prQ1Y)
+      && prQ0.cells.ON === '–' && prQ0.cells['1W'] === '–' && prQ0.cells['2W'] === '–'
+      && prXq.head === 'Offshore kotası' && typeof prQX2 === 'number' && Math.abs(prQX2 - prXccy2Y / 100) < 1e-15
+      && prXq.cells['XCCY 2Y'] === prPct(prQX2), { prQ0, prXq, prQ1Y, prOis1Y, prQX2, prXccy2Y });
     await shot(page, '16-fiyatlama-xccy');
     // a 12x15 FRA typed in one box, then a price: the NPV
     await page.click('#pr-asset button[data-v="fra"]');
