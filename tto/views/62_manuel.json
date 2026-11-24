@@ -157,7 +157,7 @@
    "title": "Girdiler",
    "range": "A2:C17",
    "hidden": false,
-   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade, kupon frekansı, tip (S / D), sabit kupon, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, temiz fiyat ve valör - kâğıt trading listesindeyse DİBS RV satırından (kullanılan temiz, valörü, bilinen kupon), değilse Tüm Kâğıtlar'dan (katalogdaki vade ve kupon, 6 ayda bir; bid / ask ortası, yoksa bugünkü son işlem). Böylece sağdaki Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (C17 hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
+   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade ve sabit kupon katalogdan (Tüm Kâğıtlar); tip (S / D); kâğıt trading listesindeyse DİBS RV satırından kupon frekansı, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, kullanılan temiz fiyat ve valörü; değilse 6 ayda bir ve Tüm Kâğıtlar'ın bid / ask ortası (yoksa bugünkü son işlemi). Böylece sağdaki Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (C17 hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
   },
   {
    "id": "B3",
