@@ -341,6 +341,10 @@ leg = (F·(P − O) + Q·O) / P, start leg = (R·P − F·(P − O)) / O.
   implied rates), `ASW!C4` → `T65` (the ASW sheet's curve and the shift of ASW FX's 18M) and the gold spot date
   (`EK_XAU!B9`, when none is typed).
 - The cells counted from the USDTRY spot: `MASA!P94:P99`, `MASA!C171`, `Forward!B200:B205`, `Forward!K130:K134`.
+- The Forward page's two-way tables (24.11.2026) solve a typed outright's TRY rate (`extras.implied_try`, simple
+  ACT/360) over the days each table counts: USDTRY from `Forward!I2`, EURTRY from `Forward!K2` (TOPLU FORWARD's and
+  ÇAPRAZ's EURTRY, the EURTRY value-date table, FSS's EURTRY period `MAX(0, G168 − F168)`), the free list from its row's
+  start. No curve is read for it: offshore and OIS are untouched.
 - `fx_shift` (`ppkcurve.read`) = FX spot − OIS spot, in days. It puts the OIS side's MPC path on the offshore curve's
   days (`StepCurve.rebased`: the offshore PPK curve, and its bumps in Fiyatlama) and the offshore curve on Motor's
   quarterly calendar in the interpolation chart. ASW FX's 18M uses a shift of its own, `ASW!T65 − Forward!I2`

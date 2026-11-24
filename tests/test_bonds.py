@@ -467,10 +467,11 @@ def test_the_trading_list_gives_the_nominal_of_a_thousand_dollar_dv01(svc):
 # ---------------------------------------------------------------------------------------------- tables that grow
 def test_the_bulk_forward_table_has_a_hundred_rows_of_the_sheets_own_formulas(svc):
     # every value date and manual TRY rate starts empty (the file's dates of the day it was saved are nobody's today),
-    # and an empty row prices nothing
+    # and an empty row prices nothing (the manual TRY rate is two-way: its default the rate a fwd / puan typed gives,
+    # empty with none - test_fwd_iki_yon.py)
     for k in range(ex.BULK_ROWS):
-        for col in "BL":
-            assert cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST + k)) is None, (col, k)
+        assert cell(svc, "%s!B%d" % (ex.BULK_SHEET, ex.BULK_FIRST + k)) is None, k
+        assert cell(svc, "%s!L%d" % (ex.BULK_SHEET, ex.BULK_FIRST + k)) == "", k
     assert all(cell(svc, "%s!%s%d" % (ex.BULK_SHEET, col, ex.BULK_FIRST)) in (None, "") for col in "NPQ")
     # the Forward sheet's own table (its first rows) and the same value dates typed here - in its first row and in a
     # row the sheet does not have - give the same prices: the sheet's formulas, row by row

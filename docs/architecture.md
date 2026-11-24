@@ -118,6 +118,11 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 - **Values typed over a member before it was two-way** ("Elle değer" at the member's own cell): its row-side's anchor,
   moved to the store once when the user's values are read (`TwoWay.adopt`, logged); such cells are never declared
   "Elle değer" inputs at the start (`_declare_saved_cells`).
+- **Tables on it** (desk-decisions): FORWARD KOTASYON; the Forward page's TOPLU FORWARD, value-date tables, SERBEST
+  FORWARD, FORWARD STARTING SWAP's Manuel row and ÇAPRAZ FORWARD
+  ([desk-decisions.md](desk-decisions.md#forward-sayfasının-tabloları-iki-yönlü-24112026)). A typed value stays through
+  any other input's change; the one exception is a table's own rule in the service: ÇAPRAZ FORWARD's typed forwards go
+  when its currency (`Forward!C197`) changes (`Service._cross_typed_forwards`, from `_set_inputs` / `_reset_inputs`).
 - **Adopting it** (the module's docstring has the full list): the builder writes the stores and the members' formulas
   (the table's inverse formulas: one implementation, as `extras.fwd_outright` / `fwd_rate`); the view declares the group;
   the tests cover each member typed -> the others, exact round trips, the last typed wins, Delete, a paste, a scenario,
@@ -210,11 +215,11 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | Sheet | Book | What |
 |---|---|---|
 | EK_TATIL | tto, borsa | USD (Fed) / EUR (TARGET2) holiday lists beside the TRY copy; joint FX calendars |
-| EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders) |
+| EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders); the value-date tables and the free forward list two-way (typed values in `N:U` / `Z:AB` of their rows) |
 | EK_XAU | tto | gold forwards, VİOP gold calculator |
 | EK_VIOP | tto | VİOP contract history for charts |
 | EK_KAYNAK | tto | pricing-source order for OIS / offshore / XCCY (see [market-data.md](market-data.md#pricing-sources)) |
-| EK_BULK | tto | 100-row bulk forward table; each row's Parite / Yön / Tutar / Karşı taraf (V..Y) for "İşleme al" (below, *Prices and rows as trades*) |
+| EK_BULK | tto | 100-row bulk forward table, two-way (Manuel TRY % / USDTRY fwd, puan / EURTRY fwd, puan; typed values in `Z:AC`, their rate `AD`); each row's Parite / Yön / Tutar / Karşı taraf (V..Y) for "İşleme al" (below, *Prices and rows as trades*) |
 | EK_DIBS | tto | DİBS Trading: live T0/T1/T2 quotes, repo, "FX swap'a göre" fair values |
 | EK_EVREN | tto | Tüm Kâğıtlar (the service writes its rows) |
 | EK_CARRY | tto | carry along a chosen TLREF path |
@@ -353,7 +358,8 @@ Günlük İşlemler's entry is filled from other pages; nothing below saves a tr
 - **TOPLU FORWARD's rows** ("İşleme al"; [desk-decisions.md](desk-decisions.md), *TOPLU FORWARD → işlem*):
   the header button (`"action": "toplu-islem"`, `view.js` → `blotterentry.js` `bookBulkForward`) → `GET
   /api/blotter/bulk/toplu-forward` (`Service.bulk_from_forward`: the user's EK_BULK rows read on the engine thread →
-  `entry.bulk_forward_paste`: a tab-separated paste, a line per row with a Tutar, its price to the last digit, and a
+  `entry.bulk_forward_paste`: a tab-separated paste, a line per row with a Tutar, its price to the last digit - a USDTRY
+  fwd / puan typed in the two-way row: the outright (`bulk_forward_price`, the row's typed value its `anchor`) -, and a
   "Satır" column the dialog does not read) → `openBulk(page, from)`: "Excel'den yapıştır" with its own preview
   (`/api/blotter/bulk/preview`) and save (`/api/blotter/bulk`, one transaction) → the browser then resets the kept rows'
   Tutar cells (`/api/reset`, found by "Satır").

@@ -418,6 +418,10 @@ def _ois_row(vals: Dict[str, str]) -> Dict[str, Any]:
 #: the Tutar of the rows kept by it, so that a second press cannot book them again
 BULK_FWD_HEAD = ("Satır", "Parite", "Yön", "Tutar", "Valör", "TRY faizi", "Forward kur", "Karşı taraf", "Not")
 BULK_FWD_NOTE = "TOPLU FORWARD"
+#: where a row's TRY rate comes from, by the column of its typed value (the table is two-way: extras.BULK_TW_ID) - none
+#: typed: RET mid
+BULK_FWD_SOURCES = {None: "RET mid %", "L": "Manuel TRY %", "N": "USDTRY fwd", "O": "USDTRY puan", "P": "EURTRY fwd",
+                    "Q": "EURTRY puan"}
 
 
 def _plain(x: float, lang: str) -> str:
@@ -446,21 +450,29 @@ def bulk_forward_price(row: Dict[str, Any]) -> Tuple[str, Optional[float], str]:
     """The price TOPLU FORWARD books a row at - what the row shows: ``(field, value, source)``.
 
     * a forward typed in the row's pair's own column (USDTRY fwd (elle) / EURTRY fwd (elle)): *Forward kur* = it;
-    * else USDTRY: *TRY faizi* = the rate the row priced with - its Manuel TRY % if typed, else RET mid % (the blotter's
-      TRY-rate pricing is this very row's formula, the workbook's own bulk row ``Forward!N163``: the same forward);
+    * else USDTRY whose USDTRY fwd or puan is the row's typed value (the table is two-way): *Forward kur* = the row's
+      USDTRY fwd - the one typed, or spot + the puan typed / 10000;
+    * else USDTRY: *TRY faizi* = the rate the row priced with - its Manuel TRY %, typed or worked out from the EURTRY fwd /
+      puan typed, else RET mid % (the blotter's TRY-rate pricing is this very row's formula, the workbook's own bulk row
+      ``Forward!N163``: the same forward);
     * else EURTRY: *Forward kur* = the row's EURTRY fwd.  (The blotter's EURTRY TRY-rate pricing takes the EUR rate as the
       middle of the interpolated EUR bid and ask, ``Forward!AD27``; the row takes Bloomberg's interpolated EUR MID: the
       same forward only while every MID is the exact middle of its bid and ask - the row's outright is booked instead.)
 
-    ``value`` None: the row has no such price (no valör, no curve): the dialog says why.  ``row``: the table's cells -
-    ``pair`` (V), ``manual`` (L), ``ret_mid`` (G), ``eur_fwd`` (P), ``usd_typed`` (R), ``eur_typed`` (T)."""
+    The source says where the row's TRY rate comes from (``BULK_FWD_SOURCES``).  ``value`` None: the row has no such price
+    (no valör, no curve): the dialog says why.  ``row``: the table's cells - ``pair`` (V), ``manual`` (L), ``ret_mid``
+    (G), ``usd_fwd`` (N), ``eur_fwd`` (P), ``usd_typed`` (R), ``eur_typed`` (T) - and ``anchor``, the column of the row's
+    typed value (L, N, O, P, Q; None: none - a row without it: L when its Manuel TRY % is a number)."""
     pair = _row_pair(row)
     typed = _number(row.get({"USDTRY": "usd_typed", "EURTRY": "eur_typed"}.get(pair, "")))
     if typed is not None:
         return "forward", typed, "elle forward"
     manual = _number(row.get("manual"))
-    source = "Manuel TRY %" if manual is not None else "RET mid %"
+    anchor = row["anchor"] if "anchor" in row else ("L" if manual is not None else None)
+    source = BULK_FWD_SOURCES.get(anchor, BULK_FWD_SOURCES[None])
     if pair == "USDTRY":
+        if anchor in ("N", "O"):
+            return "forward", _number(row.get("usd_fwd")), source
         return "try_rate", manual if manual is not None else _number(row.get("ret_mid")), source
     return "forward", _number(row.get("eur_fwd")) if pair == "EURTRY" else None, source
 
@@ -502,8 +514,9 @@ def bulk_forward_paste(rows: List[Dict[str, Any]], lang: str = "tr") -> Dict[str
         out.writerow(line)
     if lines:
         said = ("TOPLU FORWARD FİYATLAMA'dan Tutar'ı yazılı %d satır%s. Fiyat satırın gösterdiği: USDTRY'de TRY faizi (Manuel "
-                "TRY %%, boşsa RET mid %%), EURTRY'de EURTRY fwd, elle forward yazılmışsa o. Kaydedilen satırların Tutar'ı "
-                "tabloda silinir." % (len(lines), " · Tutar'ı boş %d satır alınmadı" % skipped if skipped else ""))
+                "TRY %%, boşsa RET mid %%; USDTRY fwd ya da puanı yazılmışsa o forward), EURTRY'de EURTRY fwd, elle forward "
+                "yazılmışsa o. Kaydedilen satırların Tutar'ı tabloda silinir."
+                % (len(lines), " · Tutar'ı boş %d satır alınmadı" % skipped if skipped else ""))
     else:
         said = ("TOPLU FORWARD FİYATLAMA'da Tutar'ı yazılı satır yok%s: işleme almak için satıra Yön ve Tutar yazın"
                 % (" (valörü olan %d satırın Tutar'ı boş)" % skipped if skipped else ""))

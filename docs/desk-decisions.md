@@ -961,6 +961,8 @@ Offered to the desk (as relayed, in English) and approved - the desk: **"3 ekle"
   never saved.
 - **The price is what the row shows**, to its last digit:
   - a forward typed in the row's pair's own column (R for USDTRY, T for EURTRY): *Forward kur* = it;
+  - (since the table is two-way, 24.11.2026, below) a USDTRY fwd or puan typed in the row: the USDTRY row's *Forward kur* =
+    the row's USDTRY fwd; a rate worked out from an EURTRY fwd / puan typed is the row's Manuel TRY %;
   - else **USDTRY**: *TRY faizi* = the rate the row used - Manuel TRY % (L) if typed, else RET mid % (G). The blotter's
     TRY-rate pricing of USDTRY is the workbook's own bulk row (`Forward!N163`), the formula of N: the booked forward is N
     (tested to 1e-9, in fact to the last bits);
@@ -1230,6 +1232,69 @@ Code: `tto/twoway.py`, `tto/extras.py` (`_fwd_quote_cells`, `fwd_outright`, `fwd
 `tto/views/30_forward.json` (`"twoway"`), `tto/service.py` (`_set_inputs`, `_reset_inputs`, `paste`, `_cell_info`,
 `_mark_formulas`, `_overlay`), `tto/render.py`, `tto/copies.py`, `grid.js` / `app.css` (✎). Tests: `tests/test_twoway.py`
 (the mechanism), `tests/test_fwd_twoway.py` (the matrices), the browser test's checks after "EURTRY points typed by hand".
+
+### Forward sayfasının tabloları iki yönlü (24.11.2026)
+
+After FORWARD KOTASYON (above) the desk asked the same of every table:
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+>
+> "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için."
+
+**What became two-way on the Forward page** (`tto/twoway.py`; each table's own formulas and their exact inverses - one
+way back, `extras.implied_try`, shared with the tables' "elle" columns; the in-place member is the table's input from
+before, so what users typed there keeps its meaning):
+- **TOPLU FORWARD** (`EK_BULK` rows 5–104): Manuel TRY % (L, in place), USDTRY fwd / puan (N / O), EURTRY fwd / puan
+  (P / Q). Typed values in `Z:AC`, the TRY rate they give in `AD`.
+- **USDTRY / EURTRY FORWARD**, the value-date tables (`EK_FWD` rows 47–51 / 58–62, the Elle rows too): per row and side
+  the TRY % (B / D, in place), outright (E / G), puan (H / J) and P/gün (K / M). Typed values in `N:S`, rates in `T:U`.
+- **SERBEST FORWARD** (`EK_FWD` rows 68–77): minor % (G, in place), swap (H), forward (I). Typed in `Z:AA`, rate `AB`.
+- **FORWARD STARTING SWAP**'s Manuel row (`Forward` row 179): the TRY fwd-fwd % (C169, in place), far TRY % (D), USDTRY
+  far outright / FS puan / günlük puan (H / I / J), EURTRY far / puan (N / O). Typed in `U179:Z179`, rate `AA179`.
+- **ÇAPRAZ FORWARD** (`Forward` rows 200–214): Manuel TRY % (F, in place) and the manual XXXTRY forward (Q). Typed in
+  `U`, rate `V`.
+
+**Choices made while building them** (said in README and under each table; ask the desk before changing):
+- **One TRY rate prices both pairs** of a TOPLU FORWARD row, and one TRY fwd-fwd % both far legs of the FSS Manuel row:
+  a USDTRY forward typed moves the row's EURTRY forward and the other way round (each on its own spot, USD / EUR rate and
+  days - EURTRY's from its spot date).
+- **"İşleme al"** books the price the row shows (tested to 1e-9): a USDTRY fwd or puan typed - the USDTRY row as *Forward
+  kur* = the row's USDTRY fwd; an EURTRY fwd or puan typed - the USDTRY row at the TRY rate it gives (the blotter's
+  TRY-rate pricing is the row's own formula: the row's USDTRY fwd to the last bits), the EURTRY row at its EURTRY fwd as
+  before. The note names where the rate came from (`TOPLU FORWARD · USDTRY fwd`, `· USDTRY puan`, `· EURTRY fwd`,
+  `· EURTRY puan`, besides the old ones).
+- **The value date changed** (`Forward!D2`): a value typed in the value-date tables stays as typed - the same outright,
+  points or P/gün are then the new date's -, the others are worked out on the new days, as a TRY rate typed there always
+  stayed. Delete takes a row-side back to its curve.
+- **The EURTRY value-date table's TRY rates are the USDTRY table's** (typed ones too, as before): a USDTRY forward or points
+  typed moves EURTRY's TRY rate and forward, unless a value is typed in the EURTRY table itself.
+- **ÇAPRAZ FORWARD's currency changed** (`C197` typed, deleted or back to the file's): the manual forwards typed go (a
+  forward is its currency's; another currency would read it as its own) - the row back to its Manuel TRY % typed, if
+  any. A Manuel TRY % typed stays: a TRY rate means the same in any currency. Cleared, not kept per currency (switching
+  back does not bring them back). The same currency typed again (another spelling) clears nothing; a forward typed in the
+  same write as the currency stays.
+- **ÇAPRAZ's 1M–12M dates roll with the spot** (formulas): a forward typed stays on its row, its rate is that day's date's.
+- **FSS's Manuel row** fills only with a valid near / far (Durum OK), as before - otherwise only the value typed shows; an
+  EURTRY value typed gives no rate while EURTRY's own period is 0 (the far date before its spot date).
+- **Mids are not typed**: the value-date tables' TRY mid, mid outright, puan mid and P/gün mid are each worked out from
+  the two sides (one mid typed would need a rule for the width).
+- **The way-back columns stay** ("Yeni açtığımız tablolar kalsın"): TOPLU FORWARD's "fwd (elle)" (R / T) and İma TRY %
+  (S / U), FSS's "Elle puan → faiz" rows (I181 / O182), ÇAPRAZ's "XXXTRY fwd (elle)" (R) - typing them changes no row.
+- **Left out**: the workbook's own 20-row bulk table (`Forward!B142:Q163`, a hidden helper: TOPLU FORWARD is its page
+  version), the Forward sheet's own hidden USDTRY / EURTRY tables (the value-date tables show the same), and the shared RET
+  tables (the desk's inputs). The Forward page's calculators (AG:AK, the bond carry, Forward DV01, XARTRY) are another
+  builder's.
+- No new Bloomberg request. With nothing typed every value is as before (checked cell for cell on `Forward`, `EK_FWD` and
+  `EK_BULK`: the shared calculation and a user's with the old inputs typed).
+
+Code: `tto/extras.py` (`implied_try`, `_fr_side` / `FR_TW_*` / `FR_LIST_TW`, `_bulk_twoway` / `BULK_TW_*`, `cross_rate`,
+`_fwd_twoway_check` / `_tto_fwd_twoway` / `FS_TW_*` / `CROSS_TW_*`), `tto/views/30_forward.json` (`"twoway"`:
+toplu-forward, fwdrate-usd-bid / -ask, fwdrate-eur-bid / -ask, fwdfree, fss-manuel, capraz-forward; the helper tables
+BK2, B34y, B36y and EKF4 show the typed values), `tto/entry.py` (`bulk_forward_price`, `BULK_FWD_SOURCES`),
+`tto/service.py` (`_bulk_from_forward`; `_cross_typed_forwards`, from `_set_inputs` and `_reset_inputs`). Tests:
+`tests/test_fwd_iki_yon.py`, the browser test's checks after "Forward starting swap: its own FS points typed back".
 
 ## Process
 
