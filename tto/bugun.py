@@ -12,7 +12,9 @@ is handled (the page links there) and says plainly when there is nothing.
 * **Quant** - the AL / SAT lines that appeared since the previous close: the signal log's entries opened since the
   desk's close of the business day before the quant's day (a threshold crossed, a daily line's "YENİ") and the daily
   lines whose direction turned since that close (``new``) - best expectancy first (TRY at the line's own size), with
-  the instrument, the side, the size, entry / target / stop and R/R.
+  the instrument, the side, the size, entry / target / stop and R/R - in the traded instrument's own level (an FX
+  line's forward price; a level of the model's own - the FRA / PPK line's gap - as the instrument's, the FRA's rate,
+  the gap beside it: ``note``).
 * **DİBS** - the trading list's bonds whose RV signal turned: DİBS RV's Sinyal (OIS ASW, AC) and Sinyal FX (BI)
   against the desk's close record of them (:meth:`Bugun.look`: taken at the desk's close every business day - the
   sheet keeps no history of its signals; before the first record there is no comparison and the bonds signalling now
@@ -290,9 +292,11 @@ class Bugun(object):
     @staticmethod
     def _signal_line(s: Dict[str, Any], e: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """A live line as the desk reads it: the trade in its words, its side, size, entry / target / stop in the
-        instrument's own price (FX: the forward of the holding), R/R and the expected P&L."""
+        instrument's own price (FX: the forward of the holding; a level of the model's own: the traded instrument's -
+        the FRA's rate -, the model's gap beside it in ``note``), R/R and the expected P&L."""
         from . import quantfam as qf
         px = s.get("px") or None
+        quote = s.get("quote") or None
         mo = s.get("money") or {}
         info = s.get("info") or {}
         legs = s.get("legs") or []
@@ -313,26 +317,31 @@ class Bugun(object):
             exp_text = qf.exp_text(s)
         except Exception:  # noqa: BLE001 - the words are not worth the line
             exp_text = ""
-        at = px if px is not None else s
+        at = px if px is not None else (quote if quote is not None else s)
         return {"sid": s["id"], "family": s.get("family"), "model": info.get("model") or s.get("family_label") or "",
                 "asset": s.get("asset") or "", "trade": s.get("line") or s.get("trade_tr") or s.get("expression") or "",
                 "side": side, "up": up, "size": size, "entry": _num(at.get("entry")), "target": _num(at.get("target")),
-                "stop": _num(at.get("stop")), "digits": int((px or {}).get("digits") or s.get("digits") or 2),
-                "unit": (px or {}).get("label") or s.get("unit") or "", "rr": rr, "exp_try": _num(s.get("exp_try")),
+                "stop": _num(at.get("stop")), "digits": int((px or quote or {}).get("digits") or s.get("digits") or 2),
+                "unit": (px or quote or {}).get("label") or s.get("unit") or "", "rr": rr, "exp_try": _num(s.get("exp_try")),
+                "note": qf.gaps_text(quote) if quote is not None else "",
                 "exp_text": exp_text, "strength": s.get("strength") or "", "gated": s.get("gated") or "",
                 "new": bool(s.get("new")), "day": (e or {}).get("day") or s.get("day"),
                 "time": (e or {}).get("time") or s.get("time") or "", "page": s.get("page") or "quant", "listed": True}
 
     @staticmethod
     def _log_line(e: Dict[str, Any]) -> Dict[str, Any]:
-        """A line written down since the close that is no longer in the list (its |z| fell back): as the log keeps it."""
+        """A line written down since the close that is no longer in the list (its |z| fell back): as the log keeps it -
+        a level of the model's own in the traded instrument's level it had then (``quote``), the gap beside it."""
         from . import quantfam as qf
-        lv, tg, st = _num(e.get("level")), _num(e.get("target")), _num(e.get("stop"))
+        q = e.get("quote") if isinstance(e.get("quote"), dict) else None
+        at = q if q is not None else {"entry": e.get("level"), "target": e.get("target"), "stop": e.get("stop"), "digits": e.get("digits")}
+        lv, tg, st = _num(at.get("entry")), _num(at.get("target")), _num(at.get("stop"))
         rr = abs(tg - lv) / abs(st - lv) if lv is not None and tg is not None and st is not None and st != lv else None
         fam = qf.FAMILIES.get(e.get("family") or "")
         return {"sid": e["sid"], "family": e.get("family"), "model": e.get("family_label") or "", "asset": e.get("asset") or "",
                 "trade": e.get("expression") or "", "side": "AL" if (e.get("dir") or 0) > 0 else "SAT", "up": (e.get("dir") or 0) > 0,
-                "size": None, "entry": lv, "target": tg, "stop": st, "digits": int(e.get("digits") or 2), "unit": e.get("unit") or "",
+                "size": None, "entry": lv, "target": tg, "stop": st, "digits": int(at.get("digits") or 2),
+                "unit": (q or {}).get("label") or e.get("unit") or "", "note": qf.gaps_text(q) if q is not None else "",
                 "rr": rr, "exp_try": None, "exp_text": "", "strength": e.get("strength") or "", "gated": "", "new": bool(e.get("daily")),
                 "day": e.get("day"), "time": e.get("time") or "", "page": fam[2] if fam else "quant", "listed": False}
 

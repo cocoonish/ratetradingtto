@@ -274,7 +274,9 @@ export class BugunPage {
         title: (x.model ? x.model + ' · ' : '') + (x.asset || '') + (x.gated ? ' · düşük güven: ' + x.gated : '')
           + (x.listed ? '' : ' · listeden çıktı (|z| geri döndü); kayıtta açık') + ' · tıklayınca sinyalin sayfası' },
       td(x.time + (x.new ? ' · YENİ' : ''), 'l muted'), td(x.side, 'l ' + (x.up ? 'buy' : 'sell')), td(x.trade, 'l wrap'),
-      td(x.size || '', 'l muted'), td(p(x.entry) + ' / ' + p(x.target) + ' / ' + p(x.stop) + (x.unit ? ' ' + x.unit : '')),
+      td(x.size || '', 'l muted'),
+      // (in the traded instrument's own level - an FX line's forward, the FRA / PPK line's FRA rate -; a model's gap beside it)
+      td(p(x.entry) + ' / ' + p(x.target) + ' / ' + p(x.stop) + (x.unit ? ' ' + x.unit : '') + (x.note ? ' · ' + x.note : ''), null, x.note || null),
       td(isNum(x.rr) ? num(x.rr, 2) : '—'), td(isNum(x.exp_try) ? sgn(x.exp_try, 0) + ' TL' : (x.exp_text || '—'), isNum(x.exp_try) ? cls(x.exp_try) : 'muted', x.exp_text || null));
       tr.addEventListener('click', () => { window.location.hash = '#/' + (x.page || 'quant'); });
       table.appendChild(tr);

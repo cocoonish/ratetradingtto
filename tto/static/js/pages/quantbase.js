@@ -54,6 +54,46 @@ export function sheetText(s, v) {
   return ' (' + (sh.where || 'OIS sayfasında') + ' ' + sgn(v * sh.factor, 1) + ')';
 }
 
+// ------------------------------------------------------------------------------------------------ a model's level, traded
+// A line whose level is the model's own - a gap to the PPK path, a residual of a fit, a premium over realized vol - says
+// entry / target / stop in the traded instrument's own level (``s.quote``, tto/quantfam.py inst_quote: the FRA's rate …),
+// the model's gap beside each (the desk, 24.11.2026: "6x9 net bir seviye değil mi, bps olarak yazdıklarını anlayamadım").
+const GAP_UNIT = { vol: 'vol puanı' };
+
+/** The instrument's level as the desk writes it: a rate "%38,72", a vol "14,20 vol", a price "42,8150". */
+export function quoteText(q, v) {
+  if (!isNum(v)) return '—';
+  const d = isNum(q.digits) ? q.digits : 2;
+  return q.unit === '%' ? '%' + num(v, d, false) : levelText(v, q.unit, d);
+}
+
+/** The model's gap beside it: "+6,9 bp patikanın üstünde", "-2,00 vol puanı gerçekleşen vol'ün altında", "0,0 bp: patikada". */
+export function gapText(q, v) {
+  const g = (q && q.gap) || {};
+  if (!isNum(v)) return '—';
+  const d = isNum(g.digits) ? g.digits : 1;
+  const unit = GAP_UNIT[g.unit] || g.unit || '';
+  if (Number(v.toFixed(d)) === 0) return (num(0, d, false) + ' ' + unit + ': ' + (g.at || '')).replace('  ', ' ');
+  return (sgn(v, d) + ' ' + unit + ' ' + (g.of || '') + ' ' + (v > 0 ? 'üstünde' : 'altında')).replace('  ', ' ');
+}
+
+/** The gap at entry, target and stop in one: "patika farkı +6,9 / +0,1 / +7,9 bp". */
+export function gapsText(q) {
+  const g = (q && q.gap) || {};
+  const d = isNum(g.digits) ? g.digits : 1;
+  return ((g.name || 'fark') + ' ' + ['entry', 'target', 'stop'].map((k) => (isNum(g[k]) ? sgn(g[k], d) || num(0, d, false) : '—')).join(' / ')
+    + ' ' + (GAP_UNIT[g.unit] || g.unit || '')).trim();
+}
+
+/** A level of the model's own (the signal's units) as the instrument's level, the gap beside it: "%38,72 (+6,9 bp
+ * patikanın üstünde)"; a VİOP contract's price after its rate ("%38,40 · fiyat 42,8150 (…)"). */
+export function quoteLevel(q, v) {
+  if (!isNum(v)) return '—';
+  const alt = q.alt || null;
+  return quoteText(q, q.base + q.scale * v) + (alt && isNum(alt.base) ? ' · ' + alt.label + ' ' + quoteText(alt, alt.base + alt.scale * v) : '')
+    + ' (' + gapText(q, v) + ')';
+}
+
 /** A signal's expected P&L as one cell: FX in money per 1 mn of the base currency, a rates package in bp (its TL in
  * the tooltip), anything else in its own unit. */
 export function pnlCell(s) {
@@ -322,7 +362,10 @@ export class SignalChart {
       this.zHead.textContent = (m.score_name || 'z') + ' · gün gün';
       if (this.charts.z) this.charts.z.update(zspec); else this.charts.z = new Chart(this.zHost, zspec, { height: 250 });
     }
-    this.statEl.textContent = 'Şimdi ' + fmt(m.level, digits) + (unit ? ' ' + unit : '') + sheetText(s || m, m.level) + ' · ' + (m.score_name || 'z') + ' ' + sgn(m.z, 2)
+    // (a level of the model's own: the traded instrument's level first, the gap beside it - "Şimdi 6x9 FRA %38,72 (+6,9 bp …)")
+    const sq = s && !s.px && s.quote ? s.quote : null;
+    this.statEl.textContent = 'Şimdi ' + (sq ? sq.inst + ' ' + quoteLevel(sq, m.level) : fmt(m.level, digits) + (unit ? ' ' + unit : '') + sheetText(s || m, m.level))
+      + ' · ' + (m.score_name || 'z') + ' ' + sgn(m.z, 2)
       + (isNum(m.half_life) ? ' · yarı ömür ' + fmt(m.half_life, 1) + ' gün' : '')
       + (m.regime && m.regime.tag ? ' · rejim ' + (REGIME[m.regime.tag] || m.regime.tag) : '')
       + ' · ' + isoToTr(days[0]) + ' – ' + isoToTr(days[days.length - 1]) + ' · ' + days.length + ' gün';
@@ -390,6 +433,13 @@ export class SignalChart {
           + ' (giriş / hedef / stop) · ' + (m.series_label || m.name || '') + (isNum(s.exp_pnl) ? ' · beklenen ' + sgn(s.exp_pnl, 2) + ' ' + pu : '')
           + (isNum(s.carry_h) ? ' (içinde forward primi ' + sgn(s.carry_h, 2) + ' ' + pu + ')' : '')
           + (isNum(s.sigma_h) ? ' · ufuk σ ' + fmt(s.sigma_h, 2) + ' ' + pu : '')]);
+      } else if (s.quote) {
+        // ... and a level of the model's own in the traded instrument's (above): the model's own numbers - its gap - here,
+        // what the instrument's are made of (the model's value now: the path's forward …)
+        const q = s.quote;
+        lines.push(['Model farkı', [s.entry, s.target, s.stop].map((v) => sgn(v, s.digits) || '—').join(' / ') + (s.unit ? ' ' + s.unit : '')
+          + ' (giriş / hedef / stop) · ' + ((q.gap || {}).name || '') + ' · ' + q.inst + ' = ' + (q.model || 'model') + ' + fark'
+          + (q.held ? ' · ' + q.held : '')]);
       }
       const kv = h('table', { class: 'plain qkv' });
       for (const [k, v] of lines) kv.appendChild(h('tr', null, h('th', null, k), h('td', null, v)));
@@ -418,11 +468,13 @@ export class SignalChart {
   }
 
   /** The signal as the desk reads it: the trade in desk words, entry / target / stop in the instrument's own price (FX:
-   * the forward of the holding, with the spot), the plain sentence (the server's, from the signal's own numbers) and
+   * the forward of the holding, with the spot; a level of the model's own: the traded instrument's - the FRA's rate -,
+   * the model's gap beside it), the plain sentence (the server's, from the signal's own numbers) and
    * the money - FX per 1 mn of the base currency (its forward premium's part and the spot's), a rates package in bp and
    * TL of its main leg's DV01 - at the horizon, at the target and at the stop. */
   plainBlock(s) {
     const px = s.px || null;
+    const q = px ? null : (s.quote || null);
     const mo = s.money || {};
     const pu = s.pnl_unit || '';
     const lv = (v) => levelText(v, s.unit, s.digits) + sheetText(s, v);       // (a fly: the OIS sheet's quote beside it)
@@ -445,10 +497,15 @@ export class SignalChart {
         + (s.gated ? ' · ' + LOW + ' (' + s.gated + ')' : ''))]);
     }
     const d = px ? px.digits : s.digits;
+    // (a level of the model's own: the traded instrument's levels - the FRA's rate -, the model's gap at each beside them,
+    // what they are held on - "hedef / stop bugünkü PPK patikasıyla" -; a VİOP contract's prices after them)
+    const alt = q && q.alt ? q.alt : null;
     rows.push(['Giriş / hedef / stop', h('td', { id: this.id('quant-sig-prices') }, px
       ? fmt(px.entry, d) + ' / ' + fmt(px.target, d) + ' / ' + fmt(px.stop, d) + ' · ' + px.inst + ' (giriş: ' + px.note
         + (px.tenor ? ' · spot ' + fmt(px.spot, d) : '') + ')' + (isNum(px.spot_exp) ? ' · ' + span + ' sonra beklenen kur ' + fmt(px.spot_exp, d) : '')
-      : lv(s.entry) + ' / ' + lv(s.target) + ' / ' + lv(s.stop) + (s.instrument ? ' · ' + s.instrument : ''))]);
+      : q ? quoteText(q, q.entry) + ' / ' + quoteText(q, q.target) + ' / ' + quoteText(q, q.stop) + ' · ' + q.inst + ' (' + gapsText(q)
+          + (q.note ? '; ' + q.note : '') + ')' + (alt ? ' · ' + alt.label + ' ' + [alt.entry, alt.target, alt.stop].map((v) => quoteText(alt, v)).join(' / ') : '')
+        : lv(s.entry) + ' / ' + lv(s.target) + ' / ' + lv(s.stop) + (s.instrument ? ' · ' + s.instrument : ''))]);
     let pnl = '—';
     let tip = null;
     if (px && isNum(mo.total)) {
@@ -475,15 +532,17 @@ export class SignalChart {
     rows.push(['Beklenen K/Z', h('td', { id: this.id('quant-sig-pnl'), title: tip }, pnl)]);
     const rr = isNum(s.rr) ? s.rr : (isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     let ends = '';
+    // (a level of the model's own: the instrument's level at the target and the stop first - "hedefte (%38,65) 6,8 bp …")
+    const at = (k) => (q && isNum(q[k]) ? '(' + quoteText(q, q[k]) + ') ' : '');
     if (px && (isNum(mo.target) || isNum(mo.stop))) {
       ends = 'hedefte ' + (money(mo.target, mo.ccy) || '—') + ' · stopta ' + (money(mo.stop, mo.ccy) || '—') + ' (1 mn ' + mo.base + ')';
     } else if (isNum(mo.per_bp) && mo.bp && (isNum(mo.bp.target) || isNum(mo.bp.stop))) {
-      ends = 'hedefte ' + (isNum(mo.bp.target) ? fmt(mo.bp.target, 1) + ' bp ≈ ' + money(mo.target, 'TL') : '—')
-        + ' · stopta ' + (isNum(mo.bp.stop) ? fmt(Math.abs(mo.bp.stop), 1) + ' bp ≈ ' + money(mo.stop, 'TL') : '—');
+      ends = 'hedefte ' + at('target') + (isNum(mo.bp.target) ? fmt(mo.bp.target, 1) + ' bp ≈ ' + money(mo.target, 'TL') : '—')
+        + ' · stopta ' + at('stop') + (isNum(mo.bp.stop) ? fmt(Math.abs(mo.bp.stop), 1) + ' bp ≈ ' + money(mo.stop, 'TL') : '—');
     } else if (isNum(mo.per_unit) && (isNum(mo.target) || isNum(mo.stop))) {
-      ends = 'hedefte ' + (money(mo.target, mo.ccy) || '—') + ' · stopta ' + (money(mo.stop, mo.ccy) || '—');
+      ends = 'hedefte ' + at('target') + (money(mo.target, mo.ccy) || '—') + ' · stopta ' + at('stop') + (money(mo.stop, mo.ccy) || '—');
     } else if (isNum(s.reward) || isNum(s.risk)) {
-      ends = 'hedefe ' + (isNum(s.reward) ? fmt(s.reward, 2) + ' ' + pu : '—') + ' · stopa ' + (isNum(s.risk) ? fmt(s.risk, 2) + ' ' + pu : '—');
+      ends = 'hedefe ' + at('target') + (isNum(s.reward) ? fmt(s.reward, 2) + ' ' + pu : '—') + ' · stopa ' + at('stop') + (isNum(s.risk) ? fmt(s.risk, 2) + ' ' + pu : '—');
     }
     if (ends && isNum(rr)) ends += ' · ödül / risk ' + fmt(rr, 2);
     if (ends && isNum(s.exp_r)) ends += ' · beklenen / risk ' + fmt(s.exp_r, 2);
@@ -582,10 +641,18 @@ export function signalRows(list, opts = {}) {
     const row = [];
     const pu = s.pnl_unit || '';
     const px = s.px || null;
+    const q = px ? null : (s.quote || null);
     const mo = s.money || {};
     // an FX trade's entry / target / stop in the instrument's own price (the forward of the holding), the series' in its tooltip
     const at = px ? { tip: px.inst + ' · giriş: ' + px.note + (px.tenor ? ' · spot ' + fmt(px.spot, px.digits) : '') + ' · analiz serisi ' + fmt(s.entry, s.digits) + ' ' + (s.unit || '') }
       : {};
+    // a level of the model's own in the traded instrument's (the FRA's rate …), the model's gap in its tooltip
+    const lvCell = (k) => {
+      const trail = k === 'target' && s.trail ? { empty: 'iz süren stop' } : {};
+      if (px) return N(px[k], px.digits, Object.assign(k === 'entry' ? at : {}, trail));
+      if (q) return N(q[k], q.digits, Object.assign({ tip: q.inst + ': ' + gapText(q, s[k]) + (k === 'entry' && q.note ? ' · ' + q.note : '') }, trail));
+      return N(s[k], s.digits, Object.assign({ tip: sheetText(s, s[k]).trim() || undefined }, trail));
+    };
     const rr = isNum(s.rr) ? s.rr : (px && isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
     if (opts.group) row.push(T(groupText(s), Object.assign({ tip: s.tag ? s.tag + ': masanın offshore işlem limiti dar' : (s.group || '') },
@@ -597,11 +664,8 @@ export function signalRows(list, opts = {}) {
       bookCell(s),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
-      N(px ? px.entry : s.entry, px ? px.digits : s.digits, px ? at : { tip: sheetText(s, s.entry).trim() || undefined }),
-      N(px ? px.target : s.target, px ? px.digits : s.digits, Object.assign(px ? {} : { tip: sheetText(s, s.target).trim() || undefined },
-        s.trail ? { empty: 'iz süren stop' } : {})),
-      N(px ? px.stop : s.stop, px ? px.digits : s.digits, px ? {} : { tip: sheetText(s, s.stop).trim() || undefined }),
-      T(px ? px.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : {}),
+      lvCell('entry'), lvCell('target'), lvCell('stop'),
+      T(px ? px.label : q ? q.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : q ? { tip: q.inst + ' · ' + gapsText(q) } : {}),
       pnlCell(s),
       ...levelCells(s, rr),
       N(s.half_life, 1), T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),

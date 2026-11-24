@@ -194,8 +194,10 @@ class SignalsPage extends QuantPage {
     this.logAt = Date.now();
     const d = await api.get('/api/quant/log');
     if (this.dead) return;
+    // (the log follows each family's own level; the entry's levels in the traded instrument's own - the FRA's rate … - in the tooltip)
     const rows = (d.entries || []).slice(0, 120).map((e) => [T(isoToTr(e.day) + ' ' + (e.time || '')), T(e.family_label), T(e.expression, { b: 1 }), Z(e.z),
-      N(e.level, e.digits), N(e.target, e.digits), N(e.stop, e.digits), T(e.status === 'open' ? 'açık' : e.status, { b: e.status !== 'open' ? 1 : 0 }),
+      N(e.level, e.digits, e.levels_text ? { tip: 'Girişte: ' + e.levels_text } : {}), N(e.target, e.digits), N(e.stop, e.digits),
+      T(e.status === 'open' ? 'açık' : e.status, { b: e.status !== 'open' ? 1 : 0 }),
       T(e.closed_day ? isoToTr(e.closed_day) : ''), N(e.closed_level, e.digits), N(e.pnl, 2, { sign: true }), N(e.pnl_sigma, 2, { sign: true }), N(e.held, 0)]);
     this.boxes.log.set(['Giriş', 'Aile', 'İşlem', 'z', 'Seviye', 'Hedef', 'Stop', 'Sonuç', 'Kapanış', 'Son seviye', 'K/Z', 'K/Z σ', 'Gün'], rows,
       (d.entries || []).slice(0, 120).map((e) => e.sid), 'Kayıt yok');
@@ -298,7 +300,9 @@ export function quantEvent(q) {
   api.get('/api/quant/alerts', { since }).then((d) => {
     live.alerts = Math.max(live.alerts, d.last || 0);
     for (const a of d.alerts || []) {
-      const el = toast('Sinyal · ' + a.family_label + ': ' + a.expression + ' (z ' + sgn(a.z, 2) + ', ' + a.strength + ')', 'ok', 12000);
+      // (its levels in the traded instrument's own - the FRA's rate, an FX forward's price -, the model's gap beside them)
+      const el = toast('Sinyal · ' + a.family_label + ': ' + a.expression + ' (z ' + sgn(a.z, 2) + ', ' + a.strength + ')'
+        + (a.levels ? ' · ' + a.levels : ''), 'ok', 12000);
       el.classList.add('qalert');
       el.title = 'Sinyali aç';
       el.addEventListener('click', () => { window.location.hash = '#/quant?p=' + encodeURIComponent('sig:' + a.sid); });

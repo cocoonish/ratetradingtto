@@ -1265,6 +1265,15 @@ class Quant(object):
                  "expression": sg["expression"], "dir": sg["direction"], "z": sg["z"], "entry_z": sg["entry_z"], "level": sg["level"],
                  "target": sg["target"], "stop": sg["stop"], "scale": sg["scale"], "unit": sg["unit"], "digits": sg["digits"], "strength": sg["strength"],
                  "composite": sg["composite"], "day": today, "time": stamp.strftime("%H:%M"), "status": "open"}
+            # the levels in the traded instrument's own (an FX line's forward, the FRA / PPK line's FRA rate …) as they
+            # were at the entry: what the alarm says and Bugün shows - the log itself follows the family's own level
+            try:
+                e["levels_text"] = qf.levels_line(sg)
+            except Exception:  # noqa: BLE001 - the words are not worth the entry
+                e["levels_text"] = ""
+            q = sg.get("quote")
+            if q:
+                e["quote"] = {k: q.get(k) for k in ("inst", "unit", "digits", "label", "entry", "target", "stop", "base", "scale", "gap", "note")}
             if daily:
                 e["daily"] = True                            # (followed to its stop or its direction's turn: no target, no time)
             if sg.get("trail"):
@@ -1357,7 +1366,7 @@ class Quant(object):
             self._alert_seq += 1
             a = {"seq": self._alert_seq, "sid": e["sid"], "family": e["family"], "family_label": e["family_label"], "asset": e["asset"],
                  "group": e.get("group"), "expression": e["expression"], "z": e["z"], "level": e["level"], "unit": e["unit"],
-                 "digits": e["digits"], "strength": e["strength"], "day": e["day"], "time": e["time"]}
+                 "digits": e["digits"], "strength": e["strength"], "day": e["day"], "time": e["time"], "levels": e.get("levels_text") or ""}
             self.store.put(self.ALERT_KEY, (self._alerts() + [a])[-ALERT_KEEP:])
         self._desk_alarm(a, e)
         for fn in list(self._hooks):
@@ -1381,8 +1390,9 @@ class Quant(object):
         alarm = "quant:" + a["sid"]
         try:
             z = ("%+.2f" % a["z"]).replace(".", ",")
+            # (with the line's levels in the traded instrument's own: "… · giriş %38,72 · hedef %38,65 · stop %38,73 (6x9 FRA; …)")
             desk.fired([{"id": alarm, "label": "Sinyal · %s: %s" % (a["family_label"], a["expression"]), "time": _now().strftime("%H:%M:%S"),
-                         "mode": "level", "value_text": "z %s (%s)" % (z, a["strength"]),
+                         "mode": "level", "value_text": "z %s (%s)" % (z, a["strength"]) + (" · " + a["levels"] if a.get("levels") else ""),
                          "condition": "yön döndü (YENİ)" if e.get("daily") else "giriş eşiği |z| ≥ %s" % _txt(float(e.get("entry_z") or DEFAULTS["entry_z"])),
                          "measure_text": "",
                          "note": "Sinyaller sayfası", "by": ""}])
@@ -1401,7 +1411,8 @@ class Quant(object):
 
     def add_alert_hook(self, fn: Callable[[Dict[str, Any]], None]) -> None:
         """Called with every new signal alert ``{seq, sid, family, family_label, asset, group, expression, z, level,
-        unit, strength, day, time}`` - for other listeners (the desk's alarms are wired in already: :meth:`_desk_alarm`)."""
+        unit, strength, day, time, levels}`` (``levels``: entry / target / stop in the traded instrument's own level,
+        ``quantfam.levels_line``) - for other listeners (the desk's alarms are wired in already: :meth:`_desk_alarm`)."""
         self._hooks.append(fn)
 
     def counters(self) -> Dict[str, int]:

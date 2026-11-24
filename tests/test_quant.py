@@ -565,6 +565,82 @@ def test_fra_path_reproduces_its_quotes_in_the_desk_s_convention():
             assert "tolerans" in s["gated"] and s["strength"] == "elendi" and s["composite"] == 0
 
 
+FRA_LABELS = ("1M", "2M", "3M", "6M", "9M", "1Y")
+
+
+def _fra_ctx(live_bump=0.12, today_path=True):
+    """The FRA / PPK family on a history whose 6M quote wanders around the path, today's path solved the same day
+    (``ctx.path``) and today's quotes - its par rates, the 6M ``live_bump`` above - live."""
+    base = 0.395
+    rnd = random.Random(17)
+    noise = ar1(300, 0.7, 0.03, rnd)
+    days = DAYS[-300:]
+    series = {"OIS:" + lbl: {} for lbl in FRA_LABELS}
+    meta = {"OIS:" + lbl: {"label": lbl + " OIS", "kind": "rate", "months": m} for m, lbl in zip(qf.PATH_TENORS, FRA_LABELS)}
+    mdays, values = {}, []
+    for i, d in enumerate(days):
+        sp = dt.date.fromisoformat(d) + dt.timedelta(days=2)
+        for m, lbl in zip(qf.PATH_TENORS, FRA_LABELS):
+            par = qf.par_rate(sp, lambda x, sp=sp: qf.path_df(sp, base, [], x, set()), m, set())
+            series["OIS:" + lbl][d] = par + (noise[i] if m == 6 else 0.0)
+        mdays[d] = {"spot": sp.isoformat(), "base": base, "flag": ""}
+        values.append({"day": d, "meeting": "2030-01-01", "level": base})
+    spot = dt.date(2026, 11, 4)
+    steps = [(dt.date(2026, 12, 11), 0.385), (dt.date(2027, 1, 22), 0.375)]
+    live = {"OIS:" + lbl: qf.par_rate(spot, lambda x: qf.path_df(spot, base, steps, x, set()), m, set()) for m, lbl in zip(qf.PATH_TENORS, FRA_LABELS)}
+    live["OIS:6M"] += live_bump
+    path = {"day": TODAY.isoformat(), "spot": spot, "base": base, "steps": steps} if today_path else None
+    return ctx_of(series, meta, mpc={"days": mdays, "values": values}, path=path, live=live), live, (spot, base, steps)
+
+
+def test_an_fra_signal_is_told_in_the_fra_rate_with_the_path_gap_beside_it():
+    """The desk, 24.11.2026 ("6x9 net bir seviye değil mi, bps olarak yazdıklarını anlayamadım"): the FRA / PPK line's
+    entry is the FRA's rate now (the curve's forward, the desk's convention), target and stop the rates where the gap
+    to today's path is the target's / the stop's (path forward + gap, the path held) - the gap in bp beside them -, the
+    legs' par rates with their weights; recomputed live as the level is."""
+    ctx, live, (spot, base, steps) = _fra_ctx()
+    mons, _ = qf.fam_frapath(ctx)
+    m = next(x for x in mons if x.sid == "frapath:3x6")
+    qf.score_all(ctx, [m], live)
+    s = qf.make_signal(m, cfg(usdtry=40.0), "10:00")
+    q = s["quote"]
+    today = qf.frapath_day(spot, base, steps, {mm: live["OIS:" + lbl] for mm, lbl in zip(qf.PATH_TENORS, FRA_LABELS)}, set())["fra"]["3x6"]
+    assert s["z"] > 2 and s["direction"] == -1 and s["expression"].startswith("Receive 3x6 FRA")
+    assert (q["inst"], q["unit"], q["fra"], q["label"], q["asof"]) == ("3x6 FRA", "%", "3x6", "3x6 FRA %", "canlı")
+    # entry: the FRA's rate now; the base: the path's forward of the same dates; the gap: the level
+    assert q["entry"] == pytest.approx(today["curve"]) and q["base"] == pytest.approx(today["path"]) and s["level"] == pytest.approx(today["dev"])
+    for which in ("entry", "target", "stop"):
+        assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which]) and q["gap"][which] == pytest.approx(s[which])
+    assert q["target"] < q["entry"] < q["stop"]                          # (receive: the rate falls to the target)
+    # the legs' par rates now, their DV01 weights as before
+    assert {lg["key"]: lg["level"]["level"] for lg in s["legs"]} == {"OIS:6M": pytest.approx(live["OIS:6M"]), "OIS:3M": pytest.approx(live["OIS:3M"])}
+    assert "6M OIS (%" + qf._th(live["OIS:6M"], 2) + ") ×" in s["trade_tr"] and "3M OIS (%" in s["trade_tr"]
+    # in words: the rate first, the gap beside it; what is held for target and stop
+    entry_txt = "%" + qf._th(q["entry"], 2)
+    assert "3x6 FRA şimdi %s (%s bp patikanın üstünde)" % (entry_txt, qf._sg(s["level"], 1)) in s["plain"]
+    assert "hedef seviyesine (%%%s; " % qf._th(q["target"], 2) in s["plain"] and "Hedef ve stop bugünkü PPK patikasıyla" in s["plain"]
+    assert "(%s)" % entry_txt in s["thesis"] and "patika değişirse" in q["held"]
+    assert qf.levels_line(s).startswith("giriş %s · hedef %%%s · stop %%%s (3x6 FRA; patika farkı %s / " % (
+        entry_txt, qf._th(q["target"], 2), qf._th(q["stop"], 2), qf._sg(s["level"], 1)))
+    # live: the 6M moves 5 bp - the level and the rates follow, today's path held (its forward the same)
+    live2 = dict(live, **{"OIS:6M": live["OIS:6M"] + 0.05})
+    qf.score_all(ctx, [m], live2)
+    s2 = qf.make_signal(m, cfg(usdtry=40.0), "10:01")
+    q2 = s2["quote"]
+    assert q2["base"] == pytest.approx(q["base"]) and q2["entry"] > q["entry"] + 0.05 and s2["level"] > s["level"]
+    for which in ("entry", "target", "stop"):
+        assert (q2[which] - q2["base"]) * 100.0 == pytest.approx(s2[which])
+    assert {lg["key"]: lg["level"]["level"] for lg in s2["legs"]}["OIS:6M"] == pytest.approx(live2["OIS:6M"])
+    # before today's path: the last close's level, its FRA rate and its path - said so
+    ctx0, live0, _ = _fra_ctx(today_path=False)
+    m0 = next(x for x in qf.fam_frapath(ctx0)[0] if x.sid == "frapath:3x6")
+    qf.score_all(ctx0, [m0], live0)
+    s0 = qf.make_signal(m0, cfg(entry_z=0.01), "10:00")
+    q0 = s0["quote"]
+    assert q0["asof"] == "son kapanış" and "kapanışının PPK patikasıyla" in q0["note"] and m0.level == pytest.approx(m0.values[-1])
+    assert (q0["entry"] - q0["base"]) * 100.0 == pytest.approx(s0["level"])
+
+
 def test_the_workbook_s_own_path_reproduces_its_quotes():
     """The saved workbook as Excel left it: OIS_MAIN's meeting levels (S10…), the solver's own base (Motor!K4) and the
     quotes (B9:B14, 1M … 1Y): in the convention frapath_day uses the path's par rates are the quotes to a basis point -
@@ -1118,8 +1194,9 @@ def test_strong_signals_ring_as_the_desk_s_alarms():
     look("2026-11-03", [strong, medium], [qf.make_signal(m, c, "10:00") for m in (strong, medium)])
     assert [e["id"] for e in desk.events] == ["quant:a"] and svc.nudged >= 1          # the desk's setting: Güçlü and up
     e = desk.events[0]
-    assert e["label"] == "Sinyal · PCA kalıntısı: Receive a" and e["value_text"] == "z +3,20 (Güçlü)" and e["mode"] == "level"
-    assert e["condition"] == "giriş eşiği |z| ≥ 2"
+    # (the line's levels beside its z: in its own level here - a level of the model's own in the traded instrument's, below)
+    assert e["label"] == "Sinyal · PCA kalıntısı: Receive a" and e["value_text"] == "z +3,20 (Güçlü) · giriş +3,2 bp · hedef 0,0 bp · stop +3,5 bp"
+    assert e["mode"] == "level" and e["condition"] == "giriş eşiği |z| ≥ 2"
     at(strong, 0.0)                                      # the target: its desk alarm closes
     look("2026-11-04", [strong, medium], [])
     assert desk.closed == [("quant:a", "hedefe ulaştı")]
@@ -1132,13 +1209,51 @@ def test_strong_signals_ring_as_the_desk_s_alarms():
     look("2026-11-05", [third], [])
     at(third, 2.6)
     look("2026-11-06", [third], [qf.make_signal(third, c, "10:00")])
-    assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and desk.events[1]["value_text"] == "z +2,60 (Orta)"
+    assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and desk.events[1]["value_text"].startswith("z +2,60 (Orta) · giriş +2,6 bp")
     q.set_settings("ayse", {"desk_alarm": "kapalı"})
     fourth = _mon("f", "rv", 1.0)
     look("2026-11-09", [fourth], [])
     at(fourth, 3.4)
     look("2026-11-10", [fourth], [qf.make_signal(fourth, c, "10:00")])
     assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and q.counters()["alerts"] == 4
+
+
+def test_an_fra_line_s_alarm_says_the_fra_rates_the_gap_beside_them():
+    """The FRA / PPK line's alarm (the desk's and a subscriber's) and its log entry: entry / target / stop in the FRA's
+    rate, the gap to the path beside them - the log itself still follows the gap."""
+    class Desk(object):
+        def __init__(self):
+            self.events = []
+
+        def fired(self, events):
+            self.events.extend(events)
+
+        def close(self, alarm, why):
+            pass
+
+    svc = _Svc()
+    svc.desk_alarms = desk = Desk()
+    q = Quant(svc)
+    c = cfg()
+    path_fwd = 38.65
+    m = _mon("frapath:6x9", "frapath", 1.0)
+    m.quote = lambda live: {"inst": "6x9 FRA", "unit": "%", "digits": 2, "base": path_fwd, "scale": 0.01, "fra": "6x9",
+                            "gap": {"name": "patika farkı", "of": "patikanın", "at": "patikada"}, "note": "hedef / stop bugünkü PPK patikasıyla"}
+    q._track({"cfg": c, "today": "2026-11-02", "mons": {m.sid: m}}, [])
+    m.zfn = lambda level, live: 3.2
+    m.score({}, {})
+    m.level = 6.9
+    sg = qf.make_signal(m, c, "10:00")
+    q._track({"cfg": c, "today": "2026-11-03", "mons": {m.sid: m}}, [sg])
+    qt = sg["quote"]
+    want = "giriş %%38,72 · hedef %%%s · stop %%%s (6x9 FRA; patika farkı +6,9 / %s / %s bp)" % (
+        qf._th(path_fwd + sg["target"] / 100.0, 2), qf._th(path_fwd + sg["stop"] / 100.0, 2), qf._sg(sg["target"], 1), qf._sg(sg["stop"], 1))
+    assert qt["entry"] == pytest.approx(38.719) and qf.levels_line(sg) == want
+    assert desk.events[0]["value_text"] == "z +3,20 (Güçlü) · " + want
+    e = q._log()[0]
+    assert e["levels_text"] == want and e["level"] == 6.9 and e["quote"]["entry"] == pytest.approx(38.719) and e["quote"]["label"] == "6x9 FRA %"
+    q.set_subscription("ayse", {"on": True, "families": [], "min": "Zayıf"})
+    assert q.alerts("ayse", 0)["alerts"][0]["levels"] == want
 
 
 def test_settings_are_validated_and_shared():

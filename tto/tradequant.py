@@ -4,8 +4,9 @@
 **Which lines Trades can book** (:func:`bookable`; every line of a quant answer says it - ``book: {ok, why, kind}``,
 :func:`mark`): TRY OIS outright (one leg, its level the rate), spread (two legs 1:1 in DV01, opposite sides, its level long
 − short in bp), fly (three legs 50/50 - the wings ½ each on one side, the body on the other -, its level body − ½ each
-wing: the Trades fly's), FRA (the universe's m×n FRA, its forward rate), a PPK period (its meeting by its date), a DİBS
-bond alone (its yield), an FX spot (a G10 pair's, Opsiyon → spot's spot lines - USDTRY / EURTRY among them).  Not: a vol
+wing: the Trades fly's), FRA (the universe's m×n FRA, its forward rate; the FRA / PPK patikası line's FRA at its rate -
+its quote, ``quantfam.inst_quote``), a PPK period (its meeting by its date; a line telling a period's rate as its quote too),
+a DİBS bond alone (its yield), an FX spot (a G10 pair's, Opsiyon → spot's spot lines - USDTRY / EURTRY among them).  Not: a vol
 trade, VİOP, Offshore (forwards, swap points, the offshore curve: "offshore limiti"), an FX forward, a correlation line,
 a package weighted otherwise (PCA, a hedge: its level is no Trades package's), a DİBS switch or a bond hedged with OIS -
 each with its reason.
@@ -15,7 +16,8 @@ product, structure and legs, side (a swap's receive / pay - tradevalue keeps the
 its DV01 (1.000 $ of the desk's unit × the line's size), turned into a nominal on the desk's 5 mn lot as the form turns a
 DV01 (``TradeBook.normalize``); an FX line 1 mn of the base × its size -, the trade price = the line's entry now (a spread's
 / fly's legs at the curve's rates, the long leg / body set so the package is the entry), target and stop = the line's (an
-FX line's in prices: ``px``), and where it came from (``source``).  Nothing is saved: the page opens the Trades form.
+FX line's in prices: ``px``; a level of the model's own in the instrument's: ``quote`` - the FRA / PPK line's FRA rates),
+and where it came from (``source``).  Nothing is saved: the page opens the Trades form.
 """
 from __future__ import annotations
 
@@ -108,7 +110,12 @@ def bookable(line: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
         return no("offshore (offshore limiti): Trades'te offshore ürünü yok")
     if _FRA.match(uni) and unit == "%":
         return True, "", "fra"
-    if len(keys) == 1 and keys[0].startswith("MPC:") and _ISO.match(keys[0][4:]) and unit == "%":
+    # a level of the model's own told in the traded instrument's (quantfam.inst_quote): the FRA / PPK line is its FRA at its
+    # rate, a meeting's period line its period at its rate - booked as the universe's lines are
+    quote = line.get("quote") if isinstance(line.get("quote"), dict) else {}
+    if quote.get("unit") == "%" and _FRA.match("FRA:" + str(quote.get("fra") or "")) and keys and all(_OIS.match(k) for k in keys):
+        return True, "", "fra"
+    if len(keys) == 1 and keys[0].startswith("MPC:") and _ISO.match(keys[0][4:]) and (unit == "%" or quote.get("unit") == "%"):
         return True, "", "mpc"
     if keys and all(k.startswith("DIBS:") for k in keys):
         if len(keys) == 1 and unit == "%":
@@ -198,6 +205,11 @@ def raw_form(book: Any, user: str, line: Dict[str, Any], scope: str, kind: str) 
     s = 1 if line.get("direction") == 1 else -1
     raw: Dict[str, Any] = {"scope": scope, "trade_date": today}
     entry, target, stop = _f(line.get("entry")), _f(line.get("target")), _f(line.get("stop"))
+    quote = line.get("quote") if isinstance(line.get("quote"), dict) and kind in ("fra", "mpc") else None
+    if quote is not None and quote.get("unit") == "%":
+        # (a level of the model's own: the instrument's rate - the FRA's, its target and stop the rates where the model's
+        # gap is theirs on today's model value, quantfam.inst_quote)
+        entry, target, stop = _f(quote.get("entry")), _f(quote.get("target")), _f(quote.get("stop"))
     if kind == "fxspot":
         px = line.get("px") or {}
         pair = str(px.get("pair") or legs[0]["key"][3:]).upper()
@@ -220,7 +232,7 @@ def raw_form(book: Any, user: str, line: Dict[str, Any], scope: str, kind: str) 
         structure = {"outright": "outright", "spread": "spread", "fly": "fly", "fra": "fra", "mpc": "mpc"}[kind]
         q: Dict[str, Any] = {"structure": structure, "trade_date": today}
         if kind == "fra":
-            m = _FRA.match(str(info.get("universe") or ""))
+            m = _FRA.match(str(info.get("universe") or "")) or _FRA.match("FRA:" + str((quote or {}).get("fra") or ""))
             q["fra"] = "%sx%s" % (m.group(1), m.group(2))
         dflt = book.defaults(user, "ois", **q)
         raw.update(product="ois", structure=structure, settle_date=dflt.get("settle_date"))
@@ -256,8 +268,8 @@ def raw_form(book: Any, user: str, line: Dict[str, Any], scope: str, kind: str) 
     raw["target"], raw["stop"] = target, stop
     source = {"kind": "quant", "family": str(line.get("family") or ""), "family_label": str(line.get("family_label") or ""),
               "line_id": str(line.get("id") or ""), "at": book.now().strftime("%Y-%m-%d %H:%M"),
-              "instrument": str(line.get("instrument") or ""), "entry": entry, "target": target, "stop": stop,
-              "unit": str((line.get("px") or {}).get("unit") or line.get("unit") or "")}
+              "instrument": str((quote or {}).get("inst") or line.get("instrument") or ""), "entry": entry, "target": target, "stop": stop,
+              "unit": str((line.get("px") or {}).get("unit") or (quote or {}).get("unit") or line.get("unit") or "")}
     raw["source"] = source
     return raw, source
 

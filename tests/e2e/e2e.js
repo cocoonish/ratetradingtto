@@ -5107,6 +5107,46 @@ async function clipAfter(page, action) {
     check("... a fly's entry / target / stop on the card with the OIS sheet's quote beside them (2·body − wings), in the list's tooltip",
       flyCard.prices.startsWith('-12,5 bp (OIS sayfasında -25,0) / -8,0 bp (OIS sayfasında -16,0) / -15,0 bp (OIS sayfasında -30,0) · 6M/1Y/2Y fly')
       && flyCard.tip === '(OIS sayfasında -25,0)' && flyCard.entry === '-12,5', flyCard);
+    // a level of the model's own told in the traded instrument's (tto/quantfam.py inst_quote; the desk, 24.11.2026: "6x9 net bir
+    // seviye değil mi, bps olarak yazdıklarını anlayamadım"): the FRA / PPK line's entry / target / stop in the FRA's rate on the card
+    // and in the list, the gap to the path beside them, what they are held on; the gap itself kept in the details
+    const fraCard = await page.evaluate(async () => {
+      const q = await import('/static/js/pages/quantbase.js');
+      const gap = { name: 'patika farkı', of: 'patikanın', at: 'patikada', unit: 'bp', digits: 1, entry: 6.9, target: 0.1, stop: 7.9 };
+      const quote = { inst: '6x9 FRA', unit: '%', digits: 2, label: '6x9 FRA %', fra: '6x9', base: 38.651, scale: 0.01, entry: 38.72, target: 38.652,
+        stop: 38.73, gap, note: 'hedef / stop bugünkü PPK patikasıyla', model: 'PPK patikasının 6x9 forward\'ı (%38,65)',
+        held: 'Hedef ve stop bugünkü PPK patikasıyla (patikanın 6x9 forward\'ı %38,65): patika değişirse onlar da değişir.' };
+      const s = { id: 'frapath:6x9', family: 'frapath', family_label: 'FRA / PPK patikası', asset: 'TRY OIS', expression: 'Receive 6x9 FRA (PPK patikasına göre)',
+        instrument: '6x9 FRA (PPK patikasına göre)', z: 3.05, entry_z: 2, strength: 'Güçlü', gates: [], agree: 0, conflict: 0,
+        parts: { z: 3.05, regime: 1, hl: 1, carry: 1 }, composite: 3.05, hold: 4, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1, level: 6.9,
+        entry: 6.9, target: 0.1, stop: 7.9, direction: -1, pnl_unit: 'bp', exp_pnl: 5.1, rr: 6.8, reward: 6.8, risk: 1, group: 'TRY OIS', tier: '≤ 2Y', tag: '', gated: '',
+        trade_tr: 'sabit faiz alınan (receive): 9M OIS (%39,50) ×3,27 · sabit faiz ödenen (pay): 6M OIS (%40,10) ×2,27 (değişken bacak TLREF)', plain: '…',
+        legs: [{ key: 'OIS:9M', name: '9M OIS', action: 'Receive', side: -1, weight: 3.27, dv01_usd: 3270, text: 'Receive 9M OIS ×3,27' },
+          { key: 'OIS:6M', name: '6M OIS', action: 'Pay', side: 1, weight: 2.27, dv01_usd: 2270, text: 'Pay 6M OIS ×2,27' }],
+        money: { ccy: 'TL', per_bp: 50500, dv01_usd: 1000, total: 257550, target: 343400, stop: -50500, bp: { total: 5.1, target: 6.8, stop: -1 } },
+        quote, book: { ok: true, why: '', kind: 'fra' } };
+      const host = document.createElement('div');
+      const c = new q.SignalChart(host);
+      c.show({ monitor: { name: s.instrument }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+      const text = (sel) => (host.querySelector(sel) || {}).textContent || '';
+      const model = [...host.querySelectorAll('table.qkv tr')].find((tr) => (tr.querySelector('th') || {}).textContent === 'Model farkı');
+      const out = { prices: text('#quant-sig-prices'), ends: text('#quant-sig-ends'), trade: text('#quant-sig-trade'), book: text('#quant-sig-book'),
+        model: model ? model.querySelector('td').textContent : '', now: q.quoteLevel(quote, 6.9), zero: q.gapText(quote, 0.02) };
+      c.destroy();
+      const row = q.signalRows([s])[0];
+      const col = (n) => q.SIGNAL_HEAD.indexOf(n);
+      return Object.assign(out, { entry: row[col('Giriş')].t, target: row[col('Hedef')].t, stop: row[col('Stop')].t, unit: row[col('Birim')].t,
+        tip: row[col('Giriş')].tip || '', unitTip: row[col('Birim')].tip || '' });
+    });
+    check('a model-relative line in the traded instrument\'s level: the FRA / PPK card says the FRA\'s rates, the gap to the path beside them, held on today\'s path',
+      fraCard.prices === '%38,72 / %38,65 / %38,73 · 6x9 FRA (patika farkı +6,9 / +0,1 / +7,9 bp; hedef / stop bugünkü PPK patikasıyla)'
+      && fraCard.ends === 'hedefte (%38,65) 6,8 bp ≈ +343 bin TL · stopta (%38,73) 1,0 bp ≈ -51 bin TL · ödül / risk 6,80'
+      && fraCard.trade.startsWith('sabit faiz alınan (receive): 9M OIS (%39,50) ×3,27 · sabit faiz ödenen (pay): 6M OIS (%40,10) ×2,27')
+      && fraCard.book === 'İşleme al' && fraCard.now === '%38,72 (+6,9 bp patikanın üstünde)' && fraCard.zero === '0,0 bp: patikada'
+      && fraCard.model.startsWith('+6,9 / +0,1 / +7,9 bp (giriş / hedef / stop) · patika farkı · 6x9 FRA = PPK patikasının 6x9 forward\'ı (%38,65) + fark'), fraCard);
+    check('... and its list row: Giriş / Hedef / Stop the FRA\'s rates, Birim "6x9 FRA %", the gap in the tooltip',
+      fraCard.entry === '38,72' && fraCard.target === '38,65' && fraCard.stop === '38,73' && fraCard.unit === '6x9 FRA %'
+      && fraCard.tip === '6x9 FRA: +6,9 bp patikanın üstünde · hedef / stop bugünkü PPK patikasıyla' && fraCard.unitTip === '6x9 FRA · patika farkı +6,9 / +0,1 / +7,9 bp', fraCard);
     check('... the alarm subscription chooses groups too, and knows the families on the universe (Trend, Carry + momentum, Makine öğrenmesi)',
       await page.locator('#quant-sub-groups input[type=checkbox]').count() === 7
       && /Trend/.test(await page.textContent('#quant-sub-families')) && /Carry \+ momentum/.test(await page.textContent('#quant-sub-families'))
@@ -6866,6 +6906,21 @@ async function clipAfter(page, action) {
       && bgSeen.each.every(Boolean) && bgSeen.agenda && bgSeen.errs === 0, bgSeen);
     check('... the RET block says what the header\'s dot says (loaded today or not)', /^Bugün yüklendi/.test(bgSeen.ret) === retToday,
       { ret: bgSeen.ret, retToday });
+    // a quant line of the model's own level (the FRA / PPK line, tto/bugun.py): its entry / target / stop in the FRA's rate, the
+    // gap to the path beside them - drawn by the page's own block from a line as the server gives it
+    const bgFra = await page.evaluate(() => {
+      const pg = window.tto.state.page;
+      const body = document.createElement('div');
+      const c = { el: document.createElement('section'), body, count: document.createElement('span') };
+      pg.paintQuant(c, { ready: true, since: '2026-11-23 17:30', at: '2026-11-24 09:31:00', count: 1, more: 0, lines: [{ sid: 'frapath:6x9',
+        family: 'frapath', model: 'FRA / PPK patikası', asset: 'TRY OIS', trade: 'Receive 6x9 FRA (PPK patikasına göre)', side: 'RECEIVE', up: false,
+        size: 'DV01 1.000 $', entry: 38.719, target: 38.651, stop: 38.729, digits: 2, unit: '6x9 FRA %', note: 'patika farkı +6,9 / +0,1 / +7,9 bp',
+        rr: 6.8, exp_try: 257550, exp_text: '', strength: 'Güçlü', gated: '', new: false, day: '2026-11-24', time: '09:10', page: 'quant-pca', listed: true }] });
+      const cells = [...body.querySelectorAll('#bugun-quant-table tr[data-sid] td')].map((td) => ({ t: td.textContent, title: td.title }));
+      return { levels: (cells[4] || {}).t || '', tip: (cells[4] || {}).title || '', n: cells.length };
+    });
+    check('... a quant line of the model\'s own level in Bugün: the FRA\'s rates, its instrument, the gap to the path beside them',
+      bgFra.levels === '38,72 / 38,65 / 38,73 6x9 FRA % · patika farkı +6,9 / +0,1 / +7,9 bp' && bgFra.tip === 'patika farkı +6,9 / +0,1 / +7,9 bp', bgFra);
     const bgRecon = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json;
     const bgChat = await page.locator('#bugun-chat-table tr[data-line]').count();
     check('... "Girilmemiş işlemler": the "Girilmedi" lines of the chat ↔ Günlük İşlemler list', bgChat === Math.min(bgRecon.missing, 40),

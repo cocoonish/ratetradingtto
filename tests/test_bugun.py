@@ -245,6 +245,36 @@ def test_the_quants_new_al_sat_lines_since_the_previous_close_best_expectancy_fi
     assert got["lines"][0]["sid"] == "n%d" % (bg.QUANT_TOP + 2)
 
 
+FRA_QUOTE = {"inst": "6x9 FRA", "unit": "%", "digits": 2, "label": "6x9 FRA %", "fra": "6x9", "base": 38.65, "scale": 0.01,
+             "entry": 38.719, "target": 38.651, "stop": 38.729, "gap": {"name": "patika farkı", "unit": "bp", "digits": 1, "of": "patikanın",
+                                                                       "at": "patikada", "entry": 6.9, "target": 0.1, "stop": 7.9}}
+
+
+def test_a_model_level_line_says_its_instruments_levels_the_gap_beside_them(svc, monkeypatch):
+    """The FRA / PPK line (the desk, 24.11.2026: "6x9 net bir seviye değil mi"): entry / target / stop in the FRA's rate,
+    the unit its instrument, the gap to the path in the note - live, and as the log kept it once the line left the list."""
+    u = login(svc, "Bugün FRA")
+    q = svc.quant
+    day = dt.date(2026, 11, 17)
+    fra = _sig("frapath:6x9", -1, 343000.0, entry=6.9, target=0.1, stop=7.9, unit="bp", digits=1, quote=FRA_QUOTE)
+    monkeypatch.setattr(q, "_view", {"today": day.isoformat(), "at": "2026-11-17 09:31:02", "signals": [fra], "gated": [], "list": [fra]})
+    log = [_entry("frapath:6x9", "2026-11-17", "09:10", level=6.9, target=0.1, stop=7.9, unit="bp", digits=1, quote=FRA_QUOTE),
+           _entry("frapath:3x6", "2026-11-17", "09:15", level=-7.0, target=-0.5, stop=-8.2, unit="bp", digits=1,
+                  quote=dict(FRA_QUOTE, inst="3x6 FRA", label="3x6 FRA %", entry=38.10, target=38.165, stop=38.088,
+                             gap=dict(FRA_QUOTE["gap"], entry=-7.0, target=-0.5, stop=-8.2)))]
+    svc.store.put(q.LOG_KEY, log)
+    try:
+        got = svc.bugun.view(u)["quant"]
+    finally:
+        svc.store.put(q.LOG_KEY, [])
+    by = {x["sid"]: x for x in got["lines"]}
+    live, gone = by["frapath:6x9"], by["frapath:3x6"]
+    assert (live["entry"], live["target"], live["stop"], live["digits"], live["unit"]) == (38.719, 38.651, 38.729, 2, "6x9 FRA %")
+    assert live["note"] == "patika farkı +6,9 / +0,1 / +7,9 bp" and live["side"] == "RECEIVE" and live["listed"]
+    assert (gone["entry"], gone["target"], gone["stop"], gone["unit"], gone["listed"]) == (38.10, 38.165, 38.088, "3x6 FRA %", False)
+    assert gone["note"] == "patika farkı -7,0 / -0,5 / -8,2 bp" and gone["rr"] == pytest.approx(0.065 / 0.012)
+
+
 # ---------------------------------------------------------------------------------------------- DİBS
 def test_the_close_record_is_taken_once_a_business_day_at_the_desks_close(svc):
     b = svc.bugun
