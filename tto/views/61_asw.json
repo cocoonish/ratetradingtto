@@ -92,6 +92,13 @@
    "label": "Eğri / grafik: boş, 1, 0 ya da x"
   },
   {
+   "range": "V7:V56",
+   "scope": "user",
+   "group": "asw-target",
+   "kind": "number",
+   "label": "Hedef ASW (bp) → temiz fiyat (ASW sayfasının kendi OIS eğrisine göre)"
+  },
+  {
    "range": "C59:C61",
    "scope": "user",
    "group": "asw-sel",
@@ -179,6 +186,35 @@
      "L": "price"
     }
    }
+  },
+  {
+   "id": "aswters",
+   "type": "table",
+   "title": "ASW → temiz fiyat  ·  ASW sayfasının kendi OIS eğrisine göre (ASW FX değil)",
+   "range": "B6:Y56",
+   "cols": [
+    "B",
+    "F",
+    "H",
+    "I",
+    "L",
+    "R",
+    "V",
+    "W",
+    "X",
+    "Y"
+   ],
+   "keep_title": true,
+   "bonds": {
+    "key": "B",
+    "first": 7,
+    "last": 56,
+    "order": {
+     "kind": "H",
+     "maturity": "I"
+    }
+   },
+   "note": "Hedef ASW sütununa kâğıdın ASW'sini bp olarak yazın (ör. -50 ya da 25): Temiz, kâğıdın o ASW'de olacağı temiz fiyattır - tablonun kendi hesabı tersinden: ASW = (PV @OIS − kirli @spot) / annuity, kirli @spot = (temiz + işlemiş) · TLREF ile spot'a taşınmış. Eğri bu sayfanın kendi OIS eğrisidir (ASW!C65:R65 kotaları); ASW FX ima sütunu başka bir eğridir, ona göre değildir. Fark = bu temiz − tablodaki temiz. Bulunan fiyat Manuel temiz'e yazılınca ASW tam yazılan değer çıkar. TLREF'li kâğıtların DM → fiyatı DİBS RV'dedir; fiyatı olmayan kâğıtta önce Manuel temiz'e herhangi bir fiyat yazın (sonuç ona bağlı değildir). Kişiseldir: herkes kendi hedefini yazar; kâğıt listede yer değiştirince kâğıdıyla gider."
   },
   {
    "id": "chart0",

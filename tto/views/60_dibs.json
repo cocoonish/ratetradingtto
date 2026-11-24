@@ -110,6 +110,13 @@
    "group": "dibs-14",
    "kind": "auto",
    "label": "'Sat nominal (mn)'"
+  },
+  {
+   "range": "BK5:BK54",
+   "scope": "user",
+   "group": "dibs-15",
+   "kind": "number",
+   "label": "'Hedef ASW / DM (bp)' → temiz fiyat (DİBS RV'nin TRY OIS eğrisine göre)"
   }
  ],
  "panels": [
@@ -202,6 +209,31 @@
      "V": "yield ask"
     }
    }
+  },
+  {
+   "id": "B3r",
+   "type": "table",
+   "title": "ASW / DM → temiz fiyat  ·  DİBS RV'nin TRY OIS eğrisine göre",
+   "range": "A4:BN54",
+   "cols": [
+    "A",
+    "C",
+    "D",
+    "E",
+    "O",
+    "Z",
+    "BK",
+    "BL",
+    "BM",
+    "BN"
+   ],
+   "keep_title": true,
+   "bonds": {
+    "key": "A",
+    "first": 5,
+    "last": 54
+   },
+   "note": "Hedef ASW / DM sütununa bp yazın: sabit kuponlu ve bonoda ASW, TLREF'li kâğıtta DM (ör. 75). Temiz, kâğıdın o ASW / DM'de olacağı temiz fiyattır - tablonun kendi hesabı tersinden: ASW = (PV @OIS − kirli @OIS spot) / annuity; DM'de kâğıdın nakit akışları ileri TLREF + DM ile dönem dönem iskonto edilir (sayfanın DM çözücüsünün fiyatı, Manuel Tahvil'in DM hedefi gibi); kirli fiyat TLREF ile valöre getirilir, işlemiş faiz düşülür. Eğri DİBS RV'nin TRY OIS eğrisidir (Ayarlar'daki eğri interpolasyonunuzla); DİBS ASW sayfasının kendi eğrisi ve FX swap ASW'leri başka eğrilerdir. FRN'nin DM'i, TÜFE'nin ASW'si yoktur (Not'ta yazar). Fark = bu temiz − kullanılan temiz. Bulunan fiyat Manuel temiz'e yazılınca ASW / DM tam yazılan değer çıkar. Kişiseldir; kâğıt listede yer değiştirince kâğıdıyla gider."
   },
   {
    "id": "B4",
