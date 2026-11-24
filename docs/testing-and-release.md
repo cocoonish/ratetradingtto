@@ -48,6 +48,9 @@ env -u PYTHONPATH PYTHONIOENCODING=utf-8 /d/tto-genis-test/venv/Scripts/python -
   the browser test apart. On 19.11.2026 the groups took 44 and 49 min wall time (1189 and 1101 tests), the browser
   test about 6 min. Heavy files: `test_service` (about 14 min alone), `test_bloomberg` and `test_history` (about 5),
   `test_bonds` and `test_dates` (about 4).
+- **One dashboard per data folder:** `python -m tto` holds `<data>/tto.lock` while it runs (`tto/datadir.py`): a second
+  start on the same `--data-dir` exits 3 at once ("bir dashboard kullanıyor"). Give every copy you start its own data
+  folder. A run killed (no Ctrl+C) leaves the lock; the next start on this computer takes it over at once.
 - **Backup copies:** `tests/conftest.py` sets `TTO_BACKUP_COPY_DIR=""` for every process a test starts. An unpacked
   install would otherwise send its backups' second copy to the desk's `D:\tto-yedek` (`config.backup_copy_default`),
   and after 17:30 it takes the day's backup at once. Keep that line, and start any install copy yourself with

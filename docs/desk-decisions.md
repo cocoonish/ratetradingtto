@@ -1606,6 +1606,43 @@ BK2, B34y, B36y and EKF4 show the typed values), `tto/entry.py` (`bulk_forward_p
   - The office machine has no command window, only Anaconda Prompt ("Normal cmd'ye erişim olmadığı için anaconda
     prompt ile runlıyorum, bat'ı da bunun gibi değiştirelim", 19.11.2026). So `run.bat` opens Anaconda first
     (`TTO_CONDA`, else the usual folders), and install or run commands for the user are given for Anaconda Prompt.
+  - On the computer's own disk, one computer per data folder (24.11.2026, below).
 - **Rows move.** A change to the PPK calendar, a VİOP roll or a change to the bond lists moves users' data between
   rows. Every feature that stores anything by cell, row or position must handle that move and test it (see
   [architecture.md](architecture.md#row-keys)).
+
+### One dashboard per data folder, on the computer's own disk (24.11.2026)
+
+> "Kendi limitim bitince arkadaştan açtım"
+
+**What happened** (24.11.2026, at the office). The dashboard's install and its `data` folder sat on a network drive (a
+mapped share). After the desk's own Bloomberg limit ran out, the user opened the dashboard from a colleague's computer
+on the same folder. The status page then showed `tarihçe · DatabaseError: database disk image is malformed`, and the
+BDH-based tables errors. The last backup was the previous day's, taken at 17:30.
+
+**Why.** SQLite's write-ahead log (WAL) needs every process on one computer - they share memory through the `-shm`
+file - and does not work over a network filesystem: two computers on one database file, or one over a share, can
+damage it.
+
+**What the dashboard does since:**
+- **One dashboard per data folder.** A second dashboard on the same folder - from this computer or another - does not
+  start: it says which computer holds the folder, whose and since when. A lock left by a dashboard that did not exit
+  cleanly (the window closed, a crash) is taken over by the next start. `yedekten-don` and `kurtar` do not run while a
+  dashboard holds the folder.
+- **A data folder on a network drive** still starts, but with the rollback journal instead of WAL for that run, a loud
+  console line, a log line and a red line in the badge's window: "Veri klasörü bir ağ sürücüsünde: veritabanı
+  bozulabilir - dashboard'u bilgisayarın kendi diskine kurun; yedeğin ikinci kopyası ağda durabilir". The share is the
+  place for the backup's second copy, not for the database.
+- **A damaged file:** close the dashboard everywhere, go back to the last backup (`yedekten-don`), then
+  `python -m tto kurtar <the damaged file>` (`--dene` first) brings back what it still holds - the rows the backup
+  lacks, by each table's key; a row the database has is never overwritten, except where the table carries the row's
+  own time and the damaged file's is later (a user's inputs typed again, a trade changed or deleted on the day), and
+  the records of what Bloomberg was asked today, merged so that today's requests are not made again (the daily limit).
+  History tables may stay unread: the dashboard fetches the missing days itself (only new days). The steps for
+  Anaconda Prompt are in README, *Veritabanı bozulursa*.
+
+Code: `tto/datadir.py` (the lock, the network drive), `tto/store.py` (the journal mode; `restore` moves a `-journal`
+with its file), `tto/recover.py` (`kurtar`: what each table does, RULES - table in
+[architecture.md](architecture.md#the-file-itself-one-dashboard-the-journal-mode-a-damaged-file)), `tto/__main__.py`
+(`cmd_run`, `cmd_restore`, `cmd_recover`), `tto/ops.py` (`check_folder`, `folder_status`), `tto/static/js/status.js`.
+Tests: `tests/test_datadir.py`, `tests/test_kurtar.py`, the browser test's "status window: the data folder …".
