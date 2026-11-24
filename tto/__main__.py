@@ -13,6 +13,9 @@
 
 Nothing has to be installed: when Starlette / uvicorn are missing they are taken from the wheels in ``vendor/``
 (see ``tto/bundled.py``).
+
+One dashboard per data folder: the dashboard and ``yedekten-don`` hold the data folder's lock
+(``data/tto.lock``, ``tto/datadir.py``) - a start while another holds it is refused (exit code 3).
 """
 from __future__ import annotations
 
@@ -135,23 +138,66 @@ def cmd_run(args) -> int:
         return 2
     import uvicorn
 
-    from .ops import setup_logging
+    # one dashboard per data folder (datadir.py): taken before the database is opened - refused while another
+    # dashboard, of this computer or another one, holds it; given back when the dashboard stops
+    from .datadir import DataLock, LockHeld, took_over_text
+    lock = DataLock(settings.data_dir, program="dashboard", port=settings.port, say=_say)
     try:
-        logfile = setup_logging(settings.log_dir)
-    except OSError as exc:                         # a folder that cannot be written: run without the file
-        logfile = "yazılamadı (%s)" % exc
-    from .server import create_app
-    app = create_app(settings=settings)
-    shown = "localhost" if settings.host in ("0.0.0.0", "::") else settings.host
-    how = ", web paketleri: gömülü kopya (vendor/%s)" % packages["bundled"] if packages["bundled"] else ""
-    print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
-    print("Günlük: %s" % logfile)
-    import logging
-    logging.getLogger("tto").info("dashboard başlıyor: port %d, mod %s, veri %s", settings.port, settings.mode, settings.data_dir)
-    # no proxy in front of the dashboard: the address a request came from is the connection's own (an
-    # X-Forwarded-For header could otherwise make a request from the network look like one from this computer)
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning", proxy_headers=False)
-    return 0
+        lock.acquire()
+    except LockHeld as exc:
+        print("HATA: %s" % exc, file=sys.stderr)
+        return 3
+    except OSError as exc:
+        print("HATA: veri klasörüne yazılamıyor (%s): %s" % (settings.data_dir, exc), file=sys.stderr)
+        return 2
+    try:
+        from .ops import setup_logging
+        try:
+            logfile = setup_logging(settings.log_dir)
+        except OSError as exc:                     # a folder that cannot be written: run without the file
+            logfile = "yazılamadı (%s)" % exc
+        import logging
+        if lock.took_over is not None:
+            said = took_over_text(lock.took_over, lock.took_over_why)
+            logging.getLogger("tto").warning(said)
+            _say("Not: %s" % said)
+        lock.on_lost = _stop_on_lost
+        lock.start()
+        settings.data_lock = lock                  # (the status page shows it: ops.folder_status)
+        from .server import create_app
+        app = create_app(settings=settings)
+        shown = "localhost" if settings.host in ("0.0.0.0", "::") else settings.host
+        how = ", web paketleri: gömülü kopya (vendor/%s)" % packages["bundled"] if packages["bundled"] else ""
+        print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
+        print("Günlük: %s" % logfile)
+        logging.getLogger("tto").info("dashboard başlıyor: port %d, mod %s, veri %s", settings.port, settings.mode,
+                                      settings.data_dir)
+        # no proxy in front of the dashboard: the address a request came from is the connection's own (an
+        # X-Forwarded-For header could otherwise make a request from the network look like one from this computer)
+        uvicorn.run(app, host=settings.host, port=settings.port, log_level="warning", proxy_headers=False)
+        return 0
+    finally:
+        lock.release()
+
+
+def _say(text: str) -> None:
+    try:
+        print(text, flush=True)
+    except Exception:  # noqa: BLE001 - a console that cannot print
+        pass
+
+
+def _stop_on_lost(holder) -> None:
+    """The data folder's lock went to another dashboard (this one's heartbeat could not be written for a minute): this
+    one stops as Ctrl+C stops it - two dashboards must never write one database."""
+    import _thread
+    who = "okunamayan bir kilit" if "raw" in holder else "%s, açılışı %s" % (holder.get("host") or "?", holder.get("started") or "?")
+    try:
+        print("HATA: veri klasörünün kilidi başka bir dashboard'a geçti (%s): bu dashboard kapanıyor - aynı veritabanına iki "
+              "dashboard yazmasın diye." % who, file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+    _thread.interrupt_main()
 
 
 def cmd_import(args) -> int:
@@ -250,15 +296,38 @@ def cmd_restore(args) -> int:
     path = args.backup
     if not os.path.exists(path) and os.path.basename(path) == path:     # a name alone: from any of the folders
         path = next((os.path.join(f, path) for f, _ in folders if os.path.isfile(os.path.join(f, path))), path)
+    lock = _command_lock(settings, "yedekten-don")         # (never while a dashboard runs on the folder)
+    if lock is None:
+        return 3
     try:
         res = restore(path, settings.db_path)
     except ValueError as exc:
         print("HATA: %s" % exc, file=sys.stderr)
         return 2
+    finally:
+        lock.release()
     print("Veritabanı yedekten geri getirildi: %s  <-  %s" % (res["restored"], res["from"]))
     if res["kept"]:
         print("Önceki hali silinmedi, yanında duruyor: %s" % res["kept"])
     return 0
+
+
+def _command_lock(settings: Settings, program: str):
+    """The data folder's lock for a command that changes the database (datadir.py): ``None`` - said why - while a
+    dashboard (or another command) runs on the folder."""
+    from .datadir import DataLock, LockHeld, took_over_text
+    lock = DataLock(settings.data_dir, program=program, say=_say)
+    try:
+        lock.acquire()
+    except LockHeld as exc:
+        print("HATA: %s" % exc, file=sys.stderr)
+        return None
+    except OSError as exc:
+        print("HATA: veri klasörüne yazılamıyor (%s): %s" % (settings.data_dir, exc), file=sys.stderr)
+        return None
+    if lock.took_over is not None:
+        _say("Not: %s" % took_over_text(lock.took_over, lock.took_over_why))
+    return lock.start()
 
 
 def cmd_check_fx(args) -> int:

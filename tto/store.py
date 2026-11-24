@@ -5,6 +5,11 @@ transaction: it lands whole or not at all.  Every commit is on the disk before i
 a trade entered a moment before a power cut is kept.  :meth:`Store.backup_to` makes an online copy (SQLite's backup
 API, consistent while the dashboard keeps writing); :func:`restore` puts one back in place.
 
+The file keeps a write-ahead log (``journal_mode=WAL``) - except on a network drive (``datadir.on_network_drive``):
+WAL needs every process on one computer (they share memory through ``-shm``) and cannot work on a network filesystem,
+so there the rollback journal (``DELETE``) is used for that run, and writers wait longer for a reader that holds the
+file (the backup's).
+
 The history's tables - the daily closes (``hist_values``), the watch's own closes (``watch_closes``) and the meeting
 pricing (``mpc_days`` / ``mpc_values``) - are kept in memory as well: read once when the file is opened, changed by
 every write of the store after it is committed, and read from memory only.  Python's sqlite3 gives the interpreter
@@ -28,6 +33,8 @@ import sqlite3
 import threading
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
+
+from . import datadir
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -162,10 +169,11 @@ def _cell_order(ref: str) -> Tuple[str, int, int, str]:
 
 
 def restore(backup: str, db_path: str) -> Dict[str, Any]:
-    """Put a backup in the place of the database - with the dashboard stopped.  The backup is checked first (a
-    sound SQLite file with the dashboard's tables); the database as it was is kept beside it, with its write-ahead
-    log (``tto.db.onceki-<time>``): nothing is deleted.  On Windows a database the dashboard still has open cannot be
-    moved: that stops the restore before anything changed."""
+    """Put a backup in the place of the database - with the dashboard stopped (``python -m tto yedekten-don`` holds
+    the data folder's lock while it runs: datadir.py).  The backup is checked first (a sound SQLite file with the
+    dashboard's tables); the database as it was is kept beside it, with its write-ahead log or journal
+    (``tto.db.onceki-<time>``): nothing is deleted - ``python -m tto kurtar`` reads it back (recover.py).  On Windows a
+    database the dashboard still has open cannot be moved: that stops the restore before anything changed."""
     backup, db_path = os.path.abspath(backup), os.path.abspath(db_path)
     if not os.path.isfile(backup):
         raise ValueError("yedek dosyası yok: %s" % backup)
@@ -188,7 +196,9 @@ def restore(backup: str, db_path: str) -> Dict[str, Any]:
     kept = db_path + ".onceki-" + stamp
     moved: List[Tuple[str, str]] = []
     try:
-        for suffix in ("", "-wal", "-shm"):          # the database with its log: the log belongs to it, not to the backup
+        # the database with its log - the write-ahead log, or the rollback journal a run on a network drive left after a
+        # crash: it belongs to that file, never to the backup (beside the backup it would "roll back" pages into it)
+        for suffix in ("", "-wal", "-shm", "-journal"):
             if os.path.exists(db_path + suffix):
                 os.replace(db_path + suffix, kept + suffix)
                 moved.append((db_path + suffix, kept + suffix))
@@ -359,10 +369,15 @@ class Store(object):
         # told after every write of the inputs: (the user - None for the shared inputs, "*" for every user -, whether
         # formulas were written); the inputs' formulas (inputformula.py) follow what any writer did to their cells
         self.on_inputs: Optional[Any] = None
-        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        # a data folder on a network drive (the module's text): the rollback journal, and a writer waits up to 30 s for
+        # a reader holding the file (the nightly backup copies it in one step) - with WAL readers never hold a writer
+        self.network = path != ":memory:" and datadir.on_network_drive(path)
+        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30.0 if self.network else 5.0)
         self._db.row_factory = sqlite3.Row
         with self._lock:
-            self._db.execute("PRAGMA journal_mode=WAL")
+            #: the journal mode the file runs with ("wal", "delete"; "memory" for ":memory:")
+            self.journal_mode = str(self._db.execute("PRAGMA journal_mode=%s" % ("DELETE" if self.network else "WAL"))
+                                    .fetchone()[0]).lower()
             # every commit waits until the write-ahead log is on the disk (NORMAL leaves the last commits to the next
             # checkpoint: a power cut could take back a trade the blotter had shown as entered).  Measured on the desk
             # machine with commits like the dashboard's: ~0.6-1.1 ms a commit (p99 ~4 ms) against ~0.03 ms - the

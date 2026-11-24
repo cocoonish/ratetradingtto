@@ -261,6 +261,7 @@ class Service(object):
         # nightly backup (ops.py)
         self.ops = Ops(self)
         self.ops.check_database()
+        self.ops.check_folder()                          # (a data folder on a network drive: said loud - datadir.py)
         # where the long calculations are - the quant fit, the ML models, the backtest, the history sync - and the time
         # left from the last runs (progress.py: the top bar's "Hesap")
         from .progress import Progress
