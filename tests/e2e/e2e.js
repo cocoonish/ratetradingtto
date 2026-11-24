@@ -3284,7 +3284,9 @@ async function clipAfter(page, action) {
     await page.click('.panel[data-panel="L1"] button[data-action="add-isin"]');
     await page.fill('#isin-text', 'TRT190128T14');
     await page.click('#isin-add');
-    const toldAsw = await page.waitForFunction(() => /DİBS ASW'ye de eklendi/.test(document.querySelector('#toasts').textContent), null,
+    // (this bond's own toast, which comes with the add's answer: the ☆ step's "DİBS ASW'ye de eklendi: 13.01.27 TLREF" may
+    // still be up, and waiting for that one opened DİBS ASW while the add was still writing the list)
+    const toldAsw = await page.waitForFunction(() => /DİBS ASW'ye de eklendi: 19\.01\.28/.test(document.querySelector('#toasts').textContent), null,
       { timeout: 20000 }).then(() => true, () => false);
     await open(page, 'asw');
     await page.waitForSelector('.panel[data-panel="tbl"] table.grid');
