@@ -535,12 +535,16 @@ REFERENCE = {
 #: (page, panel) -> [(what the note names, sheet ranges)]
 _POSITION = ("Pozisyon", ["DV01_RISK!C6:C25", "DV01_RISK!K6:K25", "DV01_RISK!Q6:Q25"])    # bucket DV01s, pivots, rates
 _HEDGE = ("Hedge", ["DV01_RISK!C85:G85", "DV01_RISK!C88:E102"])                           # the hedge instruments
+#: DİBS RV's bond rows two-way: a yield, spread or carry typed in a row is kept in its stores (YF:YL) - typed on DİBS RV
+#: as the manual clean price is (test_kagit_twoway.py)
+_RV_TYPED = ["DİBS RV!N5:N54", "DİBS RV!YF5:YL54"]
 NAMED = {
-    ("masa", "B19"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54", "DİBS RV!AL5:AL54"])],
-    ("kagitlar", "U1"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54"])],
+    ("masa", "B19"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!AL5:AL54"] + _RV_TYPED)],
+    ("kagitlar", "U1"): [("DİBS RV", ["DİBS RV!H5:H54"] + _RV_TYPED)],
     # Manuel Tahvil's ISIN (C17 says what it filled): the bond's DİBS RV row - the clean price in use (its manual clean
-    # price, the price type), its known coupon - else Tüm Kâğıtlar' bid / ask (their pricing sources)
-    ("manuel", "B2"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54", "DİBS RV!X2"]),
+    # price or the level typed in its row, the price type), its known coupon - else Tüm Kâğıtlar' bid / ask (their
+    # pricing sources)
+    ("manuel", "B2"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!X2"] + _RV_TYPED),
                        ("Tüm Kâğıtlar", ["EK_EVREN!C2", "EK_EVREN!E2"])],
     ("dv01", "B9"): [_POSITION, _HEDGE],
     ("dv01", "B10"): [_POSITION, _HEDGE],
@@ -554,8 +558,8 @@ INCIDENTAL = {
     # DV01 per leg (which cancels out - the rounding stays)
     ("masa", "B3"): ["OIS_MAIN!F2:H2"],
     # DİBS live: a bond's name comes from its DİBS RV row, filled while DİBS RV prices the bond (price type, manual
-    # clean price, known coupon)
-    ("dibslive", "L1"): ["DİBS RV!X2", "DİBS RV!H5:H54", "DİBS RV!N5:N54"],
+    # clean price or a level typed in its row, known coupon)
+    ("dibslive", "L1"): ["DİBS RV!X2", "DİBS RV!H5:H54"] + _RV_TYPED,
 }
 
 #: the desk's status row: it checks every page's data

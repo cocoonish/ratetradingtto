@@ -1252,10 +1252,11 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         res = s.bond_flag(u, "TRT190128T14", False)
         assert (res["on"], res["removed"], res["asw"]) == (False, 1, True)
         assert cell(s, "ASW!B%d" % ra, book="asw") is None and cell(s, "ASW!C%d" % ra, book="asw") is None
-        assert cell(s, "ASW!D%d" % ra, user=user_key(other), book="asw") is None
+        # (nothing typed: the two-way tables' default - test_kagit_twoway.py)
+        assert cell(s, "ASW!D%d" % ra, user=user_key(other), book="asw") == ""
         assert s._list_values(u, "asw", "ASW!B7:B56") == asw_before
         assert cell(s, "DİBS RV!A%d" % r) is None and cell(s, "DİBS RV!B%d" % r) is None
-        assert cell(s, "DİBS RV!N%d" % r, user=user_key(u)) is None and cell(s, "DİBS RV!AL%d" % r, user=user_key(other)) is None
+        assert cell(s, "DİBS RV!N%d" % r, user=user_key(u)) == "" and cell(s, "DİBS RV!AL%d" % r, user=user_key(other)) == ""
         assert s.store.user_inputs(user_key(other), "tto").get(("tto", "DİBS RV!AL%d" % r)) is None
         assert cell(s, "EK_EVREN!H%d" % rows["TRT190128T14"]) == ""
         assert s.bond_flag(u, "TRT190128T14", False)["removed"] == 0
@@ -1316,7 +1317,7 @@ def test_the_asw_list_and_tum_kagitlar_follow_the_trading_list_by_every_route(tm
         assert res["follow"] == {"asw_removed": ["TRT130127T11"], "text": "DİBS ASW'den de çıkarıldı: 13.01.27 TLREF"}
         assert res["row_values"]["cleared"] == [{"isin": "TRT130127T11", "row": ra, "values": 3}] and "DİBS ASW" in res["row_values"]["text"]
         assert [cell(s, "ASW!%s%d" % (c, ra), user=who, book="asw") for c, who in (("B", None), ("C", None), ("D", theirs), ("E", mine))] \
-            == [None, None, None, None]
+            == [None, None, "", None]                                     # (D: the two-way table's default)
         # typed over: the bond that leaves takes its ASW row along, the new one goes below the ASW list's last bond
         res = s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % at(NEW_FIXED), "value": "TRT190128T14"}])
         assert (res["follow"]["asw_removed"], res["follow"]["asw_added"]) == ([NEW_FIXED], ["TRT190128T14"])
@@ -1386,7 +1387,7 @@ def test_once_the_trading_lists_bonds_the_asw_list_lacks_go_onto_it(tmp_path, ca
     again = make_service(tmp_path)
     try:
         assert cell(again, "ASW!B%d" % end, book="asw") == "TRT150328T24"
-        assert cell(again, "ASW!D%d" % end, user_key(u), book="asw") is None
+        assert cell(again, "ASW!D%d" % end, user_key(u), book="asw") == ""
         said = [r.getMessage() for r in caplog.records if "bir kereye mahsus" in r.getMessage()]
         assert len(said) == 1 and "TRT150328T24 → ASW!B%d" % end in said[0]
         assert again.store.get(again.ASW_SYNCED)                                 # once

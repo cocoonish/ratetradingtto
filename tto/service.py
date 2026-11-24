@@ -5922,6 +5922,13 @@ class Service(object):
         ois = [base.get(si, aswfx.ROW, aswfx.QUOTE_COL + k) for k in range(n)]
         days = [base.get(si, aswfx.ROW, aswfx.DAY_COL + i) for i in range(len(aswfx.NODES))]
         ov = dict(self._overlay(user, book)) if user else {}
+        if user:
+            # a row priced by a typed ASW (or dirty price: the table is two-way) is priced here at the clean price the
+            # user's calculation has - its ASW on this curve worked out, not held at the level typed on the OIS curve
+            pins, stores = self._twoway_pins(book, base, "ASW", ov)
+            for cell in stores:
+                ov.pop(cell, None)
+            ov.update(pins)
         swapped = 0
         point = x18["point"]
         for k, t in enumerate(aswfx.to_sheet(ois, fx, days, {aswfx.CURVE_TENOR: point} if point is not None else None)):
@@ -5933,6 +5940,27 @@ class Service(object):
         calc = Calc(book.engine, shared, ov) if swapped else None
         self._fx_calc_kept = (key, calc, swapped, x18)
         return calc, swapped
+
+    def _twoway_pins(self, book, base: Calc, sheet: str, overlay: Dict[Tuple[int, int], Any]
+                     ) -> Tuple[Dict[Tuple[int, int], Any], List[Tuple[int, int]]]:
+        """The rows of ``sheet``'s two-way tables (twoway.py) that a stored member prices for the user (``overlay``: their
+        own values) - a typed ASW is a clean price on the curve it was typed on: ``(pins, stores)``, the in-place
+        member's cell (the clean price) as ``base``, the user's calculation, has it, and those row-sides' stores.  A
+        calculation of the sheet on another curve (ASW FX, the offshore history) takes the pins - and leaves the stores
+        out where it can -, so it prices those rows at the user's price."""
+        pins: Dict[Tuple[int, int], Any] = {}
+        stores: List[Tuple[int, int]] = []
+        for g in self.twoway.groups.values():
+            own = next((m for m in g.members if m.own), None)
+            if g.book is not book or g.sheet != sheet or own is None:
+                continue
+            for pos, cell in enumerate(own.cells):
+                a = g.anchor(pos, overlay, book.engine.input_value)
+                if a is None or a.own:
+                    continue
+                pins[cell] = base.get(cell[0], *divmod(cell[1], COLS))
+                stores.extend(g.stores(pos))
+        return pins, stores
 
     def _asw_fx_point(self, book, user: Optional[str]) -> Dict[str, Any]:
         """The 18M point the user's calculation on the FX swap curve was made with (:meth:`_asw_fx_18m`)."""
@@ -6182,6 +6210,8 @@ class Service(object):
         ov.update(arrays)
         if base is not eng.shared:
             ov.update(self.interp.boot_cells(book))    # (a PPK user's own: the offshore curve bootstrapped, as the desk's)
+            # (today's row reads the table's clean prices: a row priced by a typed ASW at the user's price, as ASW FX)
+            ov.update(self._twoway_pins(book, base, "ASW", self._overlay(user, book))[0])
         info.update(rows)
         info["today"] = swapped
         info["none"] = {r for r, k in rows["n"].items() if not k} | (set() if swapped else {aswfx.ROW})

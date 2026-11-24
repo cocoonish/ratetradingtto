@@ -63,7 +63,7 @@
    "scope": "user",
    "group": "manuel-7",
    "kind": "auto",
-   "label": "'Temiz fiyat' – clean price"
+   "label": "'Temiz fiyat' – clean price (two-way: typed, every result follows; formula default: the price a result typed gives, else the ISIN's price or the file's)"
   },
   {
    "range": "B15",
@@ -143,6 +143,25 @@
    "label": "'ISIN' – kâğıdın koşulları girdilere gelir (yazılan değer önce gelir)"
   }
  ],
+ "twoway": [
+  {
+   "id": "manuel",
+   "sheet": "Manuel Tahvil",
+   "label": "Manuel Tahvil",
+   "note": "İki yönlü: temiz fiyat ya da sonuçlardan biri (kirli fiyat, BIST basit / bileşik getiri, ASW par-par, Z-spread, DM, getiri − OIS) - hangisini yazarsanız o kalır, temiz fiyat ondan, öteki sonuçlar temiz fiyattan hesaplanır (✎ yazılan değer; silince ISIN'in fiyatı ya da dosyanınki döner). Yazılan getiri ya da spread varsayımsal bir fiyat verir: eğri oynadıkça fiyat oynar, yazılan değer aynen kalır; ISIN'in getirdiği fiyatın önüne geçer.",
+   "members": [
+    {"name": "Temiz fiyat", "range": "B14"},
+    {"name": "Kirli fiyat (valör)", "range": "F4", "store": "AP18"},
+    {"name": "Kirli fiyat (OIS spot)", "range": "F6", "store": "AP19"},
+    {"name": "BIST basit getiri", "range": "F7", "store": "AP20"},
+    {"name": "BIST bileşik getiri", "range": "F8", "store": "AP21"},
+    {"name": "ASW par-par", "range": "F15", "store": "AP22"},
+    {"name": "Z-spread", "range": "F16", "store": "AP23"},
+    {"name": "DM", "range": "I3", "store": "AP24"},
+    {"name": "Getiri − OIS", "range": "I5", "store": "AP25"}
+   ]
+  }
+ ],
  "panels": [
   {
    "id": "B1",
@@ -215,7 +234,7 @@
    "id": "B9",
    "type": "table",
    "title": "Yardımcı · dönem tablosu ara sütunları (gün, endeks faktörü, kupon, nakit akışı)",
-   "range": "M23:AF63",
+   "range": "M23:AG63",
    "hidden": true
   },
   {
@@ -224,6 +243,14 @@
    "title": "Yardımcı · ISIN'den (DİBS RV ve Tüm Kâğıtlar'dan okunanlar)",
    "range": "AL17:AM36",
    "hidden": true
+  },
+  {
+   "id": "B11",
+   "type": "table",
+   "title": "Yardımcı · iki yönlü: yazılan sonuçlar",
+   "range": "AO17:AP25",
+   "hidden": true,
+   "keep_title": true
   }
  ]
 }
