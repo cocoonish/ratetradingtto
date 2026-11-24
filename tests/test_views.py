@@ -529,6 +529,10 @@ _HEDGE = ("Hedge", ["DV01_RISK!C85:G85", "DV01_RISK!C88:E102"])                 
 NAMED = {
     ("masa", "B19"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54", "DİBS RV!AL5:AL54"])],
     ("kagitlar", "U1"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54"])],
+    # Manuel Tahvil's ISIN (C17 says what it filled): the bond's DİBS RV row - the clean price in use (its manual clean
+    # price, the price type), its known coupon - else Tüm Kâğıtlar' bid / ask (their pricing sources)
+    ("manuel", "B2"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54", "DİBS RV!X2"]),
+                       ("Tüm Kâğıtlar", ["EK_EVREN!C2", "EK_EVREN!E2"])],
     ("dv01", "B9"): [_POSITION, _HEDGE],
     ("dv01", "B10"): [_POSITION, _HEDGE],
     **{("dv01", pid): [_POSITION] for pid in ("B2", "B11", "B13", "B14", "B16", "B17", "B18")},

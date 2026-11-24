@@ -134,6 +134,13 @@
    "group": "manuel-17",
    "kind": "auto",
    "label": "fixed coupon / spread / principal per period override"
+  },
+  {
+   "range": "B17",
+   "scope": "user",
+   "group": "manuel-18",
+   "kind": "text",
+   "label": "'ISIN' – kâğıdın koşulları girdilere gelir (yazılan değer önce gelir)"
   }
  ],
  "panels": [
@@ -148,8 +155,9 @@
    "id": "B2",
    "type": "table",
    "title": "Girdiler",
-   "range": "A2:C16",
-   "hidden": false
+   "range": "A2:C17",
+   "hidden": false,
+   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade, kupon frekansı, tip (S / D), sabit kupon, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, temiz fiyat ve valör - kâğıt trading listesindeyse DİBS RV satırından (kullanılan temiz, valörü, bilinen kupon), değilse Tüm Kâğıtlar'dan (katalogdaki vade ve kupon, 6 ayda bir; bid / ask ortası, yoksa bugünkü son işlem). Böylece sağdaki Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (C17 hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
   },
   {
    "id": "B3",
@@ -208,6 +216,13 @@
    "type": "table",
    "title": "Yardımcı · dönem tablosu ara sütunları (gün, endeks faktörü, kupon, nakit akışı)",
    "range": "M23:AF63",
+   "hidden": true
+  },
+  {
+   "id": "B10",
+   "type": "table",
+   "title": "Yardımcı · ISIN'den (DİBS RV ve Tüm Kâğıtlar'dan okunanlar)",
+   "range": "AL17:AM36",
    "hidden": true
   }
  ]
