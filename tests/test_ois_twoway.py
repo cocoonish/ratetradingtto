@@ -10,6 +10,8 @@ of every table: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay �
 * **TOPLU TARİH ARASI FAİZ** (EK_TARIH): a row's spread or its "+ spread (360)";
 * **MPC OIS / MPC SPREAD → PPK ADIMI** (EK_PPK): a window's rate, its O/N equivalent or its step; a pair's spread, the
   later window's rate, its O/N or its step - with their meeting when the calendar changes;
+* **TÜM FORWARD / FRA** (OIS_MAIN rows 336-438): a row's end leg fill or its FRA - an FRA typed holds the start leg (its
+  fill, else its market par) and gives the end leg (the desk's "Ok", 24.11.2026);
 * **OIS · Nakit Akışı** (TM_OIS): the trade rate or one of its five PVs;
 * **USD · FOMC** (SOFR_FOMC): a window's OIS rate, its O/N or its step (bp, or in steps of Adım); WIRP or its difference to
   the implied O/N - with their meeting.
@@ -66,19 +68,20 @@ def test_the_groups_their_stores_and_their_in_place_members(svc):
     formula of the group; the old inputs (the block's spread, a row's spread, the window's rate, the pair's spread, the
     trade rate, the window OIS, WIRP) stay where they were, inputs in place."""
     assert svc.twoway.problems == {}
-    assert {"masa-spread", "tarih-row", "ppk-window", "ppk-spread", "tmois-rate", "fomc-window", "fomc-wirp"} <= set(svc.twoway.groups)
+    assert {"masa-spread", "tarih-row", "ppk-window", "ppk-spread", "fra-leg", "tmois-rate", "fomc-window", "fomc-wirp"} <= set(svc.twoway.groups)
     tto, sofr = svc.books["tto"], svc.books["sofr"]
     g = svc.twoway.groups["masa-spread"]
     assert g.shape == (1, 1) and len(g.members) == 1 + len(KINDS) * len(ROWS)
     assert [m.name for m in g.members if m.own] == ["Spread (bp)"] and tto.inputs[tto.cell("MASA!I60")].group == "masa-2"
     for book, ref, member in ((tto, "MASA!CT62", "F62"), (tto, "MASA!DD68", "Y68"), (tto, "EK_TARIH!AT5", "M5"),
                               (tto, "EK_PPK!Z18", "L18"), (tto, "EK_PPK!AC17", "V17"), (tto, "TM_OIS!P4", "J5"),
+                              (tto, "OIS_MAIN!%s438" % ex.FRA_TW, "S438"),
                               (sofr, "SOFR_FOMC!AI83", "AE83"), (sofr, "SOFR_FOMC!AJ74", "Q74")):
         d = book.inputs[book.cell(ref)]
         h = book.twoway[book.cell(ref)]
         assert d.scope == "user" and d.group.startswith("twoway:") and h.store and book.ref(*h.member_cell).endswith("!" + member), ref
         assert book.cell(book.ref(*h.member_cell)) not in book.inputs
-    for book, ref in ((tto, "EK_TARIH!D5"), (tto, "EK_PPK!G3"), (tto, "EK_PPK!S17"), (tto, "TM_OIS!D3"), (sofr, "SOFR_FOMC!AB74"),
+    for book, ref in ((tto, "EK_TARIH!D5"), (tto, "EK_PPK!G3"), (tto, "EK_PPK!S17"), (tto, "OIS_MAIN!R336"), (tto, "TM_OIS!D3"), (sofr, "SOFR_FOMC!AB74"),
                       (sofr, "SOFR_FOMC!P83")):
         assert book.twoway[book.cell(ref)].member.own and book.inputs[book.cell(ref)].group != "adhoc", ref
     # the stores go with their meeting (typed per meeting); the members' cells stay computed
@@ -526,6 +529,119 @@ def test_what_is_typed_in_the_ppk_tables_moves_with_its_meeting(tmp_path):
         assert cell(svc, "EK_PPK!L3", a) == -25.0 and isinstance(cell(svc, "EK_PPK!G3", a), float)
     finally:
         svc.stop()
+
+
+# ============================================================================== OIS · PPK: TÜM FORWARD / FRA
+FRA_SAMPLE = (336, 337, 338, 344, 350, 371, 402, 438)                       # a spot start, 3x6, … the last row
+
+
+def fra_parts(svc, user, r):
+    """A row's start leg's market par (I), end leg's (J), months (M) and annuities (O, P), and its start fill (Q)."""
+    return {c: cell(svc, "OIS_MAIN!%s%d" % (c, r), user) for c in "IJMOPQ"}
+
+
+def fra_of(p, end):
+    """S's formula: the FRA two legs make, a blank start fill its market par (I); a spot start: the end leg."""
+    q = p["I"] if p["Q"] is None else p["Q"]
+    return end if p["M"] == 0 else (end * p["P"] - q * p["O"]) / (p["P"] - p["O"])
+
+
+def end_of(p, fra):
+    """Its inverse: the end leg that makes the FRA with the start leg held (its fill, else its market par)."""
+    q = p["I"] if p["Q"] is None else p["Q"]
+    return fra if p["M"] == 0 else (fra * (p["P"] - p["O"]) + q * p["O"]) / p["P"]
+
+
+def test_an_fra_typed_gives_the_end_leg_the_start_leg_held(svc):
+    """TÜM FORWARD / FRA (the desk's "Ok", 24.11.2026: "when you type the FRA, the start leg stays - your fill, or the market
+    par if blank - and the end leg is computed"): nothing typed - the table's FRA of the market's pars, the end leg's fill
+    blank; an FRA typed stands and the end leg's fill is the one that makes it (a spot start: the FRA itself); the start leg
+    held is the market par when its fill is blank, the fill when typed - typed while the FRA stands, it moves the end leg;
+    each value worked out, typed back as its own kind, gives the same row (1e-9)."""
+    u = svc.login("FRA iki yönlü")["user"]
+    o = lambda c, r: cell(svc, "OIS_MAIN!%s%d" % (c, r), u)                     # noqa: E731
+    try:
+        for r in FRA_SAMPLE:
+            p = fra_parts(svc, u, r)
+            assert p["Q"] is None and o("R", r) == "" and close(o("S", r), fra_of(p, p["J"]), 1e-12), r       # (as before)
+            put(svc, u, {"OIS_MAIN!S%d" % r: "35"})
+            assert o("S", r) == 0.35 and close(o("R", r), end_of(p, 0.35), 1e-12), r                        # (the market par held)
+            assert stored(svc, u, "OIS_MAIN") == {"%s%d" % (ex.FRA_TW, r): 0.35}, r
+            end = o("R", r)
+            put(svc, u, {"OIS_MAIN!R%d" % r: end})                                 # the end leg typed back: the same FRA
+            assert close(o("S", r), 0.35, 1e-9) and stored(svc, u, "OIS_MAIN") == {"R%d" % r: end}, r
+            back = o("S", r)
+            put(svc, u, {"OIS_MAIN!S%d" % r: back})                                # ... and the FRA typed back
+            assert o("S", r) == back and close(o("R", r), end, 1e-9), r
+            if p["M"] != 0:
+                put(svc, u, {"OIS_MAIN!Q%d" % r: "36,8"})                          # the start leg's fill: the end leg moves
+                p["Q"] = 36.8 / 100
+                assert o("S", r) == back and close(o("R", r), end_of(p, back), 1e-12), r
+                assert abs(o("R", r) - end) > 1e-6, r
+            svc.reset_inputs(u, "tto")
+        p = fra_parts(svc, u, 336)
+        assert p["M"] == 0 and p["I"] == ""                                       # (a spot start: no start leg)
+        put(svc, u, {"OIS_MAIN!S336": "37"})
+        assert o("R", 336) == 0.37 and o("S", 336) == 0.37
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_the_fra_rows_last_typed_wins_delete_and_a_paste(svc):
+    """The end leg's fill typed, then the FRA: the fill typed goes (the FRA stands, the fill is the one it needs); the fill
+    again: the FRA typed goes.  Delete on either - back to the market's (nothing typed).  A column of FRAs pasted: each row
+    its own.  The Hedef FRA columns stay as they were (against the legs as the FRA reads them)."""
+    u = svc.login("FRA iki yönlü son")["user"]
+    o = lambda c, r: cell(svc, "OIS_MAIN!%s%d" % (c, r), u)                     # noqa: E731
+    tw = ex.FRA_TW
+    try:
+        p = fra_parts(svc, u, 337)
+        market = o("S", 337)
+        pct = lambda x: x / 100                                                   # noqa: E731 - "36,2" in a % cell
+        put(svc, u, {"OIS_MAIN!R337": "36,2"})
+        assert stored(svc, u, "OIS_MAIN") == {"R337": pct(36.2)} and close(o("S", 337), fra_of(p, pct(36.2)), 1e-12)
+        put(svc, u, {"OIS_MAIN!S337": "34,5"})
+        assert stored(svc, u, "OIS_MAIN") == {tw + "337": pct(34.5)} and close(o("R", 337), end_of(p, pct(34.5)), 1e-12)
+        put(svc, u, {"OIS_MAIN!R337": "36,2"})
+        assert stored(svc, u, "OIS_MAIN") == {"R337": pct(36.2)}
+        for typed, deleted in (("S337", "S337"), ("S337", "R337"), ("R337", "S337")):
+            put(svc, u, {"OIS_MAIN!" + typed: "35,5"})
+            res = put(svc, u, {"OIS_MAIN!" + deleted: ""})
+            assert stored(svc, u, "OIS_MAIN") == {} and o("R", 337) == "" and o("S", 337) == market and res["applied"] == 1, (typed, deleted)
+        res = svc.paste(u, "tto", "OIS_MAIN!S337", "34\n34,5\n35")
+        assert res["errors"] == [] and stored(svc, u, "OIS_MAIN") == {tw + "337": pct(34), tw + "338": pct(34.5), tw + "339": pct(35)}
+        for r, v in ((337, pct(34)), (338, pct(34.5)), (339, pct(35))):
+            assert o("S", r) == v and close(o("R", r), end_of(fra_parts(svc, u, r), v), 1e-12), r
+        # Hedef FRA: as before - the legs as the FRA reads them (the end leg the one the FRA typed needs)
+        put(svc, u, {"OIS_MAIN!U337": "33"})
+        assert close(o("V", 337), end_of(p, pct(33)), 1e-12)
+        assert close(o("W", 337), (o("R", 337) * p["P"] - pct(33) * (p["P"] - p["O"])) / p["O"], 1e-12)
+        assert svc.reset_inputs(u, "tto", ["OIS_MAIN!R338"])["reset"] == 1 and o("S", 338) != pct(34.5)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_fills_typed_before_keep_their_meaning_and_the_page_marks_the_fra(svc):
+    """An end leg's fill typed before stays where it was (the FRA reads it, as before); an FRA typed over before it was two-way
+    ("Elle değer") is that row's typed FRA.  On the page the FRA typed is marked, the end leg says it comes from it; the
+    table's note says what is held."""
+    u = svc.login("FRA iki yönlü eski")["user"]
+    o = lambda c, r: cell(svc, "OIS_MAIN!%s%d" % (c, r), u)                     # noqa: E731
+    try:
+        svc.store.set_user_inputs(u, "tto", {"OIS_MAIN!R340": 0.361, "OIS_MAIN!S341": 0.333})
+        svc._reload_user(u)
+        assert stored(svc, u, "OIS_MAIN") == {"R340": 0.361, ex.FRA_TW + "341": 0.333}
+        assert close(o("S", 340), fra_of(fra_parts(svc, u, 340), 0.361), 1e-12) and o("S", 341) == 0.333
+        assert close(o("R", 341), end_of(fra_parts(svc, u, 341), 0.333), 1e-12)
+        book = svc.books["tto"]
+        assert book.cell("OIS_MAIN!S341") not in book.inputs
+        p, m = marks(svc, u, "ois", "B21")
+        assert m["S341"]["an"] == "Bitiş bacağı dolum" and m["R341"]["ao"] == "Gerçekleşen FRA · S341" and m["S341"]["m"] == 1
+        # (an end leg's fill typed is its row's typed value too: the FRA worked out from it)
+        assert m["R340"]["m"] == 1 and m["R340"]["an"] == "Gerçekleşen FRA" and m["S340"]["ao"] == "Bitiş bacağı dolum · R340"
+        assert "boşsa piyasa par" in p["note"] and "hangisini yazarsanız o kalır" in p["note"]
+    finally:
+        svc.reset_inputs(u, "tto")
 
 
 # ============================================================================== OIS · Nakit Akışı: rate <-> PV

@@ -2189,16 +2189,32 @@ def _tto_ppk_back(model: Model) -> None:
 #: typed per row (U) -> the end leg's rate that makes it with the start leg as S reads it (V: (F·(P − O) + Q·O) / P; M = 0:
 #: the target itself) and the start leg's rate that makes it with the end leg as S reads it (W: (R·P − F·(P − O)) / O;
 #: none when M = 0).  Either typed back into its fill makes S the target.  A row is the user's own FRA (M / N), as Q / R.
+#:
+#: Two-way (tto/twoway.py; the desk, 24.11.2026, its "Ok" to: "when you type the FRA, the start leg stays - your fill, or
+#: the market par if blank - and the end leg is computed"): per row the end leg's fill (R, in place: what was typed there
+#: keeps its meaning) or the FRA itself (S) - the one typed last stands.  S typed (kept in ``FRA_TW``): R is the end leg
+#: that makes it with the start leg as S reads it (Q, else the start leg's market par I) - V's formula, :func:`fra_end_leg`;
+#: M = 0: R = S.  R typed or nothing typed: S as the table computes it (a blank start fill: the market's par, as before).
+#: The start leg's fill (Q) stays an input of its own: typed with S standing, it moves R.
 FRA_LEG_NAME = "FRA ikinci bacak"
 FRA_LEG_ROWS = (336, 438)
 FRA_LEG_TARGET, FRA_LEG_END, FRA_LEG_START = "U", "V", "W"
+FRA_TW = "BG"                      # the FRA typed (two-way: kept here, in the page's hidden helper columns)
 #: S's formula, the one the way back inverts (row ``r``)
 FRA_LEG_S = ('IF(M%(r)d=0,IF(R%(r)d="",J%(r)d,R%(r)d),(IF(R%(r)d="",J%(r)d,R%(r)d)*P%(r)d-IF(Q%(r)d="",I%(r)d,Q%(r)d)*O%(r)d)'
              '/(P%(r)d-O%(r)d))')
 
 
+def fra_end_leg(fra: str, r: int) -> str:
+    """The end leg's rate that makes the FRA ``fra`` with row ``r``'s start leg as S reads it (its fill, else its market
+    par): (F·(P − O) + Q′·O) / P; a spot start (M = 0): the FRA itself - S's formula solved for R, the one inverse of
+    "Gereken bitiş bacağı" (V) and of an FRA typed into S (R's default)."""
+    return 'IF($M%(r)d=0,%(f)s,(%(f)s*($P%(r)d-$O%(r)d)+IF($Q%(r)d="",$I%(r)d,$Q%(r)d)*$O%(r)d)/$P%(r)d)' % {"r": r, "f": fra}
+
+
 def _fra_leg_check(model: Model) -> None:
-    """S of every row of TÜM FORWARD / FRA is the formula inverted; the columns the way back takes are empty."""
+    """S of every row of TÜM FORWARD / FRA is the formula inverted; the columns the way back takes are empty, and so are
+    the end leg's fills (they take a formula default) and the two-way store."""
     _need_sheets(model, "OIS_MAIN")
     h = FRA_LEG_ROWS[0] - 1
     _need_captions(model, (("OIS_MAIN", "A334", "TÜM FORWARD / FRA"), ("OIS_MAIN", "I%d" % h, "Başlangıç bacağı oranı"),
@@ -2214,23 +2230,31 @@ def _fra_leg_check(model: Model) -> None:
             rc = parse_a1("%s%d" % (col, r))
             if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
                 raise ValueError("OIS_MAIN!%s%d boş değil" % (col, r))
+    _need_empty(model, "OIS_MAIN", "R%d:R%d" % FRA_LEG_ROWS)
+    _need_empty(model, "OIS_MAIN", "%s%d:%s%d" % (FRA_TW, h, FRA_TW, FRA_LEG_ROWS[1]))
 
 
 def _tto_fra_leg(model: Model) -> None:
-    """TÜM FORWARD / FRA's U:W: a target FRA typed -> the end leg / the start leg it needs."""
+    """TÜM FORWARD / FRA's U:W: a target FRA typed -> the end leg / the start leg it needs; and the table two-way: the end
+    leg's fill (R) or the FRA (S, kept in ``FRA_TW``) typed - an FRA typed gives the end leg, the start leg held."""
     b = SheetBuilder(model, "OIS_MAIN")
     h = FRA_LEG_ROWS[0] - 1
     for col, text in ((FRA_LEG_TARGET, "Hedef FRA"), (FRA_LEG_END, "Gereken bitiş bacağı"), (FRA_LEG_START, "Gereken başl. bacağı")):
         b.set("%s%d" % (col, h), text, like="S%d" % h)
+    b.set("%s%d" % (FRA_TW, h), "Yazılan FRA (iki yönlü; boş: yazılan yok)", like="S%d" % h)
     for r in range(FRA_LEG_ROWS[0], FRA_LEG_ROWS[1] + 1):
-        f = {"r": r, "u": FRA_LEG_TARGET}
-        f["q"] = 'IF($Q%(r)d="",$I%(r)d,$Q%(r)d)' % f            # the start leg as S reads it ...
-        f["e"] = 'IF($R%(r)d="",$J%(r)d,$R%(r)d)' % f            # ... and the end leg
+        f = {"r": r, "u": FRA_LEG_TARGET, "st": "$%s%d" % (FRA_TW, r)}
+        f["e"] = 'IF($R%(r)d="",$J%(r)d,$R%(r)d)' % f            # the end leg as S reads it
         b.set("%(u)s%(r)d" % f, None, like="Q%d" % r)             # typed, with the fills' look
-        b.set("%s%d" % (FRA_LEG_END, r), ('=IFERROR(IF(ISNUMBER($%(u)s%(r)d),IF($M%(r)d=0,$%(u)s%(r)d,'
-                                          '($%(u)s%(r)d*($P%(r)d-$O%(r)d)+%(q)s*$O%(r)d)/$P%(r)d),""),"")') % f, fmt=PCT3, bold=True)
+        b.set("%s%d" % (FRA_LEG_END, r), '=IFERROR(IF(ISNUMBER($%(u)s%(r)d),%(v)s,""),"")' % dict(f, v=fra_end_leg("$%s%d" % (FRA_LEG_TARGET, r), r)),
+              fmt=PCT3, bold=True)
         b.set("%s%d" % (FRA_LEG_START, r), ('=IFERROR(IF(AND(ISNUMBER($%(u)s%(r)d),$M%(r)d<>0),'
                                             '(%(e)s*$P%(r)d-$%(u)s%(r)d*($P%(r)d-$O%(r)d))/$O%(r)d,""),"")') % f, fmt=PCT3, bold=True)
+        # two-way: the end leg's fill typed (where it always was), else - with an FRA typed - the end leg that makes it,
+        # else nothing (S reads its market par, as before); S shows the FRA typed, else its own formula
+        b.input("R%d" % r, '=IF(ISBLANK(%(st)s),"",IFERROR(%(end)s,""))' % dict(f, end=fra_end_leg(f["st"], r)), like="R%d" % r)
+        b.patch("S%d" % r, "=IF(ISBLANK(%s),%s,%s)" % (f["st"], FRA_LEG_S % f, f["st"]))
+        b.input("%s%d" % (FRA_TW, r), None, like="S%d" % r)
 
 
 # ---------------------------------------------------------------------------------------------- OIS · Nakit Akışı: rate <-> PV

@@ -1213,14 +1213,12 @@ to the default; the separate tables of 23-24.11 stay as they were):
 - **Masa → TOPLU TARİH ARASI FAİZ** (`EK_TARIH`): a row's Spread (bp) or its "+ spread (360)".
 - **OIS · PPK → MPC OIS → PPK ADIMI** (`EK_PPK!A1:M18`): a window's MPC OIS (elle), its O/N eşdeğeri or its İma PPK adımı;
   **MPC SPREAD → PPK ADIMI** (`P1:W17`): a pair's Elle spread, the later window's rate, its O/N or its step.
+- **OIS · PPK → TÜM FORWARD / FRA** (`OIS_MAIN!A334:W438`): a row's Bitiş bacağı dolum or its Gerçekleşen FRA. A row has
+  two fills and the FRA they make; the desk's answer was **"Ok"** (24.11.2026) to the rule put to it: "when you type the
+  FRA, the start leg stays - your fill, or the market par if blank - and the end leg is computed".
 - **OIS · Nakit Akışı** (`TM_OIS`): the İşlem oranı or one of the five PVs (piyasa, S1–S3, beklenen).
 - **USD · FOMC** (`SOFR_FOMC`): a window's Pencere OIS (elle), Elle O/N, Elle adım (bp) or Elle toplantı adımı; and WIRP
   (manuel) or Fark WIRP (bp).
-
-**Left out:** **TÜM FORWARD / FRA** (`OIS_MAIN!A334:W438`). A row has two degrees of freedom - two fills and the FRA they
-make. Typing the FRA must keep one fill typed and solve the other (the fill typed last held, else the end leg solved): the
-row must hold two typed values at once and know which was typed last. The mechanism keeps one typed value per row; that
-table stays as it was, with its "Hedef FRA" columns (U:W: a target -> each leg it needs).
 
 **Choices made while building it** (said in README; ask the desk before changing):
 - **Masa's spread follows what is typed in the block, and its readers with it.** `MASA!I60` stays a plain bp value - the
@@ -1237,6 +1235,10 @@ table stays as it was, with its "Hedef FRA" columns (U:W: a target -> each leg i
 - **What is typed in a meeting's row goes with its meeting** (`meetings.TCMB` / `FED`), as the rate, the spread and the
   window OIS did: the O/N, step or later rate typed (their stores) too.
 - **Steps typed in % of a step** (Elle toplantı adımı, a % cell as Toplantı adımı %): −100 is one step cut.
+- **TÜM FORWARD / FRA:** an FRA typed holds the start leg (Başl. bacağı dolum, or the start leg's market par when it is
+  blank - as Gerçekleşen FRA always read a blank fill) and gives Bitiş bacağı dolum = (FRA·(P − O) + start·O) / P (a spot
+  start: the FRA itself), "Gereken bitiş bacağı"'s formula. The start fill stays an input of its own: typed while the FRA
+  stands, it moves the end leg. An end fill typed (or nothing typed): the FRA as the table computes it, as before.
 
 **How the separate boxes of 24.11 relate** (they stay; each reads the same quantity another way):
 - TARİH ARASI FAİZ → SPREAD (`EK_TARIH!B109:I114`): its "Kote − eğri" for a curve is the spread that the same quote typed
@@ -1244,14 +1246,18 @@ table stays as it was, with its "Hedef FRA" columns (U:W: a target -> each leg i
 - TOPLU TARİH ARASI FAİZ's Kote % (`N`): with ACT/360 shown it is the row's "+ spread (360)" and its "Kote − seçilen eğri"
   the spread that "+ spread (360)" typed would give the row - but Kote % stays a reading: it does not set the row's spread.
 - MPC OIS (elle), Elle spread, Pencere OIS (elle) are the two-way tables' own inputs (in place): what was typed there keeps
-  its meaning. Hedef FRA is unchanged (its table is the one left out).
+  its meaning.
+- Hedef FRA (`OIS_MAIN!U:W`) stays: a target typed there is the same quantity as an FRA typed into Gerçekleşen FRA - its
+  "Gereken bitiş bacağı" is the end fill that FRA typed gives (the start leg held); "Gereken başl. bacağı" (the start leg
+  with the end fill held) has no two-way counterpart: the rule holds the start leg.
 
 Code: `tto/extras.py` (`_tarih_tw_check` / `_tarih_tw`, `TARIH_TW_*`; `TARIH_TW` in `_tto_tarih`; `PPK_TW_WINDOW`,
-`PPK_TW_PAIR` in `_tto_ppk_back`; `TMOIS_*`, `_tmois_check` / `_tto_tmois`; `FOMC_TW`, `FOMC_TW_WIRP` in
-`_usd_fomc_back`; `overnight_back`), `tto/meetings.py` (the stores' bands), `tto/views/10_masa.json`, `20_ois.json`,
-`55_tmois.json`, `80_usd.json` (`"twoway"`, the hidden helper tables TAFY, PPKY, B7, fomcy). Tests:
-`tests/test_ois_twoway.py`, `tests/test_ppkters.py`, `tests/test_toplufaiz.py`, the browser test's checks after
-"two-way: the date-to-date block".
+`PPK_TW_PAIR` in `_tto_ppk_back`; `FRA_TW`, `fra_end_leg` in `_tto_fra_leg`; `TMOIS_*`, `_tmois_check` / `_tto_tmois`;
+`FOMC_TW`, `FOMC_TW_WIRP` in `_usd_fomc_back`; `overnight_back`), `tto/meetings.py` (the stores' bands),
+`tto/views/10_masa.json`, `20_ois.json`, `55_tmois.json`, `80_usd.json` (`"twoway"`, the hidden helper tables TAFY,
+PPKY, B23 (the FRA list's store), B7, fomcy). Tests: `tests/test_ois_twoway.py`, `tests/test_ppkters.py`,
+`tests/test_toplufaiz.py`, the browser test's checks after "two-way: the date-to-date block" and after "TÜM FORWARD /
+FRA".
 
 ### Forward kotasyon iki yönlü (24.11.2026)
 

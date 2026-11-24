@@ -454,8 +454,13 @@ def test_left_out_when_the_tables_are_not_what_they_read():
     sofr = Model.load(sofr_path)
     sofr.sheet("SOFR_FOMC").consts[parse_a1("AD80")] = 1.0
     assert ex.apply("sofr", sofr) == ["FOMC pencere OIS'ten adım: SOFR_FOMC!AD80 boş değil"]
-    # as they fit: the formulas they invert stay as they are
+    # as they fit: the formulas they invert stay as they are (the realized FRA within its two-way cell: an FRA typed shows,
+    # else the formula - tests/test_ois_twoway.py)
     tto = Model.load(path)
     before = {a: ex.formula_of(tto, "OIS_MAIN", a) for a in ("D84", "B103", "S336", "S438")}
     assert ex.apply("tto", tto) == []
-    assert {a: ex.formula_of(tto, "OIS_MAIN", a) for a in before} == before
+    after = {a: ex.formula_of(tto, "OIS_MAIN", a) for a in before}
+    assert after["D84"] == before["D84"] and after["B103"] == before["B103"]
+    for a in ("S336", "S438"):
+        store = "$%s%s" % (ex.FRA_TW, a[1:])
+        assert after[a] == "IF(ISBLANK(%s),%s,%s)" % (store, before[a], store), a

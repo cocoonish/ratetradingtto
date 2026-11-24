@@ -252,7 +252,7 @@
    "scope": "user",
    "group": "ois-32",
    "kind": "pct",
-   "label": "'Başl. bacağı dolum', 'Bitiş bacağı dolum'"
+   "label": "'Başl. bacağı dolum', 'Bitiş bacağı dolum' (the end leg's: two-way with 'Gerçekleşen FRA' - formula default: the end leg an FRA typed in its row needs, the start leg held)"
   },
   {
    "range": "U336:U438",
@@ -352,6 +352,16 @@
      "label": "'O/N eşdeğeri' typed in MPC SPREAD → PPK ADIMI (two-way: the later window's rate, the spread and the step follow; goes with its meeting)"},
     {"name": "İma PPK adımı", "range": "V3:V17", "store": "AC3:AC17", "kind": "number",
      "label": "'İma PPK adımı (bp)' typed in MPC SPREAD → PPK ADIMI (two-way: the later window's rate, its O/N and the spread follow; goes with its meeting)"}
+   ]
+  },
+  {
+   "id": "fra-leg",
+   "label": "TÜM FORWARD / FRA",
+   "note": "İki yönlü: bitiş bacağı dolumu ya da Gerçekleşen FRA - hangisini yazarsanız o kalır: FRA yazılınca başlangıç bacağı tutulur (dolumunuz, boşsa piyasa par'ı) ve bitiş bacağı ondan hesaplanır; dolum yazılınca FRA (boş başlangıç dolumu yine piyasa par'ı) (✎ yazılan; silince satır boşalır). Başlangıç dolumu ayrı bir girdidir: FRA yazılıyken değiştirirseniz bitiş bacağı yeniden hesaplanır.",
+   "members": [
+    {"name": "Bitiş bacağı dolum", "range": "R336:R438"},
+    {"name": "Gerçekleşen FRA", "range": "S336:S438", "store": "BG336:BG438", "kind": "pct",
+     "label": "'Gerçekleşen FRA' typed in TÜM FORWARD / FRA (two-way: the end leg's fill that makes it follows, the start leg - its fill, else the market par - held)"}
    ]
   }
  ],
