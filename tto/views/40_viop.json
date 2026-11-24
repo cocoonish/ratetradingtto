@@ -163,13 +163,6 @@
    "label": "Target 'FRA eğrisi' – FRA+bp satırının OIS FRA'sı (ve hedef faizi) hangi eğriden: Bootstrap (piyasa) ya da OIS · PPK senaryoları S1 / S2 / S3 (liste EK_VFRA!A3:A6, adları SENARYOLAR'dan); boş = Bootstrap"
   },
   {
-   "range": "P331:P338",
-   "scope": "user",
-   "group": "viop-21",
-   "kind": "number",
-   "label": "Target 'Hedef değer' (bp; Faiz %: the rate; Fiyat: the far contract's price, 51,10)"
-  },
-  {
    "range": "M340",
    "scope": "user",
    "group": "viop-22",
@@ -892,6 +885,33 @@
    "hidden": true,
    "keep_title": true,
    "title": "Yardımcı · VİOP Target FRA eğrileri (açılır liste; her satırın tarihleri, S1–S3 iskonto faktörleri, Bootstrap / S1 / S2 / S3 FRA'sı ve durumu)"
+  },
+  {
+   "id": "VT1",
+   "type": "table",
+   "range": "AE330:AI338",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · VİOP Target'ın yazılan değerleri (iki yönlü: hedef değer, hedef faiz, uzak limit, spread fiyatı, hedef − piyasa)"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "viop-target",
+   "label": "VİOP Target",
+   "note": "İki yönlü: hedef değer, hedef faiz, uzak limit fiyatı, spread fiyatı ya da hedef − piyasa - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır boşalır). Hedef değer satırın hedef tipindedir: FRA+bp'de OIS FRA'ya göre bp, FXswap+bp'de FX swap imaya göre bp, Faiz %'de faiz, Fiyat'ta uzak limit fiyatı. Uzak limitten faiz, yakın limit satırın yönüyle (SHORT: yakın ask, LONG: yakın bid).",
+   "members": [
+    {"name": "Hedef değer", "range": "P331:P338", "store": "AE331:AE338",
+     "label": "Target 'Hedef değer' typed (two-way; in the row's type: bp, the rate, the far price - its target rate, limits and gap follow)"},
+    {"name": "Hedef faiz", "range": "Q331:Q338", "store": "AF331:AF338",
+     "label": "Target 'Hedef faiz (360)' typed (two-way: hedef değer, limits and gap follow)"},
+    {"name": "Uzak limit", "range": "S331:S338", "store": "AG331:AG338",
+     "label": "Target 'Uzak limit fiyatı' typed (two-way: the rate it implies, hedef değer, spread and gap follow)"},
+    {"name": "Spread fiyatı", "range": "T331:T338", "store": "AH331:AH338",
+     "label": "Target 'Spread fiyatı' typed (two-way: far limit = near limit + spread; the rate, hedef değer and gap follow)"},
+    {"name": "Hedef − piyasa", "range": "V331:V338", "store": "AI331:AI338",
+     "label": "Target 'Hedef − piyasa (bp)' typed (two-way: the rate = market implied + gap; hedef değer and limits follow)"}
+   ]
   }
  ],
  "sections": [

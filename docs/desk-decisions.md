@@ -1251,6 +1251,9 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
   Volatility (End Vol, Fwd Vol; Start Vol held), Yıllık getiriden forward fiyat (Ann. Yield, Forward), İki fiyat arası
   yıllık getiri (Last Price, Ann. Yield; First Price held).
 - **DV01 Risk's Senaryo P&L** (rows 69-71): each shock (bp) or the P&L it makes; shock = P&L / the P&L of 1 bp.
+- **VİOP Target** (rows 331-338): Hedef değer, Hedef faiz, Uzak limit fiyatı, Spread fiyatı or Hedef − piyasa. The target
+  rate is the row's hub: a far price gives the rate it implies (the Fiyat type's inverse, the near limit by the row's
+  side), a spread price the far limit near limit + spread, a gap the market's implied rate + gap.
 
 **Choices made while building them** (said on the pages and in README; ask the desk before changing):
 - **Each calculator has a hub**, the input its block computes from (Volatilite, Basit, DF ...): a value typed into another
@@ -1265,12 +1268,20 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
 - **No guard added**: an inverse with no answer shows Excel's error, as the blocks' own formulas do (a move with zero days,
   a P&L with no position: `#DIV/0!`); a bound on the wrong side of the spot gives a negative vol (the formula solved).
 - Nothing typed: every calculator shows what it showed (the file's values, the market's forward).
+- **VİOP Target: "Hedef tipi" stays the user's.** Hedef değer is always shown in the row's own type, whichever member was
+  typed: on an FRA+bp row a far price typed shows its bp over OIS FRA, on a Fiyat row the price itself (the survey's
+  "a price typed sets the type to Fiyat" is that case). The type is not flipped by a typed price: the mechanism never
+  writes another input, and a flipped type would make a Hedef değer typed afterwards mean something else. A row is priced
+  while any of its five is typed; a contract that rolled off leaves it "Geçersiz" with the typed value kept. Typing is on
+  the VİOP page; Masa's strip of the target's inputs types Hedef değer (the same store). Masa's summary shows a worked-out
+  Hedef değer to four decimals.
 
 Left out (with the reason): the RET tables and RET adil değer (shared, not this group's); Fiyatlama's optional new kinds;
 Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye endeksli and the hidden copies (survey).
 
-Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`), `tto/views/90_calc.json`, `70_dv01.json`
-(`"twoway"`, helper tables B36 / B11s). Tests: `tests/test_hesap_twoway.py`.
+Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_STORES`, `viop_fx_implied`,
+`_tto_viop_tw`), `tto/views/90_calc.json`, `70_dv01.json`, `40_viop.json` (`"twoway"`, helper tables B36 / B11s / VT1),
+`10_masa.json` (TARGET's note). Tests: `tests/test_hesap_twoway.py`, `tests/test_viop_twoway.py`.
 
 ## Process
 

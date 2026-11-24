@@ -4393,10 +4393,10 @@ def viop_far_limit(r: int) -> str:
     return "%s*(1+$Q%d*%s/360)/%s" % (viop_near_limit(r), r, viop_target_days(r), viop_usd_carry(r))
 
 
-def viop_price_rate(r: int) -> str:
+def viop_price_rate(r: int, price: Optional[str] = None) -> str:
     """Its inverse: the target rate the far price typed in "Hedef değer" implies, ((price / near limit) · USD carry − 1)
-    · 360 / days."""
-    return "(($P%d/%s)*%s-1)*360/%s" % (r, viop_near_limit(r), viop_usd_carry(r), viop_target_days(r))
+    · 360 / days (``price``: another cell or expression than the row's "Hedef değer", ``$P``)."""
+    return "((%s/%s)*%s-1)*360/%s" % (price or "$P%d" % r, viop_near_limit(r), viop_usd_carry(r), viop_target_days(r))
 
 
 def _vprice_anchors(r: int) -> Tuple[str, str]:
@@ -4635,6 +4635,135 @@ def _tto_viop_fra(model: Model) -> None:
         mf = 'VIOP!$O$%d&" "&VIOP!$P$%d' % (r, r)
         SheetBuilder(model, "MASA").patch("S%d" % m, "=" + formula_of(model, "MASA", "S%d" % m).replace(
             mf, '%s&IF(%s!$U$%d<>""," · geçersiz",IF(%s!$D$%d>1," · "&%s!$E$%d,""))' % (mf, e, h, e, h, e, h)))
+
+
+# ---------------------------------------------------------------------------------------------- VİOP target: two-way
+#: The VİOP target table two-way (tto/twoway.py; the desk, 24.11.2026: "Bu söylediklerin ve tüm tablolar bu şekilde
+#: olmalı"): per row, "Hedef değer" (P, in the row's own "Hedef tipi"), "Hedef faiz" (Q), "Uzak limit fiyatı" (S),
+#: "Spread fiyatı" (T) or "Hedef − piyasa" (V) can be typed - the one typed last stands, the others are worked out from
+#: it.  Each is kept in a store of the row (``VT_STORES``: AE:AI, beside the table's tooltips); the target rate Q is the
+#: row's hub:
+#:
+#: * Hedef değer typed: the sheet's own target rate of its type (FRA+bp: OIS FRA + bp; FXswap+bp: the FX swap implied
+#:   rate + bp; Faiz %: the rate; Fiyat: the rate the far price implies, ``viop_price_rate``);
+#: * Uzak limit typed: the rate that far price implies (``viop_price_rate``, the Fiyat type's inverse); Spread fiyatı
+#:   typed: the far limit is the near limit (by the row's side, as R) + the spread; Hedef − piyasa typed: the market's
+#:   implied rate (U, by the side) + the gap;
+#: * every other member is the sheet's own formula of that rate - Hedef değer in the row's type: FRA+bp (Q − OIS FRA) ·
+#:   10000, FXswap+bp (Q − FX swap implied) · 10000, Faiz % Q · 100, Fiyat the far limit.
+#:
+#: "Hedef tipi" stays the user's: it says what Hedef değer means (the mechanism never writes another input - a type
+#: flipped by a typed price would make a later Hedef değer mean something else).  A row is priced while any of its five
+#: is typed (U, W, X, Y read that instead of "Hedef değer <> blank", which is worked out now); a contract that rolled off
+#: still leaves the row "Geçersiz" (EK_VFRA!U) with its typed value kept.  What users typed in Hedef değer before is its
+#: store's at their next read (twoway.TwoWay.adopt).
+VT_NAME = "VİOP target iki yönlü"
+VT_STORES = {"P": "AE", "Q": "AF", "S": "AG", "T": "AH", "V": "AI"}
+VT_HEADS = {"AE": "Yazılan hedef değer", "AF": "Yazılan hedef faiz", "AG": "Yazılan uzak limit", "AH": "Yazılan spread fiyatı",
+            "AI": "Yazılan hedef − piyasa (bp)"}
+
+
+def viop_fx_implied(r: int) -> str:
+    """The FX swap implied TRY rate between the row's two contracts, as the target rate's FXswap+bp branch reads it: the
+    mid of the far over the near contract's FX swap forward (rows 105 / 106), the USD carry, ACT/360."""
+    two = "INDEX($L$105:$X$105,MATCH($%(c)s%(r)d,$L$97:$X$97,0))+INDEX($L$106:$X$106,MATCH($%(c)s%(r)d,$L$97:$X$97,0))"
+    return "((((%s)/2)/((%s)/2))*%s-1)*360/%s" % (two % {"c": "M", "r": r}, two % {"c": "L", "r": r}, viop_usd_carry(r),
+                                                   viop_target_days(r))
+
+
+def _vt_active(r: int) -> str:
+    """A row is priced while any of its five is typed."""
+    return "NOT(AND(%s))" % ",".join("ISBLANK($%s%d)" % (VT_STORES[c], r) for c in "PQSTV")
+
+
+def _vt_rate_parts(r: int) -> Tuple[str, str, str]:
+    """The target rate's anchors in its formula: the condition ("Hedef değer" not blank), the start of the by-type rate,
+    its end - each found exactly once (``_viop_tw_check``)."""
+    return '$P%d<>""' % r, 'IF($O%d="Faiz %%",' % r, '+$P%d/10000)),""),"")' % r
+
+
+def _viop_tw_check(model: Model) -> None:
+    """The target table as the types and the FRA's curve leave it: the rate's anchors, the FX swap branch, the members'
+    formulas, the conditions read by "Piyasa ima", OIS FRA, DV01 and days; its stores' cells empty."""
+    _need_sheets(model, "VIOP", VFRA_SHEET)
+    _need_captions(model, (("VIOP", "P330", "Hedef değer"), ("VIOP", "Q330", "Hedef faiz (360)"), ("VIOP", "S330", "Uzak limit fiyatı"),
+                           ("VIOP", "T330", "Spread fiyatı"), ("VIOP", "U330", "Piyasa ima ff (yön)"),
+                           ("VIOP", "V330", "Hedef − piyasa (bp)")))
+    sh = model.sheet("VIOP")
+    for r in range(VFRA_ROWS[0], VFRA_ROWS[1] + 1):
+        if parse_a1("P%d" % r) in sh.fml or sh.consts.get(parse_a1("P%d" % r)) not in (None, ""):
+            raise ValueError("VIOP!P%d boş bir girdi değil" % r)
+        q = _need_formula(model, "VIOP", "Q%d" % r, 'IF($O%d="FXswap+bp",%s,$W%d)' % (r, viop_fx_implied(r), r))
+        cond, typed, end = _vt_rate_parts(r)
+        if q.count(cond) != 1 or q.count(typed) != 1 or q.count(end) != 1 or 'IF(N($P%d)>0,' % r not in q:
+            raise ValueError("VIOP!Q%d beklenen hedef faiz formülü değil (iki yönlü)" % r)
+        _need_formula(model, "VIOP", "S%d" % r, viop_far_limit(r))
+        _need_formula(model, "VIOP", "T%d" % r, "$S%d-%s" % (r, viop_near_limit(r)))
+        _need_formula(model, "VIOP", "V%d" % r, "($Q%d-$U%d)*10000" % (r, r))
+        for c in "UWXY":
+            if _need_formula(model, "VIOP", "%s%d" % (c, r), cond).count(cond) != 1:
+                raise ValueError("VIOP!%s%d beklenen formül değil (%s)" % (c, r, cond))
+        h = r - VFRA_ROWS[0] + VFRA_FIRST
+        bad = 'IF(%s!$U$%d<>"",%s!$U$%d,' % (VFRA_SHEET, h, VFRA_SHEET, h)
+        if not _need_formula(model, "VIOP", "AB%d" % r, bad).startswith(bad):
+            raise ValueError("VIOP!AB%d beklenen ipucu formülü değil" % r)
+        for col in VT_STORES.values():
+            rc = parse_a1("%s%d" % (col, r))
+            if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+                raise ValueError("VIOP!%s%d boş değil" % (col, r))
+    for col in VT_STORES.values():
+        if parse_a1("%s%d" % (col, VFRA_ROWS[0] - 1)) in sh.fml:
+            raise ValueError("VIOP!%s%d boş değil" % (col, VFRA_ROWS[0] - 1))
+
+
+def _tto_viop_tw(model: Model) -> None:
+    """The target table two-way: the stores, the rate from whichever member is typed, the members' formulas wrapped,
+    "Hedef değer" worked out in the row's type, the rows priced while any member is typed, the rate's tooltip."""
+    v = SheetBuilder(model, "VIOP")
+    head = VFRA_ROWS[0] - 1
+    for col, text in VT_HEADS.items():
+        v.set("%s%d" % (col, head), text, like="Q%d" % head)
+    for r in range(VFRA_ROWS[0], VFRA_ROWS[1] + 1):
+        s = {c: "$%s%d" % (col, r) for c, col in VT_STORES.items()}
+        h = r - VFRA_ROWS[0] + VFRA_FIRST
+        for c, col in VT_STORES.items():
+            v.input("%s%d" % (col, r), None, fmt=_numfmt(model, "VIOP", "%s%d" % (c, r)))
+        active = _vt_active(r)
+        cond, typed, end = _vt_rate_parts(r)
+        near = viop_near_limit(r)
+        # the rate: Hedef değer's by its type (as before, off its store), else the far price / spread / gap typed
+        q = formula_of(model, "VIOP", "Q%d" % r).replace(cond, active)
+        others = "IF(NOT(ISBLANK(%s)),%s,IF(NOT(ISBLANK(%s)),%s,$U%d+%s/10000))" % (
+            s["S"], viop_price_rate(r, s["S"]), s["T"], viop_price_rate(r, "(%s+%s)" % (near, s["T"])), r, s["V"])
+        q = q.replace(typed, "IF(ISBLANK(%s),%s,%s" % (s["P"], others, typed)).replace(end, end.replace("))", ")))", 1))
+        q = q.replace("$P%d" % r, s["P"])
+        v.patch("Q%d" % r, "=IF(ISBLANK(%s),%s,%s)" % (s["Q"], q, s["Q"]))
+        for c in "UWXY":
+            v.patch("%s%d" % (c, r), "=" + formula_of(model, "VIOP", "%s%d" % (c, r)).replace(cond, active))
+        for c in "STV":
+            v.patch("%s%d" % (c, r), "=IF(ISBLANK(%s),%s,%s)" % (s[c], formula_of(model, "VIOP", "%s%d" % (c, r)), s[c]))
+        # Hedef değer in the row's type, from the rate (and the far limit on a Fiyat row)
+        by_type = ('IF($O%(r)d="Faiz %%",$Q%(r)d*100,IF($O%(r)d="%(price)s",$S%(r)d,IF($O%(r)d="FXswap+bp",($Q%(r)d-%(fx)s)*10000,'
+                   '($Q%(r)d-$W%(r)d)*10000)))') % {"r": r, "price": VPRICE_TYPE, "fx": viop_fx_implied(r)}
+        v.patch("P%d" % r, '=IF(ISBLANK(%s),IFERROR(IF(ISNUMBER($Q%d),%s,""),""),%s)' % (s["P"], r, by_type, s["P"]))
+        # the rate's tooltip says where it comes from when another member was typed
+        bad = 'IF(%s!$U$%d<>"",%s!$U$%d,' % (VFRA_SHEET, h, VFRA_SHEET, h)
+        tip = formula_of(model, "VIOP", "AB%d" % r)
+        mine = ('IF(NOT(ISBLANK(%(Q)s)),"Hedef faiz yazıldı: hedef değer, uzak limit, spread fiyatı ve hedef − piyasa ondan",'
+                'IF(NOT(ISBLANK(%(S)s)),"Hedef faiz = yazılan uzak limit fiyatı "&TEXT(%(S)s,"General")&" → ima TRY faizi (yakın limit "'
+                '&TEXT($R%(r)d,"0.0000")&", "&TEXT($Y%(r)d,"0")&" gün, ACT/360)",'
+                'IF(NOT(ISBLANK(%(T)s)),"Hedef faiz = yazılan spread fiyatı "&TEXT(%(T)s,"General")&": uzak limit = yakın limit "'
+                '&TEXT($R%(r)d,"0.0000")&" + spread → ima TRY faizi (ACT/360)",'
+                'IF(NOT(ISBLANK(%(V)s)),"Hedef faiz = piyasa ima ff (yön) "&TEXT($U%(r)d,"0.00%%")&" + yazılan hedef − piyasa "'
+                '&TEXT(%(V)s,"General")&" bp",') % dict(s, r=r)
+        v.patch("AB%d" % r, "=" + bad + mine + tip[len(bad):-1] + "))))" + ")")
+    # the desk sheet's strip says a worked-out target to four decimals (a typed one as typed)
+    for r, h, m in _vfra_rows():
+        mf = 'VIOP!$O$%d&" "&VIOP!$P$%d' % (r, r)
+        text = formula_of(model, "MASA", "S%d" % m)
+        if text.count(mf) == 1:
+            SheetBuilder(model, "MASA").patch("S%d" % m, "=" + text.replace(mf, 'VIOP!$O$%d&" "&IF(ISBLANK(VIOP!$%s$%d),ROUND(VIOP!$P$%d,4),'
+                                                                              'VIOP!$P$%d)' % (r, VT_STORES["P"], r, r, r)))
 
 
 # ---------------------------------------------------------------------------------------------- the fair RET's scenarios
@@ -5051,8 +5180,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
             # (two-way calculators: Hesaplayıcılar and DV01's scenario P&L - after the market defaults and the way back of
-            # the implied move, whose formulas they keep)
-            *_tw_hub_builders(),
+            # the implied move, whose formulas they keep; the VİOP target after its types and the FRA's curve)
+            *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }

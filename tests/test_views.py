@@ -545,6 +545,10 @@ NAMED = {
     # price, the price type), its known coupon - else Tüm Kâğıtlar' bid / ask (their pricing sources)
     ("manuel", "B2"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!N5:N54", "DİBS RV!X2"]),
                        ("Tüm Kâğıtlar", ["EK_EVREN!C2", "EK_EVREN!E2"])],
+    # the VİOP target's two-way members typed on the VİOP page (its Hedef değer is in the strip above it, worked out from
+    # them when one of them is typed)
+    ("masa", "B17"): [("VİOP", ["VIOP!AF331:AI338"])],
+    ("masa", "B17D"): [("VİOP", ["VIOP!AF331:AI338"])],
     ("dv01", "B9"): [_POSITION, _HEDGE],
     ("dv01", "B10"): [_POSITION, _HEDGE],
     **{("dv01", pid): [_POSITION] for pid in ("B2", "B11", "B13", "B14", "B16", "B17", "B18")},

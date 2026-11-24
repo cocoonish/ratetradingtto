@@ -127,6 +127,10 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   from -: the other members keep their workbook formula wrapped in their store, the hub is its store, else the value the
   typed member gives (the block's formula solved), else its old default (the file's constant, or its formula default when
   it stays in place). A copyable calculator keeps every member in a store, so a temporary copy is never refused.
+- **VİOP Target** (`extras._tto_viop_tw`): five members per row (stores `VIOP!AE:AI`), the target rate the hub. A member
+  shown in only part of a table (Masa's TARGET strip shows Hedef değer alone) has a limit in that table's temporary copy:
+  the copy cannot empty the row-side's other stores (`Copies.overlay` keeps the copy's own cells only), so a value typed
+  there on the VİOP page shows through.
 
 ## Books and the formula engine
 

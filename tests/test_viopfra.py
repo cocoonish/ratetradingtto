@@ -73,7 +73,9 @@ def test_the_choice_sits_beside_the_target_type_as_a_list_of_the_scenarios(svc):
     viop = next(v for v in load_views() if v["id"] == "viop")
     scope = {i["range"]: (i["scope"], i["kind"]) for i in viop["inputs"]}
     assert scope["Z331:Z338"] == ("user", "list")
-    assert {scope[r][0] for r in ("L331:L338", "M331:M338", "N331:N338", "O331:O338", "P331:P338")} == {"user"}
+    assert {scope[r][0] for r in ("L331:L338", "M331:M338", "N331:N338", "O331:O338")} == {"user"}
+    # (Hedef değer is two-way since 24.11.2026 - test_viop_twoway.py: a personal store keeps what is typed in it)
+    assert next(g for g in viop["twoway"] if g["id"] == "viop-target").get("scope", "user") == "user"
     u = svc.login("FRA eğrisi liste")["user"]
     page = svc.view(u, "viop")
     table = next(p for p in page["panels"] if p["id"] == "B33")["data"]
@@ -481,9 +483,11 @@ def test_the_type_is_left_out_when_the_far_limit_is_priced_otherwise():
     path = os.path.join(ROOT, "models", "tto.json.gz")
     tto = Model.load(path)
     ex.SheetBuilder(tto, "VIOP").patch("S333", "=" + ex.formula_of(tto, "VIOP", "S333").replace("/360)/", "/365)/"))
-    assert ex.apply("tto", tto) == ["VİOP hedef fiyatı: VIOP!S333 beklenen formül değil (%s yok)" % ex.viop_far_limit(333)]
+    # (the two-way target - test_viop_twoway.py - is built on the type "Fiyat": left out with it)
+    two_way = ex.VT_NAME + ": VIOP!Q331 beklenen hedef faiz formülü değil (iki yönlü)"
+    assert ex.apply("tto", tto) == ["VİOP hedef fiyatı: VIOP!S333 beklenen formül değil (%s yok)" % ex.viop_far_limit(333), two_way]
     assert "Fiyat" not in ex.formula_of(tto, "VIOP", "Q331") and "EK_VFRA!$U$10" in ex.formula_of(tto, "VIOP", "Q331")
     assert {"sqref": "O331:O338", "type": "list", "formula1": '"FRA+bp,FXswap+bp,Faiz %"'} in tto.sheet("VIOP").validations
     tto = Model.load(path)                                                                # the list written otherwise
     next(v for v in tto.sheet("VIOP").validations if v["sqref"] == "O331:O338")["formula1"] = '"FRA+bp,Faiz %"'
-    assert ex.apply("tto", tto) == ["VİOP hedef fiyatı: VIOP!O331:O338 hedef tipi listesi beklenen değil"]
+    assert ex.apply("tto", tto) == ["VİOP hedef fiyatı: VIOP!O331:O338 hedef tipi listesi beklenen değil", two_way]
