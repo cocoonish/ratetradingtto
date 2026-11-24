@@ -3494,16 +3494,8 @@ async function clipAfter(page, action) {
       for (let r = 5; r <= 54; r++) { const td = window.tto.findCell('DİBS RV!A' + r); if (td && td.textContent.trim() === c) return r; }
       return 0;
     }, code);
-    // Delete on a list cell right after the list grew may land while the grid rebuilds for its new shape (a shape
-    // change clears the selection: grid.js update) - press it again until the cell is empty (a Delete on an
-    // emptied input does nothing)
-    const rvDelete = async (ref) => {
-      for (let i = 0; i < 3; i++) {
-        await (await cellHandle(page, ref)).click();
-        await page.keyboard.press('Delete');
-        if (await waitCell(page, ref, 't.trim() === ""', 8000).then(() => true).catch(() => false)) return;
-      }
-    };
+    // (the page's own refresh often asks while the Delete is applied: it must show the move all the same - the write's
+    // generation comes with it, Service._wrote; tests/test_page_after_write.py)
     const moving = 'TRT081128T15';
     const fromRow = await rvRowOf(moving);
     const toRow = 1 + await page.evaluate(() => {
@@ -3515,7 +3507,8 @@ async function clipAfter(page, action) {
     await waitCell(page, 'DİBS RV!N' + fromRow, '/^98,5/.test(t)');
     await typeInto(page, 'DİBS RV!A' + toRow, moving);
     await waitCell(page, 'DİBS RV!A' + toRow, 't.trim() === "' + moving + '"');
-    await rvDelete('DİBS RV!A' + fromRow);
+    await (await cellHandle(page, 'DİBS RV!A' + fromRow)).click();
+    await page.keyboard.press('Delete');
     await waitCell(page, 'DİBS RV!N' + toRow, '/^98,5/.test(t)').catch(() => {});
     const followed = { from: fromRow, to: toRow, priceThere: await cellText(page, 'DİBS RV!N' + toRow),
       priceHere: await cellText(page, 'DİBS RV!N' + fromRow), said: await page.textContent('#toasts') };
@@ -3525,7 +3518,8 @@ async function clipAfter(page, action) {
     // back where it was (the price with it), then the price off
     await typeInto(page, 'DİBS RV!A' + fromRow, moving);
     await waitCell(page, 'DİBS RV!A' + fromRow, 't.trim() === "' + moving + '"');
-    await rvDelete('DİBS RV!A' + toRow);
+    await (await cellHandle(page, 'DİBS RV!A' + toRow)).click();
+    await page.keyboard.press('Delete');
     await waitCell(page, 'DİBS RV!N' + fromRow, '/^98,5/.test(t)').catch(() => {});
     const rvBack = { price: await cellText(page, 'DİBS RV!N' + fromRow), here: await cellText(page, 'DİBS RV!A' + fromRow),
       there: await cellText(page, 'DİBS RV!A' + toRow) };
