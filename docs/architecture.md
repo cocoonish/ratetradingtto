@@ -104,19 +104,27 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 - **Resets** (`/api/reset` with refs: "Kendi girdimi sil", "formüle dön"): a two-way cell stands for its whole row-side
   (`TwoWay.widen`). "Girdilerimi sıfırla", scenarios (save / load) and "Girdilerim" need nothing: the stores are
   ordinary inputs ("Girdilerim" names a store by its member's cell).
-- **Formulas** (`inputformula.py`): accepted on the store; a cycle - a formula reading a member of its own row-side - is
-  refused, and its reason names the member's cells (`TwoWay.said`), not the stores.
+- **Formulas** (`inputformula.py`): accepted on the store. A formula reading its own row-side - a member, a store or a
+  cell computed from them, by the formulas' references (`TwoWay.own_row_ring`, after `InputFormulas.accept`) - is
+  refused as typed: once it stands the row-side's other members are worked out from it, also when what it reads holds a
+  typed value now (the in-place member's, emptied by that write - the engine's masks alone cannot see that one). Every
+  reason, a refusal or a formula stopped with `#CALC!`, names the member's cells (`TwoWay.said`), not the stores.
 - **The page** (`Renderer.cell`, `twoway.mark`): a member is an input (`i`), modified (`m`) when its store holds a value;
   the anchor gets `an` (the members worked out from it), the others of an anchored row-side `ao` (the anchor's name and
   cell). The browser draws the anchor bold with ✎ (`grid.js` `cellClass` / `tipOf`, `app.css` `td.in.anchor`); the
   group's `note` goes under every table showing its members (`TwoWay.note_for`). `/api/cell` gives `input.twoway`.
-- **Temporary copies** (`copies.py`): a member's store is the copy's input; a member typed in a copy writes its store and
-  the copy's own empty values for the row-side's other stores (`TwoWay.copy_write`); Delete in a copy takes the
-  row-side's values away (it follows the table again). Limit: the engine's copy layer cannot unset a value the table holds,
+- **Temporary copies** (`copies.py`): every store of the row-side of a member the copy shows is the copy's input
+  (`Copies._check`) - also the stores of members it does not show, so a copy of a table that shows one member of a row
+  starts with the table's typed value of the row and a value typed in it clears the others in the copy's layer (they do
+  not show through); a member typed in a copy writes its store and the copy's own empty values for the row-side's other
+  stores (`TwoWay.copy_write`); Delete in a copy takes the row-side's values away (it follows the table again). Limit: the engine's copy layer cannot unset a value the table holds,
   so an in-place member typed in the table cannot go back to its formula in a copy - typing another member of that
   row-side there is refused with the reason.
-- **Values typed over a member before it was two-way** ("Elle değer" at the member's own cell): its row-side's anchor,
-  moved to the store once when the user's values are read (`TwoWay.adopt`, logged); such cells are never declared
+- **What was kept at a member's own cell before it was two-way** ("Elle değer" over it, or the page's input it was,
+  with its formula): its row-side's anchor, moved to the store once (logged) - the formula with it, still live
+  (`InputFormulas._take` leaves such a formula for this instead of dropping it) - when a user's values are read
+  (`TwoWay.adopt`), the desk's at the start (`TwoWay.adopt_shared`), a temporary copy's own values when the copy is read
+  (`TwoWay.adopt_copy`, `Copies._load`: a copy opened before its table was two-way). Such cells are never declared
   "Elle değer" inputs at the start (`_declare_saved_cells`).
 - **Adopting it** (the module's docstring has the full list): the builder writes the stores and the members' formulas
   (the table's inverse formulas: one implementation, as `extras.fwd_outright` / `fwd_rate`); the view declares the group;

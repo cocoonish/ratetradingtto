@@ -22,12 +22,18 @@ shape - are one **row-side** (a value date's bid; its ask is another row-side).
   row, left to right) is its anchor; a blank in the same write as a value of the same row-side clears nothing; a
   row-side the write only blanks goes back to its default.
 * **Formulas** (``=…``, tto/inputformula.py) are taken on a member as on any input: kept on its store, refused with the
-  reason where they would read themselves (a formula reading a member of its own row-side is a cycle); the reason names
-  the member's cell, not the store.
-* Pasting, Senaryolar, "Girdilerimi sıfırla", temporary copies (copies.py) and the page's marks go through the stores:
+  reason where they would read themselves.  A formula reading its own row-side - a member, a store, a cell computed from
+  them - is a cycle once it stands, also when what it reads holds a typed value now (the in-place member's typed value
+  is emptied by the write, its formula default then reads the new store): refused as typed (:meth:`own_row_ring`).  Every
+  reason - a refusal, a formula stopped with ``#CALC!`` - names the member's cell, not the store.
+* Pasting, Senaryolar, "Girdilerimi sıfırla", temporary copies (copies.py: every store of the row-side of a member a
+  copy shows is the copy's input, also those of members it does not show) and the page's marks go through the stores:
   a table that declares its group has nothing more to do for them.
-* **A value typed over a member's cell before it was two-way** ("Elle değer", kept at the member's own cell) is that
-  row-side's anchor: moved to the store once, the row-side's other stores emptied (:meth:`adopt`).
+* **What was kept at a member's own cell before it was two-way** - "Elle değer" typed over it, or the page's input it
+  was then, with the formula typed into it - is that row-side's anchor: moved to the store once, the formula with it (it
+  stays live; inputformula.py leaves it for this), the row-side's other stores emptied, logged - a user's values when
+  they are read (:meth:`adopt`), the desk's at the start (:meth:`adopt_shared`), a temporary copy's own values when the
+  copy is read (:meth:`adopt_copy`: a copy opened before the table was two-way).
 
 **How a table adopts it** (FORWARD KOTASYON in ``extras._tto_forward`` is the example):
 
@@ -63,6 +69,9 @@ Cell = Tuple[int, int]
 #: a copy's write that would need the table's in-place value gone (see the module's "Limits")
 COPY_TABLE_TYPED = ("kopyada yazılamaz: tablonun kendisinde bu satıra %s yazılmış (%s) - kopya onu formülüne döndüremez; "
                     "kopyada başka bir değer yazmak için önce tablodaki değeri silin")
+#: a formula typed into a member that reads its own row-side (:meth:`TwoWay.own_row_ring`)
+ROW_CYCLE = ("döngüsel başvuru: %s - formül kendi satırını okuyor (iki yönlü tablo: yazılınca satırın öbür değerleri bu "
+             "formülden hesaplanır)")
 
 
 _GONE = object()
@@ -365,43 +374,141 @@ class TwoWay(object):
         rx, names = got
         return rx.sub(lambda m: names[m.group(0)], text) if rx is not None and text else text
 
-    def adopt(self, user: str, book, rows: Dict[Tuple[str, str], Any]) -> Dict[Tuple[str, str], Any]:
-        """A user's values as the store keeps them (``rows``: {(book, ref): value}), with a value typed over a member's
-        cell before it was two-way ("Elle değer", kept at the member's own cell - a value: "Elle değer" takes no
-        formula) taken as its row-side's anchor: moved to the member's store, the row-side's other stores emptied -
-        once, in the store (the log says so).  Two such in one row-side: the member declared later wins.  Returns the
-        rows as they are now."""
-        idx = getattr(book, "twoway", None)
-        if not idx:
-            return rows
-        found: Dict[Tuple[str, int], Tuple[Hit, str, Any]] = {}
-        legacy = []
-        for (bid, ref), val in rows.items():
+    # ------------------------------------------------------------------ values kept from before a table was two-way
+    @staticmethod
+    def _legacy(book, refs: Iterable[str]) -> Tuple[Dict[Tuple[str, int], Tuple[Hit, str]], List[str]]:
+        """Refs kept at a member's own cell from before it was two-way - a value typed over it ("Elle değer"), or the
+        page's input it was then: ``({(group, pos): (hit, ref)}, [every such ref])`` - per row-side the member declared
+        later wins."""
+        idx = getattr(book, "twoway", None) or {}
+        found: Dict[Tuple[str, int], Tuple[Hit, str]] = {}
+        legacy: List[str] = []
+        for ref in refs:
             try:
                 h = idx.get(book.cell(ref))
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, AttributeError, TypeError):
                 continue
             if h is None or not h.redirected:
                 continue
             legacy.append(ref)
             key = (h.group.id, h.pos)
             if key not in found or h.member.k > found[key][0].member.k:
-                found[key] = (h, ref, val)
+                found[key] = (h, ref)
+        return found, legacy
+
+    def adopt(self, user: str, book, rows: Dict[Tuple[str, str], Any]) -> Tuple[Dict[Tuple[str, str], Any], bool]:
+        """A user's values as the store keeps them (``rows``: {(book, ref): value}), with a value kept at a member's own
+        cell from before it was two-way - "Elle değer" typed over it, or the page's input it was then, with the formula
+        typed into it (inputformula.py leaves that one to this) - taken as its row-side's anchor: moved to the member's
+        store, the row-side's other stores emptied, once, in the store (the log says so).  Two such in one row-side: the
+        member declared later wins.  Returns the rows as they are now and whether a formula moved."""
+        if not getattr(book, "twoway", None):
+            return rows, False
+        found, legacy = self._legacy(book, [ref for (bid, ref) in rows if bid == book.id])
         if not legacy:
-            return rows
+            return rows, False
         store = self.svc.store
+        texts = store.user_formulas(user, book.id)
         put: Dict[str, Any] = {}
+        forms: Dict[str, str] = {}
         drop = set(legacy)
-        for h, ref, val in found.values():
-            put[book.ref(*h.store_cell)] = val
+        for h, ref in found.values():
+            at = book.ref(*h.store_cell)
+            put[at] = rows[(book.id, ref)]
+            if isinstance(texts.get((book.id, ref)), str):
+                forms[at] = texts[(book.id, ref)]
             drop.update(book.ref(*c) for c in h.siblings())
         drop = sorted(r for r in drop - set(put) if (book.id, r) in rows)
         if drop:
             store.clear_user_inputs(user, book.id, drop)
-        store.set_user_inputs(user, book.id, put, {})
-        log.info("iki yönlü tablo: %s'nin hücrelerin üzerine yazdığı değerler satırlarının yazılan değeri oldu: %s",
-                 user, ", ".join("%s → %s" % (ref, book.ref(*h.store_cell)) for h, ref, _ in found.values()))
-        return store.user_inputs(user, book.id)
+        store.set_user_inputs(user, book.id, put, forms)
+        log.info("iki yönlü tablo: %s'nin önceden yazdığı değerler satırlarının yazılan değeri oldu: %s", user,
+                 ", ".join("%s → %s%s" % (ref, book.ref(*h.store_cell), " (formülüyle)" if book.ref(*h.store_cell) in forms else "")
+                           for h, ref in found.values()))
+        return store.user_inputs(user, book.id), bool(forms)
+
+    def adopt_shared(self, book) -> None:
+        """The desk's values (shared inputs) kept at a member's own cell from before it was two-way: as :meth:`adopt` -
+        moved to the store with their formula, the row-side's other stores emptied - once, at the start (logged)."""
+        if not getattr(book, "twoway", None):
+            return
+        store = self.svc.store
+        rows = store.shared_inputs(book.id)
+        found, legacy = self._legacy(book, [ref for (bid, ref) in rows if bid == book.id])
+        if not legacy:
+            return
+        texts = store.shared_formulas(book.id)
+        put: Dict[str, Any] = {}
+        forms: Dict[str, str] = {}
+        drop = set(legacy)
+        for h, ref in found.values():
+            at = book.ref(*h.store_cell)
+            put[at] = rows[(book.id, ref)]
+            if isinstance(texts.get((book.id, ref)), str):
+                forms[at] = texts[(book.id, ref)]
+            drop.update(book.ref(*c) for c in h.siblings())
+        drop = sorted(r for r in drop - set(put) if (book.id, r) in rows)
+        if drop:
+            store.clear_shared_inputs(book.id, drop)
+        store.set_shared_inputs(book.id, put, None, forms)
+        log.info("iki yönlü tablo: masanın önceden yazılmış değerleri satırlarının yazılan değeri oldu: %s",
+                 ", ".join("%s → %s" % (ref, book.ref(*h.store_cell)) for h, ref in found.values()))
+
+    def adopt_copy(self, book, values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """A temporary copy's own values (copies.py, ``{ref: value}``) with one kept at a member's own cell from before
+        the table was two-way (the page's input it was when the copy was opened) taken as the copy's value of its
+        row-side: into the member's store, the row-side's other stores the copy's own empty values (a store of its own
+        cell - the in-place member - the table's again).  A store the copy holds already stands; the old value goes.
+        Returns the new values (``None``: nothing to adopt)."""
+        if not getattr(book, "twoway", None):
+            return None
+        found, legacy = self._legacy(book, list(values))
+        if not legacy:
+            return None
+        out = {k: v for k, v in values.items() if k not in set(legacy)}
+        for h, ref in found.values():
+            sheet = book.model.sheets[h.group.si]
+            hidden = [book.ref(*c) for c in h.group.stores(h.pos) if c[1] not in sheet.fml]
+            if any(r in out for r in hidden):
+                continue                                   # (a value typed in the copy since: it stands)
+            out[book.ref(*h.store_cell)] = values[ref]
+            for c in h.siblings():
+                if c[1] in sheet.fml:
+                    out.pop(book.ref(*c), None)            # (the in-place member: the table's again)
+                else:
+                    out[book.ref(*c)] = None
+        return out
+
+    # ------------------------------------------------------------------ formulas typed into a member
+    def own_row_ring(self, book, h: Hit, boxes: Any) -> Optional[List[str]]:
+        """A formula typed into a member, by the cells its text names (``boxes``: [(book, sheet, r1, c1, r2, c2)] -
+        ``None``: cells it works out, OFFSET / INDIRECT, which the engine's check covers): whether it reads its own
+        row-side - a member or a store of it, or a cell the workbook's formulas compute from those stores.  Once it
+        stands, the row-side's other members are worked out from it: a cycle - also when the cell read holds a value
+        typed now (the in-place member's typed value is emptied by this very write, its formula default then reads the
+        formula's store).  Returns the ring as the members' cells say it (``[typed into, read, typed into]``) or None."""
+        if not boxes:
+            return None
+        g = h.group
+        stores = [m.store[h.pos] for m in g.members]
+        row = {c for m in g.members for c in (m.cells[h.pos], m.store[h.pos])}
+        try:
+            row |= set(book.engine.ref_index().downstream(stores))
+        except Exception:  # noqa: BLE001 - the references cannot be told: the row-side's own cells still are
+            pass
+        hits = []
+        for bid, si, r1, c1, r2, c2 in boxes:
+            if bid != book.id:
+                continue
+            hits.extend(c for c in row if c[0] == si and r1 <= c[1] // COLS <= r2 and c1 <= c[1] % COLS <= c2)
+        if not hits:
+            return None
+        idx = book.twoway
+        # (a member or store of the row-side first, said as its member's cell; else the cell computed from it)
+        own = sorted(c for c in hits if c in idx and idx[c].group is g and idx[c].pos == h.pos)
+        read = book.ref(*idx[own[0]].member_cell) if own else book.ref(*min(hits))
+        typed = book.ref(*h.member_cell)
+        return [typed, read, typed]
 
     # ------------------------------------------------------------------ a temporary copy's values (copies.py)
     def copy_write(self, book, h: Hit, value: Any, values: Dict[str, Any], table: Dict[Cell, Any]) -> Optional[str]:

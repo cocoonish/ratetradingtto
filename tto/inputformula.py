@@ -269,6 +269,11 @@ class InputFormulas(object):
                 continue
             d = book.inputs.get((si, rc))
             if d is None or d.group in ("adhoc", "adhoc-shared"):
+                h = book.twoway.get((si, rc)) if getattr(book, "twoway", None) else None
+                if h is not None and h.redirected:
+                    # an input that became a two-way table's member: its value and this formula go to the member's
+                    # store together when the scope's values are read (twoway.TwoWay.adopt / adopt_shared) - kept
+                    continue
                 gone.append((bid, ref, text, GONE_INPUT))
                 continue
             if (d.scope == "shared") != (scope == SHARED):
@@ -341,7 +346,7 @@ class InputFormulas(object):
             raise FormulaError(e.note or "formül hesaplanamadı")
         ring = self._ring(e, [x for x in batch if x.scope == scope])
         if ring:
-            raise FormulaError(CYCLE % " → ".join(ring))
+            raise FormulaError(self._named(e, CYCLE % " → ".join(ring)))
         if self._reads_live(e):
             feeds = self._feeds(e)
             if feeds:
@@ -510,7 +515,7 @@ class InputFormulas(object):
                         # an error read back through its own cell (a cycle settled on #CALC! after a retry): the cycle
                         ring = self._ring(e, [])
                         if ring:
-                            self._freeze(e, STOPPED_CYCLE % " → ".join(ring), sets)
+                            self._freeze(e, self._named(e, STOPPED_CYCLE % " → ".join(ring)), sets)
                             continue
                         if self._feeds(e):
                             # an error value there (a reference whose meeting left the list reads #REF! too) would be a
@@ -533,7 +538,7 @@ class InputFormulas(object):
                 found = [(e, self._ring(e, [])) for e in stuck]
                 ringed = [(e, ring) for e, ring in found if ring]
                 for e, ring in ringed or found:
-                    self._freeze(e, STOPPED_CYCLE % " → ".join(ring) if ring else STOPPED_RESTLESS, sets)
+                    self._freeze(e, self._named(e, STOPPED_CYCLE % " → ".join(ring)) if ring else STOPPED_RESTLESS, sets)
                 self._apply(scope, sets)
                 changed = True
             return changed
@@ -649,6 +654,18 @@ class InputFormulas(object):
         return v
 
     # ------------------------------------------------------------------ cycles
+    def boxes(self, e: _Entry) -> Optional[List[Tuple[str, int, int, int, int, int]]]:
+        """The cells a formula's text names, as boxes ``[(book, sheet, r1, c1, r2, c2)]`` (None: cells it works out -
+        OFFSET / INDIRECT).  A two-way table's member checks its own row-side with them (``TwoWay.own_row_ring``)."""
+        return self._boxes(e)
+
+    def _named(self, e: _Entry, text: str) -> str:
+        """A reason as the user reads it: a two-way table's store said as its member's cell - the one typed into
+        (twoway.py)."""
+        tw = getattr(self.svc, "twoway", None)
+        book = self.svc.books.get(e.bid)
+        return tw.said(book, text) if tw is not None and book is not None else text
+
     def _ring(self, x: _Entry, batch: List[_Entry]) -> List[str]:
         """The way from ``x`` round to it, as the cells it passes (``["MASA!C60", "MASA!C171", "MASA!C60"]``: C60 reads
         C171, which reads C60) - ``[]``: none.  Through the workbook's formulas and the scope's other formula inputs."""

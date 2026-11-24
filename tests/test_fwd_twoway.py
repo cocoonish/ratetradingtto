@@ -178,7 +178,7 @@ def test_a_spread_typed_before_reads_exactly_as_before(svc):
     value - the TRY rate OIS + spread, the forward and points from it, as before; marked as typed."""
     u = svc.login("çy eski spread")["user"]
     svc.store.set_user_inputs(u, "tto", {"EK_FWD!D6": -35.0, "EK_FWD!E104": -40.0})
-    svc._reload_user(u)
+    svc.et.call(svc._reload_user, u)
     assert stored(svc, u) == {"D6": -35.0, "E104": -40.0}
     for r, side, s in ((6, 0, -35.0), (104, 1, -40.0)):
         ois = cell(svc, "EK_FWD!L%d" % r, u)
