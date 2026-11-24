@@ -137,6 +137,22 @@ def test_a_rates_consensus_is_sized_at_the_median_its_money_and_legs_with_it():
     assert live2[1]["money"]["per_bp"] == 84000.0                                          # (its own line as it was)
 
 
+def test_a_model_level_consensus_says_its_instruments_levels_the_gap_beside_them():
+    """Lines whose level is a model's own (a gap to the PPK path) agreeing on their instrument: the consensus line says the
+    best family's levels in the traded instrument's (the FRA's rate), the gap beside each (quantfam.inst_quote)."""
+    quote = {"inst": "6x9 FRA", "unit": "%", "digits": 2, "label": "6x9 FRA %", "base": 38.65, "scale": 0.01, "entry": 38.719,
+             "target": 38.651, "stop": 38.729, "gap": {"name": "patika farkı", "of": "patikanın", "at": "patikada", "unit": "bp", "digits": 1}}
+
+    def fra(fam, exp):
+        return dict(ois(fam, side=-1, exp=exp, inst="6x9 FRA (PPK patikasına göre)", legs=(("OIS:9M", 3.27), ("OIS:6M", -2.27))),
+                    unit="bp", digits=1, entry=6.9, target=0.1, stop=7.9, quote=quote)
+
+    out = qcons.lines([fra("trend", 0.05), fra("ml", 0.30), fra("sira", 0.12)], REG)
+    assert len(out) == 1
+    assert "hedef %38,65 (+0,1 bp patikanın üstünde) · stop %38,73 (+7,9 bp patikanın üstünde)" in out[0]["line"]
+    assert out[0]["quote"]["entry"] == 38.719                        # (the best line's quote: its levels are the line's)
+
+
 def test_most_families_first_and_the_group_s_button():
     three = [fx("trend"), fx("ml"), fx("optspot")]
     four = [ois("trend"), ois("ml"), ois("sira"), ois("optspot")]

@@ -79,11 +79,15 @@ def _hit(sg: Dict[str, Any]) -> str:
 
 
 def _price(sg: Dict[str, Any], which: str) -> str:
-    """A line's entry / target / stop as it says it: an FX line's in its price, any other's in its level."""
+    """A line's entry / target / stop as it says it: an FX line's in its price, a level of the model's own in the traded
+    instrument's (the FRA's rate, ``quote``) with the model's gap beside it, any other's in its level."""
     px = sg.get("px")
     if px:
         v = px.get(which)
         return qf._th(v, px.get("digits") or 4) if v is not None else "—"
+    q = sg.get("quote")
+    if q:
+        return "%s (%s)" % (qf.quote_text(q, q.get(which)), qf.gap_text(q, sg.get(which))) if q.get(which) is not None else "—"
     return qf._level_text(sg.get(which), sg.get("unit") or "", sg.get("digits") or 2) + qf.sheet_text(sg, sg.get(which))
 
 

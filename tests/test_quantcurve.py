@@ -375,6 +375,38 @@ def test_dibs_family_finds_the_planted_bond_with_carry_and_ranking(fitted):
     assert qx.PLANTED in [r["isin"] for r in d["receive"]] + [r["isin"] for r in d["rows"] if r["score"] is not None and r["score"] < 0]
 
 
+def test_a_fit_signal_is_told_in_the_tenors_rate_and_a_bonds_yield_the_gap_beside_them(fitted):
+    """The desk, 24.11.2026 ("6x9 net bir seviye değil mi, bps olarak yazdıklarını anlayamadım"): a fit's residual is
+    told in the traded instrument's own level - the tenor's rate, the bond's yield (its own convention) -, target and
+    stop the level where the residual is theirs on today's fit (fit + residual), the residual beside them; live."""
+    ctx, eng, data, mons, tables, t, timing = fitted
+    m = next(x for x in mons if x.sid == "curve:OIS:2Y")
+    s = qf.make_signal(m, ctx.cfg, "10:00")
+    q, row = s["quote"], {r["key"]: r for r in t["curve"]["rows"]}["OIS:2Y"]
+    assert (q["inst"], q["unit"], q["label"]) == ("2Y OIS", "%", "2Y OIS %") and q["entry"] == pytest.approx(row["par"])
+    assert q["base"] == pytest.approx(row["fit"]) and s["level"] == pytest.approx(row["resid"])
+    for which in ("entry", "target", "stop"):
+        assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which])
+    assert {lg["key"]: lg["level"]["level"] for lg in s["legs"]} == {lg["key"]: pytest.approx(ctx.cur(lg["key"])) for lg in m.legs}
+    assert "2Y OIS şimdi %%%s (%s bp NSS uyumunun üstünde)" % (qf._th(q["entry"], 2), qf._sg(s["level"], 1)) in s["plain"]
+    assert "Hedef ve stop bugünkü NSS uyumuyla" in s["plain"] and "2Y OIS (%" in s["trade_tr"]
+    # the bond: its yield in the fit's own convention, the model yield the base
+    b = next(x for x in mons if x.sid == "dibsfv:" + qx.PLANTED)
+    sb = qf.make_signal(b, ctx.cfg, "10:00")
+    qb, rb = sb["quote"], {r["isin"]: r for r in t["dibsfv"]["rows"]}[qx.PLANTED]
+    assert qb["entry"] == pytest.approx(rb["yield"]) and qb["base"] == pytest.approx(rb["model"]) and qb["note"].startswith("basit getiri")
+    for which in ("entry", "target", "stop"):
+        assert (qb[which] - qb["base"]) * 100.0 == pytest.approx(sb[which])
+    assert sb["legs"][0]["level"]["level"] == pytest.approx(rb["yield"]) and "NS uyumunun üstünde" in sb["plain"]
+    # live: a yield moves - the quote with it, the relation held
+    live = {"DIBSS:" + qx.PLANTED: rb["yield"] + 0.05}
+    b.score(ctx.derive_live(live), live)
+    s2 = qf.make_signal(b, dict(ctx.cfg, entry_z=0.01), "10:01")
+    q2 = s2["quote"]
+    assert q2["entry"] == pytest.approx(rb["yield"] + 0.05) and (q2["entry"] - q2["base"]) * 100.0 == pytest.approx(s2["level"])
+    qf.score_all(ctx, [b], ctx.live)                                      # (the module's monitors as they were)
+
+
 def test_the_cross_section_z_is_over_the_fitted_bonds(fitted):
     """"Kesit z": every row's residual over the dispersion (sample standard deviation) of today's residuals of the bonds
     in the fit - the fixed-coupon ones -; the bills, priced on the curve and not fitted, are measured against it as any

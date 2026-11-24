@@ -234,6 +234,22 @@ def test_pca_residual_marks_the_planted_cheap_tenor():
     for f in (0, 1):
         assert abs(sum(leg["weight"] * e[f][idx[leg["key"]]] for leg in planted.legs)) < 1e-9
     assert 0 < planted.half_life < 20
+    # told in the tenor's rate (quantfam.inst_quote): entry the 2Y now, target / stop the 2Y where the package is at its
+    # gap's target / stop with its hedge legs where they are (the main leg's weight 1: a bp of the gap a bp of the rate)
+    q = s["quote"]
+    assert (q["inst"], q["unit"]) == ("2Y OIS", "%") and q["entry"] == pytest.approx(ctx.cur("OIS:2Y"))
+    for which in ("entry", "target", "stop"):
+        assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which])
+    assert {lg["key"]: lg["level"]["level"] for lg in s["legs"]} == {lg["key"]: pytest.approx(ctx.cur(lg["key"])) for lg in planted.legs}
+    assert "paket ortalamasının üstünde" in s["plain"] and "hedge bacakları" in q["note"]
+    # live: a hedge leg moves - the level and the 2Y's target move with it, the 2Y's own rate not
+    hedge = planted.legs[1]["key"]
+    live = {hedge: ctx.cur(hedge) + 0.10}
+    planted.score(live, live)
+    s2 = qf.make_signal(planted, cfg(entry_z=0.01), "10:01")
+    q2 = s2["quote"]
+    assert q2["entry"] == pytest.approx(q["entry"]) and q2["base"] != pytest.approx(q["base"])
+    assert (q2["entry"] - q2["base"]) * 100.0 == pytest.approx(s2["level"])
 
 
 def _curve(n, seed, shape=None, slope_of=None, trend=0.0, beta=None):
@@ -394,6 +410,63 @@ def test_pairs_scanner_finds_the_cointegrated_basis_and_kalman():
     k = next(x for x in mons if x.sid == "kalman:off:3M")
     k.score({}, {})
     assert k.z > 1.5 and k.info["static_beta"] == off3["beta"]
+    # the offshore − OIS pair stays in its own level: its y in a level of its own would be an offshore rate worked out from
+    # OIS (docs/curves.md: never)
+    assert s["quote"] is None and qf.make_signal(k, cfg(entry_z=0.01), "10:00")["quote"] is None
+
+
+def test_a_pairs_y_leg_is_told_in_its_own_level_the_x_leg_held():
+    """A DİBS's yield and a TLREF floater's price against the OIS of their maturity (Engle-Granger, Kalman): the line in
+    the bond's own level - its yield, the floater's price -, target / stop where the residual is theirs with OIS where
+    it is (the pair's equilibrium α + β·OIS), the residual beside them."""
+    rnd = random.Random(23)
+    n = 300
+    days = DAYS[-n:]
+    labels, months = ("1Y", "2Y", "3Y", "5Y"), (12.0, 24.0, 36.0, 60.0)
+    level = walk(n, 0.05, rnd, 35.0)
+    series = {"OIS:" + lbl: {d: level[i] - 0.4 * j for i, d in enumerate(days)} for j, lbl in enumerate(labels)}
+    meta = {"OIS:" + lbl: {"label": lbl + " OIS", "kind": "rate", "months": m} for lbl, m in zip(labels, months)}
+    md = TODAY + dt.timedelta(days=int(3.2 * 365))
+    for isin, floater in (("TRT150130T11", False), ("TRD150130T11", True)):
+        noise = ar1(n, 0.7, 0.05, rnd)
+        noise[-1] = 3.0 * 0.05 / math.sqrt(1 - 0.49)
+        pts = {}
+        for i, d in enumerate(days):
+            mo = qf._months_between(dt.date.fromisoformat(d), md)
+            x = qf._interp(sorted((m, series["OIS:" + lbl][d]) for lbl, m in zip(labels, months)), mo)
+            if floater:                                      # its margin (bp a year): 30 + a bp a bp of OIS, the price that gives it
+                pts[d] = 100.0 - (30.0 + 100.0 * (x - 34.0) + noise[i] * 20.0) * (mo / 12.0) / 100.0
+            else:                                            # its yield 2 % over 0,9 × OIS
+                pts[d] = 2.0 + 0.9 * x + noise[i]
+        series["DIBS:" + isin] = pts
+        meta["DIBS:" + isin] = {"label": isin, "kind": "rate", "group": "dibs", "unit": "px" if floater else "pct", "maturity": md.isoformat(),
+                                "name": isin}
+    ctx = ctx_of(series, meta)
+    mons, table = qf.fam_pairs(ctx)
+    rows = {r["pid"]: r for r in table["rows"]}
+    by = {m.sid: m for m in mons}
+    for pid, unit in (("dibs:TRT150130T11", "%"), ("frn:TRD150130T11", "")):
+        row, m = rows[pid], by["pairs:" + pid]
+        assert row["passes"]
+        m.score({}, {})
+        s = qf.make_signal(m, cfg(entry_z=0.01), "10:00")
+        q = s["quote"]
+        assert q["unit"] == unit and q["gap"]["name"] == "denge farkı" and "OIS (vadesine göre) %" in q["held"]
+        for which in ("entry", "target", "stop"):
+            assert q[which] == pytest.approx(q["base"] + q["scale"] * s[which])
+        if unit == "%":
+            # the yield now; at a zero residual α + β × OIS at its maturity
+            x = qf._pair_now(ctx, next(sp for sp in qf.pair_specs(ctx) if sp["pid"] == pid), {})[1]
+            assert q["entry"] == pytest.approx(ctx.last("DIBS:TRT150130T11")) and q["base"] == pytest.approx(row["alpha"] + row["beta"] * x)
+            assert s["legs"][0]["level"]["level"] == pytest.approx(q["entry"]) and q["inst"] == "TRT150130T11"
+        else:
+            # the floater's price now (its own level: price = 100 − margin × years / 100), cheaper as its margin widens
+            assert q["entry"] == pytest.approx(ctx.last("DIBS:TRD150130T11")) and q["inst"] == "TRD150130T11 fiyatı" and q["scale"] < 0
+        k = by.get("kalman:" + pid)
+        if k is not None:
+            k.score({}, {})
+            sk = qf.make_signal(k, cfg(entry_z=0.01), "10:00")
+            assert sk["quote"]["entry"] == pytest.approx(q["entry"]) and (sk["quote"]["entry"] - sk["quote"]["base"]) / sk["quote"]["scale"] == pytest.approx(sk["level"])
 
 
 def test_macro_betas_split_today_into_global_and_try_specific():
@@ -455,6 +528,14 @@ def test_vol_premium_and_garch_forecast_signals():
         assert s["px"] is None and s["money"] is None and s["trade_tr"] == "satılan: USDZAR 3M ATM vol"
         assert s["plain"].startswith("Satılan: USDZAR 3M ATM vol. USDZAR 3M ATM vol şimdi")
         assert s["plain"].endswith("vol puanı.") if s["exp_pnl"] is not None else "Beklenen" not in s["plain"]
+        # told in the implied vol itself (what is sold), the benchmark held: realized / GARCH + the premium
+        q = s["quote"]
+        assert (q["inst"], q["unit"]) == ("USDZAR 3M ATM vol", "vol") and q["entry"] == pytest.approx(26.0)
+        assert q["base"] == pytest.approx(row["rv63"] if sid == "volprem:USDZAR" else row["garch"])
+        for which in ("entry", "target", "stop"):
+            assert q[which] - q["base"] == pytest.approx(s[which])
+        assert "USDZAR 3M ATM vol şimdi 26,00 vol (+" in s["plain"] and ("gerçekleşen vol'ün üstünde" if sid == "volprem:USDZAR" else
+                                                                         "GARCH tahmininin üstünde") in s["plain"]
     sigs = [qf.make_signal(by[sid], cfg(stop_z=50.0, hl_max_mult=10.0), "10:00") for sid in ("volprem:USDZAR", "volfc:USDZAR")]
     qf.rank(sigs)
     assert all(x["agree"] == 1 and x["agree_with"] for x in sigs)        # the realized and the forecast benchmark agree
@@ -507,6 +588,14 @@ def test_viop_calendar_spread_against_cip_fair_value():
     s = qf.make_signal(m, cfg(), "10:00")
     assert s["z"] > 2 and {l["key"]: l["side"] for l in s["legs"]} == {"VIOPI:A1H7 Curncy": -1, "VIOPI:A1Z6 Curncy": 1}
     assert s["legs"][0]["text"].startswith("Sell VİOP Mar 27") and s["expression"].startswith("Sell VİOP takvim")
+    # told in the implied TRY forward rate between the two expiries, its fair one from OIS held (the calendar's own level)
+    q, d = s["quote"], days[-1]
+    fair = qf._fwd(near["ois360"][d], near["days"][d], far["ois360"][d], far["days"][d])
+    assert q["unit"] == "%" and q["base"] == pytest.approx(fair) and q["entry"] == pytest.approx(fair + 0.25)
+    for which in ("entry", "target", "stop"):
+        assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which])
+    assert {l["key"]: l["level"]["level"] for l in s["legs"]} == {"VIOPI:A1H7 Curncy": pytest.approx(far["imp"][d]), "VIOPI:A1Z6 Curncy": pytest.approx(near["imp"][d])}
+    assert "adil forward'ın üstünde" in s["plain"]
 
 
 def test_fra_path_reproduces_its_quotes_in_the_desk_s_convention():
@@ -563,6 +652,85 @@ def test_fra_path_reproduces_its_quotes_in_the_desk_s_convention():
             assert not s["gated"] and s["exp_pnl"] > 0 and "FRA" in s["thesis"]
         else:
             assert "tolerans" in s["gated"] and s["strength"] == "elendi" and s["composite"] == 0
+
+
+FRA_LABELS = ("1M", "2M", "3M", "6M", "9M", "1Y")
+
+
+def _fra_ctx(live_bump=0.12, today_path=True):
+    """The FRA / PPK family on a history whose 6M quote wanders around the path, today's path solved the same day
+    (``ctx.path``) and today's quotes - its par rates, the 6M ``live_bump`` above - live."""
+    base = 0.395
+    rnd = random.Random(17)
+    noise = ar1(300, 0.7, 0.03, rnd)
+    days = DAYS[-300:]
+    series = {"OIS:" + lbl: {} for lbl in FRA_LABELS}
+    meta = {"OIS:" + lbl: {"label": lbl + " OIS", "kind": "rate", "months": m} for m, lbl in zip(qf.PATH_TENORS, FRA_LABELS)}
+    mdays, values = {}, []
+    for i, d in enumerate(days):
+        sp = dt.date.fromisoformat(d) + dt.timedelta(days=2)
+        for m, lbl in zip(qf.PATH_TENORS, FRA_LABELS):
+            par = qf.par_rate(sp, lambda x, sp=sp: qf.path_df(sp, base, [], x, set()), m, set())
+            series["OIS:" + lbl][d] = par + (noise[i] if m == 6 else 0.0)
+        mdays[d] = {"spot": sp.isoformat(), "base": base, "flag": ""}
+        values.append({"day": d, "meeting": "2030-01-01", "level": base})
+    spot = dt.date(2026, 11, 4)
+    steps = [(dt.date(2026, 12, 11), 0.385), (dt.date(2027, 1, 22), 0.375)]
+    live = {"OIS:" + lbl: qf.par_rate(spot, lambda x: qf.path_df(spot, base, steps, x, set()), m, set()) for m, lbl in zip(qf.PATH_TENORS, FRA_LABELS)}
+    live["OIS:6M"] += live_bump
+    path = {"day": TODAY.isoformat(), "spot": spot, "base": base, "steps": steps} if today_path else None
+    return ctx_of(series, meta, mpc={"days": mdays, "values": values}, path=path, live=live), live, (spot, base, steps)
+
+
+def test_an_fra_signal_is_told_in_the_fra_rate_with_the_path_gap_beside_it():
+    """The desk, 24.11.2026 ("6x9 net bir seviye değil mi, bps olarak yazdıklarını anlayamadım"): the FRA / PPK line's
+    entry is the FRA's rate now (the curve's forward, the desk's convention), target and stop the rates where the gap
+    to today's path is the target's / the stop's (path forward + gap, the path held) - the gap in bp beside them -, the
+    legs' par rates with their weights; recomputed live as the level is."""
+    ctx, live, (spot, base, steps) = _fra_ctx()
+    mons, _ = qf.fam_frapath(ctx)
+    m = next(x for x in mons if x.sid == "frapath:3x6")
+    qf.score_all(ctx, [m], live)
+    s = qf.make_signal(m, cfg(usdtry=40.0), "10:00")
+    q = s["quote"]
+    today = qf.frapath_day(spot, base, steps, {mm: live["OIS:" + lbl] for mm, lbl in zip(qf.PATH_TENORS, FRA_LABELS)}, set())["fra"]["3x6"]
+    assert s["z"] > 2 and s["direction"] == -1 and s["expression"].startswith("Receive 3x6 FRA")
+    assert (q["inst"], q["unit"], q["fra"], q["label"], q["asof"]) == ("3x6 FRA", "%", "3x6", "3x6 FRA %", "canlı")
+    # entry: the FRA's rate now; the base: the path's forward of the same dates; the gap: the level
+    assert q["entry"] == pytest.approx(today["curve"]) and q["base"] == pytest.approx(today["path"]) and s["level"] == pytest.approx(today["dev"])
+    for which in ("entry", "target", "stop"):
+        assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which]) and q["gap"][which] == pytest.approx(s[which])
+    assert q["target"] < q["entry"] < q["stop"]                          # (receive: the rate falls to the target)
+    # the legs' par rates now, their DV01 weights as before
+    assert {lg["key"]: lg["level"]["level"] for lg in s["legs"]} == {"OIS:6M": pytest.approx(live["OIS:6M"]), "OIS:3M": pytest.approx(live["OIS:3M"])}
+    assert "6M OIS (%" + qf._th(live["OIS:6M"], 2) + ") ×" in s["trade_tr"] and "3M OIS (%" in s["trade_tr"]
+    # in words: the rate first, the gap beside it; what is held for target and stop
+    entry_txt = "%" + qf._th(q["entry"], 2)
+    assert "3x6 FRA şimdi %s (%s bp patikanın üstünde)" % (entry_txt, qf._sg(s["level"], 1)) in s["plain"]
+    assert "hedef seviyesine (%%%s; " % qf._th(q["target"], 2) in s["plain"] and "Hedef ve stop bugünkü PPK patikasıyla" in s["plain"]
+    assert "(%s)" % entry_txt in s["thesis"] and "patika değişirse" in q["held"]
+    assert qf.levels_line(s).startswith("giriş %s · hedef %%%s · stop %%%s (3x6 FRA; patika farkı %s / " % (
+        entry_txt, qf._th(q["target"], 2), qf._th(q["stop"], 2), qf._sg(s["level"], 1)))
+    # the rationale's stop in the FRA's rate too
+    inv = qf.rationale(ctx, m, s, cfg(usdtry=40.0))["invalidation"]
+    assert inv[0].startswith("Stop: 3x6 FRA %%%s (giriş %s; %s bp patikanın üstünde)" % (qf._th(q["stop"], 2), entry_txt, qf._sg(s["stop"], 1)))
+    # live: the 6M moves 5 bp - the level and the rates follow, today's path held (its forward the same)
+    live2 = dict(live, **{"OIS:6M": live["OIS:6M"] + 0.05})
+    qf.score_all(ctx, [m], live2)
+    s2 = qf.make_signal(m, cfg(usdtry=40.0), "10:01")
+    q2 = s2["quote"]
+    assert q2["base"] == pytest.approx(q["base"]) and q2["entry"] > q["entry"] + 0.05 and s2["level"] > s["level"]
+    for which in ("entry", "target", "stop"):
+        assert (q2[which] - q2["base"]) * 100.0 == pytest.approx(s2[which])
+    assert {lg["key"]: lg["level"]["level"] for lg in s2["legs"]}["OIS:6M"] == pytest.approx(live2["OIS:6M"])
+    # before today's path: the last close's level, its FRA rate and its path - said so
+    ctx0, live0, _ = _fra_ctx(today_path=False)
+    m0 = next(x for x in qf.fam_frapath(ctx0)[0] if x.sid == "frapath:3x6")
+    qf.score_all(ctx0, [m0], live0)
+    s0 = qf.make_signal(m0, cfg(entry_z=0.01), "10:00")
+    q0 = s0["quote"]
+    assert q0["asof"] == "son kapanış" and "kapanışının PPK patikasıyla" in q0["note"] and m0.level == pytest.approx(m0.values[-1])
+    assert (q0["entry"] - q0["base"]) * 100.0 == pytest.approx(s0["level"])
 
 
 def test_the_workbook_s_own_path_reproduces_its_quotes():
@@ -1118,8 +1286,9 @@ def test_strong_signals_ring_as_the_desk_s_alarms():
     look("2026-11-03", [strong, medium], [qf.make_signal(m, c, "10:00") for m in (strong, medium)])
     assert [e["id"] for e in desk.events] == ["quant:a"] and svc.nudged >= 1          # the desk's setting: Güçlü and up
     e = desk.events[0]
-    assert e["label"] == "Sinyal · PCA kalıntısı: Receive a" and e["value_text"] == "z +3,20 (Güçlü)" and e["mode"] == "level"
-    assert e["condition"] == "giriş eşiği |z| ≥ 2"
+    # (the line's levels beside its z: in its own level here - a level of the model's own in the traded instrument's, below)
+    assert e["label"] == "Sinyal · PCA kalıntısı: Receive a" and e["value_text"] == "z +3,20 (Güçlü) · giriş +3,2 bp · hedef 0,0 bp · stop +3,5 bp"
+    assert e["mode"] == "level" and e["condition"] == "giriş eşiği |z| ≥ 2"
     at(strong, 0.0)                                      # the target: its desk alarm closes
     look("2026-11-04", [strong, medium], [])
     assert desk.closed == [("quant:a", "hedefe ulaştı")]
@@ -1132,13 +1301,51 @@ def test_strong_signals_ring_as_the_desk_s_alarms():
     look("2026-11-05", [third], [])
     at(third, 2.6)
     look("2026-11-06", [third], [qf.make_signal(third, c, "10:00")])
-    assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and desk.events[1]["value_text"] == "z +2,60 (Orta)"
+    assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and desk.events[1]["value_text"].startswith("z +2,60 (Orta) · giriş +2,6 bp")
     q.set_settings("ayse", {"desk_alarm": "kapalı"})
     fourth = _mon("f", "rv", 1.0)
     look("2026-11-09", [fourth], [])
     at(fourth, 3.4)
     look("2026-11-10", [fourth], [qf.make_signal(fourth, c, "10:00")])
     assert [e["id"] for e in desk.events] == ["quant:a", "quant:e"] and q.counters()["alerts"] == 4
+
+
+def test_an_fra_line_s_alarm_says_the_fra_rates_the_gap_beside_them():
+    """The FRA / PPK line's alarm (the desk's and a subscriber's) and its log entry: entry / target / stop in the FRA's
+    rate, the gap to the path beside them - the log itself still follows the gap."""
+    class Desk(object):
+        def __init__(self):
+            self.events = []
+
+        def fired(self, events):
+            self.events.extend(events)
+
+        def close(self, alarm, why):
+            pass
+
+    svc = _Svc()
+    svc.desk_alarms = desk = Desk()
+    q = Quant(svc)
+    c = cfg()
+    path_fwd = 38.65
+    m = _mon("frapath:6x9", "frapath", 1.0)
+    m.quote = lambda live: {"inst": "6x9 FRA", "unit": "%", "digits": 2, "base": path_fwd, "scale": 0.01, "fra": "6x9",
+                            "gap": {"name": "patika farkı", "of": "patikanın", "at": "patikada"}, "note": "hedef / stop bugünkü PPK patikasıyla"}
+    q._track({"cfg": c, "today": "2026-11-02", "mons": {m.sid: m}}, [])
+    m.zfn = lambda level, live: 3.2
+    m.score({}, {})
+    m.level = 6.9
+    sg = qf.make_signal(m, c, "10:00")
+    q._track({"cfg": c, "today": "2026-11-03", "mons": {m.sid: m}}, [sg])
+    qt = sg["quote"]
+    want = "giriş %%38,72 · hedef %%%s · stop %%%s (6x9 FRA; patika farkı +6,9 / %s / %s bp)" % (
+        qf._th(path_fwd + sg["target"] / 100.0, 2), qf._th(path_fwd + sg["stop"] / 100.0, 2), qf._sg(sg["target"], 1), qf._sg(sg["stop"], 1))
+    assert qt["entry"] == pytest.approx(38.719) and qf.levels_line(sg) == want
+    assert desk.events[0]["value_text"] == "z +3,20 (Güçlü) · " + want
+    e = q._log()[0]
+    assert e["levels_text"] == want and e["level"] == 6.9 and e["quote"]["entry"] == pytest.approx(38.719) and e["quote"]["label"] == "6x9 FRA %"
+    q.set_subscription("ayse", {"on": True, "families": [], "min": "Zayıf"})
+    assert q.alerts("ayse", 0)["alerts"][0]["levels"] == want
 
 
 def test_settings_are_validated_and_shared():
@@ -1533,6 +1740,13 @@ def test_fit_runs_off_the_engine_thread_and_finds_the_planted_signals(seeded, mo
     pca_rows = {r["key"]: r for r in svc.quant.view("pca", user, {})["pca"]["rows"]}
     assert pca_rows["OIS:2Y"]["z"] == ids["pca:OIS:2Y"]["z"] and pca_rows["OIS:2Y"]["sid"] == "pca:OIS:2Y"
     assert one["signal"]["entry"] == one["monitor"]["level"]
+    # a model's own level told in the traded instrument's (quantfam.inst_quote) through the service's list and card: the
+    # PCA residual's 2Y in its rate, every quote the instrument's level of the line's own (base + scale × level)
+    q2y = ids["pca:OIS:2Y"]["quote"]
+    assert (q2y["inst"], q2y["unit"]) == ("2Y OIS", "%") and "legs" not in q2y and one["signal"]["quote"]["entry"] == q2y["entry"]
+    for s in v["signals"] + v["gated"]:
+        q = s.get("quote")
+        assert not q or all(abs(q[k] - (q["base"] + q["scale"] * s[k])) < 1e-9 for k in ("entry", "target", "stop") if s.get(k) is not None)
     t0 = svc.quant.state["refreshes"]
     svc.quant.refresh_live()
     assert svc.quant.state["refreshes"] == t0 + 1 and svc.quant.state["live_ms"] < 2000
@@ -1826,6 +2040,13 @@ def test_intraday_families_on_planted_bars():
     z1 = sig["izscore:OIS:1Y"]
     assert z1 and z1["expression"].startswith("Receive") and z1["intraday"] and z1["horizon_unit"] == "bar" and not z1["gated"]
     assert 2 < z1["z"] < 3.5 and z1["exp_pnl"] > 0 and z1["pnl_unit"] == "bp"
+    # its distance from the 60-minute mean told in the rate itself, the bars before held (quantfam.inst_quote): the entry is
+    # the rate now, target / stop the rates where the distance is theirs
+    q1 = z1["quote"]
+    assert q1["inst"] == ctx.label("OIS:1Y") and q1["unit"] == "%" and q1["entry"] == pytest.approx(live["OIS:1Y"])
+    for which in ("entry", "target", "stop"):
+        assert q1[which] == pytest.approx(q1["base"] + q1["scale"] * z1[which])
+    assert q1["target"] < q1["entry"] and "60 dakikalık ortalamanın üstünde" in z1["plain"] and sig["ipath:USDTRY"]["quote"] is None
     orb = sig["iorb:OIS:2Y"]
     row = next(r for r in table["z"] if r["key"] == "OIS:2Y")
     assert row["breaks"] >= qi.MIN_BREAKS and row["cont"] > 0 and orb and orb["expression"].startswith("Pay 2Y OIS")

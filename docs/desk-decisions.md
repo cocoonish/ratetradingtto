@@ -261,6 +261,8 @@ same limit.) What the dashboard does since (details and costs: [market-data.md](
   past trades - except the families whose design fixes their own levels (`quantlevels.KEEP`; their line says why).
   - A line whose calibrated levels lost money in the backtest is "düşük güven": no alarm, no log ("2a", 17.11).
   - Do not add generic evidence gates that filter signals out.
+  - Its levels are the traded instrument's own: a model's gap or residual is said as the instrument's level, the gap
+    beside it ("6x9 net bir seviye değil mi", 24.11 - [below](#quant-a-models-level-told-in-the-traded-instruments-level-24112026)).
 - **Alarms** (15.11):
   - muting is personal;
   - there is no RET alarm;
@@ -1624,6 +1626,66 @@ toplu-forward, fwdrate-usd-bid / -ask, fwdrate-eur-bid / -ask, fwdfree, fss-manu
 BK2, B34y, B36y and EKF4 show the typed values), `tto/entry.py` (`bulk_forward_price`, `BULK_FWD_SOURCES`),
 `tto/service.py` (`_bulk_from_forward`; `_cross_typed_forwards`, from `_set_inputs` and `_reset_inputs`). Tests:
 `tests/test_fwd_iki_yon.py`, the browser test's checks after "Forward starting swap: its own FS points typed back".
+
+### Quant: a model's level told in the traded instrument's level (24.11.2026)
+
+On a photo of the selected signal "FRA / PPK patikası · Receive 6x9 FRA (PPK patikasına göre)" - "Şimdi 6,9 bp · z +3,05",
+"… 6x9 FRA (PPK patikasına göre) şimdi +6,9 bp; hedef seviyesine (+0,1 bp) gelirse …", "Giriş / hedef / stop: +6,9 bp /
++0,1 bp / +7,9 bp" - the desk wrote:
+
+> "Burada da 6x9 net bir seviye değil mi, bps olarak yazdıklarını anlayamadım bunun da net olması lazım"
+
+The 6x9 FRA is a tradeable level; the bp numbers (the FRA's gap to the PPK path) are not readable as levels. The desk has
+said before that it wants AL / SAT lines with tradeable levels ("Quant prints trades", above).
+
+- **The FRA / PPK line says the FRA's rate.** Entry: the FRA's rate now (the curve's forward of the bucket, the desk's
+  convention - what the family already reads, Trades' FRA dates and rule). Target and stop: the FRA's rate where the gap
+  is the target's / the stop's with today's path held - today's path forward of the bucket + that gap. The legs' par rates
+  now with their weights ("9M OIS (%39,50) ×3,27 · 6M OIS (%40,10) ×2,27").
+- **The bp gap stays, second, beside each** ("+6,9 bp patikanın üstünde"; the card's "Model farkı" row keeps the gap
+  itself): a number the desk sees is not dropped without asking ("Keep the original number beside a refined one", above).
+- **Everywhere the levels appear:** the card (its sentence, İşlem, Giriş / hedef / stop - "hedef / stop bugünkü PPK
+  patikasıyla" -, Hedefte / stopta), the list's row (Birim "6x9 FRA %", the gap in the tooltip), Bugün's "Quant · yeni AL /
+  SAT" lines, the alarms (the desk's alarm and a subscriber's: "giriş %38,72 · hedef %38,65 · stop %38,73 (6x9 FRA; patika
+  farkı +6,9 / +0,1 / +7,9 bp)" - every line's alarm now says its levels, in its instrument's own) and "İşleme al": the line is
+  booked as Trades' FRA ("6x9", receive / pay) at the FRA's rate, its target and stop the FRA rates.
+- **Live, as the level is.** The rates are worked out again on every refresh: the FRA's with the quotes, the target's and
+  the stop's from the line's own gaps (the family's rule or its calibrated levels, as before) - all on today's path's
+  forward, which moves when the history solves the path again (every 15 minutes); the card says so. Before today's path
+  the line's level is the last close's, and so are its rates ("hedef / stop 03.11.26 kapanışının PPK patikasıyla").
+- **The signal log follows the family's own level** (the gap, its K/Z in bp); the entry's FRA rates are in its tooltip and
+  in the alarm.
+- No new Bloomberg request; Bootstrap does not move (the quant reads its own quotes and the history's path); OIS only.
+- **The same rule in the other families** (the request asked for the audit; built the same way, the desk has not seen these
+  yet): wherever today's model value gives an exact map (instrument = model value + gap, the model value held), the line
+  is told in the traded instrument's own level, the gap beside it - Eğri adil değeri (the tenor's rate; the NSS fit),
+  DİBS adil değeri (the bond's yield in its own convention; the NS fit - the gap is the yield difference to first order,
+  its second order a hundredth of a bp), PCA kalıntısı (the main tenor's rate; the hedge legs at their rates now),
+  Eşbütünleşik / Kalman çift of a DİBS, a TLREF floater or a VİOP contract against OIS (the bond's yield, the floater's
+  price - an FRN has only a price -, the contract's implied rate; the OIS leg where it is now), VİOP takvim (the implied
+  forward rate between the expiries; the fair one from OIS), VİOP adil değer (the contract's implied rate; the OIS of its
+  maturity - the contract's price at today's spot beside it), Vol primi / Vol tahmini (the ATM 3M implied vol; the
+  realized vol / the GARCH forecast), İma kalibrasyonu (the period's rate - booked as a PPK period in Trades), the
+  intraday z of a rate (the rate; the last hour's bars).
+- **Left in their own level**: the lines whose level already is the traded one (an outright rate, a spread or fly of the
+  legs' rates in bp, a vol quote, an FX price) or has no instrument level (a correlation) - Korelasyon, PCA-nötr fly /
+  spread, Makro artık, Momentum, Tahmin modeli, PPK döngüsü, İma patikası ayrıklığı, Opsiyon smile, Öncü-takipçi, the
+  intraday breakout / RV / carry path, DİBS switch, EM carry, Forward primi, the universe's families, Konsensüs (the best
+  family's line as it is). **The offshore − OIS and the USDTRY points pairs stay too**: their y is an offshore level, and
+  an offshore level is never worked out from OIS ([curves.md](curves.md#where-ois-and-offshore-meet)).
+
+Code: `tto/quantfam.py` (`Monitor.quote`, `inst_quote`, `quote_text` / `gap_text` / `gaps_text` / `levels_line`, the texts in
+`plain_text` / `what_text`; the quotes of `fam_frapath`, `fam_pca`, `fam_pairs` (`_pair_quote`), `fam_viopcal`, `fam_vol`),
+`tto/quantcurve.py` (`fam_curve`, `fam_dibs`), `tto/quantviop.py` (`fam_viop`), `tto/quantpath.py` (`cal_monitor`),
+`tto/quantintraday.py` (the intraday z), `tto/quant.py` (`_track`, `_alert`, `_desk_alarm`), `tto/bugun.py`,
+`tto/tradequant.py` (`bookable`, `raw_form`), `tto/quantcons.py` (`_price`), `tto/static/js/pages/quantbase.js`
+(`quoteText`, `gapText`, `gapsText`, `quoteLevel`; `signalRows`, `plainBlock`), `quant.js` (the toast, the log's tooltip),
+`bugun.js`. Tests: `tests/test_quant.py` (`test_an_fra_signal_is_told_in_the_fra_rate_with_the_path_gap_beside_it`,
+`test_an_fra_line_s_alarm_says_the_fra_rates_the_gap_beside_them`, `test_a_pairs_y_leg_is_told_in_its_own_level_the_x_leg_held`,
+the PCA, vol, VİOP calendar and intraday tests), `tests/test_quantcurve.py`, `tests/test_quantviop.py`,
+`tests/test_quantpath.py`, `tests/test_trades_levels.py` (`test_an_fra_path_line_fills_its_fra_at_the_fra_rate`,
+`test_the_fra_path_lines_fra_rate_is_the_rate_trades_values_the_fra_at` - the family's FRA rate is Trades' par of the FRA),
+`tests/test_bugun.py`, `tests/test_quantcons.py`, the browser test's FRA / PPK card, row and Bugün checks.
 
 ## Process
 

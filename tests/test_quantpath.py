@@ -232,6 +232,18 @@ def test_calibration_finds_a_bias_and_says_when_the_sample_is_small():
     assert s["family"] == "imacal" and s["direction"] == -1 and s["expression"].startswith("Receive PPK")      # lean to the cut
     assert close(s["target"] - s["entry"], -0.4 * 50.0, 1e-9) and close(s["entry"] - s["stop"], -0.8 * 50.0, 1e-9)
     assert "Taşıma 0" in s["note"] and s["carry_week"] == 0.0 and s["info"]["scenarios"][0]["outcome"] == -50.0
+    # told in the period's own level - the policy rate the path prices for it (%): base + the move priced, the base held;
+    # without the path's base no quote (the move alone, as before)
+    assert s["quote"] is None
+    now["base"] = 40.0
+    s = qf.make_signal(mon, dict(DEFAULTS), "10:00")
+    q = s["quote"]
+    assert q["unit"] == "%" and close(q["entry"], 40.0 + now["rows"][0]["cum"] / 100.0, 1e-12) and close(q["base"], 40.0, 1e-12)
+    for which in ("entry", "target", "stop"):
+        assert close((q[which] - q["base"]) * 100.0, s[which], 1e-9)
+    assert "patika tabanının altında" in s["plain"] and q["inst"] == s["legs"][0]["name"]
+    from tto import tradequant as tq                                     # (a PPK period at its rate: Trades books it as one)
+    assert tq.bookable(s)[2] == "mpc"
 
 
 # ================================================================================================ the WIRP

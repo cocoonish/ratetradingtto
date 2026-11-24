@@ -351,6 +351,16 @@ def test_the_family_on_a_synthetic_history_and_its_signal():
     s = qf.make_signal(front, ctx.cfg, "10:00")
     assert s["family"] == "viop" and s["page"] == "quant-viop" and s["expression"].startswith("Buy VİOP Kas26") and "Sell USDTRY spot" in s["expression"]
     assert "kontrat" in s["legs"][0]["name"] and s["legs"][0]["dv01_usd"] == pytest.approx(1000.0)
+    # told in the contract's implied rate (the desk, 24.11.2026: a level, not a gap), the OIS of its maturity held - its
+    # price at each beside it, at today's spot and USD rate (the VİOP sheet's formula turned round)
+    t = "A1X6 Curncy"
+    q = s["quote"]
+    assert (q["inst"], q["unit"]) == ("VİOP Kas26 ima faizi", "%") and q["entry"] == pytest.approx(live["VQM:" + t])
+    for which in ("entry", "target", "stop"):
+        assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which])
+        assert q["alt"][which] == pytest.approx(qv.price_of(q[which], live["VQS:" + t], live["VQU:" + t], live["VQG:" + t]))
+    head = "VİOP Kas26 ima faizi şimdi %%%s · fiyat %s (%s bp OIS'in üstünde)" % (qf._th(q["entry"], 2), qf._th(q["alt"]["entry"], 4), qf._sg(s["level"], 1))
+    assert q["alt"]["label"] == "fiyat" and head in s["plain"], s["plain"]
     built = tab["_build"](live, dt.datetime(2026, 11, 3, 11, 0))
     row = next(x for x in built["rows"] if x["ticker"] == "A1X6 Curncy")
     assert row["basis"] == pytest.approx(90.0, abs=2.0) and row["fair"] > row["mid"]                     # cheap: fair above

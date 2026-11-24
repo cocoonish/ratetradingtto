@@ -14,6 +14,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import ANON, auth, make_service
+from tto import quantfam as qf
 from tto import tradebook as tbm
 from tto import tradequant as tq
 from tto import tradevalue as tv
@@ -436,6 +437,14 @@ def _lines(svc):
                     px={"pair": "EURTRY", "inst": "EURTRY 1A forward", "digits": 4, "entry": 60.1, "target": 58.3, "stop": 63.3}),
         "off": dict(base, id="trend:OFF:3M", family="trend", asset="Offshore", instrument="Offshore 3M", unit="%", direction=1,
                     entry=35.8, target=None, stop=35.3, legs=[_leg("OFF:3M", "Offshore 3M", 1)]),
+        # the FRA / PPK line: its level the gap to the path (bp), its legs the FRA's annuity-weighted OIS legs; told in the
+        # FRA's rate (quantfam.inst_quote): entry the FRA now, target / stop the path's forward + their gaps
+        "frapath": dict(base, id="frapath:3x6", family="frapath", family_label="FRA / PPK patikası", asset="TRY OIS",
+                        instrument="3x6 FRA (PPK patikasına göre)", unit="bp", direction=-1, entry=6.9, target=0.1, stop=7.9,
+                        legs=[_leg("OIS:6M", "6M OIS", -1, 2.1, 2100.0), _leg("OIS:3M", "3M OIS", 1, 1.1, 1100.0)],
+                        quote={"inst": "3x6 FRA", "unit": "%", "digits": 2, "label": "3x6 FRA %", "fra": "3x6", "base": r1 - 0.30,
+                               "scale": 0.01, "entry": r1 - 0.30 + 0.069, "target": r1 - 0.30 + 0.001, "stop": r1 - 0.30 + 0.079,
+                               "gap": {"name": "patika farkı", "unit": "bp", "entry": 6.9, "target": 0.1, "stop": 7.9}}),
     }
 
 
@@ -454,8 +463,13 @@ def test_which_lines_trades_can_book_and_every_line_says_so(lines):
     got = {k: tq.bookable(s) for k, s in lines.items()}
     assert {k: (ok, kind) for k, (ok, _, kind) in got.items()} == {
         "ois": (True, "outright"), "spread": (True, "spread"), "dibs": (True, "dibs"), "fx": (True, "fxspot"), "vol": (False, None),
-        "pca": (False, None), "fwd": (False, None), "off": (False, None)}
+        "pca": (False, None), "fwd": (False, None), "off": (False, None), "frapath": (True, "fra")}
     assert "vol" in got["vol"][1] and "PCA" in got["pca"][1] and "forward" in got["fwd"][1] and "offshore" in got["off"][1]
+    # (the FRA / PPK line is its FRA by its quote; without one - no rate to book it at - its weighted legs are no Trades package)
+    assert tq.bookable(dict(lines["frapath"], quote=None))[:2] == (False, "paket Trades'in spread (1:1) / fly (50/50) yapısında değil (PCA ya da "
+                                                                      "hedge ağırlıklı): bacakları ayrı girin")
+    assert tq.bookable(dict(lines["frapath"], quote=dict(lines["frapath"]["quote"], unit="bp")))[0] is False
+    assert tq.bookable(dict(lines["ois"], legs=[_leg("MPC:2026-12-11", "PPK", 1)], unit="bp", quote={"unit": "%", "entry": 38.4}))[2] == "mpc"
     fly = dict(lines["spread"], unit="bp", legs=[_leg("OIS:1Y", "1Y", 1), _leg("OIS:6M", "6M", -1, 0.5), _leg("OIS:2Y", "2Y", -1, 0.5)])
     assert tq.bookable(fly)[2] == "fly"
     assert tq.bookable(dict(fly, legs=fly["legs"][:2] + [_leg("OIS:2Y", "2Y", 1, 0.5)]))[0] is False      # (wings on two sides)
@@ -505,6 +519,40 @@ def test_an_ois_spread_line_fills_both_legs_at_the_curve_and_the_package_at_the_
     assert abs(t["price"] - line["entry"]) < 0.02                       # (the package at the line's entry, its legs to 4 decimals)
     assert abs(t["target"] - round(line["target"], 2)) < 1e-9 and abs(t["stop"] - round(line["stop"], 2)) < 1e-9
     assert tbm.gains_up(t) is True and tbm.level_spec(t)["unit"] == "bp"
+
+
+def test_an_fra_path_line_fills_its_fra_at_the_fra_rate(box, lines):
+    """The FRA / PPK patikası line (the desk, 24.11.2026: "6x9 net bir seviye değil mi"): booked as Trades' FRA - its
+    "3x6", receive -, the price its FRA rate now, target and stop the FRA rates of its quote (the path's forward + the
+    gap), never the gap in bp; its DV01 the package's (1.000 $)."""
+    svc = box["svc"]
+    res = tq.prefill(svc, _key(svc, "FRA Alan"), "frapath:3x6")
+    t, q = res["trade"], lines["frapath"]["quote"]
+    assert res["ok"] and res["kind"] == "fra" and (t["product"], t["structure"], t["fra"], tbm.rate_side(t["side"])) == ("ois", "fra", "3x6", "receive")
+    assert t["price"] == round(q["entry"], 4) and (t["target"], t["stop"]) == (round(q["target"], 4), round(q["stop"], 4))
+    assert t["sized_by"] == "dv01" and t["dv01"] == 1000.0 and t["notional"] % 5e6 == 0 and t["value_date"] < t["end_date"]
+    src = res["source"]
+    assert (src["entry"], src["target"], src["stop"], src["unit"], src["instrument"]) == (t["price"], t["target"], t["stop"], "%", "3x6 FRA")
+    assert res["text"].startswith("RECEIVE 3x6 FRA") and tbm.level_spec(t)["unit"] == "bp"
+
+
+def test_the_fra_path_lines_fra_rate_is_the_rate_trades_values_the_fra_at(box):
+    """The FRA / PPK line's entry - the family's forward of the bucket, its own bootstrap of the OIS quotes in the desk's
+    convention - is the rate Trades values the same FRA at (its par now): booked at its entry, the FRA is at zero."""
+    svc = box["svc"]
+    mkt = _market(svc)
+    ctx, _, raw = svc.quant.snapshot()
+    quotes = {m: raw["OIS:%s" % lbl] for m, lbl in zip(qf.PATH_TENORS, ("1M", "2M", "3M", "6M", "9M", "1Y")) if raw.get("OIS:%s" % lbl) is not None}
+    spot = qf.business_on_or_after(mkt.today + dt.timedelta(days=1), ctx.holidays)
+    dfs = qf.curve_dfs(spot, quotes, ctx.holidays)
+    assert len(quotes) == 6
+    for m1, m2 in qf.FRA_BUCKETS:
+        a, b = qf.tenor_end(spot, m1, ctx.holidays), qf.tenor_end(spot, m2, ctx.holidays)
+        rate = (qf.curve_df(spot, [], a, dfs) / qf.curve_df(spot, [], b, dfs) - 1.0) * 365.0 / (b - a).days * 100.0
+        probe = {"product": "ois", "structure": "fra", "fra": "%dx%d" % (m1, m2), "trade_date": mkt.today.isoformat(),
+                 "settle_date": spot.isoformat(), "side": "S", "notional": 1e6, "price": 0.0}
+        v = svc.et.call(tv.value, probe, mkt)
+        assert v["ok"] and v["price_now"] == pytest.approx(rate, abs=1e-6), (m1, m2, v.get("why"))
 
 
 def test_a_dibs_line_fills_the_bond_by_its_yield(box, lines):
