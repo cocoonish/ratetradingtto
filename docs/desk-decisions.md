@@ -949,14 +949,14 @@ Fourteen pricing tools that work one way only were listed to the desk; the desk 
 
 Items 2, 3 and 13 of that list (as they were put to the desk, in English):
 
-> 2. MPC OIS / MPC SPREAD: rate → PPK step. "Type a meeting swap's rate or an MPC spread and see how many bp of cut or
+> (2) MPC OIS / MPC SPREAD: rate → PPK step. "Type a meeting swap's rate or an MPC spread and see how many bp of cut or
 > hike it prices in. Broker Chat already does this for single-period lines it reads, but not for spreads and not on the
 > page."
 >
-> 3. FRA second leg. "Today TÜM FORWARD / FRA takes both legs' fills and shows the realized FRA. Instead, type the target
-> FRA and the first leg's fill, and see the rate you need on the second leg."
+> (3) FRA second leg. "Today TÜM FORWARD / FRA takes both legs' fills and shows the realized FRA. Instead, type the
+> target FRA and the first leg's fill, and see the rate you need on the second leg."
 >
-> 13. USD · FOMC: "a window's OIS rate → the implied FOMC step."
+> (13) USD · FOMC: "a window's OIS rate → the implied FOMC step."
 
 **What was built** (each the exact inverse of what the page computes forward; README, *Faizden PPK / FOMC adımı ve FRA'nın
 öbür bacağı*):
