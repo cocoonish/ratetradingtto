@@ -3963,6 +3963,9 @@ TARIH_PICKED = "R2"                                             # the chosen cur
 #: the block's own box under the table (rows TARIH_BACK … + 5): its quote's cell, then the curves across C:I
 TARIH_BACK = TARIH_LAST + 5
 TARIH_BACK_QUOTE = "C%d" % (TARIH_BACK + 1)
+#: a row's spread (D) and its "+ spread (360)" (M) are two-way (tto/twoway.py; the desk, 24.11.2026): an M typed is kept
+#: here, right after the helpers, and the row's spread is the one it gives - M − the chosen curve's ACT/360 rate
+TARIH_TW = "AT"
 
 
 def _tarih_layout() -> Dict[Any, str]:
@@ -4045,6 +4048,8 @@ def _tarih_check(model: Model) -> None:
         if code.startswith("S"):                                   # the scenarios' rows: "S1 – " & their name
             _need_formula(model, "MASA", "B%d" % k, '"%s – "' % code)
     _tarih_formulas(model, TARIH_FIRST)
+    if _col(_tarih_layout()[("f", TARIH_CURVES[-1][0])]) >= _col(TARIH_TW):        # (the two-way store after the helpers)
+        raise ValueError("%s!%s yardımcı sütunların içinde" % (TARIH_SHEET, TARIH_TW))
 
 
 def _tto_tarih(model: Model) -> None:
@@ -4089,7 +4094,12 @@ def _tto_tarih(model: Model) -> None:
     blank = 'IF($E%d="","",' % r                                            # a row without its two dates shows nothing
     b.input("B%d" % r, '=IF(ISNUMBER($C%d),OIS_MAIN!$B$2,"")' % r, fmt=DATE)
     b.input("C%d" % r, None, fmt=DATE)
-    b.input("D%d" % r, '=IF(ISNUMBER($C%d),$%s$%s,"")' % (r, TARIH_SPREAD[0], TARIH_SPREAD[1:]), fmt="0")
+    # the row's spread: typed, else the general one - or, two-way, the one a "+ spread (360)" typed in the row gives (the
+    # chosen curve's ACT/360 rate is what the spread is added to, whatever basis the table shows)
+    tw = "$%s%d" % (TARIH_TW, r)
+    b.input("D%d" % r, '=IF(ISBLANK(%s),IF(ISNUMBER($C%d),$%s$%s,""),IFERROR((%s-INDEX($%s%d:$%s%d,%s))*10000,""))'
+            % (tw, r, TARIH_SPREAD[0], TARIH_SPREAD[1:], tw, d0, r, d1, r, picked), fmt="0")
+    b.input("%s%d" % (TARIH_TW, r), None, fmt="0.00%")
     b.set("E%d" % r, '=IF(AND(ISNUMBER($B%d),ISNUMBER($C%d)),%s,"")' % (r, r, fml["E"]), fmt=INT0)
     b.set("%s%d" % (lay["ks"], r), '=IF(ISNUMBER($B%d),%s,"")' % (r, fml[lay["ks"]]), fmt=INT0)
     b.set("%s%d" % (lay["ke"], r), '=IF(ISNUMBER($C%d),%s,"")' % (r, fml[lay["ke"]]), fmt=INT0)
@@ -4107,7 +4117,8 @@ def _tto_tarih(model: Model) -> None:
                   fmt="0.00%")
         b.set("%s%d" % (lay[("d", code)], r), "=" + blank + fml[("d", code)] + ")", fmt="0.0000%")
         b.set("%s%d" % (lay[("f", code)], r), "=" + blank + fml[("f", code)] + ")", fmt="0.0000%")
-    b.set("%s%d" % (TARIH_PLUS, r), "=%sINDEX($%s%d:$%s%d,%s))" % (blank, f0, r, f1, r, picked), fmt="0.00%")
+    # (two-way: a "+ spread (360)" typed stands, the row's spread is the one it gives)
+    b.set("%s%d" % (TARIH_PLUS, r), "=IF(ISBLANK(%s),%sINDEX($%s%d:$%s%d,%s)),%s)" % (tw, blank, f0, r, f1, r, picked, tw), fmt="0.00%")
     # the other way round: the row's quote, read in the basis chosen, less the chosen curve's rate and Bootstrap's as the
     # row shows them (bp) - so that rate + spread / 10000 = the quote; with ACT/360 the chosen one's spread, typed as the
     # row's spread, makes the "+ spread (360)" column the quote
@@ -4117,8 +4128,10 @@ def _tto_tarih(model: Model) -> None:
     b.set("%s%d" % (TARIH_VS[0], r), "=%s%s)" % (blank, vs % ("INDEX($%s%d:$%s%d,%s)" % (TARIH_RATES[0], r, TARIH_RATES[-1], r, picked))),
           fmt="0.0", bold=True)
     b.set("%s%d" % (TARIH_VS[1], r), "=%s%s)" % (blank, vs % ("$%s%d" % (boot, r))), fmt="0.0", bold=True)
-    for c in list(range(_col("B"), _col(TARIH_VS[-1]) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)):
+    for c in list(range(_col("B"), _col(TARIH_VS[-1]) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)) + [_col(TARIH_TW)]:
         b.fill_down("%s%d" % (index_to_col(c), r), TARIH_LAST)
+    b.note("%s3" % TARIH_TW, "İki yönlü: yazılan '+ spread (360)' (boş: yazılan yok; satırın spread'i D'de)")
+    b.head("%s4" % TARIH_TW, ["Yazılan + spread (360)"])
     b.note("B%d" % (TARIH_LAST + 2), "Masa'daki TARİH ARASI FAİZ bloğunun formülleri, satır satır: eğrilerin OIS spot'tan başlangıç ve "
                                      "bitişe iskonto faktörleri (MASA!H62:I68), dönem faizi (DF başl. / DF bitiş − 1)·360/gün - ACT/365'te "
                                      "·365, O/N'de 360·((DF başl. / DF bitiş)^(1/gün) − 1) -, Ağırlıklı = S1–S3, OIS · PPK olasılıklarıyla. "
@@ -4158,6 +4171,135 @@ def _tarih_back(b: "SheetBuilder") -> None:
     b.note("B%d" % (t + 5), "Kırık tarih için verilen faizi (ACT/360 basit, %) yazın: her TRY OIS eğrisine spread = kote − eğrinin dönem ACT/360 "
                             "faizi (bp), bloğun tarihleriyle. Bulunan spread bloğun Spread (bp)'sine yazılınca o eğrinin 'Dönem + spread "
                             "(360)'ı koteye eşit çıkar.")
+
+
+# ---------------------------------------------------------------------------------------------- Masa: the date-to-date block two-way
+#: MASA's TARİH ARASI FAİZ (B59:N70) and TARİH ARASI FORWARD (P59:AB70) price one start / end pair on the seven TRY OIS curves
+#: (rows 62-68) with ONE spread, MASA!I60 (bp): F = D + I60/10000 (the period's ACT/360 rate + spread), N = L + I60/10000
+#: (spot → end), Q / R the TRY % spot → start / end (ACT/360 + spread, in %), S / T the forwards at the start and the end
+#: (spot·(1 + TRY·g/360)/(1 + USD·g/360)), U / V their points, W the forward-forward points, X = F·100, Y the end forward
+#: less the RET mid's.  Two-way (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık
+#: olmaması için"): any of these 77 cells - or the spread itself - can be typed; the one typed last stands and gives the
+#: block's one spread, every other cell follows from it with the block's own formulas.  The spread is kept where it always
+#: was (I60: what users typed there keeps its meaning) and stays a plain bp value - the default of the forward quote
+#: matrix's general spread (EK_FWD!D4:E4), Forward!P58 / O27, OIS_MAIN!F122 and EK_TARIH!G2, which follow it; a value
+#: typed in the block is kept in ``TARIH_TW_STORE`` (a column a kind, the block's rows), the spread it gives beside it
+#: (``TARIH_TW_FROM``: each formula's exact inverse - linear in the spread, so closed form; the forwards' through the TRY
+#: rate of the leg, Q's base without the spread in ``TARIH_TW_BASE``).  A start leg (Q, S, U) at the OIS spot (K60 ≤ 0)
+#: does not depend on the spread: typed there it gives no spread (the block and the spread show nothing until it goes).
+TARIH_TW_NAME = "TARİH ARASI iki yönlü"
+TARIH_SPREAD_CELL = "I60"                 # the block's one spread (bp): OIS_SPREAD's cell
+TARIH_TW_ROWS = (62, 68)
+TARIH_TW_KINDS = "FNQRSTUVWXY"            # the block's cells that carry the spread, in the order of their stores
+TARIH_TW_LABEL, TARIH_TW_STORE, TARIH_TW_FROM, TARIH_TW_BASE = "CS", "CT", "DF", "DR"
+TARIH_TW_CAPTIONS = ("Dönem + spread (360)", "Spot→bitiş + spread", "TRY % spot→başl.", "TRY % spot→bitiş", "Fwd başlangıç",
+                     "Fwd bitiş", "Puan başl.", "Puan bitiş", "Fwd-fwd puan", "Dönem TRY %", "Bitiş fwd − RET mid fwd")
+#: the block's formulas the two-way cells wrap and invert (row ``r``; the weighted row's own in ``_TARIH_TW_WEIGHTED``)
+_TARIH_TW_PLAIN = {
+    "D": 'IFERROR((H%(r)d/I%(r)d-1)*360/$G$60,"")', "L": 'IFERROR((1/I%(r)d-1)*360/$M$60,"")',
+    "F": 'IFERROR(D%(r)d+$I$60/10000,"")', "N": 'IFERROR(L%(r)d+$I$60/10000,"")',
+    "Q": 'IFERROR(IF($K$60<=0,"",((1/H%(r)d-1)*360/$K$60)*100+$I$60/100),"")',
+    "R": 'IFERROR(((1/I%(r)d-1)*360/$M$60)*100+$I$60/100,"")',
+    "S": 'IFERROR(IF($K$60<=0,$Q$60,$Q$60*(1+Q%(r)d/100*$K$60/360)/(1+$U$60/100*$K$60/360)),"")',
+    "T": 'IFERROR($Q$60*(1+R%(r)d/100*$M$60/360)/(1+$W$60/100*$M$60/360),"")',
+    "U": 'IFERROR((S%(r)d-$Q$60)*10000,"")', "V": 'IFERROR((T%(r)d-$Q$60)*10000,"")', "W": 'IFERROR((T%(r)d-S%(r)d)*10000,"")',
+    "X": 'IFERROR(F%(r)d*100,"")',
+    "Y": 'IFERROR((T%(r)d-$Q$60*(1+$Z$60/100*$M$60/360)/(1+$W$60/100*$M$60/360))*10000,"")',
+}
+_TARIH_TW_AVG = 'IFERROR((SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,%(c)s63:%(c)s65)/SUM(OIS_MAIN!$Q$3:$Q$5)),"")'
+_TARIH_TW_WEIGHTED = dict(_TARIH_TW_PLAIN, Q='IFERROR(IF($K$60<=0,"",SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,Q63:Q65)/SUM(OIS_MAIN!$Q$3:$Q$5)),"")',
+                          **{c: _TARIH_TW_AVG % {"c": c} for c in "DLFNRX"})
+
+
+def _tarih_tw_cols() -> Dict[str, Tuple[str, str]]:
+    """Each two-way kind's store and the column of the spread it gives: {"F": ("CT", "DF"), …}."""
+    return {k: (index_to_col(_col(TARIH_TW_STORE) + i), index_to_col(_col(TARIH_TW_FROM) + i)) for i, k in enumerate(TARIH_TW_KINDS)}
+
+
+def _tarih_tw_check(model: Model) -> None:
+    """The block as the two-way cells invert it: its one spread a number in I60, each curve row's formulas as written above
+    (the weighted row's the S1-S3 average), the columns the stores and their spreads take empty."""
+    _need_sheets(model, "MASA", "OIS_MAIN")
+    _need_captions(model, (("MASA", "H60", "Spread (bp)"), ("MASA", "F61", "Dönem + spread (360)"), ("MASA", "N61", "Spot→bitiş + spread"),
+                           ("MASA", "Q61", "TRY % spot→başl. (360+spr)"), ("MASA", "W61", "Fwd-fwd puan"), ("MASA", "X61", "Dönem TRY % (360+spr)")))
+    if type(model.sheet("MASA").consts.get(parse_a1(TARIH_SPREAD_CELL))) is not float:
+        raise ValueError("MASA!%s bir sayı değil" % TARIH_SPREAD_CELL)
+    for r in range(TARIH_TW_ROWS[0], TARIH_TW_ROWS[1] + 1):
+        want = _TARIH_TW_WEIGHTED if r == TARIH_WEIGHTED else _TARIH_TW_PLAIN
+        for col, text in want.items():
+            if _need_formula(model, "MASA", "%s%d" % (col, r)) != text % {"r": r}:
+                raise ValueError("MASA!%s%d beklenen formül değil (%s değil)" % (col, r, text % {"r": r}))
+    # what the inverses read must not read the spread (the spread's default reads them): the discount factors, the
+    # dates' days, the spot, the USD rates, the RET mid
+    spread = re.compile(r"(?<![A-Za-z0-9_$!])\$?I\$?60(?![0-9])")
+    for addr in ["%s%d" % (c, r) for r in range(TARIH_TW_ROWS[0], TARIH_TW_ROWS[1] + 1) if r != TARIH_WEIGHTED for c in "HI"] + \
+            ["G60", "K60", "M60", "Q60", "U60", "W60", "Z60"]:
+        if spread.search(_need_formula(model, "MASA", addr)):
+            raise ValueError("MASA!%s bloğun spread'ini okuyor ($I$60)" % addr)
+    _need_empty(model, "MASA", "%s%d:%s%d" % (TARIH_TW_LABEL, TARIH_TW_ROWS[0] - 3, TARIH_TW_BASE, TARIH_TW_ROWS[1]))
+
+
+def _tarih_tw(model: Model) -> None:
+    """MASA's date-to-date block two-way: the stores, the spread each gives, the block's cells wrapped, the spread's default."""
+    b = SheetBuilder(model, "MASA")
+    r0, r1 = TARIH_TW_ROWS
+    cols = _tarih_tw_cols()
+    default = model.sheet("MASA").consts.get(parse_a1(TARIH_SPREAD_CELL))
+    base = TARIH_TW_BASE
+    b.set("%s%d" % (TARIH_TW_LABEL, r0 - 3), "İKİ YÖNLÜ · TARİH ARASI FAİZ / FORWARD: yazılan değerler ve verdikleri spread", bold=True)
+    b.note("%s%d" % (TARIH_TW_LABEL, r0 - 2), "Boş: yazılan yok. Bloğun tek spread'i (MASA!I60) yazılan değerin verdiğidir; spread kendi "
+                                             "hücresinde yazılırsa burası boşalır.")
+    b.head("%s%d" % (TARIH_TW_LABEL, r0 - 1), ["Eğri"] + ["Yazılan " + c for c in TARIH_TW_CAPTIONS] + [None]
+           + ["Spread (bp) ← " + c for c in TARIH_TW_CAPTIONS] + [None, "TRY % başl. (spread'siz)"])
+    # one formula of the forward legs: the TRY rate (%, ACT/360 + spread) a forward at the start / the end implies
+    # (spot·(1 + TRY·g/360)/(1 + USD·g/360) solved for TRY)
+    start_try = "((%s/$Q$60)*(1+$U$60/100*$K$60/360)-1)*360/$K$60*100"
+    end_try = "((%s/$Q$60)*(1+$W$60/100*$M$60/360)-1)*360/$M$60*100"
+    for r in range(r0, r1 + 1):
+        f = {"r": r, "base": base}
+        st = {k: "$%s%d" % (s, r) for k, (s, _) in cols.items()}
+        b.set("%s%d" % (TARIH_TW_LABEL, r), "=$B%d" % r)
+        if r == TARIH_WEIGHTED:
+            b.set("%s%d" % (base, r), '=IFERROR(IF($K$60<=0,"",SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,%s63:%s65)/SUM(OIS_MAIN!$Q$3:$Q$5)),"")'
+                  % (base, base), fmt="0.0000")
+        else:
+            b.set("%s%d" % (base, r), '=IFERROR(IF($K$60<=0,"",((1/H%(r)d-1)*360/$K$60)*100),"")' % f, fmt="0.0000")
+        # the spread (bp) a value typed in each kind gives: its formula solved for the spread
+        start = 'IF($K$60<=0,"",(%s-$%s%d)*100)'                  # a start leg's TRY % -> the spread (none at the spot)
+        end = "(%s-100*$L%d)*100" % ("%s", r)                     # an end leg's TRY % -> the spread
+        a = "$Q$60/(1+$W$60/100*$M$60/360)"                        # dT / d(TRY % · M60/36000)
+        t0 = "$Q$60*(1+$L%d*$M$60/360)/(1+$W$60/100*$M$60/360)" % r                    # the end forward without the spread
+        s0 = "IF($K$60<=0,$Q$60,$Q$60*(1+$%s%d/100*$K$60/360)/(1+$U$60/100*$K$60/360))" % (base, r)
+        ck = "IF($K$60<=0,0,$Q$60/(1+$U$60/100*$K$60/360)*$K$60)"
+        inverse = {
+            "F": "(%s-$D%d)*10000" % (st["F"], r),
+            "N": "(%s-$L%d)*10000" % (st["N"], r),
+            "Q": start % (st["Q"], base, r),
+            "R": end % st["R"],
+            "S": start % (start_try % st["S"], base, r),
+            "T": end % (end_try % st["T"]),
+            "U": start % (start_try % ("($Q$60+%s/10000)" % st["U"]), base, r),
+            "V": end % (end_try % ("($Q$60+%s/10000)" % st["V"])),
+            "W": "(%s-(%s-%s)*10000)*360/(%s*$M$60-%s)" % (st["W"], t0, s0, a, ck),
+            "X": "(%s/100-$D%d)*10000" % (st["X"], r),
+            "Y": end % (end_try % ("(%s/10000+$Q$60*(1+$Z$60/100*$M$60/360)/(1+$W$60/100*$M$60/360))" % st["Y"])),
+        }
+        for k, (s, sp) in cols.items():
+            addr = "%s%d" % (k, r)
+            b.input("%s%d" % (s, r), None, like=addr)
+            b.set("%s%d" % (sp, r), '=IF(ISBLANK(%s),"",IFERROR(%s,""))' % (st[k], inverse[k]), fmt="0.00")
+            if k == "X" and r != TARIH_WEIGHTED:
+                # X = F·100 read from F's parts (D + the spread): the same number, without reading what is typed into F
+                # (the forward table would read the rates table's typed value)
+                old = 'IFERROR(($D%(r)d+$I$60/10000)*100,"")' % f
+            else:
+                old = formula_of(model, "MASA", addr)
+            b.patch(addr, "=IF(ISBLANK(%s),%s,%s)" % (st[k], old, st[k]))
+    # the spread: typed (where it always was), else the one the value typed in the block gives, else the workbook's
+    s0, s1 = cols[TARIH_TW_KINDS[0]][0], cols[TARIH_TW_KINDS[-1]][0]
+    g0, g1 = cols[TARIH_TW_KINDS[0]][1], cols[TARIH_TW_KINDS[-1]][1]
+    b.patch(TARIH_SPREAD_CELL, '=IF(COUNTA($%s$%d:$%s$%d)=0,%s,IF(COUNT($%s$%d:$%s$%d)=0,"",SUM($%s$%d:$%s$%d)))'
+            % (s0, r0, s1, r1, _literal(default), g0, r0, g1, r1, g0, r0, g1, r1))
 
 
 # ---------------------------------------------------------------------------------------------- Forward: bond carry, price -> repo
@@ -4934,7 +5076,10 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BOND_BACK_NAME, _bond_back_check, _tto_bond_back), (MOVE_BACK_NAME, _move_back_check, _tto_move_back),
             (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread),
             # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
-            (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
+            (TARIH_SHEET, _tarih_check, _tto_tarih),
+            # (the date-to-date block two-way: after the bulk table and the one OIS spread, which read the block as the file has it)
+            (TARIH_TW_NAME, _tarih_tw_check, _tarih_tw),
+            (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
