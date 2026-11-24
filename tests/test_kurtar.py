@@ -219,6 +219,15 @@ def test_the_lock_is_respected(tmp_path, capsys):
     finally:
         lock.release()
     assert digest(d["db"]) == before and not [n for n in os.listdir(str(d["data"])) if "kurtarma-oncesi" in n]
+    # a lock a crashed dashboard left (its process gone): taken over - said in the log - and given back at the end
+    from test_datadir import dead_pid, record
+    from tto import datadir
+    record(d["data"], host=datadir.host_name(), pid=dead_pid())
+    assert main(["kurtar", d["damaged"], "--data-dir", str(d["data"])]) == 0
+    assert "eski kilidi devralındı" in capsys.readouterr().out
+    with open(str(d["data"] / "logs" / "tto.log"), encoding="utf-8") as fh:
+        assert "kurtar: veri klasörünün eski kilidi devralındı" in fh.read()
+    assert not os.path.exists(os.path.join(str(d["data"]), datadir.LOCK_NAME))
 
 
 def test_a_number_the_database_gave_another_row_meanwhile(tmp_path, capsys):

@@ -376,6 +376,10 @@ def cmd_recover(args) -> int:
             setup_logging(settings.log_dir)                # (the summary goes to the dashboard's log too)
         except OSError:
             pass
+        if lock.took_over is not None:
+            import logging
+            from .datadir import took_over_text
+            logging.getLogger("tto").warning("kurtar: %s", took_over_text(lock.took_over, lock.took_over_why))
     try:
         res = recover.run(path, settings.db_path, trial=args.dene)
     except recover.RecoverError as exc:
