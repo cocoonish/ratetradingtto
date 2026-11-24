@@ -400,6 +400,11 @@ table.grid td.in.ff:not(.nt)::before { content: "ƒ"; position: absolute; top: 1
 table.grid td.in.sh.ff:not(.nt)::before { color: var(--shared-line); }
 table.grid td.in.hand.ff:not(.nt)::before { color: var(--hand-line); }
 table.grid td.in.ff.ffe:not(.nt)::before { color: var(--neg); opacity: 1; }      /* (stopped, or its value an error) */
+/* a two-way table's row (tto/twoway.py): the value typed (✎ in place of the dot, bold) - the row's others come from it */
+table.grid td.in.anchor { font-weight: 700; }
+table.grid td.in.anchor.mod::after { content: "✎"; top: 0; right: 2px; width: auto; height: auto; border-radius: 0; background: none;
+  font: 600 10px/1 var(--font); color: var(--hand-line); }
+.sw-anchor { font: 600 11px/12px var(--font); color: var(--hand-line); text-align: center; }
 .sw-ff { font: italic 650 11px/12px var(--font); color: var(--input-line); text-align: center; }
 /* while a formula is typed: the cells of the reference just put in */
 table.grid td.pt { outline: 2px dashed var(--accent); outline-offset: -3px; }

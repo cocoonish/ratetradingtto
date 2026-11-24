@@ -971,6 +971,10 @@ const fetchCell = debounce(async (book, ref, ticket, copy) => {
         : inp.own ? 'kopyanın kendi girdisi' : 'tablonun değerini izliyor') + (inp.label ? ' – ' + inp.label : '');
     } else if (inp) text += (text ? '   ·   ' : '') + (inp.scope === 'shared' ? 'ortak girdi' : 'kişisel girdi')
       + (inp.label ? ' – ' + inp.label : '') + (inp.error ? '   ·   ' + inp.error : '');
+    // a two-way table's cell (tto/twoway.py): what was typed in its row, if anything
+    const tw = inp && inp.twoway;
+    if (tw) text += '   ·   iki yönlü: ' + (!tw.anchor ? 'satırda yazılan yok (varsayılan)'
+      : tw.anchor.ref === info.ref ? 'yazdığınız değer' : 'yazılan ' + tw.anchor.member + ' · ' + tw.anchor.ref + ', bu ondan hesaplanır');
     $('sb-fx').textContent = text;
     $('sb-fx').title = text;
   } catch (e) { /* the formula bar is informative only */ }

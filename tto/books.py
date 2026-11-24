@@ -45,6 +45,8 @@ class Book(object):
         self.dates: Any = None                    # which cells hold a date, where one counts from (tto/datecells.py)
         self.engine = Engine(model, provider=provider, clock=clock)
         self.inputs: Dict[Tuple[int, int], InputDef] = {}
+        # the cells of the pages' two-way groups (tto/twoway.py): a member's cell or a store's -> its ``Hit``
+        self.twoway: Dict[Tuple[int, int], Any] = {}
         self._validation: Dict[Tuple[int, int], List[str]] = {}
         self._validation_ranges: Dict[Tuple[int, int], Tuple[int, int, int, int, int]] = {}
         self._index_validations()

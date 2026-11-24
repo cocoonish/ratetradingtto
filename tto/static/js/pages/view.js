@@ -246,6 +246,8 @@ export class ViewPage {
           + 'kendiliğinden güncellenir. F2 ya da üzerine gelmek formülü gösterir; silmek formülü de kaldırır. Bloomberg işlevleri '
           + 'kullanılamaz.' }, h('i', { class: 'sw-ff' }, 'ƒ'), 'formüllü girdi'),
         h('span', null, h('i', { class: 'sw-hand' }), 'formül yerine elle değer'),
+        h('span', { title: 'İki yönlü tablo: bir satırın değerlerinden (spread, TRY %, puan, fwd …) hangisini yazarsanız o kalır, '
+          + 'diğerleri ondan hesaplanır. Silince satır varsayılana döner.' }, h('i', { class: 'sw-anchor' }, '✎'), 'iki yönlü: yazılan'),
         h('span', { class: 'muted' }, data.ms + ' ms'))));
 
     if (data.links && data.links.length) {

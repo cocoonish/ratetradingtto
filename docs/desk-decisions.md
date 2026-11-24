@@ -1192,6 +1192,45 @@ Code: `tto/extras.py` (`PPK_SHEET` / `_tto_ppk_back`, `FRA_LEG_NAME` / `_tto_fra
 `_usd_fomc_back`), `tto/meetings.py` (the bands), `tto/views/20_ois.json` (PPK1, PPK2, B21), `tto/views/80_usd.json` (fomc).
 Tests: `tests/test_ppkters.py`, the browser test's checks after "Forward starting swap".
 
+### Forward kotasyon iki yönlü (24.11.2026)
+
+On 23.11 the desk asked: "Spread ile forward kotasyonlarını bulduğumuz yere faizi girdiğimde de spreadi ve rate'leri
+vermesi lazım". The answer then was separate tables below the matrices (FAİZ → SPREAD, `EK_FWD` rows 131–157, beside the
+older PUAN → OIS SPREAD). On 24.11 the desk said what it had meant:
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+
+and then, of every table: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için".
+
+**What was built:**
+- **FORWARD KOTASYON (USDTRY `EK_FWD!A1:W16`, EURTRY `A100:W115`) is two-way**: per value date and side, the spread
+  (D / E), TRY % (M / N), puan (H / I) and fwd (J / K) can all be typed. The one typed last stands exactly - also when the
+  market moves -; the other three are worked out from it with the matrix's own formulas and their exact inverses (one
+  implementation, `extras.fwd_outright` / `extras.fwd_rate`, shared with FAİZ → SPREAD and PUAN → OIS SPREAD): spread
+  = TRY − OIS; fwd = spot · (1 + TRY · g/360) / (1 + USD (EUR) · g/360); puan = (fwd − spot) · 10000; a puan typed: fwd =
+  spot + puan / 10000; a fwd typed: TRY = ((fwd / spot) · (1 + USD · g/360) − 1) · 360 / g. The 23.11 tables stay as they
+  were.
+- **The rule, "last typed wins"**: typing one of the four clears the row-side's other typed value; Delete on any of the
+  four (or a reset) takes the row-side back to its default - the general spread of the "Tümü" row, or the market's
+  (offshore implied − OIS) in "Piyasa spread" mode. A pasted block gives each row-side its rightmost value.
+- **"Piyasa spread" mode** only sets the default: a spread typed stood over the market's before (the input's typed value
+  replaces its formula), and so does any typed value now - a typed TRY %, puan or fwd stays, its spread is worked out
+  from it, not the market's.
+- **What users typed keeps its meaning**: a spread is kept where it always was (`D5:E14`, `D104:E113`): no value moved.
+  A TRY % / puan / fwd typed is kept in hidden columns of the same row (`AN:AS`). A value typed over M / H / J with "Elle
+  değer" before this became that row's typed value.
+- **Generic**: the mechanism is `tto/twoway.py`, declared per table in the view JSON (`"twoway"`); other tables adopt
+  it by declaring their group and writing their inverse formulas ([architecture.md](architecture.md#two-way-tables-ttotwowaypy)).
+- No new Bloomberg request; Bootstrap and every number with nothing typed are unchanged (checked cell for cell on
+  `EK_FWD`).
+
+Code: `tto/twoway.py`, `tto/extras.py` (`_fwd_quote_cells`, `fwd_outright`, `fwd_rate`, `FWD_TW_*`),
+`tto/views/30_forward.json` (`"twoway"`), `tto/service.py` (`_set_inputs`, `_reset_inputs`, `paste`, `_cell_info`,
+`_mark_formulas`, `_overlay`), `tto/render.py`, `tto/copies.py`, `grid.js` / `app.css` (✎). Tests: `tests/test_twoway.py`
+(the mechanism), `tests/test_fwd_twoway.py` (the matrices), the browser test's checks after "EURTRY points typed by hand".
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

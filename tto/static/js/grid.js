@@ -110,6 +110,8 @@ function cellClass(cell) {
     // (the market did not deliver) stays a plain input: that is where a value has to be typed
     else if (cell.fx && !cell.m && cell.t && cell.k !== 'e') cls += ' auto';
     if (cell.ff) cls += cell.fe ? ' ff ffe' : ' ff';  // typed as a formula (=C60+7): a small ƒ in the corner
+    // a two-way table (tto/twoway.py): the value typed in its row (✎) - the row's other values are worked out from it
+    if (cell.an) cls += ' anchor';
   }
   return cls;
 }
@@ -117,7 +119,7 @@ function cellClass(cell) {
 function signature(cell) {
   return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1)
     + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '') + '\u0001' + (cell.ff || '') + '\u0001' + (cell.fe || '')
-    + '\u0001' + (cell.tip || '') + '\u0001' + (cell.ro || '');
+    + '\u0001' + (cell.tip || '') + '\u0001' + (cell.ro || '') + '\u0001' + (cell.an || '') + '\u0001' + (cell.ao || '');
 }
 
 /** What a cell says when the mouse rests on it: an input's formula, the workbook's comment, a long text in full - in a
@@ -128,6 +130,11 @@ function tipOf(cell) {
   else if (cell.tip) tip = cell.tip;
   else if (cell.k === 's' && cell.t && cell.t.length > 28 && !cell.ff) tip = cell.t;
   if (cell.ff) tip = 'Formül: ' + cell.ff + (cell.fe ? '\n' + cell.fe : '') + (tip ? '\n' + tip : '');
+  // a two-way table's row: which value was typed, and that the others come from it
+  if (cell.an) tip = '✎ Yazdığınız değer: satırın ' + cell.an + ' değerleri bundan hesaplanır - piyasa değişse de bu kalır. '
+    + 'Silince (Delete) satır varsayılana döner.' + (tip ? '\n' + tip : '');
+  else if (cell.ao) tip = 'Hesaplanan: bu satırda yazılan değer ' + cell.ao + ', bu hücre ondan hesaplanır. Buraya yazarsanız '
+    + 'yazılan değer bu olur.' + (tip ? '\n' + tip : '');
   if (cell.ro) tip = 'Kopyada salt okunur: ' + cell.ro + (tip ? '\n' + tip : '');
   return tip;
 }
@@ -592,8 +599,9 @@ export class Grid {
           + (keepPt ? ' pt' : '');
         td.textContent = cell.t || '';
         // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with
-        // it; a date typed as a shortcut: what was typed)
-        if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size) td.title = titleOf(this, i, j, cell);
+        // it; a date typed as a shortcut: what was typed; a two-way table's row typed into or back to its default)
+        if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size
+            || (cell.an || '') !== (before.an || '') || (cell.ao || '') !== (before.ao || '')) td.title = titleOf(this, i, j, cell);
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
         else td.style.removeProperty('--bar');

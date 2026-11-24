@@ -1127,7 +1127,7 @@
    "scope": "user",
    "group": "ekfwd-rowspread",
    "kind": "number",
-   "label": "Spread bid / ask (bp) per value date (formula default: the general spread)"
+   "label": "Spread bid / ask (bp) per value date (two-way, typed: its TRY %, puan and fwd follow; formula default: the general spread - the market's in 'Piyasa spread' -, or the one a TRY % / puan / fwd typed gives)"
   },
   {
    "range": "EK_FWD!D20:E29",
@@ -1179,7 +1179,7 @@
    "scope": "user",
    "group": "ekfwd-eur-rowspread",
    "kind": "number",
-   "label": "EURTRY spread bid / ask (bp) per value date (formula default: the general spread)"
+   "label": "EURTRY spread bid / ask (bp) per value date (two-way, typed: its TRY %, puan and fwd follow; formula default: the general spread - the market's in 'Piyasa spread' -, or the one a TRY % / puan / fwd typed gives)"
   },
   {
    "range": "EK_FWD!D119:E128",
@@ -1201,6 +1201,38 @@
    "group": "ekfwd-eur-rates",
    "kind": "number",
    "label": "TRY bid / ask % typed by hand for the EURTRY matrix's dates, to read their spread over OIS, points and forward"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "ekfwd-quote",
+   "sheet": "EK_FWD",
+   "label": "FORWARD KOTASYON · USDTRY",
+   "note": "İki yönlü: spread, TRY %, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner).",
+   "members": [
+    {"name": "Spread", "range": "D5:E14"},
+    {"name": "TRY %", "range": "M5:N14", "store": "AN5:AO14",
+     "label": "TRY bid / ask % typed in the USDTRY forward quote matrix (two-way: its spread, puan and fwd follow)"},
+    {"name": "Puan", "range": "H5:I14", "store": "AP5:AQ14",
+     "label": "Puan bid / ask typed in the USDTRY forward quote matrix (two-way: its fwd, TRY % and spread follow)"},
+    {"name": "Fwd", "range": "J5:K14", "store": "AR5:AS14",
+     "label": "Fwd bid / ask typed in the USDTRY forward quote matrix (two-way: its puan, TRY % and spread follow)"}
+   ]
+  },
+  {
+   "id": "ekfwd-eur-quote",
+   "sheet": "EK_FWD",
+   "label": "FORWARD KOTASYON · EURTRY",
+   "note": "İki yönlü: spread, TRY %, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner).",
+   "members": [
+    {"name": "Spread", "range": "D104:E113"},
+    {"name": "TRY %", "range": "M104:N113", "store": "AN104:AO113",
+     "label": "TRY bid / ask % typed in the EURTRY forward quote matrix (two-way: its spread, puan and fwd follow)"},
+    {"name": "Puan", "range": "H104:I113", "store": "AP104:AQ113",
+     "label": "Puan bid / ask typed in the EURTRY forward quote matrix (two-way: its fwd, TRY % and spread follow)"},
+    {"name": "Fwd", "range": "J104:K113", "store": "AR104:AS113",
+     "label": "Fwd bid / ask typed in the EURTRY forward quote matrix (two-way: its puan, TRY % and spread follow)"}
+   ]
   }
  ],
  "panels": [
@@ -1671,18 +1703,18 @@
    "id": "EKF3",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "X2:AK14",
+   "range": "X2:AU14",
    "hidden": true,
-   "title": "Yardımcı · forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi",
+   "title": "Yardımcı · forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi; iki yönlü hücrelerin yazılan değerleri",
    "keep_title": true
   },
   {
    "id": "EKF7",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "X101:AL113",
+   "range": "X101:AU113",
    "hidden": true,
-   "title": "Yardımcı · EURTRY forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi",
+   "title": "Yardımcı · EURTRY forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi; iki yönlü hücrelerin yazılan değerleri",
    "keep_title": true
   },
   {

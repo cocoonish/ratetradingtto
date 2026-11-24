@@ -20,6 +20,29 @@
   date input without a ``"tenor"`` (or a cell typed over: "Elle değer") - the start the workbook counts its days from
   (``O35 = O34-O33``: the End counts from the Start).  A date input whose cell is not formatted as a date is shown as
   one (``dd.mm.yyyy``).
+* ``twoway`` (optional)  two-way tables (:mod:`tto.twoway`; the desk, 24.11.2026: "hangisine ben girdiysem diğerini
+  hesaplasın ... Genel olarak tablolar bu şekilde olmalı")::
+
+      "twoway": [{"id": "ekfwd-quote", "sheet": "EK_FWD", "label": "FORWARD KOTASYON · USDTRY", "note": "İki yönlü: ...",
+                  "scope": "user",
+                  "members": [{"name": "Spread", "range": "D5:E14"},
+                              {"name": "TRY %", "range": "M5:N14", "store": "AN5:AO14", "label": "...", "kind": "number"},
+                              {"name": "Puan", "range": "H5:I14", "store": "AP5:AQ14"}, ...]}]
+
+  same-shaped ranges of one sheet (``"sheet"``: the page's unless given), each a way of giving the same value (its
+  ``"name"`` says which on the page); the cells at one place of every member are one **row-side** (a value date's bid).
+  What is typed into a member is kept in its ``"store"``: a blank range of its shape, declared as an input by the module
+  (``"scope"`` the group's, "user" unless given; ``"kind"``, ``"label"`` for "Girdilerim") - never listed in
+  ``inputs``; the member's own cells are formulas showing the store, or the value worked out from whichever store holds
+  one.  At most one member has no store and keeps what is typed in its own cells: an input of ``inputs`` (the table's
+  input from before) whose formula default is the value the other stores give.  The member typed last is the row-side's
+  **anchor** (the others' stores emptied in the same write); Delete or a reset of any cell of a row-side takes it back to
+  its default; a pasted block gives each row-side its last value; writes, pastes, resets, scenarios, temporary copies,
+  input formulas and the page's marks (``an``: the anchor - ✎, bold -, ``ao``: worked out from it) all go through the
+  stores.  ``"note"`` is said under every table that shows the group's members.  A declaration that cannot work (shapes
+  that differ, a store that is not blank or is an input already, a store-less member that is not an input, two of them,
+  a member cell that is no formula, a cell of two groups) is left out with the reason in the log
+  (``Service.twoway.problems``).  How a table adopts it, and its limits: :mod:`tto.twoway`.
 * ``panels``  ``{"type": "table", "range": "B29:J39", "title": "...", "hidden": false}`` |
               (``"sheet": "VIOP", "borrowed": true``: a few cells of another page's sheet, shown here as well) |
   ``{"type": "chart", "chart": <index of the chart on the sheet>}`` | ``{"type": "notes", "range": ...}`` |
