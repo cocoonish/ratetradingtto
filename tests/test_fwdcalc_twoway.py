@@ -1,10 +1,11 @@
 """The Forward page's calculators two-way (the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık
 olmaması için", "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için"): Interest 2 SP, SP 2
 Interest, its all-in and Interest 2 SP · O/N (TRY, SP, All In, ON Karşılık, Günlük SP - USDTRY and EURTRY apart), the
-Basit ↔ bileşik · Repo converters, Forward DV01 (Tutar and the three DV01s) and the bond carry (Carry, B/E, Px Drop and
-its daily figure): any of a block's values can be typed - the one typed last stands, the others are worked out from it
-with the block's own formulas and their exact inverses (``extras._tto_fwd_calc_tw``, ``extras._tto_bond_back``).  The
-mechanism itself: ``test_twoway.py``."""
+Basit ↔ bileşik · Repo converters, Forward DV01 (Tutar and the three DV01s), the bond carry (Carry, B/E, Px Drop and
+its daily figure), TRY OIS w/Spread (the Spread or a tenor's rate) and the OIS mid at the value date with its spread:
+any of a block's values can be typed - the one typed last stands, the others are worked out from it with the block's
+own formulas and their exact inverses (``extras._tto_fwd_calc_tw``, ``extras._tto_bond_back``).  The mechanism itself:
+``test_twoway.py``."""
 from __future__ import annotations
 
 import pytest
