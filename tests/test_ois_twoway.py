@@ -19,7 +19,6 @@ out, typed back as its own kind, gives the same row (1e-9)."""
 from __future__ import annotations
 
 import datetime as dt
-import math
 
 import pytest
 
