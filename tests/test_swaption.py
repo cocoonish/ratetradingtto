@@ -237,6 +237,65 @@ def test_a_vol_typed_in_any_unit_prices_and_the_other_two_follow(svc):
     assert svc.swaption(u, {"notional": "50m", "vol": "5"})["options"]["payer"]["tl"] == pytest.approx(d["options"]["payer"]["tl"] / 2)
 
 
+def test_a_premium_or_a_breakeven_typed_gives_the_vol_two_way():
+    """Two-way (the desk, 24.11.2026: "tüm tablolar bu şekilde olmalı"): an option's premium (running bp, upfront bp, TL)
+    or breakeven typed in place of the vol is priced at the normal vol that gives it - the closed form at the money,
+    Brent elsewhere, for payer, receiver and straddle, in and out of the money; under the intrinsic value no vol."""
+    T = 250 / 252.0
+    for K in (F, F + 0.0125, F - 0.02):
+        sigma = 118.7e-4
+        pay, rec = sw.premiums(F, K, sigma * math.sqrt(T))
+        for kind, p in (("payer", pay), ("receiver", rec), ("straddle", pay + rec)):
+            assert sw.normal_from_premium(kind, F, K, T, p) == pytest.approx(sigma, rel=1e-12), (K, kind)
+            for measure, typed in (("running", p / 1e-4), ("upfront", A * p / 1e-4), ("tl", N * A * p)):
+                assert sw.premium_of("%s:%s" % (kind, measure), typed, K, A, N) == pytest.approx(p, rel=1e-14)
+        assert sw.premium_of("payer:be", K + pay, K, A, N) == pytest.approx(pay, abs=1e-15)
+        assert sw.premium_of("receiver:be", K - rec, K, A, N) == pytest.approx(rec, abs=1e-15)
+        for unit, level in (("straddle:be_low", K - pay - rec), ("straddle:be_high", K + pay + rec)):
+            assert sw.premium_of(unit, level, K, A, N) == pytest.approx(pay + rec, abs=1e-15)
+    # at the money each leg is s/√(2π): the closed form
+    assert sw.normal_from_premium("payer", F, F, T, 0.01) == 0.01 * fv.SQRT2PI / math.sqrt(T)
+    assert sw.normal_from_premium("straddle", F, F, T, 0.02) == 0.01 * fv.SQRT2PI / math.sqrt(T)
+    # at or under the intrinsic value (0,02 in the money) no vol; nothing typed reads as before
+    assert sw.normal_from_premium("payer", F, F - 0.02, T, 0.02) is None and sw.normal_from_premium("receiver", F, F + 0.02, T, 0.015) is None
+    got = sw.read_inputs({"vol": "125,5", "vol_unit": "payer:running"})
+    assert (got["typed"], got["vol_unit"]) == (125.5, "payer:running")
+    assert sw.read_inputs({"vol": "1,2mn", "vol_unit": "straddle:tl"})["typed"] == 1.2e6
+    assert sw.read_inputs({"vol": "36,25", "vol_unit": "receiver:be"})["typed"] == pytest.approx(0.3625)
+    for bad, why in (({"vol": "0", "vol_unit": "payer:upfront"}, "Payer prim (bp, peşin) okunamadı: '0'"),
+                     ({"vol": "abc", "vol_unit": "straddle:be_low"}, "Straddle alt başabaşı okunamadı")):
+        with pytest.raises(sw.SwaptionError) as exc:
+            sw.read_inputs(bad)
+        assert str(exc.value).startswith(why), exc.value
+
+
+def test_each_premium_and_breakeven_of_the_page_typed_back_gives_the_same_vol(svc):
+    """On the replay day (5 bp a day typed): each premium of the table and each breakeven typed back as such gives the
+    same vol and the same numbers (1e-9); the vol says what priced it; one under the intrinsic value is refused with the
+    reason; nothing typed in its unit reads the realized vol as before."""
+    u = svc.login("Swaption iki yönlü")["user"]
+    for strike in ("", "36,50"):
+        d = svc.swaption(u, {"strike": strike, "vol": "5", "vol_unit": "day"})
+        o = d["options"]
+        typed = {"%s:%s" % (k, m): o[k][key] for k in sw.KINDS for m, key in (("running", "running_bp"), ("upfront", "upfront_bp"),
+                                                                                ("tl", "tl"))}
+        typed.update({"payer:be": o["payer"]["breakeven"], "receiver:be": o["receiver"]["breakeven"],
+                      "straddle:be_low": o["straddle"]["breakeven"]["low"], "straddle:be_high": o["straddle"]["breakeven"]["high"]})
+        for unit, value in typed.items():
+            back = svc.swaption(u, {"strike": strike, "vol": repr(value * 100 if ":be" in unit else value), "vol_unit": unit})
+            assert back["vol"]["source"] == "typed" and back["vol"]["unit"] == unit and back["vol"]["unit_text"] == sw.UNIT_TEXT[unit]
+            assert back["vol"]["day"] == pytest.approx(5.0, rel=1e-9), (strike, unit)
+            for kind in sw.KINDS:
+                for k in ("running_bp", "upfront_bp", "tl", "delta_tl", "vega_tl", "theta_tl"):
+                    assert back["options"][kind][k] == pytest.approx(o[kind][k], rel=1e-9), (strike, unit, kind, k)
+    k = svc.swaption(u, {"strike": "33", "vol": "5", "vol_unit": "day"})               # (deep in the money for the payer)
+    intrinsic = (k["F"] - 0.33) * 1e4
+    with pytest.raises(ServiceError) as exc:
+        svc.swaption(u, {"strike": "33", "vol": "%.2f" % (intrinsic - 1), "vol_unit": "payer:running"})
+    assert exc.value.status == 400 and str(exc.value).startswith("Payer prim (bp, running): hiçbir vol bunu vermez")
+    assert svc.swaption(u, {"vol": "", "vol_unit": "payer:running"})["vol"]["source"] == "realized"
+
+
 def test_a_ppk_user_gets_the_ppk_forward_first(svc):
     a = svc.login("Swaption Boot")["user"]
     b = svc.login("Swaption PPK")["user"]

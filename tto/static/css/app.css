@@ -218,6 +218,10 @@ a { color: var(--accent-ink); }
 .prop-pop .pp-field .inp { width: 112px; text-align: right; font-variant-numeric: tabular-nums; }
 .prop-pop .pp-field #prop-pair { text-align: left; text-transform: uppercase; }
 .prop-pop .pp-field .seg button, .prop-pop .pp-rhead .seg button { padding: 3px 9px; font-size: 12px; }
+/* a two-way box (prop.js, swaption.js; the desk, 24.11.2026): the one typed last - bold, ✎ by its label; the others show
+   (greyed, as placeholders) what it gives */
+.inp.tw-anchor { font-weight: 700; box-shadow: inset 0 -2px 0 var(--hand-line); }
+.prop-pop .pp-field.tw-anchored .lbl::after, .swaption .tw-anchored > span::after { content: " ✎"; color: var(--hand-line); }
 .prop-pop .pp-mid { font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .prop-pop .errtxt { margin-top: 8px; }
 .prop-pop .errtxt:empty { display: none; }
@@ -1600,6 +1604,12 @@ table.plain.bugun tr.near-target td:first-child { box-shadow: inset 3px 0 0 var(
 .swaption .swpt-vols { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .swaption .swpt-vol { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--ink-2); }
 .swaption .swpt-vol .inp { width: 84px; text-align: right; }
+/* the options table's premiums and breakevens, typed in place (two-way): a value there prices the vol */
+.swaption .swpt-edit { cursor: text; border-radius: 3px; outline: 1px dashed transparent; outline-offset: -1px; }
+.swaption .swpt-edit:hover { outline-color: var(--line-2); }
+.swaption .swpt-edit:focus { outline: 1px solid var(--accent); background: var(--surface); }
+.swaption .swpt-edit.tw-anchor { font-weight: 700; box-shadow: inset 0 -2px 0 var(--hand-line); }
+.swaption .swpt-edit.tw-anchor::after { content: " ✎"; color: var(--hand-line); font-weight: 600; }
 .swaption .seg button.swpt-far { opacity: .45; }
 .swaption .swpt-error { padding: 0 12px 10px; }
 .swaption .swpt-error:empty { display: none; }

@@ -649,6 +649,7 @@
    "copy_with": ["B17D"],
    "type": "table",
    "title": "VİOP  ·  TARGET  (girdiler VIOP!L331:P338)",
+   "note": "İki yönlü: hedef faiz, uzak limit, spread fiyatı ya da hedef − piyasa VİOP sayfasındaki Target tablosunda da yazılabilir - satır yazılandan hesaplanır, hedef değer satırın tipinde gösterilir.",
    "range": "P119:AB129",
    "hidden": false,
    "client_quote": {"pair": "VİOP USDTRY", "title": "spread", "rows": "121:128", "days": "AB",

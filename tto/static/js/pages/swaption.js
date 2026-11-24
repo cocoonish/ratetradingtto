@@ -3,6 +3,10 @@
 // closes (bp/day, bp/year, % Black), and payer / receiver / straddle with their greeks at the vol used - the realized 60
 // changes', or one typed in any of the three units -, the rate at the expiry and the breakevens.  Nothing is booked and
 // nothing is stored on the server: the inputs go with each request, the last ones stay in this browser only.
+// Two-way (the desk, 24.11.2026: "tüm tablolar bu şekilde olmalı"): a payer / receiver / straddle premium (bp running,
+// bp upfront, TL) or breakeven can be typed in its own cell of the table in place of the vol - the vol that prices it
+// is solved on the server; of the vol boxes and these cells, the one typed last stands (bold, ✎), the others show what it
+// gives; emptied: the realized vol again.
 import { api } from '../api.js';
 import { h, clear, debounce } from '../ui.js';
 import { num, pct, serialDate, isoToTr } from '../format.js';
@@ -17,6 +21,20 @@ const UNITS = [['day', 'bp/gün', 'Normal vol, bir iş gününde (= günlük ba�
   ['year', 'bp/yıl', 'Normal vol, yıllık (= bp/gün · √252)'],
   ['black', '% Black', 'Lognormal vol: aynı payer primini veren Black vol\'ü']];
 const KINDS = [['payer', 'Payer'], ['receiver', 'Receiver'], ['straddle', 'Straddle']];
+// the options table's rows: key, label, format, tooltip and - the premiums - the unit a value typed there is (two-way)
+const OPT_ROWS = [
+  ['running_bp', 'Prim (bp, running)', (x) => num(x, 2), 'Forward prim p', 'running'],
+  ['upfront_bp', 'Prim (bp, peşin)', (x) => num(x, 2), 'A · p: nominalin bp\'si', 'upfront'],
+  ['tl', 'Prim (TL)', (x) => num(x, 0), 'N · A · p', 'tl'],
+  ['delta', 'Delta (%)', (x) => num(x * 100, 1) + '%', 'Φ(d); receiver −Φ(−d)'],
+  ['delta_tl', 'Delta (TL/bp)', (x) => signed(x, 0), 'F 1 bp yükselince prim değişimi'],
+  ['gamma_tl', 'Gamma (TL/bp/bp)', (x) => num(x, 2), 'Deltanın 1 bp\'lik değişimi'],
+  ['vega_tl', 'Vega (TL / 1 bp normal vol)', (x) => num(x, 0), 'σN 1 bp/yıl artınca'],
+  ['vega_black_tl', 'Vega (TL / %1 Black vol)', (x) => (isNum(x) ? num(x, 0) : '–'), 'Black vol 1 puan artınca'],
+  ['theta_tl', 'Teta (TL / iş günü)', (x) => signed(x, 0), 'Aynı F, σN, A ile bir iş günü sonra'],
+];
+const EDIT_TIP = 'Yazın: bu primi (başabaşı) veren vol bulunur, tablonun gerisi ondan (iki yönlü). Vol kutularından ve bunlardan son '
+  + 'yazdığınız kalır; silince gerçekleşen vol.';
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const dash = (s) => (s === '' || s === null || s === undefined ? '–' : s);
@@ -123,6 +141,7 @@ export class SwaptionPage {
     this.schedBody = h('div', { class: 'body' });
     this.schedTitle = h('h2', null, 'Dayanak swap');
     this.notes = h('div', { class: 'body swpt-notes', id: 'swpt-notes' });
+    this.buildOptions();
     this.result = h('div', { class: 'panels', id: 'swpt-result' },
       h('section', { class: 'panel wide' }, h('div', { class: 'pad' }, this.head, this.noVol, this.tiles)),
       h('section', { class: 'panel', id: 'swpt-options-panel' },
@@ -159,8 +178,81 @@ export class SwaptionPage {
     this.state.vol = String(text || '').trim();
     this.state.vol_unit = unit;
     for (const [u] of UNITS) if (u !== unit) this.volIn[u].value = '';
-    if (this.volIn[unit].value !== text) this.volIn[unit].value = text;
+    if (this.volIn[unit] && this.volIn[unit].value !== text) this.volIn[unit].value = text;
+    this.markTyped();
     this.later();
+  }
+
+  /** The unit of the value typed (a vol box or a premium / breakeven cell), null when none: the realized vol prices. */
+  typedUnit() {
+    return this.state.vol ? this.state.vol_unit : null;
+  }
+
+  /** The one typed (two-way) bold with ✎ - a vol box or a cell of the options table. */
+  markTyped() {
+    const u = this.typedUnit();
+    for (const [unit, el] of Object.entries(this.edit)) el.classList.toggle('tw-anchor', unit === u);
+    for (const [unit] of UNITS) {
+      this.volIn[unit].classList.toggle('tw-anchor', unit === u);
+      this.volIn[unit].closest('label').classList.toggle('tw-anchored', unit === u);
+    }
+  }
+
+  /** A cell of the options table that takes a premium or a breakeven (``unit``, the server's ``<kind>:<measure>``). */
+  editable(el, unit) {
+    el.contentEditable = 'true';
+    el.spellcheck = false;
+    el.classList.add('swpt-edit');
+    el.dataset.unit = unit;
+    el.title = EDIT_TIP;
+    el.addEventListener('focus', () => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+    el.addEventListener('input', () => this.typeVol(unit, el.textContent));
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this.typeVol(unit, el.textContent); this.now(); el.blur(); }
+    });
+    el.addEventListener('paste', (e) => {            // (plain text only: what was copied, not its look)
+      e.preventDefault();
+      document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text').trim());
+    });
+    this.edit[unit] = el;
+  }
+
+  buildOptions() {
+    this.edit = {};
+    this.optTd = {};
+    const t = h('table', { class: 'plain', id: 'swpt-options' },
+      h('tr', null, h('th', { class: 'l' }, ''), ...KINDS.map(([, label]) => h('th', null, label))));
+    for (const [key, label, , tip, measure] of OPT_ROWS) {
+      const tr = h('tr', { title: tip });
+      tr.dataset.row = key;
+      tr.appendChild(h('td', { class: 'l' }, label));
+      for (const [kind] of KINDS) {
+        const td = h('td', null, '–');
+        if (measure) this.editable(td, kind + ':' + measure);
+        this.optTd[key + '.' + kind] = td;
+        tr.appendChild(td);
+      }
+      t.appendChild(tr);
+    }
+    const be = h('tr', { class: 'pkg', title: 'Vadede başabaş: payer K + p, receiver K − p, straddle K ± (p_payer + p_receiver)' });
+    be.dataset.row = 'breakeven';
+    const pay = h('td', { id: 'swpt-be-payer', style: { textAlign: 'right' } }, '–');
+    const rec = h('td', { id: 'swpt-be-receiver', style: { textAlign: 'right' } }, '–');
+    const low = h('span', { id: 'swpt-be-straddle-low' }, '–');
+    const high = h('span', { id: 'swpt-be-straddle-high' }, '–');
+    this.editable(pay, 'payer:be');
+    this.editable(rec, 'receiver:be');
+    this.editable(low, 'straddle:be_low');
+    this.editable(high, 'straddle:be_high');
+    be.append(h('td', null, 'Başabaş (vadede)'), pay, rec, h('td', { id: 'swpt-be-straddle', style: { textAlign: 'right' } }, low, ' / ', high));
+    t.appendChild(be);
+    this.optBody.appendChild(t);
   }
 
   now() {
@@ -241,7 +333,7 @@ export class SwaptionPage {
       title: d.atm ? 'ATM: K = F' : 'K − F: ' + signed(d.moneyness_bp, 1) + ' bp' }));
     box.appendChild(tile('Dayanak DV01 (TL/bp)', dash(num(d.dv01, 0)), { id: 'swpt-dv01', title: 'N · A · 0,0001 (payer +). Nominal ' + num(d.notional, 0) + ' TL' }));
     const v = d.vol || {};
-    const src = v.source === 'typed' ? 'yazılan (' + ({ day: 'bp/gün', year: 'bp/yıl', black: '% Black' })[v.unit] + ')'
+    const src = v.source === 'typed' ? 'yazılan (' + (v.unit_text || ({ day: 'bp/gün', year: 'bp/yıl', black: '% Black' })[v.unit]) + ')'
       : 'gerçekleşen ' + v.window + (isNum(v.n) && !v.full ? ' (' + v.n + ' var)' : '');
     box.appendChild(tile('Vol · bp/gün', volText.day(v.day), { id: 'swpt-vol-day-out', title: 'Kullanılan vol: ' + src }));
     box.appendChild(tile('Vol · bp/yıl', volText.year(v.year), { id: 'swpt-vol-year-out', title: 'bp/gün · √252' }));
@@ -253,34 +345,20 @@ export class SwaptionPage {
 
   drawOptions(d) {
     const o = d.options;
-    const rows = [
-      ['running_bp', 'Prim (bp, running)', (x) => num(x, 2), 'Forward prim p'],
-      ['upfront_bp', 'Prim (bp, peşin)', (x) => num(x, 2), 'A · p: nominalin bp\'si'],
-      ['tl', 'Prim (TL)', (x) => num(x, 0), 'N · A · p'],
-      ['delta', 'Delta (%)', (x) => num(x * 100, 1) + '%', 'Φ(d); receiver −Φ(−d)'],
-      ['delta_tl', 'Delta (TL/bp)', (x) => signed(x, 0), 'F 1 bp yükselince prim değişimi'],
-      ['gamma_tl', 'Gamma (TL/bp/bp)', (x) => num(x, 2), 'Deltanın 1 bp\'lik değişimi'],
-      ['vega_tl', 'Vega (TL / 1 bp normal vol)', (x) => num(x, 0), 'σN 1 bp/yıl artınca'],
-      ['vega_black_tl', 'Vega (TL / %1 Black vol)', (x) => (isNum(x) ? num(x, 0) : '–'), 'Black vol 1 puan artınca'],
-      ['theta_tl', 'Teta (TL / iş günü)', (x) => signed(x, 0), 'Aynı F, σN, A ile bir iş günü sonra'],
-    ];
-    const t = h('table', { class: 'plain', id: 'swpt-options' },
-      h('tr', null, h('th', { class: 'l' }, ''), ...KINDS.map(([, label]) => h('th', null, label))));
-    for (const [key, label, fmt, tip] of rows) {
-      const tr = h('tr', { title: tip });
-      tr.dataset.row = key;
-      tr.appendChild(h('td', { class: 'l' }, label));
-      for (const [kind] of KINDS) tr.appendChild(h('td', null, o ? fmt(o[kind][key]) : '–'));
-      t.appendChild(tr);
+    const typed = this.typedUnit();
+    // (a cell being typed into is left alone; the one typed shows what was typed, exactly)
+    const put = (el, text) => {
+      if (el === document.activeElement) return;
+      el.textContent = el.dataset.unit && el.dataset.unit === typed ? this.state.vol : text;
+    };
+    for (const [key, , fmt] of OPT_ROWS) {
+      for (const [kind] of KINDS) put(this.optTd[key + '.' + kind], o ? fmt(o[kind][key]) : '–');
     }
-    const be = h('tr', { class: 'pkg', title: 'Vadede başabaş: payer K + p, receiver K − p, straddle K ± (p_payer + p_receiver)' });
-    be.dataset.row = 'breakeven';
-    be.append(h('td', null, 'Başabaş (vadede)'),
-      h('td', { id: 'swpt-be-payer', style: { textAlign: 'right' } }, o ? rate(o.payer.breakeven) : '–'),
-      h('td', { id: 'swpt-be-receiver', style: { textAlign: 'right' } }, o ? rate(o.receiver.breakeven) : '–'),
-      h('td', { id: 'swpt-be-straddle', style: { textAlign: 'right' } }, o ? rate(o.straddle.breakeven.low) + ' / ' + rate(o.straddle.breakeven.high) : '–'));
-    t.appendChild(be);
-    clear(this.optBody).appendChild(t);
+    put(this.edit['payer:be'], o ? rate(o.payer.breakeven) : '–');
+    put(this.edit['receiver:be'], o ? rate(o.receiver.breakeven) : '–');
+    put(this.edit['straddle:be_low'], o ? rate(o.straddle.breakeven.low) : '–');
+    put(this.edit['straddle:be_high'], o ? rate(o.straddle.breakeven.high) : '–');
+    this.markTyped();
   }
 
   drawRange(d) {

@@ -15,6 +15,10 @@ and its currency, the entry (the live mid unless one is typed).
 * ``size = loss in the quote currency / |entry − stop|`` of the base currency, **rounded down to 1 000 000**.
 * Shown: the real loss at that size (in the loss's currency, TL and USD), the loss of 1M, the distance (price, %, pips; a
   TL pair's in kuruş too).  Under 1M the size is 0, and the loss 1M would make is said.
+* **Two-way** (the desk, 24.11.2026: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı"): the size may be typed instead
+  of the loss - the stop as given, the loss it makes at the stop is worked out (``size · |entry − stop|``, in the loss's
+  currency; a typed size is not rounded: it is the user's).  Stop, loss and size have two degrees of freedom: of loss and
+  size, the one typed last stands (the panel sends that one; a request with both reads the loss, as before).
 
 **The risk** (:meth:`Prop.risk`): the open trades of a Trades tab - Kişisel (the viewer's own) or Masa (the desk's).
 
@@ -160,10 +164,13 @@ def decimals_of(pair: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------- the calculator
-def size(mkt: Any, pair: str, stop: float, loss: float, loss_ccy: str, entry: Optional[float] = None) -> Dict[str, Any]:
+def size(mkt: Any, pair: str, stop: float, loss: Optional[float], loss_ccy: str, entry: Optional[float] = None,
+         amount: Optional[float] = None) -> Dict[str, Any]:
     """The position that loses at most ``loss`` (``loss_ccy``) when ``pair`` goes from the entry to ``stop``: its
     direction, the distance, the size rounded down to 1M of the base currency, the real loss at that size and the loss
-    of 1M - each amount in the quote currency, the loss's, TL and USD."""
+    of 1M - each amount in the quote currency, the loss's, TL and USD.  ``amount`` (two-way): a size typed instead of the
+    loss - that size as it is, the loss it makes at the stop worked out in ``loss_ccy`` (``loss`` is not read);
+    ``anchor`` says which of the two was typed."""
     pair = pair.upper()
     base, quote = pair[:3], pair[3:]
     mid, how = spot_of(mkt, pair)
@@ -174,17 +181,29 @@ def size(mkt: Any, pair: str, stop: float, loss: float, loss_ccy: str, entry: Op
         raise PropError("stop girişe eşit olamaz: yön stoptan okunur (girişin altında long, üstünde short)")
     direction = "long" if stop < e else "short"
     dist = abs(e - stop)
-    loss_q = convert(mkt, loss, loss_ccy, quote)
-    if loss_q is None:
-        raise PropError("kayıp %s'den %s'ye çevrilemedi: kur yok" % (loss_ccy, quote))
-    raw = loss_q / dist
-    x = raw / LOT
-    lots = int(math.floor(x + _EPS * max(1.0, x)))
 
     def money(q: float) -> Dict[str, Optional[float]]:
         return {"quote": q, "ccy": convert(mkt, q, quote, loss_ccy), "try": convert(mkt, q, quote, "TRY"),
                 "usd": convert(mkt, q, quote, "USD")}
 
+    if amount is not None:
+        # the size typed: the loss it makes at the stop (the loss's currency), nothing rounded
+        loss_q = amount * dist
+        loss = convert(mkt, loss_q, quote, loss_ccy)
+        if loss is None:
+            raise PropError("kayıp %s'den %s'ye çevrilemedi: kur yok" % (quote, loss_ccy))
+        raw = amount
+        lots_typed: Optional[float] = amount / LOT
+    else:
+        if loss is None:
+            raise PropError("Kayıp gerekli")
+        loss_q = convert(mkt, loss, loss_ccy, quote)
+        if loss_q is None:
+            raise PropError("kayıp %s'den %s'ye çevrilemedi: kur yok" % (loss_ccy, quote))
+        raw = loss_q / dist
+        lots_typed = None
+    x = raw / LOT
+    lots = int(math.floor(x + _EPS * max(1.0, x)))
     pip = tbm.pip_of(pair)
     out: Dict[str, Any] = {
         "pair": pair, "base": base, "quote": quote, "decimals": decimals_of(pair), "mid": mid, "mid_how": how,
@@ -193,8 +212,14 @@ def size(mkt: Any, pair: str, stop: float, loss: float, loss_ccy: str, entry: Op
         "pip": pip, "pips": dist / pip, "kurus": dist * 100.0 if quote == "TRY" else None,
         "loss": loss, "loss_ccy": loss_ccy, "loss_quote": loss_q, "size_raw": raw, "lots": lots, "size": lots * LOT,
         "under_1m": lots == 0, "per_1m": money(LOT * dist), "real_loss": money(lots * LOT * dist) if lots else None,
-        "usdtry": mkt.spot("USDTRY")}
+        "usdtry": mkt.spot("USDTRY"), "anchor": "loss" if lots_typed is None else "size"}
     per = out["per_1m"]["ccy"]
+    if lots_typed is not None:
+        # the size as typed (a fraction of 1M too): its loss is the loss
+        out.update(lots=lots_typed, size=amount, under_1m=False, real_loss=money(loss_q))
+        out["note"] = "%s %sM %s · kayıp %s %s" % (DIRECTION_TEXT[direction], tbm._tr(lots_typed, 2).rstrip("0").rstrip(",."),
+                                                  base, tbm._tr(loss, 0), loss_ccy)
+        return out
     if lots:
         out["note"] = "%s %dM %s · gerçek kayıp %s %s" % (DIRECTION_TEXT[direction], lots, base,
                                                           tbm._tr(out["real_loss"]["ccy"] or 0.0, 0), loss_ccy)
@@ -375,17 +400,20 @@ class Prop(object):
                 "today": mkt.today.isoformat() if getattr(mkt, "today", None) else None}
 
     def calc(self, user: Optional[str], query: Optional[Dict[str, Any]], lang: str = "tr") -> Dict[str, Any]:
-        """The calculator's answer for what the panel holds (``pair``, ``stop``, ``loss``, ``ccy``, ``entry``)."""
+        """The calculator's answer for what the panel holds (``pair``, ``stop``, ``loss``, ``ccy``, ``entry`` - or
+        ``size`` in place of ``loss``: the size typed, the loss worked out; with both the loss is read, as before)."""
         self.svc.require_user(user)
         q = query or {}
         pair = read_pair(q.get("pair"))
         if pair not in self.desk_pairs():
             raise PropError("%s masanın FX listesinde yok (Spot / FX ve quant pariteleri)" % pair)
         stop = read_price(q.get("stop"), "Stop", lang)
-        loss = read_amount(q.get("loss"), "Kayıp", lang)
+        typed = _blank(q.get("loss")) and not _blank(q.get("size"))
+        loss = None if typed else read_amount(q.get("loss"), "Kayıp", lang)
+        amount = read_amount(q.get("size"), "Büyüklük", lang) if typed else None
         ccy = read_ccy(q.get("ccy"), "Kaybın dövizi")
         entry = None if _blank(q.get("entry")) else read_price(q.get("entry"), "Giriş", lang)
-        return size(self.market(), pair, stop, loss, ccy, entry)
+        return size(self.market(), pair, stop, loss, ccy, entry, amount)
 
     # ------------------------------------------------------------------ the limit
     def limit(self, key: str) -> Optional[Dict[str, Any]]:

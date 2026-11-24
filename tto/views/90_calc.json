@@ -39,7 +39,7 @@
    "scope": "user",
    "group": "calc-3",
    "kind": "number",
-   "label": "master 'Forward' (outright; boş = piyasa: End Date'e offshore TRY ve USD OIS eğrisiyle forward)"
+   "label": "master 'Forward' (outright; iki yönlü: yazılınca fark ve puan ondan; boş = piyasa: End Date'e offshore TRY ve USD OIS eğrisiyle forward - ya da yazılan fark / puanın verdiği forward)"
   },
   {
    "range": "C7",
@@ -168,41 +168,6 @@
    "label": "B4 '360/365'"
   },
   {
-   "range": "O8",
-   "scope": "user",
-   "group": "calc-20",
-   "kind": "number",
-   "label": "B5 'Interest' (exponential)"
-  },
-  {
-   "range": "R9",
-   "scope": "user",
-   "group": "calc-21",
-   "kind": "auto",
-   "label": "B5 'Forward'"
-  },
-  {
-   "range": "U8",
-   "scope": "user",
-   "group": "calc-22",
-   "kind": "number",
-   "label": "B6 'Interest' (simple)"
-  },
-  {
-   "range": "X9",
-   "scope": "user",
-   "group": "calc-23",
-   "kind": "auto",
-   "label": "B6 'Forward'"
-  },
-  {
-   "range": "O12",
-   "scope": "user",
-   "group": "calc-24",
-   "kind": "number",
-   "label": "B8 'Basit', 'Gün Basis', 'Gün'"
-  },
-  {
    "range": "O13",
    "scope": "user",
    "group": "calc-24",
@@ -215,13 +180,6 @@
    "group": "calc-24",
    "kind": "number",
    "label": "B8 'Basit', 'Gün Basis', 'Gün'"
-  },
-  {
-   "range": "R12",
-   "scope": "user",
-   "group": "calc-25",
-   "kind": "number",
-   "label": "B9 'Bileşik', 'Gün Basis', 'Gün'"
   },
   {
    "range": "R13",
@@ -733,13 +691,6 @@
    "label": "B23 'Gün', 'Gün Basis'"
   },
   {
-   "range": "O39",
-   "scope": "user",
-   "group": "calc-68",
-   "kind": "number",
-   "label": "B23 'Volatilite'"
-  },
-  {
    "range": "O44",
    "scope": "user",
    "group": "move-back",
@@ -773,13 +724,6 @@
    "group": "calc-69",
    "kind": "date",
    "label": "B24 'Start', 'End'"
-  },
-  {
-   "range": "R38",
-   "scope": "user",
-   "group": "calc-70",
-   "kind": "number",
-   "label": "B24 'DF'"
   },
   {
    "range": "R41",
@@ -824,13 +768,6 @@
    "label": "B27 'Tarih'"
   },
   {
-   "range": "C54",
-   "scope": "user",
-   "group": "calc-75",
-   "kind": "number",
-   "label": "B27 'Fiyat'"
-  },
-  {
    "range": "F52",
    "scope": "user",
    "group": "calc-76",
@@ -846,13 +783,6 @@
   },
   {
    "range": "F54",
-   "scope": "user",
-   "group": "calc-76",
-   "kind": "number",
-   "label": "B28 'Start', 'End', 'Start Vol', 'End Vol'"
-  },
-  {
-   "range": "F55",
    "scope": "user",
    "group": "calc-76",
    "kind": "number",
@@ -929,13 +859,6 @@
    "label": "B31 'Spot'"
   },
   {
-   "range": "O56",
-   "scope": "user",
-   "group": "calc-81",
-   "kind": "number",
-   "label": "B31 'Ann. Yield'"
-  },
-  {
    "range": "O60",
    "scope": "user",
    "group": "calc-82",
@@ -951,13 +874,6 @@
   },
   {
    "range": "O64",
-   "scope": "user",
-   "group": "calc-83",
-   "kind": "auto",
-   "label": "B32 'First Price', 'Last Price'"
-  },
-  {
-   "range": "O66",
    "scope": "user",
    "group": "calc-83",
    "kind": "auto",
@@ -1285,6 +1201,14 @@
    "keep_title": true
   },
   {
+   "id": "B36",
+   "type": "table",
+   "title": "Yardımcı · iki yönlü hesaplayıcıların yazılan değerleri (her hesaplayıcının sütunu, üyesinin satırında)",
+   "range": "AH1:AT66",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
    "id": "B35",
    "type": "table",
    "title": "Yardımcı · limit (kullanılmıyor)",
@@ -1336,6 +1260,253 @@
     "B31",
     "B32",
     "B33"
+   ]
+  }
+ ],
+ "twoway": [
+  {
+   "id": "calc-band",
+   "label": "Ana girdiler",
+   "note": "İki yönlü: Forward, fark (Forward − Spot) ya da puan - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Forward",
+     "range": "AA10"
+    },
+    {
+     "name": "Fark (Forward − Spot)",
+     "range": "AA11",
+     "store": "AH11"
+    },
+    {
+     "name": "Puan",
+     "range": "AA12",
+     "store": "AH12"
+    }
+   ]
+  },
+  {
+   "id": "calc-basit",
+   "label": "Basit → Bileşik",
+   "note": "İki yönlü: Basit ya da Bileşik - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Basit",
+     "range": "O12",
+     "store": "AI12"
+    },
+    {
+     "name": "Bileşik",
+     "range": "O15",
+     "store": "AI15"
+    }
+   ]
+  },
+  {
+   "id": "calc-bilesik",
+   "label": "Bileşik → Basit",
+   "note": "İki yönlü: Bileşik ya da Basit - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Bileşik",
+     "range": "R12",
+     "store": "AJ12"
+    },
+    {
+     "name": "Basit",
+     "range": "R15",
+     "store": "AJ15"
+    }
+   ]
+  },
+  {
+   "id": "calc-df",
+   "label": "DF to Rate",
+   "note": "İki yönlü: DF, Simple ya da Continous - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "DF",
+     "range": "R38",
+     "store": "AK38"
+    },
+    {
+     "name": "Simple",
+     "range": "R39",
+     "store": "AK39"
+    },
+    {
+     "name": "Continous",
+     "range": "R40",
+     "store": "AK40"
+    }
+   ]
+  },
+  {
+   "id": "calc-exp",
+   "label": "Exponential · Interest 2 Price",
+   "note": "İki yönlü: Interest ya da Forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Interest",
+     "range": "O8",
+     "store": "AL8"
+    },
+    {
+     "name": "Forward",
+     "range": "O9",
+     "store": "AL9"
+    }
+   ]
+  },
+  {
+   "id": "calc-exp-back",
+   "label": "Exponential · Price 2 Interest",
+   "note": "İki yönlü: Interest ya da Forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Forward",
+     "range": "R9",
+     "store": "AM9"
+    },
+    {
+     "name": "Interest",
+     "range": "R8",
+     "store": "AM8"
+    }
+   ]
+  },
+  {
+   "id": "calc-simple",
+   "label": "Simple · Interest 2 Price",
+   "note": "İki yönlü: Interest ya da Forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Interest",
+     "range": "U8",
+     "store": "AN8"
+    },
+    {
+     "name": "Forward",
+     "range": "U9",
+     "store": "AN9"
+    }
+   ]
+  },
+  {
+   "id": "calc-simple-back",
+   "label": "Simple · Price 2 Interest",
+   "note": "İki yönlü: Interest ya da Forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Forward",
+     "range": "X9",
+     "store": "AO9"
+    },
+    {
+     "name": "Interest",
+     "range": "X8",
+     "store": "AO8"
+    }
+   ]
+  },
+  {
+   "id": "calc-move",
+   "label": "Implied Move",
+   "note": "İki yönlü: Volatilite, Implied Move, Upper / Lower Bound ya da Move By Pips - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Volatilite",
+     "range": "O39",
+     "store": "AP39"
+    },
+    {
+     "name": "Implied Move",
+     "range": "O40",
+     "store": "AP40"
+    },
+    {
+     "name": "Upper Bound",
+     "range": "O41",
+     "store": "AP41"
+    },
+    {
+     "name": "Lower Bound",
+     "range": "O42",
+     "store": "AP42"
+    },
+    {
+     "name": "Move By Pips",
+     "range": "O43",
+     "store": "AP43"
+    }
+   ]
+  },
+  {
+   "id": "calc-tlref",
+   "label": "TLREF Spread",
+   "note": "İki yönlü: Fiyat ya da Spread - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Fiyat",
+     "range": "C54",
+     "store": "AQ54"
+    },
+    {
+     "name": "Spread",
+     "range": "C56",
+     "store": "AQ56"
+    }
+   ]
+  },
+  {
+   "id": "calc-fwdvol",
+   "label": "Forward Volatility",
+   "note": "İki yönlü: End Vol ya da Fwd Vol (Start Vol yerinde kalır) - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "End Vol",
+     "range": "F55",
+     "store": "AR55"
+    },
+    {
+     "name": "Fwd Vol",
+     "range": "F56",
+     "store": "AR56"
+    }
+   ]
+  },
+  {
+   "id": "calc-yield",
+   "label": "Yıllık getiriden forward fiyat",
+   "note": "İki yönlü: Ann. Yield ya da Forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Ann. Yield",
+     "range": "O56",
+     "store": "AS56"
+    },
+    {
+     "name": "Forward",
+     "range": "O57",
+     "store": "AS57"
+    }
+   ]
+  },
+  {
+   "id": "calc-yield-back",
+   "label": "İki fiyat arası yıllık getiri",
+   "note": "İki yönlü: Last Price ya da Ann. Yield (First Price yerinde kalır) - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Last Price",
+     "range": "O66",
+     "store": "AT66"
+    },
+    {
+     "name": "Ann. Yield",
+     "range": "O65",
+     "store": "AT65"
+    }
    ]
   }
  ]

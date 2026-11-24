@@ -13,8 +13,10 @@ def test_the_steps_and_the_target_table_start_empty(service):
     refs = ex.empty_default_refs()
     assert refs[:3 * 80 + 5 * 8] == ex.empty_default_refs(ex.EMPTY_FIRST) and refs[0] == "OIS_MAIN!U10"
     assert len(ex.empty_default_refs(ex.EMPTY_FIRST)) == 3 * 80 + 5 * 8 and "VIOP!P338" in refs
-    for ref in ("OIS_MAIN!U10", "OIS_MAIN!V11", "OIS_MAIN!W12", "OIS_MAIN!W89", "VIOP!L331", "VIOP!N332", "VIOP!P338"):
+    for ref in ("OIS_MAIN!U10", "OIS_MAIN!V11", "OIS_MAIN!W12", "OIS_MAIN!W89", "VIOP!L331", "VIOP!N332"):
         assert cell(service, ref) is None, ref
+    # (Hedef değer is two-way since 24.11.2026: worked out from the row's typed value - none: empty)
+    assert cell(service, "VIOP!P338") == "" and cell(service, "VIOP!AE338") is None
     assert cell(service, "VIOP!K330") == "Target" and cell(service, "VIOP!P330") == "Hedef değer"     # the table is there
     # a blank step follows the scenario base: with the file's base (B3 = 1: the implied path) each scenario is the
     # market's path - the three scenarios are one
@@ -25,7 +27,7 @@ def test_the_steps_and_the_target_table_start_empty(service):
     try:
         service.set_inputs(u, "tto", [{"ref": "OIS_MAIN!U11", "value": "-75"}, {"ref": "VIOP!P331", "value": "-150"}])
         assert cell(service, "OIS_MAIN!U11", u) == -75.0 and cell(service, "VIOP!P331", u) == -150.0
-        assert cell(service, "OIS_MAIN!U11") is None and cell(service, "VIOP!P331") is None
+        assert cell(service, "OIS_MAIN!U11") is None and cell(service, "VIOP!P331") == ""
     finally:
         service.reset_inputs(u, "tto")
 
@@ -98,7 +100,7 @@ def test_old_shared_copies_of_the_file_values_go_once(tmp_path):
     svc = make_service(tmp_path)
     try:
         assert svc.store.shared_inputs("tto") == {("tto", "OIS_MAIN!P10"): 46366.0}      # a meeting date is no step
-        assert cell(svc, "OIS_MAIN!U11") is None and cell(svc, "VIOP!P331") is None
+        assert cell(svc, "OIS_MAIN!U11") is None and cell(svc, "VIOP!P331") == ""         # (two-way: nothing typed)
         assert svc.store.get("migrated.empty_defaults")
         svc.store.set_shared_inputs("tto", {"OIS_MAIN!U12": -25.0}, "biri")
     finally:

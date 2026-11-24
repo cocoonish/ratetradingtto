@@ -95,21 +95,21 @@
    "scope": "user",
    "group": "dv01-10",
    "kind": "auto",
-   "label": "surprise on top of implied"
+   "label": "surprise on top of implied (iki yönlü: yazılınca P&L ondan; P&L yazılırsa şok P&L'den)"
   },
   {
    "range": "E70",
    "scope": "user",
    "group": "dv01-11",
    "kind": "auto",
-   "label": "TLREF fixing deviation"
+   "label": "TLREF fixing deviation (iki yönlü: yazılınca P&L ondan; P&L yazılırsa şok P&L'den)"
   },
   {
    "range": "E71",
    "scope": "user",
    "group": "dv01-12",
    "kind": "auto",
-   "label": "parallel par shock"
+   "label": "parallel par shock (iki yönlü: yazılınca P&L ondan; P&L yazılırsa şok P&L'den)"
   },
   {
    "range": "C74:V74",
@@ -356,6 +356,14 @@
    "hidden": true
   },
   {
+   "id": "B11s",
+   "type": "table",
+   "title": "Yardımcı · senaryo P&L'in yazılan değerleri (iki yönlü)",
+   "range": "G65:G71",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
    "id": "B15",
    "type": "table",
    "title": "Yardımcı · hedge matrisleri",
@@ -413,6 +421,24 @@
     "B18"
    ],
    "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesinde yapıştırılır."
+  }
+ ],
+ "twoway": [
+  {
+   "id": "dv01-scenario",
+   "label": "Senaryo P&L",
+   "note": "İki yönlü: şok (Girdi 2, bp) ya da P&L (TL) - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince varsayılana döner).",
+   "members": [
+    {
+     "name": "Şok (bp)",
+     "range": "E69:E71"
+    },
+    {
+     "name": "P&L (TL)",
+     "range": "C69:C71",
+     "store": "G69:G71"
+    }
+   ]
   }
  ]
 }

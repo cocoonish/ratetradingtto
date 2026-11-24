@@ -1,7 +1,9 @@
 // "Prop" in the top bar (tto/prop.py): a position-size calculator and, below it, the prop risk of a Trades tab - on every
 // page, to look at only: nothing is booked or sent; the one thing kept is the user's own daily loss limit (server-side).
 // The calculator asks the server as its inputs change (debounced): the direction from the stop against the entry, the
-// size rounded down to 1M, the real loss at it, the loss of 1M.  The risk: the loss if every stop is hit, the tab's
+// size rounded down to 1M, the real loss at it, the loss of 1M.  Two-way (the desk, 24.11.2026: "tüm tablolar bu şekilde
+// olmalı"): the size may be typed instead of the loss - of the two, the one typed last stands (✎, bold) and the other
+// shows what it gives (greyed); Delete on it: nothing typed again.  The risk: the loss if every stop is hit, the tab's
 // "Günlük" K/Z (its last "MTM yenile", as the Trades page shows it), the limit and the room left - asked when the panel
 // opens, on its buttons and once a minute while it is open.
 import { api } from './api.js';
@@ -22,6 +24,7 @@ const pp = {
   calc: null,          // the calculator's last answer
   risk: null,          // the last risk answer
   ccy: 'TRY',          // the loss's currency - the panel's: the risk is shown in it too
+  anchor: null,        // of the loss and the size, the one typed last ('loss' / 'size'; null: neither)
   scope: 'personal',
   ticket: 0,           // the calculator's latest request
   rticket: 0,          // the risk's latest request
@@ -65,14 +68,19 @@ function build() {
   pair.setAttribute('list', 'prop-pairs');
   const entry = inp('prop-entry', 'canlı orta kur', 'Boş: panodaki canlı orta kur; yazılırsa o');
   const stop = inp('prop-stop', 'stop kuru', 'Stop seviyesi: girişin altında long, üstünde short');
-  const loss = inp('prop-loss', '500k, 1mn', 'Göze aldığınız kayıp: 500k, 1mn, 2,5mn');
+  const loss = inp('prop-loss', '500k, 1mn', 'Göze aldığınız kayıp: 500k, 1mn, 2,5mn - büyüklük ondan (1M\'e aşağı yuvarlanır)');
+  const size = inp('prop-size-in', '2m, 5m', 'Büyüklük (baz döviz): 2m, 2,5m - yazarsanız stoptaki kayıp ondan hesaplanır. Kayıp ve büyüklükten '
+    + 'son yazdığınız kalır, öbürü ondan hesaplanır');
   const ccy = seg('prop-ccy', [['TRY', 'TRY', 'Kayıp TL; risk de TL gösterilir'], ['USD', 'USD', 'Kayıp USD; risk de USD gösterilir']], pp.ccy, (v) => {
     pp.ccy = v;
     askCalc();
     paintRisk();
   });
-  for (const x of [pair, entry, stop, loss]) {
-    x.addEventListener('input', () => askCalc());
+  for (const x of [pair, entry, stop, loss, size]) {
+    x.addEventListener('input', () => {
+      if (x === loss || x === size) typed(x === loss ? 'loss' : 'size');
+      askCalc();
+    });
     x.addEventListener('keydown', (e) => { if (e.key === 'Enter') { askCalc.cancel(); calcNow(); } });
   }
   pair.addEventListener('change', () => paintMid());
@@ -95,7 +103,8 @@ function build() {
       field('Parite', pair, h('datalist', { id: 'prop-pairs' })),
       field('Giriş', entry, h('span', { class: 'pp-mid muted', id: 'prop-mid' })),
       field('Stop', stop),
-      field('Kayıp', loss, ccy)),
+      field('Kayıp', loss, ccy),
+      field('Büyüklük', size, h('span', { class: 'pp-mid muted', id: 'prop-size-base' }))),
     h('div', { class: 'errtxt', id: 'prop-err' }),
     h('div', { class: 'pp-out', id: 'prop-result' }),
     h('div', { class: 'pp-risk' },
@@ -179,15 +188,47 @@ function paintMid() {
 // ---------------------------------------------------------------------- the calculator
 const askCalc = debounce(() => calcNow(), 300);
 
+/** The loss or the size typed into (two-way): it is the one that stands; the other's own value goes - it shows what the
+ *  typed one gives.  Emptied: nothing typed (or the other, if it still holds a value of its own). */
+function typed(which) {
+  const box = $(which === 'loss' ? 'prop-loss' : 'prop-size-in');
+  const other = $(which === 'loss' ? 'prop-size-in' : 'prop-loss');
+  if (box.value.trim()) {
+    pp.anchor = which;
+    other.value = '';
+  } else if (pp.anchor === which) {
+    pp.anchor = other.value.trim() ? (which === 'loss' ? 'size' : 'loss') : null;
+  }
+  markAnchor();
+}
+
+/** The typed one bold with ✎; the other's placeholder what the typed one gives (or its hint). */
+function markAnchor() {
+  if (!pp.el) return;
+  for (const [id, which] of [['prop-loss', 'loss'], ['prop-size-in', 'size']]) {
+    const box = $(id);
+    const on = pp.anchor === which;
+    box.classList.toggle('tw-anchor', on);
+    box.closest('.pp-field').classList.toggle('tw-anchored', on);
+  }
+  const c = pp.calc;
+  const loss = $('prop-loss'), size = $('prop-size-in');
+  loss.placeholder = c && pp.anchor === 'size' && typeof c.loss === 'number' ? num(c.loss, 0) : '500k, 1mn';
+  size.placeholder = c && pp.anchor === 'loss' ? (c.lots ? c.lots + 'm' : '0') : '2m, 5m';
+  $('prop-size-base').textContent = c ? c.base : '';
+}
+
 async function calcNow() {
   if (!pp.el) return;
-  const q = { pair: $('prop-pair').value.trim(), entry: $('prop-entry').value.trim(), stop: $('prop-stop').value.trim(),
-    loss: $('prop-loss').value.trim(), ccy: pp.ccy };
+  const q = { pair: $('prop-pair').value.trim(), entry: $('prop-entry').value.trim(), stop: $('prop-stop').value.trim(), ccy: pp.ccy };
+  if (pp.anchor === 'size') q.size = $('prop-size-in').value.trim();
+  else q.loss = $('prop-loss').value.trim();
   const ticket = ++pp.ticket;
-  if (!q.pair || !q.stop || !q.loss) {
+  if (!q.pair || !q.stop || !(q.loss || q.size)) {
     pp.calc = null;
     $('prop-err').textContent = '';
-    paintCalc('Pariteyi, stopu ve göze aldığınız kaybı yazın: büyüklük 1M\'e aşağı yuvarlanır, gerçek kayıp hiçbir zaman yazdığınızı geçmez.');
+    paintCalc('Pariteyi, stopu ve göze aldığınız kaybı yazın: büyüklük 1M\'e aşağı yuvarlanır, gerçek kayıp hiçbir zaman yazdığınızı geçmez. '
+      + 'Ya da büyüklüğü yazın: stoptaki kayıp ondan hesaplanır.');
     return;
   }
   try {
@@ -223,6 +264,7 @@ function shareLine(c) {
 function paintCalc(hint) {
   const box = clear($('prop-result'));
   const c = pp.calc;
+  markAnchor();
   if (!c) {
     if (hint) box.appendChild(h('div', { class: 'muted' }, hint));
     return;
@@ -234,7 +276,13 @@ function paintCalc(hint) {
   const ccy = c.loss_ccy;
   const other = ccy === 'TRY' ? 'usd' : 'try';
   const alt = (m) => (typeof m[other] === 'number' ? ' · ' + money(m[other]) + ' ' + other.toUpperCase() : '');
-  if (c.under_1m) {
+  if (c.anchor === 'size') {
+    // the size typed (as it is): the loss it makes at the stop
+    box.appendChild(h('div', { class: 'pp-size', id: 'prop-size' }, 'Büyüklük ', h('b', null, num(c.lots, 2).replace(/,?0+$/, '') + 'M ' + c.base),
+      h('span', { class: 'muted' }, ' (yazılan)')));
+    box.appendChild(h('div', { class: 'pp-real', id: 'prop-real' }, 'Stopta kayıp ', h('b', null, money(c.real_loss.ccy) + ' ' + ccy),
+      h('span', { class: 'muted' }, alt(c.real_loss))));
+  } else if (c.under_1m) {
     box.appendChild(h('div', { class: 'pp-size', id: 'prop-size' }, 'Büyüklük ', h('b', null, '0'), h('span', { class: 'muted' }, ' (ham ' + num(c.size_raw / 1e6, 2) + 'M)')));
     box.appendChild(h('div', { class: 'pp-real neg', id: 'prop-real' }, '1M bile ' + money(c.loss) + ' ' + ccy + ' kaybı aşıyor: 1M\'de kayıp ',
       h('b', null, money(c.per_1m.ccy) + ' ' + ccy), h('span', { class: 'muted' }, alt(c.per_1m))));
@@ -417,5 +465,5 @@ export function stopProp() {
   askCalc.cancel();
   if (pp.el) { pp.el.remove(); pp.el = null; }
   // (the answers still on their way are dropped: their tickets are old)
-  Object.assign(pp, { pairs: [], limit: null, calc: null, risk: null, ccy: 'TRY', ticket: pp.ticket + 1, rticket: pp.rticket + 1 });
+  Object.assign(pp, { pairs: [], limit: null, calc: null, risk: null, ccy: 'TRY', anchor: null, ticket: pp.ticket + 1, rticket: pp.rticket + 1 });
 }

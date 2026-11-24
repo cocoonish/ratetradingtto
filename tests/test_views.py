@@ -167,7 +167,10 @@ def test_an_input_declared_a_date_holds_a_date(models):
     assert kinds[("forward", "B25:C27")] == "date" and kinds[("forward", "D25:D27")] == "number"
     assert kinds[("forward", "G25:H27")] == kinds[("forward", "E63")] == kinds[("forward", "V78")] == "pct"
     assert kinds[("forward", "V56")] == "text" and kinds[("masa", "W94:W99")] == "number"
-    assert kinds[("calc", "C54")] == kinds[("calc", "I54")] == "number"
+    # (TLREF Spread's price is a two-way member since 24.11.2026: its store takes a number, as its copy's input does)
+    calc = next(v for v in VIEWS if v["id"] == "calc")
+    tlref = next(g for g in calc["twoway"] if g["id"] == "calc-tlref")
+    assert tlref["members"][0]["range"] == "C54" and tlref["members"][0].get("kind", "number") == kinds[("calc", "I54")] == "number"
 
 
 def test_ret_curve_is_a_shared_desk_input():
@@ -548,6 +551,10 @@ NAMED = {
     # pricing sources)
     ("manuel", "B2"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!X2"] + _RV_TYPED),
                        ("Tüm Kâğıtlar", ["EK_EVREN!C2", "EK_EVREN!E2"])],
+    # the VİOP target's two-way members typed on the VİOP page (its Hedef değer is in the strip above it, worked out from
+    # them when one of them is typed)
+    ("masa", "B17"): [("VİOP", ["VIOP!AF331:AI338"])],
+    ("masa", "B17D"): [("VİOP", ["VIOP!AF331:AI338"])],
     ("dv01", "B9"): [_POSITION, _HEDGE],
     ("dv01", "B10"): [_POSITION, _HEDGE],
     **{("dv01", pid): [_POSITION] for pid in ("B2", "B11", "B13", "B14", "B16", "B17", "B18")},

@@ -5266,6 +5266,194 @@ def _tto_move_back(model: Model) -> None:
         b.set(out, '=IFERROR(IF(N(%s)>0,%s/SQRT($O$37/$O$38),""),"")' % ("$%s$%s" % (typed[0], typed[1:]), move), fmt="0.00%", bold=True)
 
 
+# ---------------------------------------------------------------------------------------------- calculators: two-way
+#: The calculators of Hesaplayıcılar (the Calculators sheet) and DV01 Risk's scenario P&L, two-way (tto/twoway.py; the
+#: desk, 24.11.2026: "hangisine ben girdiysem diğerini hesaplasın ... Bu söylediklerin ve tüm tablolar bu şekilde olmalı,
+#: kolay çalışmamız için"): any value of a calculator can be typed - the one typed last stands, the others are worked out
+#: from it with the block's own formulas and their exact inverses.
+#:
+#: Each calculator has a **hub**, the input its block computes from (Implied Move's Volatilite, Basit → Bileşik's Basit,
+#: DF to Rate's DF ...).  Every other member keeps its workbook formula, wrapped: ``IF(ISBLANK(<its store>), <formula>,
+#: <its store>)``; the hub is ``IF(ISBLANK(<its store>), <the hub the typed member gives - the block's formula solved for
+#: it -, else its old default>, <its store>)``.  The stores are blank inputs of the twoway group, in one column per
+#: calculator, each on its member's row (a hidden helper table of the page shows them).  A copyable calculator keeps every
+#: member in a store (a temporary copy works fully then: mechanism.md) - a value typed into its hub before it was two-way
+#: is its store's at the user's next read (twoway.TwoWay.adopt).  A hub kept **in place** (``own``: the top band's
+#: Forward, DV01's shocks - inputs of tables no copy is made of) stays the page's input: its default is the value the typed
+#: member gives, else what it was (the market's forward, the file's shock), and what users typed there keeps its meaning.
+#: A hub's old constant default is the workbook's value of the cell, as the block showed it.
+class TwHub(object):
+    """One two-way calculator of a workbook sheet: its hub and the members worked out from it."""
+
+    __slots__ = ("name", "sheet", "col", "hub", "own", "members", "captions")
+
+    def __init__(self, name: str, sheet: str, col: str, hub: str, own: bool,
+                 members: Sequence[Tuple[str, str, str]], captions: Sequence[Tuple[str, str]]):
+        self.name = name                    # the addition's name (the page's table)
+        self.sheet = sheet
+        self.col = col                      # the column of its stores, each on its member's row
+        self.hub = hub                      # the input the block computes from
+        self.own = own                      # the hub kept in place (no store of its own)
+        self.members = tuple(members)       # (cell, what its workbook formula holds, the hub from {x} typed in it)
+        self.captions = tuple(captions)     # (cell, text) the block is checked by
+
+    def store(self, cell: str, fixed: bool = False) -> str:
+        """Where a value typed into ``cell`` is kept (``fixed``: as an absolute reference)."""
+        row = re.sub(r"^[A-Z]+", "", cell)
+        return ("$%s$%s" if fixed else "%s%s") % (self.col, row)
+
+    def cells(self) -> List[str]:
+        return [self.hub] + [m for m, _, _ in self.members]
+
+
+_SQ = "SQRT($O$37/$O$38)"                  # Implied Move's √(Gün / Gün Basis)
+TW_HUBS = (
+    # Ana girdiler (top band): Forward (the market's forward until typed) - its difference to the spot, its points
+    TwHub("Ana girdiler iki yönlü", "Calculators", "AH", "AA10", True,
+          (("AA11", "AA10-AA9", "$AA$9+{x}"), ("AA12", "AA11*10000", "$AA$9+{x}/10000")),
+          (("Z9", "Spot"), ("Z10", "Forward"))),
+    TwHub("Basit → Bileşik iki yönlü", "Calculators", "AI", "O12", False,
+          (("O15", "((1+O12*O14/O13)^(O13/O14)-1)", "((1+{x})^($O$14/$O$13)-1)*$O$13/$O$14"),),
+          (("N12", "Basit"), ("N13", "Gün Basis"), ("N14", "Gün"), ("N15", "Bileşik"))),
+    TwHub("Bileşik → Basit iki yönlü", "Calculators", "AJ", "R12", False,
+          (("R15", "(((R12+1)^(1/(R13/R14)))-1)*(R13/R14)", "(1+{x}*$R$14/$R$13)^($R$13/$R$14)-1"),),
+          (("Q12", "Bileşik"), ("Q13", "Gün Basis"), ("Q14", "Gün"), ("Q15", "Basit"))),
+    TwHub("DF to Rate iki yönlü", "Calculators", "AK", "R38", False,
+          (("R39", "((1/R38)-1)/((R37-R36)/R41)", "1/(1+{x}*($R$37-$R$36)/$R$41)"),
+           ("R40", "-LN(R38)/((R37-R36)/R41)", "EXP(-{x}*($R$37-$R$36)/$R$41)")),
+          (("Q38", "DF"), ("Q39", "Simple"), ("Q40", "Continous"), ("Q41", "Gün Basis"))),
+    TwHub("Exponential faizden fiyat iki yönlü", "Calculators", "AL", "O8", False,
+          (("O9", "O7*EXP(O8*O6/360)", "LN({x}/$O$7)*360/$O$6"),),
+          (("N3", "Interest 2 Price"), ("N8", "Interest"), ("N9", "Forward"))),
+    TwHub("Exponential fiyattan faiz iki yönlü", "Calculators", "AM", "R9", False,
+          (("R8", "LN(R9/R7)*360/R6", "$R$7*EXP({x}*$R$6/360)"),),
+          (("Q3", "Price 2 Interest"), ("Q8", "Interest"), ("Q9", "Forward"))),
+    TwHub("Simple faizden fiyat iki yönlü", "Calculators", "AN", "U8", False,
+          (("U9", "U7+U7*U8*U6/360", "({x}/$U$7-1)*360/$U$6"),),
+          (("T3", "Interest 2 Price"), ("T8", "Interest"), ("T9", "Forward"))),
+    TwHub("Simple fiyattan faiz iki yönlü", "Calculators", "AO", "X9", False,
+          (("X8", "((X9-X7)/X7)*360/X6", "$X$7*(1+{x}*$X$6/360)"),),
+          (("W3", "Price 2 Interest"), ("W8", "Interest"), ("W9", "Forward"))),
+    # Implied Move: Volatilite - the move (% of the spot), the upper and lower bound, the move in pips
+    TwHub("Implied Move iki yönlü", "Calculators", "AP", "O39", False,
+          (("O40", "SQRT(O37/O38)*O39", "{x}/" + _SQ), ("O41", "(1+O40)*O36", "({x}/$O$36-1)/" + _SQ),
+           ("O42", "(1-O40)*O36", "(1-{x}/$O$36)/" + _SQ), ("O43", "O36*O40*10000", "{x}/($O$36*10000)/" + _SQ)),
+          (("N36", "Spot"), ("N39", "Volatilite"), ("N40", "Implied Move"), ("N41", "Upper Bound"), ("N42", "Lower Bound"),
+           ("N43", "Move By Pips"))),
+    TwHub("TLREF Spread iki yönlü", "Calculators", "AQ", "C54", False,
+          (("C56", "(100-C54)/100*365/C55*10000", "100-{x}/10000*$C$55/365*100"),),
+          (("B54", "Fiyat"), ("B55", "Gün"), ("B56", "Spread"))),
+    # Forward Volatility: the end vol from a forward vol typed, the start vol held
+    TwHub("Forward Volatility iki yönlü", "Calculators", "AR", "F55", False,
+          (("F56", "SQRT((F55^2*F53-F54^2*F52)/(F53-F52))", "SQRT(({x}^2*($F$53-$F$52)+$F$54^2*$F$52)/$F$53)"),),
+          (("E54", "Start Vol"), ("E55", "End Vol"), ("E56", "Fwd Vol"))),
+    TwHub("Yıllık getiriden forward fiyat iki yönlü", "Calculators", "AS", "O56", False,
+          (("O57", "O55*O56/360*O53+O55", "({x}/$O$55-1)*360/$O$53"),),
+          (("N55", "Spot"), ("N56", "Ann. Yield"), ("N57", "Forward"))),
+    TwHub("İki fiyat arası yıllık getiri iki yönlü", "Calculators", "AT", "O66", False,
+          (("O65", "(O66-O64)/O64*365/O62", "$O$64*(1+{x}*$O$62/365)"),),
+          (("N64", "First Price"), ("N65", "Ann. Yield"), ("N66", "Last Price"))),
+    # DV01 Risk's scenario P&L: each shock (in place) - the P&L it makes
+    TwHub("Senaryo P&L iki yönlü (tek toplantı)", "DV01_RISK", "G", "E69", True,
+          (("C69", "SUMPRODUCT((COLUMN($AJ$2:$DL$2)-COLUMN($AJ$2)>=$D$69)*$AJ$2:$DL$2)*$E$69",
+            "{x}/SUMPRODUCT((COLUMN($AJ$2:$DL$2)-COLUMN($AJ$2)>=$D$69)*$AJ$2:$DL$2)"),),
+          (("B69", "Tek toplantı sürprizi"),)),
+    TwHub("Senaryo P&L iki yönlü (TLREF)", "DV01_RISK", "G", "E70", True,
+          (("C70", "$AJ$2*$E$70", "{x}/$AJ$2"),), (("B70", "TLREF fixing şoku (MPC1'e kadar)"),)),
+    TwHub("Senaryo P&L iki yönlü (paralel)", "DV01_RISK", "G", "E71", True,
+          (("C71", "$C$26*$E$71", "{x}/$C$26"),), (("B71", "Paralel par şoku"),)),
+)
+#: the captions of the stores' columns (row 1 of the Calculators sheet; DV01 Risk: the scenario P&L's header row)
+TW_HUB_HEADS = {"Calculators!AH1": "Ana girdiler (yazılan)", "Calculators!AI1": "Basit → Bileşik (yazılan)",
+                "Calculators!AJ1": "Bileşik → Basit (yazılan)", "Calculators!AK1": "DF to Rate (yazılan)",
+                "Calculators!AL1": "Exponential faizden fiyat (yazılan)", "Calculators!AM1": "Exponential fiyattan faiz (yazılan)",
+                "Calculators!AN1": "Simple faizden fiyat (yazılan)", "Calculators!AO1": "Simple fiyattan faiz (yazılan)",
+                "Calculators!AP1": "Implied Move (yazılan)", "Calculators!AQ1": "TLREF Spread (yazılan)",
+                "Calculators!AR1": "Forward Volatility (yazılan)", "Calculators!AS1": "Yıllık getiriden forward (yazılan)",
+                "Calculators!AT1": "İki fiyat arası getiri (yazılan)", "DV01_RISK!G65": "Yazılan P&L (TL)"}
+
+
+def _numfmt(model: Model, sheet: str, addr: str) -> str:
+    """A cell's number format (``General`` when it has none)."""
+    xf = model.sheet(sheet).styles.get(parse_a1(addr), 0)
+    return model.numfmts[xf] if xf < len(model.numfmts) else "General"
+
+
+def _hub_default(model: Model, t: TwHub) -> str:
+    """What the hub shows with nothing typed in its calculator: its formula default (an input of the page, in place) or
+    the workbook's value of the cell (a number, written so that it reads back the same)."""
+    sh = model.sheet(t.sheet)
+    rc = parse_a1(t.hub)
+    if rc in sh.fml:
+        return formula_of(model, t.sheet, t.hub).lstrip("+")
+    x = sh.consts.get(rc)
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        raise ValueError("%s!%s bir sayı değil (%r)" % (t.sheet, t.hub, x))
+    text = repr(float(x))
+    if float(text) != float(x):                                     # (repr always reads back: a guard, not a case)
+        raise ValueError("%s!%s yazılamadı" % (t.sheet, t.hub))
+    return text
+
+
+def _tw_hub_check(t: TwHub, model: Model) -> None:
+    """The block the calculator's formulas solve: its captions, each member's workbook formula, the hub's default (a
+    number - a formula when it stays in place), its stores' cells empty."""
+    _need_sheets(model, t.sheet)
+    _need_captions(model, tuple((t.sheet, addr, text) for addr, text in t.captions))
+    sh = model.sheet(t.sheet)
+    if (parse_a1(t.hub) in sh.fml) and not t.own:
+        raise ValueError("%s!%s bir formül (değeri bekleniyordu)" % (t.sheet, t.hub))
+    _hub_default(model, t)
+    for cell, holds, _ in t.members:
+        _need_formula(model, t.sheet, cell, holds)
+    for cell in t.cells():
+        if t.own and cell == t.hub:
+            continue
+        rc = parse_a1(t.store(cell))
+        if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+            raise ValueError("%s!%s boş değil" % (t.sheet, t.store(cell)))
+    for ref in TW_HUB_HEADS:
+        sheet, addr = ref.split("!")
+        if sheet == t.sheet and parse_a1(addr) in sh.fml:
+            raise ValueError("%s boş değil" % ref)
+
+
+def tw_hub_formula(t: TwHub, model: Model) -> str:
+    """The hub's formula: its store (unless in place), else the value the member typed gives, else its default."""
+    out = _hub_default(model, t)
+    for cell, _, back in reversed(t.members):
+        s = t.store(cell, True)
+        out = "IF(ISBLANK(%s),%s,%s)" % (s, out, back.format(x=s))
+    if not t.own:
+        s = t.store(t.hub, True)
+        out = "IF(ISBLANK(%s),%s,%s)" % (s, out, s)
+    return "=" + out
+
+
+def _tto_tw_hub(t: TwHub, model: Model) -> None:
+    """A calculator two-way: its stores (blank, each in its member's number format), the members' formulas wrapped and
+    the hub worked out from whichever is typed."""
+    b = SheetBuilder(model, t.sheet)
+    for ref, text in TW_HUB_HEADS.items():
+        sheet, addr = ref.split("!")
+        if sheet == t.sheet and re.match(r"^%s\d+$" % t.col, addr):
+            b.set(addr, text, bold=True, color=NOTE_COLOR)
+    for cell in t.cells():
+        if not (t.own and cell == t.hub):
+            b.input(t.store(cell), None, fmt=_numfmt(model, t.sheet, cell))
+    hub = tw_hub_formula(t, model)
+    for cell, _, _ in t.members:
+        s = t.store(cell, True)
+        b.patch(cell, "=IF(ISBLANK(%s),%s,%s)" % (s, formula_of(model, t.sheet, cell).lstrip("+"), s))
+    b.patch(t.hub, hub)
+
+
+def _tw_hub_builders() -> Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]:
+    """``_BUILDERS`` entries: one per calculator, so that a block the workbook changed is left out by itself."""
+    import functools
+    return tuple((t.name, functools.partial(_tw_hub_check, t), functools.partial(_tto_tw_hub, t)) for t in TW_HUBS)
+
+
 # ---------------------------------------------------------------------------------------------- VİOP target: a far price
 #: The target table of the VİOP sheet (VIOP!K330:Y338) goes from a target rate to the far contract's limit price: "Hedef
 #: tipi" FRA+bp (OIS FRA + bp), FXswap+bp (the FX swap implied rate + bp) or Faiz % (a rate typed), "Hedef değer" its
@@ -5309,10 +5497,10 @@ def viop_far_limit(r: int) -> str:
     return "%s*(1+$Q%d*%s/360)/%s" % (viop_near_limit(r), r, viop_target_days(r), viop_usd_carry(r))
 
 
-def viop_price_rate(r: int) -> str:
+def viop_price_rate(r: int, price: Optional[str] = None) -> str:
     """Its inverse: the target rate the far price typed in "Hedef değer" implies, ((price / near limit) · USD carry − 1)
-    · 360 / days."""
-    return "(($P%d/%s)*%s-1)*360/%s" % (r, viop_near_limit(r), viop_usd_carry(r), viop_target_days(r))
+    · 360 / days (``price``: another cell or expression than the row's "Hedef değer", ``$P``)."""
+    return "((%s/%s)*%s-1)*360/%s" % (price or "$P%d" % r, viop_near_limit(r), viop_usd_carry(r), viop_target_days(r))
 
 
 def _vprice_anchors(r: int) -> Tuple[str, str]:
@@ -5551,6 +5739,135 @@ def _tto_viop_fra(model: Model) -> None:
         mf = 'VIOP!$O$%d&" "&VIOP!$P$%d' % (r, r)
         SheetBuilder(model, "MASA").patch("S%d" % m, "=" + formula_of(model, "MASA", "S%d" % m).replace(
             mf, '%s&IF(%s!$U$%d<>""," · geçersiz",IF(%s!$D$%d>1," · "&%s!$E$%d,""))' % (mf, e, h, e, h, e, h)))
+
+
+# ---------------------------------------------------------------------------------------------- VİOP target: two-way
+#: The VİOP target table two-way (tto/twoway.py; the desk, 24.11.2026: "Bu söylediklerin ve tüm tablolar bu şekilde
+#: olmalı"): per row, "Hedef değer" (P, in the row's own "Hedef tipi"), "Hedef faiz" (Q), "Uzak limit fiyatı" (S),
+#: "Spread fiyatı" (T) or "Hedef − piyasa" (V) can be typed - the one typed last stands, the others are worked out from
+#: it.  Each is kept in a store of the row (``VT_STORES``: AE:AI, beside the table's tooltips); the target rate Q is the
+#: row's hub:
+#:
+#: * Hedef değer typed: the sheet's own target rate of its type (FRA+bp: OIS FRA + bp; FXswap+bp: the FX swap implied
+#:   rate + bp; Faiz %: the rate; Fiyat: the rate the far price implies, ``viop_price_rate``);
+#: * Uzak limit typed: the rate that far price implies (``viop_price_rate``, the Fiyat type's inverse); Spread fiyatı
+#:   typed: the far limit is the near limit (by the row's side, as R) + the spread; Hedef − piyasa typed: the market's
+#:   implied rate (U, by the side) + the gap;
+#: * every other member is the sheet's own formula of that rate - Hedef değer in the row's type: FRA+bp (Q − OIS FRA) ·
+#:   10000, FXswap+bp (Q − FX swap implied) · 10000, Faiz % Q · 100, Fiyat the far limit.
+#:
+#: "Hedef tipi" stays the user's: it says what Hedef değer means (the mechanism never writes another input - a type
+#: flipped by a typed price would make a later Hedef değer mean something else).  A row is priced while any of its five
+#: is typed (U, W, X, Y read that instead of "Hedef değer <> blank", which is worked out now); a contract that rolled off
+#: still leaves the row "Geçersiz" (EK_VFRA!U) with its typed value kept.  What users typed in Hedef değer before is its
+#: store's at their next read (twoway.TwoWay.adopt).
+VT_NAME = "VİOP target iki yönlü"
+VT_STORES = {"P": "AE", "Q": "AF", "S": "AG", "T": "AH", "V": "AI"}
+VT_HEADS = {"AE": "Yazılan hedef değer", "AF": "Yazılan hedef faiz", "AG": "Yazılan uzak limit", "AH": "Yazılan spread fiyatı",
+            "AI": "Yazılan hedef − piyasa (bp)"}
+
+
+def viop_fx_implied(r: int) -> str:
+    """The FX swap implied TRY rate between the row's two contracts, as the target rate's FXswap+bp branch reads it: the
+    mid of the far over the near contract's FX swap forward (rows 105 / 106), the USD carry, ACT/360."""
+    two = "INDEX($L$105:$X$105,MATCH($%(c)s%(r)d,$L$97:$X$97,0))+INDEX($L$106:$X$106,MATCH($%(c)s%(r)d,$L$97:$X$97,0))"
+    return "((((%s)/2)/((%s)/2))*%s-1)*360/%s" % (two % {"c": "M", "r": r}, two % {"c": "L", "r": r}, viop_usd_carry(r),
+                                                   viop_target_days(r))
+
+
+def _vt_active(r: int) -> str:
+    """A row is priced while any of its five is typed."""
+    return "NOT(AND(%s))" % ",".join("ISBLANK($%s%d)" % (VT_STORES[c], r) for c in "PQSTV")
+
+
+def _vt_rate_parts(r: int) -> Tuple[str, str, str]:
+    """The target rate's anchors in its formula: the condition ("Hedef değer" not blank), the start of the by-type rate,
+    its end - each found exactly once (``_viop_tw_check``)."""
+    return '$P%d<>""' % r, 'IF($O%d="Faiz %%",' % r, '+$P%d/10000)),""),"")' % r
+
+
+def _viop_tw_check(model: Model) -> None:
+    """The target table as the types and the FRA's curve leave it: the rate's anchors, the FX swap branch, the members'
+    formulas, the conditions read by "Piyasa ima", OIS FRA, DV01 and days; its stores' cells empty."""
+    _need_sheets(model, "VIOP", VFRA_SHEET)
+    _need_captions(model, (("VIOP", "P330", "Hedef değer"), ("VIOP", "Q330", "Hedef faiz (360)"), ("VIOP", "S330", "Uzak limit fiyatı"),
+                           ("VIOP", "T330", "Spread fiyatı"), ("VIOP", "U330", "Piyasa ima ff (yön)"),
+                           ("VIOP", "V330", "Hedef − piyasa (bp)")))
+    sh = model.sheet("VIOP")
+    for r in range(VFRA_ROWS[0], VFRA_ROWS[1] + 1):
+        if parse_a1("P%d" % r) in sh.fml or sh.consts.get(parse_a1("P%d" % r)) not in (None, ""):
+            raise ValueError("VIOP!P%d boş bir girdi değil" % r)
+        q = _need_formula(model, "VIOP", "Q%d" % r, 'IF($O%d="FXswap+bp",%s,$W%d)' % (r, viop_fx_implied(r), r))
+        cond, typed, end = _vt_rate_parts(r)
+        if q.count(cond) != 1 or q.count(typed) != 1 or q.count(end) != 1 or 'IF(N($P%d)>0,' % r not in q:
+            raise ValueError("VIOP!Q%d beklenen hedef faiz formülü değil (iki yönlü)" % r)
+        _need_formula(model, "VIOP", "S%d" % r, viop_far_limit(r))
+        _need_formula(model, "VIOP", "T%d" % r, "$S%d-%s" % (r, viop_near_limit(r)))
+        _need_formula(model, "VIOP", "V%d" % r, "($Q%d-$U%d)*10000" % (r, r))
+        for c in "UWXY":
+            if _need_formula(model, "VIOP", "%s%d" % (c, r), cond).count(cond) != 1:
+                raise ValueError("VIOP!%s%d beklenen formül değil (%s)" % (c, r, cond))
+        h = r - VFRA_ROWS[0] + VFRA_FIRST
+        bad = 'IF(%s!$U$%d<>"",%s!$U$%d,' % (VFRA_SHEET, h, VFRA_SHEET, h)
+        if not _need_formula(model, "VIOP", "AB%d" % r, bad).startswith(bad):
+            raise ValueError("VIOP!AB%d beklenen ipucu formülü değil" % r)
+        for col in VT_STORES.values():
+            rc = parse_a1("%s%d" % (col, r))
+            if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+                raise ValueError("VIOP!%s%d boş değil" % (col, r))
+    for col in VT_STORES.values():
+        if parse_a1("%s%d" % (col, VFRA_ROWS[0] - 1)) in sh.fml:
+            raise ValueError("VIOP!%s%d boş değil" % (col, VFRA_ROWS[0] - 1))
+
+
+def _tto_viop_tw(model: Model) -> None:
+    """The target table two-way: the stores, the rate from whichever member is typed, the members' formulas wrapped,
+    "Hedef değer" worked out in the row's type, the rows priced while any member is typed, the rate's tooltip."""
+    v = SheetBuilder(model, "VIOP")
+    head = VFRA_ROWS[0] - 1
+    for col, text in VT_HEADS.items():
+        v.set("%s%d" % (col, head), text, like="Q%d" % head)
+    for r in range(VFRA_ROWS[0], VFRA_ROWS[1] + 1):
+        s = {c: "$%s%d" % (col, r) for c, col in VT_STORES.items()}
+        h = r - VFRA_ROWS[0] + VFRA_FIRST
+        for c, col in VT_STORES.items():
+            v.input("%s%d" % (col, r), None, fmt=_numfmt(model, "VIOP", "%s%d" % (c, r)))
+        active = _vt_active(r)
+        cond, typed, end = _vt_rate_parts(r)
+        near = viop_near_limit(r)
+        # the rate: Hedef değer's by its type (as before, off its store), else the far price / spread / gap typed
+        q = formula_of(model, "VIOP", "Q%d" % r).replace(cond, active)
+        others = "IF(NOT(ISBLANK(%s)),%s,IF(NOT(ISBLANK(%s)),%s,$U%d+%s/10000))" % (
+            s["S"], viop_price_rate(r, s["S"]), s["T"], viop_price_rate(r, "(%s+%s)" % (near, s["T"])), r, s["V"])
+        q = q.replace(typed, "IF(ISBLANK(%s),%s,%s" % (s["P"], others, typed)).replace(end, end.replace("))", ")))", 1))
+        q = q.replace("$P%d" % r, s["P"])
+        v.patch("Q%d" % r, "=IF(ISBLANK(%s),%s,%s)" % (s["Q"], q, s["Q"]))
+        for c in "UWXY":
+            v.patch("%s%d" % (c, r), "=" + formula_of(model, "VIOP", "%s%d" % (c, r)).replace(cond, active))
+        for c in "STV":
+            v.patch("%s%d" % (c, r), "=IF(ISBLANK(%s),%s,%s)" % (s[c], formula_of(model, "VIOP", "%s%d" % (c, r)), s[c]))
+        # Hedef değer in the row's type, from the rate (and the far limit on a Fiyat row)
+        by_type = ('IF($O%(r)d="Faiz %%",$Q%(r)d*100,IF($O%(r)d="%(price)s",$S%(r)d,IF($O%(r)d="FXswap+bp",($Q%(r)d-%(fx)s)*10000,'
+                   '($Q%(r)d-$W%(r)d)*10000)))') % {"r": r, "price": VPRICE_TYPE, "fx": viop_fx_implied(r)}
+        v.patch("P%d" % r, '=IF(ISBLANK(%s),IFERROR(IF(ISNUMBER($Q%d),%s,""),""),%s)' % (s["P"], r, by_type, s["P"]))
+        # the rate's tooltip says where it comes from when another member was typed
+        bad = 'IF(%s!$U$%d<>"",%s!$U$%d,' % (VFRA_SHEET, h, VFRA_SHEET, h)
+        tip = formula_of(model, "VIOP", "AB%d" % r)
+        mine = ('IF(NOT(ISBLANK(%(Q)s)),"Hedef faiz yazıldı: hedef değer, uzak limit, spread fiyatı ve hedef − piyasa ondan",'
+                'IF(NOT(ISBLANK(%(S)s)),"Hedef faiz = yazılan uzak limit fiyatı "&TEXT(%(S)s,"General")&" → ima TRY faizi (yakın limit "'
+                '&TEXT($R%(r)d,"0.0000")&", "&TEXT($Y%(r)d,"0")&" gün, ACT/360)",'
+                'IF(NOT(ISBLANK(%(T)s)),"Hedef faiz = yazılan spread fiyatı "&TEXT(%(T)s,"General")&": uzak limit = yakın limit "'
+                '&TEXT($R%(r)d,"0.0000")&" + spread → ima TRY faizi (ACT/360)",'
+                'IF(NOT(ISBLANK(%(V)s)),"Hedef faiz = piyasa ima ff (yön) "&TEXT($U%(r)d,"0.00%%")&" + yazılan hedef − piyasa "'
+                '&TEXT(%(V)s,"General")&" bp",') % dict(s, r=r)
+        v.patch("AB%d" % r, "=" + bad + mine + tip[len(bad):-1] + "))))" + ")")
+    # the desk sheet's strip says a worked-out target to four decimals (a typed one as typed)
+    for r, h, m in _vfra_rows():
+        mf = 'VIOP!$O$%d&" "&VIOP!$P$%d' % (r, r)
+        text = formula_of(model, "MASA", "S%d" % m)
+        if text.count(mf) == 1:
+            SheetBuilder(model, "MASA").patch("S%d" % m, "=" + text.replace(mf, 'VIOP!$O$%d&" "&IF(ISBLANK(VIOP!$%s$%d),ROUND(VIOP!$P$%d,4),'
+                                                                              'VIOP!$P$%d)' % (r, VT_STORES["P"], r, r, r)))
 
 
 # ---------------------------------------------------------------------------------------------- the fair RET's scenarios
@@ -5977,6 +6294,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (TARIH_TW_NAME, _tarih_tw_check, _tarih_tw),
             (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
+            # (two-way calculators: Hesaplayıcılar and DV01's scenario P&L - after the market defaults and the way back of
+            # the implied move, whose formulas they keep; the VİOP target after its types and the FRA's curve)
+            *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }

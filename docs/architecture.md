@@ -141,6 +141,15 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
     (`Service._twoway_pins`) - a typed OIS ASW is a clean price, not an FX ASW.
   - Members whose sheet values are rounded or solved in a few steps (DİBS RV's 0.1 bp spreads, its yield and Z-spread
     solvers) are exact on a row with anything typed, so that a value typed back gives the same row.
+- **Calculators of a workbook sheet** (`extras.TW_HUBS`: Hesaplayıcılar, DV01 Risk's scenario P&L): one `_BUILDERS` entry
+  per calculator (a block the workbook changed is left out by itself). Each has a hub - the input its block computes
+  from -: the other members keep their workbook formula wrapped in their store, the hub is its store, else the value the
+  typed member gives (the block's formula solved), else its old default (the file's constant, or its formula default when
+  it stays in place). A copyable calculator keeps every member in a store, so a temporary copy is never refused.
+- **VİOP Target** (`extras._tto_viop_tw`): five members per row (stores `VIOP!AE:AI`), the target rate the hub. A member
+  shown in only part of a table (Masa's TARGET strip shows Hedef değer alone) has a limit in that table's temporary copy:
+  the copy cannot empty the row-side's other stores (`Copies.overlay` keeps the copy's own cells only), so a value typed
+  there on the VİOP page shows through.
 
 ## Books and the formula engine
 
@@ -262,7 +271,7 @@ The module docstring's list of sheets is incomplete; `_BUILDERS` is the full lis
 |---|---|
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `twoway` (two-way tables), `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
-| Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption`), `bonds` (catalog) |
+| Curves and pricing | `ppkcurve`, `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption` - `vol_unit` also a premium or breakeven, `<kind>:<measure>`, two-way), `bonds` (catalog) |
 | Pages and features | `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
 | Ops | `ops` (log, backups, freshness), `progress` |
@@ -357,7 +366,8 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
 - **Endpoints** (`Service.prop_*`, each needs a session; a `PropError` is a 400 with the Turkish reason):
   - `GET /api/prop` - the desk's FX pairs that have a price (`quant.fx_pair_list`, then the Spot / FX board's), each with
     its mid, and the user's limit;
-  - `GET /api/prop/size?pair=&stop=&loss=&ccy=TRY|USD[&entry=]` - the calculator (`prop.size`);
+  - `GET /api/prop/size?pair=&stop=&loss=&ccy=TRY|USD[&entry=]` - the calculator (`prop.size`); `size=` in place of
+    `loss` (two-way: the size typed, the loss it makes at the stop; with both the loss is read, as before);
   - `GET /api/prop/risk?scope=personal|desk` - the loss at every stop, the tab's "Günlük" K/Z, the limit, the room;
   - `GET` / `POST /api/prop/limit` - the user's own daily loss limit (`prop.limit:<user>` in kv).
 - **Where its numbers come from.** Prices: `tradevalue.market` (request-free; cached 5 s, `MARKET_SECONDS`). K/Z: the

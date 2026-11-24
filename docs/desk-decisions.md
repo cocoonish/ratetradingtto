@@ -1424,6 +1424,78 @@ carry in `_bond_back_check` / `_tto_bond_back`, `BOND_TW_*`, `bond_carry_repo`),
 the `fwdcalc-*` groups; panels IY1–IY3). Tests: `tests/test_fwdcalc_twoway.py`, the browser test's checks "Forward
 calculators are two-way …".
 
+### Hesaplayıcılar, VİOP Target, Swaption, Prop iki yönlü (24.11.2026)
+
+The desk, of every table (after FORWARD KOTASYON, above):
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+>
+> "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için."
+
+**What became two-way** - of a calculator's (a row's) values any can be typed; the one typed last stands, exactly as typed
+when the market moves; the others are worked out from it with the block's own formulas and their exact inverses (typed
+back, a computed value gives the same numbers, 1e-9); Delete on any of them goes back to the default:
+- **Hesaplayıcılar** (`extras.TW_HUBS`, the mechanism of `tto/twoway.py`): Ana girdiler (Forward, Forward − Spot, puan),
+  Basit → Bileşik and Bileşik → Basit (basit, bileşik), DF to Rate (DF, Simple, Continous), Exponential and Simple - each
+  two calculators, Interest 2 Price and Price 2 Interest - (Interest, Forward), Implied Move (Volatilite, Implied Move,
+  Upper / Lower Bound, Move By Pips; the 24.11 "… (elle)" boxes stay beside it), TLREF Spread (Fiyat, Spread), Forward
+  Volatility (End Vol, Fwd Vol; Start Vol held), Yıllık getiriden forward fiyat (Ann. Yield, Forward), İki fiyat arası
+  yıllık getiri (Last Price, Ann. Yield; First Price held).
+- **DV01 Risk's Senaryo P&L** (rows 69-71): each shock (bp) or the P&L it makes; shock = P&L / the P&L of 1 bp.
+- **VİOP Target** (rows 331-338): Hedef değer, Hedef faiz, Uzak limit fiyatı, Spread fiyatı or Hedef − piyasa. The target
+  rate is the row's hub: a far price gives the rate it implies (the Fiyat type's inverse, the near limit by the row's
+  side), a spread price the far limit near limit + spread, a gap the market's implied rate + gap.
+- **Prop** (the top bar's calculator): the size may be typed in place of the loss - the stop as given (stop, loss and
+  size have two degrees of freedom), the last typed of loss / size stands, the other is worked out: a size typed
+  gives the loss it makes at the stop (size · |entry − stop| in the loss's currency); a loss typed gives the size
+  rounded down to 1M, as before.
+- **Swaption** (its page): the vol, or a payer / receiver / straddle premium (running bp, upfront bp, TL) or breakeven
+  typed in its own cell of the options table - the normal vol at which that option is worth it (a 1-D Brent solve
+  on the page's own premiums, the closed form at the money), everything else from that vol; of the vol boxes and
+  these cells the one typed last stands, as typed, when the market moves.
+
+**Choices made while building them** (said on the pages and in README; ask the desk before changing):
+- **Each calculator has a hub**, the input its block computes from (Volatilite, Basit, DF ...): a value typed into another
+  member gives the hub by the block's formula solved for it, the rest follows by the block's own formulas.
+- **Copyable calculators keep every member in a store** (none in place), so that a temporary copy works fully: in a copy
+  any member can be typed whatever the table holds. The top band's Forward and DV01's shocks (tables no copy is made of)
+  stay the page's inputs in place.
+- **Values typed before keep their meaning**: a hub typed when it was the page's input (Volatilite, Basit, the DF ...) is
+  its calculator's typed value at the user's next read (moved to its store once: `TwoWay.adopt`). An input formula typed
+  there keeps its value and loses its formula (the cell is no input of its own any more - inputformula's rule, logged);
+  a temporary copy opened before this version follows the table at that cell (type it again in the copy).
+- **No guard added**: an inverse with no answer shows Excel's error, as the blocks' own formulas do (a move with zero days,
+  a P&L with no position: `#DIV/0!`); a bound on the wrong side of the spot gives a negative vol (the formula solved).
+- Nothing typed: every calculator shows what it showed (the file's values, the market's forward).
+- **VİOP Target: "Hedef tipi" stays the user's.** Hedef değer is always shown in the row's own type, whichever member was
+  typed: on an FRA+bp row a far price typed shows its bp over OIS FRA, on a Fiyat row the price itself (the survey's
+  "a price typed sets the type to Fiyat" is that case). The type is not flipped by a typed price: the mechanism never
+  writes another input, and a flipped type would make a Hedef değer typed afterwards mean something else. A row is priced
+  while any of its five is typed; a contract that rolled off leaves it "Geçersiz" with the typed value kept. Typing is on
+  the VİOP page; Masa's strip of the target's inputs types Hedef değer (the same store). Masa's summary shows a worked-out
+  Hedef değer to four decimals.
+- **Prop: a typed size is not rounded** (it is the user's: 2,5M stays 2,5M); only the size worked out from a loss is
+  rounded down to 1M (the desk's rule of 19.11). The panel keeps nothing: the typed one is marked while it is open.
+- **Swaption: a premium under its intrinsic value has no vol** - refused with the intrinsic value said (vol 0 already
+  gives the intrinsic value); the straddle's breakevens are its two legs' premium either side of the strike. The
+  old requests (`vol` in bp/day, bp/year, % Black) and the inputs kept in the browser read as before.
+
+Left out (with the reason): the RET tables and RET adil değer (shared, not this group's); Fiyatlama's optional new kinds;
+Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye endeksli and the hidden copies (survey).
+**VİOP's gold calculator** (`EK_XAU` A38:E63) is left for the desk: its contract columns roll, and on a roll only the
+column's typed VİOP bid / ask go (`rowkeys.GOLD_PRICES`), the rest stays with the column - a value typed there two-way
+(a forward, points or a theoretical price belong to the contract; a rate may stay with the column) needs the desk's
+rule of which survive a roll.
+
+Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_STORES`, `viop_fx_implied`,
+`_tto_viop_tw`), `tto/views/90_calc.json`, `70_dv01.json`, `40_viop.json` (`"twoway"`, helper tables B36 / B11s / VT1),
+`10_masa.json` (TARGET's note); `tto/prop.py` (`size`'s `amount`, `Prop.calc`'s `size`), `tto/static/js/prop.js`
+(`typed`, `markAnchor`); `tto/swaption.py` (`PREMIUM_UNITS`, `premium_of`, `normal_from_premium`),
+`tto/static/js/pages/swaption.js` (`editable`, `markTyped`). Tests: `tests/test_hesap_twoway.py`,
+`tests/test_viop_twoway.py`, `tests/test_prop.py`, `tests/test_swaption.py`.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`
