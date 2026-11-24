@@ -7,7 +7,9 @@ belongs to the meeting in a slot is registered here, cell by cell, in four kinds
 
 * ``key`` - the meeting's date.  The list changes through it only; a formula is refused there.
 * ``typed`` - what is typed per meeting: TCMB's scenario steps ``U:W`` and Motor's prior mean and start step of the slot
-  (``Motor!D4311:D4390``, ``A4481:A4560``); Fed's decision flag, WIRP and scenario steps (``C``, ``P``, ``R:T``).
+  (``Motor!D4311:D4390``, ``A4481:A4560``), and the rate / MPC spread typed on the OIS page to read the PPK step it
+  prices (``EK_PPK!G``, ``S`` - from row 3: the row of the meeting that starts the row's window); Fed's decision flag,
+  WIRP and scenario steps (``C``, ``P``, ``R:T``) and the window OIS rate typed to read the FOMC step (``AB``).
   Every user's value, the desk's and the saved scenarios' go with the meeting; a reference to the cell
   (``=OIS_MAIN!U12+25``) follows it; no formula is typed there.
 * ``label`` - the desk's name of a meeting (``OIS_MAIN!O``): as ``typed`` - but the file's own names are the slots'
@@ -100,10 +102,17 @@ TCMB = Calendar("tcmb", "PPK", "tto", "OIS_MAIN", (10, 89), "P", (
     Band("OIS_MAIN", 10, ("N", "Q", "R", "S", "T", "X", "Y", "Z", "BM", "BN", "BO"), COMPUTED),
     Band("Motor", 4311, ("D",), TYPED),                   # Öncel μ of PPK sıra 1-80 (Motor!H4311:H4390)
     Band("Motor", 4481, ("A",), TYPED),                   # the solver's start step of the same slots
+    # the way back of 'MPC OIS' / 'MPC SPREAD' (extras.PPK_SHEET, from row extras.PPK_FIRST): a window's rate and a pair's
+    # spread typed on the row of the meeting that starts the row's (first) window, and what they give
+    Band("EK_PPK", 3, ("G", "S"), TYPED),
+    Band("EK_PPK", 3, tuple("ABCDEFHIJKLM") + tuple("PQRTUVW"), COMPUTED),
 ), header=8, where="Ayarlar → Toplantı takvimi")
 FED = Calendar("fed", "FOMC", "sofr", "SOFR_FOMC", (74, 83), "B", (
     Band("SOFR_FOMC", 74, ("C", "P", "R", "S", "T"), TYPED),
     Band("SOFR_FOMC", 74, tuple("DEFGHIJKLMNO") + ("Q",) + tuple("UVWXYZ"), COMPUTED),
+    # the way back of a window's OIS rate (extras.FOMC_BACK_NAME): typed per meeting, and what it gives
+    Band("SOFR_FOMC", 74, ("AB",), TYPED),
+    Band("SOFR_FOMC", 74, ("AA", "AC", "AD", "AE"), COMPUTED),
 ), header=73, where="USD · FOMC sayfası")
 CALENDARS = (TCMB, FED)
 BY_ID = {c.id: c for c in CALENDARS}

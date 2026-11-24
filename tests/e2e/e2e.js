@@ -3421,6 +3421,58 @@ async function clipAfter(page, action) {
     check('Forward starting swap: its own FS points typed back ("Elle puan → faiz") read its TRY fwd-fwd % and the bp over OIS mid; '
       + 'Çapraz forward: its own USDTRY forward typed back reads its TRY rate',
       Math.abs(fsBack.rate - 40.5) < 0.006 && /^[+−-]?\d/.test(fsBack.ois) && Math.abs(crossBack - 41) < 0.001, { fsPts, fsBack, crossFwd, crossBack });
+    // OIS · PPK and USD · FOMC, the ways back (the desk, 24.11.2026: items 2, 3 and 13): a meeting window's market rate
+    // typed reads the market's own PPK step; an MPC spread typed reads the later window's rate (the earlier's market +
+    // the spread); a target FRA reads the end leg it needs, which typed back makes the realized FRA the target; a FOMC
+    // window's market OIS rate typed reads its İma O/N and Toplantı adımı back
+    const ppkSigned = (t) => trNumber(String(t).replace('−', '-'));
+    const ppkClear = async (ref) => { await (await cellHandle(page, ref)).click(); await page.keyboard.press('Delete'); };
+    await open(page, 'ois');
+    await tab(page, 'mpc');
+    await waitCell(page, 'EK_PPK!F3', 't.trim() !== ""');
+    const mpcMkt = (await cellText(page, 'EK_PPK!F3')).trim();
+    await typeInto(page, 'EK_PPK!G3', mpcMkt.replace('%', ''));
+    await waitCell(page, 'EK_PPK!L3', 't.trim() !== ""');
+    const ppkBack = { typed: mpcMkt, step: (await cellText(page, 'EK_PPK!L3')).trim(), market: (await cellText(page, 'EK_PPK!M3')).trim() };
+    await typeInto(page, 'EK_PPK!S3', '-30');
+    await waitCell(page, 'EK_PPK!T3', 't.trim() !== ""');
+    const sprBack = { later: (await cellText(page, 'EK_PPK!T3')).trim(), step: (await cellText(page, 'EK_PPK!V3')).trim() };
+    check('OIS · PPK: MPC OIS → PPK ADIMI - a window\'s market rate typed reads the market\'s own PPK step (bp); MPC SPREAD → '
+      + 'PPK ADIMI - −30 bp typed reads the later window\'s rate (the earlier window\'s market − 0,30 %) and its step',
+      /^[+−-]?\d/.test(ppkBack.step) && Math.abs(ppkSigned(ppkBack.step) - ppkSigned(ppkBack.market)) <= 0.15
+      && Math.abs(trNumber(sprBack.later) - (trNumber(mpcMkt) - 0.30)) < 0.0015 && /^[+−-]?\d/.test(sprBack.step), { ppkBack, sprBack });
+    await ppkClear('EK_PPK!G3');
+    await ppkClear('EK_PPK!S3');
+    await tab(page, 'all');
+    await page.evaluate(() => window.tto.state.page.items.get('B21').toggle(false));          // (it starts folded: open it)
+    await waitCell(page, 'OIS_MAIN!S337', 't.trim() !== ""');
+    // the start leg's fill first, on the page before the target: the end leg read is then the one with that fill
+    await typeInto(page, 'OIS_MAIN!Q337', '36,8');
+    await waitCell(page, 'OIS_MAIN!Q337', 't.trim() === "36,800%"');
+    await typeInto(page, 'OIS_MAIN!U337', '35');
+    await waitCell(page, 'OIS_MAIN!V337', 't.trim() !== ""');
+    const fraNeedEnd = (await cellText(page, 'OIS_MAIN!V337')).trim();
+    await typeInto(page, 'OIS_MAIN!R337', fraNeedEnd.replace('%', ''));
+    await waitCell(page, 'OIS_MAIN!S337', 't.trim() === "35,00%"').catch(() => {});
+    const fraBack = { fraNeedEnd, realized: (await cellText(page, 'OIS_MAIN!S337')).trim(), needStart: (await cellText(page, 'OIS_MAIN!W337')).trim() };
+    check('OIS · PPK: TÜM FORWARD / FRA - a target FRA (35 %) and the start leg\'s fill typed read the end leg it needs; typed into '
+      + 'the end leg\'s fill, the realized FRA is the target',
+      /^\d+,\d{3}%$/.test(fraNeedEnd) && fraBack.realized === '35,00%' && /^\d+,\d{3}%$/.test(fraBack.needStart), fraBack);
+    for (const ref of ['OIS_MAIN!U337', 'OIS_MAIN!Q337', 'OIS_MAIN!R337']) await ppkClear(ref);
+    await page.evaluate(() => window.tto.state.page.items.get('B21').toggle(true));           // (folded again, as it was)
+    await open(page, 'usd');
+    await tab(page, 'fomc');
+    await waitCell(page, 'SOFR_FOMC!AA74', 't.trim() !== ""');
+    const fomcWinMkt = (await cellText(page, 'SOFR_FOMC!AA74')).trim();
+    await typeInto(page, 'SOFR_FOMC!AB74', fomcWinMkt);
+    await waitCell(page, 'SOFR_FOMC!AE74', 't.trim() !== ""');
+    const fomcBack = { typed: fomcWinMkt, on: (await cellText(page, 'SOFR_FOMC!AC74')).trim(), k: (await cellText(page, 'SOFR_FOMC!K74')).trim(),
+      steps: (await cellText(page, 'SOFR_FOMC!AE74')).trim(), n: (await cellText(page, 'SOFR_FOMC!N74')).trim(),
+      bp: (await cellText(page, 'SOFR_FOMC!AD74')).trim() };
+    check('USD · FOMC: a window\'s market OIS rate typed ("Pencere OIS (elle) %") reads its İma O/N and Toplantı adımı back, and the step in bp',
+      Math.abs(ppkSigned(fomcBack.on) - ppkSigned(fomcBack.k)) <= 0.0015 && Math.abs(ppkSigned(fomcBack.steps) - ppkSigned(fomcBack.n)) <= 0.3
+      && /^[+−-]?\d+,\d$/.test(fomcBack.bp), fomcBack);
+    await ppkClear('SOFR_FOMC!AB74');
     // DİBS Canlı: the value dates side by side, the day's tape, the bond's card
     await open(page, 'dibslive');
     await page.waitForSelector('.panel[data-panel="L1"] table.grid');

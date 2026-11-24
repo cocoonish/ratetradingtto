@@ -133,6 +133,13 @@
    "label": "Senaryo olasılıkları"
   },
   {
+   "range": "AB74:AB83",
+   "scope": "user",
+   "group": "usd-fomc-back",
+   "kind": "number",
+   "label": "Pencere OIS (elle) %: a meeting window's OIS rate typed (%, ACT/360), to read the FOMC step it prices (goes with its meeting)"
+  },
+  {
    "range": "BO4:BO70",
    "scope": "shared",
    "group": "usd-holidays",
@@ -170,8 +177,9 @@
    "id": "fomc",
    "type": "table",
    "title": "FOMC ima patikası · senaryo görüşü",
-   "range": "A71:Z83",
-   "wide": true
+   "range": "A71:AE83",
+   "wide": true,
+   "note": "Pencere OIS → FOMC adımı: bir toplantının penceresinin (etkin gününden sonraki toplantınınkine; İşlem 1'deki pencere) OIS faizini \"Pencere OIS (elle) %\" sütununa yazın (%, ACT/360): O/N eşdeğeri - \"İma O/N %\"nin formülü, faizin kendi iskonto oranıyla: ((1 + r·gün/36000)^(1/gün) − 1)·36000 - ve fiyatladığı FOMC adımı, \"Önceki ima %\"ye göre (önceki toplantının piyasa O/N'si, ilk toplantıda stub O/N): bp olarak ve \"Toplantı adımı %\" gibi Adım (bp) cinsinden. Piyasa pencere faizini yazarsanız İma O/N ve Toplantı adımı aynen çıkar. USD OIS eğrisi (Girdiler'deki Eğri kaynağı). Yazdığınız faiz toplantısıyla gider: takvim değişince o toplantıda kalır."
   },
   {
    "id": "fomc-chart",

@@ -255,6 +255,27 @@
    "label": "'Başl. bacağı dolum', 'Bitiş bacağı dolum'"
   },
   {
+   "range": "U336:U438",
+   "scope": "user",
+   "group": "ois-fra-target",
+   "kind": "pct",
+   "label": "'Hedef FRA' of each forward: the FRA wanted, to read the rate the other leg needs (V: the end leg with the start leg's fill, W: the start leg with the end leg's)"
+  },
+  {
+   "range": "EK_PPK!G3:G18",
+   "scope": "user",
+   "group": "ppk-rate",
+   "kind": "pct",
+   "label": "'MPC OIS (elle)': a meeting window's OIS rate typed (%), to read the PPK step it prices (goes with its meeting)"
+  },
+  {
+   "range": "EK_PPK!S3:S17",
+   "scope": "user",
+   "group": "ppk-spread",
+   "kind": "number",
+   "label": "'Elle spread (bp)': an MPC spread typed (the later window − the earlier, bp), to read the later window's rate and the PPK step it prices (goes with its meeting)"
+  },
+  {
    "range": "AE81:AG81",
    "scope": "shared",
    "group": "ois-33",
@@ -467,6 +488,16 @@
    }
   },
   {
+   "id": "PPK1",
+   "type": "table",
+   "sheet": "EK_PPK",
+   "range": "A1:M18",
+   "title": "MPC OIS → PPK ADIMI",
+   "hidden": false,
+   "wide": true,
+   "note": "Bir toplantı döneminin (MPC OIS'teki satırı) swap faizini \"MPC OIS (elle)\" sütununa yazın: fiyatladığı PPK adımı (bp) = faizin O/N eşdeğeri (ACT/365, her gün bileşik) − önceki dönemin piyasa faizininki (MPC OIS'in bir önceki satırının \"Piyasa (bootstrap)\"ı; ilk dönemde OIS spot'tan ilk toplantıya stub). Broker Chat'in toplantı swap'ı satırlarındaki ima adımla aynı hesap, aynı sayı. Piyasa Bootstrap (Murex'in MTM'i); Ayarlar'da PPK basamak seçtiyseniz sizin eğriniz. Yazdığınız faiz toplantısıyla gider."
+  },
+  {
    "id": "B14",
    "type": "table",
    "title": "MPC İŞLEMLERİ → KOVA DV01 ($)",
@@ -479,6 +510,15 @@
    "title": "MPC SPREAD – MPCk vs MPCk+1",
    "range": "A101:K117",
    "hidden": false
+  },
+  {
+   "id": "PPK2",
+   "type": "table",
+   "sheet": "EK_PPK",
+   "range": "P1:W17",
+   "title": "MPC SPREAD → PPK ADIMI",
+   "hidden": false,
+   "note": "Bir MPC spread'ini (sonraki dönem − önceki dönem, bp; MPC SPREAD'deki gibi) \"Elle spread\" sütununa yazın: sonraki dönemin faizi = önceki dönemin piyasa faizi (MPC OIS'in \"Piyasa (bootstrap)\"ı) + spread ve bu faizin sonraki dönemin toplantısında fiyatladığı PPK adımı (bp) - MPC OIS → PPK ADIMI'yla aynı hesap, aynı taban (önceki dönemin piyasa faizinin O/N eşdeğeri), Broker Chat'inkiyle aynı. Yazdığınız spread satırın ilk döneminin toplantısıyla gider."
   },
   {
    "id": "B16",
@@ -522,11 +562,12 @@
    "id": "B21",
    "type": "table",
    "title": "TÜM FORWARD / FRA",
-   "range": "A334:T438",
+   "range": "A334:W438",
    "ppk": "fra",
    "append": "fra_buckets",
    "hidden": false,
-   "collapsed": true
+   "collapsed": true,
+   "note": "\"Hedef FRA\": bir FRA hedefi yazın. \"Gereken bitiş bacağı\": başlangıç bacağının dolumuyla (\"Başl. bacağı dolum\"; boşsa piyasa) bu FRA'yı veren bitiş bacağı oranı; \"Gereken başl. bacağı\": bitiş bacağının dolumuyla (\"Bitiş bacağı dolum\"; boşsa piyasa) bu FRA'yı veren başlangıç bacağı oranı. \"Gerçekleşen FRA\"nın formülünün tersi, (R·P − Q·O) / (P − O): bulunan oran dolum sütununa yazılınca Gerçekleşen FRA hedefe eşit olur. Spot başlangıçlı satırda bitiş bacağı FRA'nın kendisidir. OIS eğrisi (TLREF, ACT/365)."
   },
   {
    "id": "B22",
@@ -592,8 +633,10 @@
     "B6",
     "B7",
     "B13",
+    "PPK1",
     "B14",
     "B15",
+    "PPK2",
     "B16",
     "B22"
    ]

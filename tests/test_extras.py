@@ -108,7 +108,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     problems = extras.apply("tto", sofr)
     assert [p.split(":")[0] for p in problems] == ["EK_TATIL", "FX valörleri", "OIS spot valörü", "EK_FWD", "EK_XAU", "EK_VIOP",
                                                    "EK_FWD vade faizleri", "EK_FWD EURTRY", "EK_KAYNAK",
-                                                   "Bulk Bond satırları", "EK_BULK", "Forward puandan faize", "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
+                                                   "Bulk Bond satırları", "EK_BULK", "Forward puandan faize", "EK_PPK", "FRA ikinci bacak",
+                                                   "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "DİBS RV ASW / DM'den fiyat",
                                                    "DİBS RV switch seviyesinden fiyat", "Manuel Tahvil ISIN", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
@@ -117,7 +118,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tek OIS spread'i", "EK_TARIH", "VİOP hedef fiyatı", "EK_VFRA",
                                                    "EK_RET", "Eğri interpolasyonu"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
-                                              "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET"} & set(sofr.sheet_index)
+                                              "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
     # the ASW sheet's curve laid out otherwise: EK_FX reads its node days and ln discount factors by their place
     asw = Model.load(os.path.join(root, "models", "asw.json.gz"))
