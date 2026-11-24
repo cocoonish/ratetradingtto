@@ -3099,6 +3099,94 @@ async function clipAfter(page, action) {
     check('Toplu fiyatlama: two outrights pasted (the table\'s own USDTRY and EURTRY forwards) read back their implied TRY rate - the RET mid they were priced with',
       [5, 6].every((r) => Math.abs(bulkBack['S' + r] - bulkBack['G' + r]) < 0.01 && Math.abs(bulkBack['U' + r] - bulkBack['G' + r]) < 0.01)
       && bulkN.every((t) => /\d,\d{4}$/.test(t)), { bulkN, bulkP, bulkBack });
+    // TOPLU FORWARD → işlem (the desk, 24.11.2026: "3 ekle"): a right click on a row's EURTRY fwd fills Günlük İşlemler's
+    // form - EURTRY (the column's own pair), the row's valör, the outright clicked; no side, no amount
+    await (await cellHandle(page, 'EK_BULK!P6')).click({ button: 'right' });
+    await page.waitForSelector('.menu');
+    const bulkMenu = await page.$$eval('.menu button', (bs) => bs.map((b) => b.textContent));
+    await page.click('.menu button:text-is("İşlem gir")');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.fwd
+      && window.tto.state.page.fwd.date && window.tto.state.page.fwd.date.value !== '', null, { timeout: 30000 });
+    const bulkFwd = await page.evaluate(() => { const f = window.tto.state.page.fwd; return [f.pair, f.dir, f.basis, f.date.value, f.manual.value, f.amount.value]; });
+    check('TOPLU FORWARD: a right click on a row\'s EURTRY fwd offers "İşlem gir" - Günlük İşlemler opens on EURTRY, the row\'s valör, that outright; no side, no amount',
+      bulkMenu[0] === 'İşlem gir' && JSON.stringify(bulkFwd) === JSON.stringify(['EURTRY', null, 'FWD', '15.04.2027', bulkP[1], '']), [bulkMenu, bulkFwd, bulkP]);
+    await open(page, 'blotter');
+    const fxBefore3 = (await fxRows()).length;
+    // ... and "İşleme al": Parite / Yön / Tutar typed on the rows (the outrights typed back taken off: RET mid prices them);
+    // every row with a Tutar opens in "Excel'den yapıştır" on FX Forward at the price it shows, a Tutar without a valör is an
+    // error row, a priced row without a Tutar is left out and said
+    await open(page, 'forward');
+    await tab(page, 'bulk');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_BULK!R5:R6', 'EK_BULK!T5:T6'] });
+    await waitCell(page, 'EK_BULK!S6', 't.trim() === ""');
+    const typeOver = async (ref, text) => {                 // (a list cell: typed over, not picked from its menu)
+      await (await cellHandle(page, ref)).click();
+      await page.keyboard.type(text);
+      await page.keyboard.press('Enter');
+    };
+    await (await cellHandle(page, 'EK_BULK!W5')).click();
+    await page.keyboard.press('Enter');                     // the side's list: its items to pick
+    await page.click('.menu button:text-is("AL")');
+    await typeInto(page, 'EK_BULK!X5', '1m');
+    await typeInto(page, 'EK_BULK!Y5', 'E2E BANKA');
+    await typeOver('EK_BULK!V6', 'eur');
+    await typeOver('EK_BULK!W6', 'Satış');
+    await typeInto(page, 'EK_BULK!X6', '2,5mn');
+    await typeInto(page, 'EK_BULK!B7', '15.07.2027');
+    await waitCell(page, 'EK_BULK!N7', 't.trim() !== ""');
+    await typeOver('EK_BULK!W8', 'al');
+    await typeInto(page, 'EK_BULK!X8', '3m');
+    await waitCell(page, 'EK_BULK!X8', 't.trim() !== ""');
+    const typedBook = {};
+    for (const c of ['V6', 'W5', 'W6', 'X5', 'X6', 'Y5']) typedBook[c] = (await cellText(page, 'EK_BULK!' + c)).trim();
+    const bookN5 = (await cellText(page, 'EK_BULK!N5')).trim();
+    const bookP6 = (await cellText(page, 'EK_BULK!P6')).trim();
+    await page.click('.panel[data-panel="BK1"] button[data-action="toplu-islem"]');
+    await page.waitForSelector('#bulk-dialog');
+    await page.waitForFunction(() => document.querySelectorAll('#bulk-preview tr.line').length === 3, null, { timeout: 20000 });
+    const bookRows = await page.evaluate(() => [...document.querySelectorAll('#bulk-preview tr.line')].map((tr) => [tr.className, tr.querySelector('td.st').textContent]));
+    const bookSaid = await page.textContent('#bulk-source');
+    const bookKinds = await page.evaluate(() => [...document.querySelectorAll('#bulk-kind button')].map((b) => b.dataset.v + (b.disabled ? '-' : '') + (b.classList.contains('on') ? '!' : '')));
+    await shot(page, '04e-toplu-forward-islem');
+    check('... "İşleme al": the rows with a Tutar in "Excel\'den yapıştır" on FX Forward - USDTRY at its row\'s forward (RET mid), EURTRY at its EURTRY fwd; the Tutar without a valör says so; the priced row without a Tutar is said left out',
+      JSON.stringify(typedBook) === JSON.stringify({ V6: 'EURTRY', W5: 'AL', W6: 'SAT', X5: '1.000.000', X6: '2.500.000', Y5: 'E2E BANKA' })
+      && /good/.test(bookRows[0][0]) && bookRows[0][1].startsWith('✓ USDTRY alış 1.000.000 USD · 15.01.2027 · forward ' + bookN5 + ' · TRY ')
+      && /good/.test(bookRows[1][0]) && bookRows[1][1].startsWith('✓ EURTRY satış 2.500.000 EUR · 15.04.2027 · forward ' + bookP6 + ' · TRY ')
+      && /bad/.test(bookRows[2][0]) && /valör yok/.test(bookRows[2][1]) && /Tutar'ı yazılı 3 satır · Tutar'ı boş 1 satır alınmadı/.test(bookSaid)
+      && bookKinds.join() === 'fwd!,ois-,bond-' && (await page.textContent('#bulk-save')) === '2 satırı kaydet', { typedBook, bookRows, bookSaid, bookKinds, bookN5, bookP6 });
+    await page.click('#bulk-save');
+    await page.waitForFunction(() => /2 işlem kaydedildi; tutarları temizlendi/.test(document.getElementById('toasts').textContent), null, { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelectorAll('#bulk-preview tr.line').length === 1, null, { timeout: 20000 });
+    const bookLeft = await page.inputValue('#bulk-text');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#bulk-dialog', { state: 'detached' });
+    await waitCell(page, 'EK_BULK!X6', 't.trim() === ""');
+    const bookAfter = {};
+    for (const c of ['X5', 'X6', 'X8', 'W5', 'V6', 'Y5', 'B5', 'N5']) bookAfter[c] = (await cellText(page, 'EK_BULK!' + c)).trim();
+    const booked = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.filter((t) => /^TOPLU FORWARD · /.test(t.note || ''));
+    check('... "2 satırı kaydet": the two booked in one go, noted "TOPLU FORWARD · RET mid %"; their Tutar emptied in the table - valör, Parite, Yön, Karşı taraf and prices stay; the row to fix left in the box with its Tutar',
+      booked.length === 2 && booked.every((t) => t.note === 'TOPLU FORWARD · RET mid %')
+      && JSON.stringify(booked.map((t) => [t.pair, t.dir, t.amount, t.cpt]).sort()) === JSON.stringify([['EURTRY', 'S', 2500000, ''], ['USDTRY', 'B', 1000000, 'E2E BANKA']])
+      && bookAfter.X5 === '' && bookAfter.X6 === '' && bookAfter.X8 === '3.000.000' && bookAfter.W5 === 'AL' && bookAfter.V6 === 'EURTRY'
+      && bookAfter.Y5 === 'E2E BANKA' && bookAfter.B5 === '15.01.2027' && bookAfter.N5 === bookN5
+      && /^Satır\tParite\tYön\tTutar\tValör/.test(bookLeft) && bookLeft.split('\n').length === 2 && /\t3\.000\.000\t/.test(bookLeft),
+      { bookAfter, booked, bookLeft });
+    await open(page, 'blotter');
+    await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === n + 2, fxBefore3, { timeout: 20000 });
+    const bookList = (await fxRows()).slice(-2);
+    const bookAmount = (await fxRows())[0].indexOf('Tutar (döviz)');
+    check('... and they are in Günlük İşlemler\'s forward list today', bookList.map((r) => r[bookAmount]).join('|') === '1.000.000|2.500.000', bookList);
+    // a second press: nothing booked twice - only the row still to fix
+    await open(page, 'forward');
+    await tab(page, 'bulk');
+    await page.click('.panel[data-panel="BK1"] button[data-action="toplu-islem"]');
+    await page.waitForSelector('#bulk-dialog');
+    await page.waitForFunction(() => document.querySelectorAll('#bulk-preview tr.line').length === 1, null, { timeout: 20000 });
+    const bookAgain = await page.evaluate(() => [...document.querySelectorAll('#bulk-preview tr.line')].map((tr) => tr.querySelector('td.st').textContent));
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#bulk-dialog', { state: 'detached' });
+    check('... pressed again, only the row still to fix comes: the booked rows are not booked twice', bookAgain.length === 1 && /valör yok/.test(bookAgain[0]), bookAgain);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_BULK!V5:Y8', 'EK_BULK!B7'] });
     // points -> rate (proposal #2): FORWARD STARTING SWAP's own "Manuel" FS points typed back read its TRY fwd-fwd %; ÇAPRAZ
     // FORWARD's own manual USDTRY forward typed back reads its TRY rate
     await typeInto(page, 'Forward!C167', '08.12.2026');
@@ -3196,7 +3284,9 @@ async function clipAfter(page, action) {
     await page.click('.panel[data-panel="L1"] button[data-action="add-isin"]');
     await page.fill('#isin-text', 'TRT190128T14');
     await page.click('#isin-add');
-    const toldAsw = await page.waitForFunction(() => /DİBS ASW'ye de eklendi/.test(document.querySelector('#toasts').textContent), null,
+    // (this bond's own toast, which comes with the add's answer: the ☆ step's "DİBS ASW'ye de eklendi: 13.01.27 TLREF" may
+    // still be up, and waiting for that one opened DİBS ASW while the add was still writing the list)
+    const toldAsw = await page.waitForFunction(() => /DİBS ASW'ye de eklendi: 19\.01\.28/.test(document.querySelector('#toasts').textContent), null,
       { timeout: 20000 }).then(() => true, () => false);
     await open(page, 'asw');
     await page.waitForSelector('.panel[data-panel="tbl"] table.grid');

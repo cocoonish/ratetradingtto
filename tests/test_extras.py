@@ -516,7 +516,7 @@ def test_a_bulk_rows_outright_gives_back_its_rate(svc):
     put(svc, u, {"EK_BULK!T%d" % first: ""})
     assert cell(svc, "EK_BULK!U%d" % first, u) == ""
     view = next(p for p in svc.view(u, "forward")["panels"] if p["id"] == "BK1")
-    assert view["range"] == "B1:U106" and view["grow"]["key"] == "B"
+    assert view["range"] == "B1:Y106" and view["grow"]["key"] == "B"           # (to Y: "İşleme al"'s inputs, test_toplu_islem)
 
 
 def test_fs_points_typed_give_back_the_manual_rate(svc):

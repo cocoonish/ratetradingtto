@@ -5,8 +5,9 @@ A table opts in with ``"trade"`` in its page definition (the grammar is in :mod:
 table's price cells with the table (:func:`client`): which cells offer "İşlem gir", and for a price there is no form for
 (a VİOP contract) why not.  A click asks the server (:func:`prefill`).  The instrument and the dates come from the
 clicked row's own cells as the user sees them now - a tenor, a value date, a meeting's two days, an ISIN - never from
-the row's place, which moves (the PPK calendar, the VİOP roll, the bond lists).  The price is the one clicked, as it was
-on screen.  The side follows the column, as the desk quotes it: at its bid the desk buys (the currency forward, the
+the row's place, which moves (the PPK calendar, the VİOP roll, the bond lists); the pair is the table's, or the clicked
+column's own in a table of two pairs (TOPLU FORWARD's USDTRY and EURTRY columns: ``"pairs"``).  The price is the one
+clicked, as it was on screen.  The side follows the column, as the desk quotes it: at its bid the desk buys (the currency forward, the
 bond; an OIS rate: PAY - Broker Chat's rule for a quote of ours), at its ask it sells; a mid leaves the side to the
 user.  The answer is what ``ctx.openTrade`` (the browser) takes: nothing is saved until the user saves.
 """
@@ -67,6 +68,24 @@ def check(hint: Any) -> List[str]:
     for k in ("first", "last"):
         if k in hint and (isinstance(hint[k], bool) or not isinstance(hint[k], int)):
             out.append("%s bir satır numarası olmalı" % k)
+    pairs = hint.get("pairs")
+    if pairs is not None:
+        if not isinstance(pairs, dict) or not pairs:
+            out.append("pairs bir nesne olmalı")
+            pairs = {}
+        for key, pair in pairs.items():
+            try:
+                forward = key in cells and WHATS[parse(cells[key])[0]][0] == "fwd"
+            except ValueError:
+                forward = True                           # (the cell's own entry says what is wrong with it)
+            if not forward:
+                out.append("pairs: %r bir forward fiyat hücresinin anahtarı değil" % (key,))
+            try:
+                if not isinstance(pair, str) or not pair.strip():
+                    raise bl.TradeError("parite yok: %r" % (key,))
+                bl.pair_of(pair)
+            except bl.TradeError as exc:
+                out.append("pairs: %s" % exc)
     if whats & {"sp", "fwd", "try", "ret"}:
         try:
             bl.pair_of(hint.get("pair") or "USDTRY")
@@ -117,6 +136,13 @@ def lookup(hint: Dict[str, Any], row: int, col: str) -> Optional[Tuple[str, Opti
     return parse(text)
 
 
+def pair_at(hint: Dict[str, Any], row: int, col: str) -> str:
+    """The currency pair of a forward price cell: its own in ``"pairs"`` (keyed as ``cells`` is: the cell, else its
+    column - a table of both pairs, TOPLU FORWARD's USDTRY and EURTRY columns), else the table's ``"pair"``."""
+    pairs = hint.get("pairs") or {}
+    return bl.pair_of(pairs.get("%s%d" % (col, row)) or pairs.get(col) or hint.get("pair") or "USDTRY")
+
+
 def _date(v: Any) -> Optional[float]:
     if type(v) is float and v > 0:
         return v
@@ -156,7 +182,7 @@ def prefill(hint: Dict[str, Any], row: int, col: str, text: Any, read: Callable[
 
     buy = None if side is None else side == "bid"
     if product == "fwd":
-        pair = bl.pair_of(hint.get("pair") or "USDTRY")
+        pair = pair_at(hint, row, col)
         if hint.get("tenor_col"):
             tenor = _text(cell(hint["tenor_col"])).upper()
             when = tenor_date(tenor, pair) if _TENOR.match(tenor) else None

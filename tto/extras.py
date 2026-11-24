@@ -1863,6 +1863,9 @@ BULK_BOND_LAST = 52               # Bulk Bond: the workbook's four rows (3..6) a
 BULK_SHEET = "EK_BULK"
 BULK_FIRST, BULK_ROWS = 5, 100    # the bulk forward table here: 100 value dates (the Forward sheet has 20)
 BULK_COLS = "CDEFGHJKNOPQ"        # the formula columns of Forward!B144:Q144 (B: date and L: manual TRY % are typed)
+#: a row as a trade ("İşleme al"; the desk, 24.11.2026: "3 ekle"): its Parite, Yön, Tutar and Karşı taraf, typed - right
+#: after the way back's R..U, on cells no input ever stood on (a value a user typed is kept by its cell)
+BULK_PAIR, BULK_DIR, BULK_AMOUNT, BULK_CPT = "V", "W", "X", "Y"
 _ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_!$.':])\$[A-Z]{1,3}\$\d+(?::\$[A-Z]{1,3}\$\d+)?(?![A-Za-z0-9_(])")
 
 
@@ -1923,6 +1926,8 @@ def _tto_bulk_forward(model: Model) -> None:
     # bulabilmeliyim"): an outright typed or pasted -> the TRY rate it implies, N's / P's own formula solved for the TRY
     # rate - the same spot, USD / EUR % and days
     b.head("R4", ["USDTRY fwd (elle)", "İma TRY %", "EURTRY fwd (elle)", "İma TRY %"])
+    # a row as a trade (the desk, 24.11.2026: "3 ekle"): what "İşleme al" books it as - the price is the row's own
+    b.head(BULK_PAIR + "4", ["Parite", "Yön", "Tutar", "Karşı taraf"])
     eur_days = "($B%(r)d-Forward!$K$2)"
     for k in range(BULK_ROWS):
         r = BULK_FIRST + k
@@ -1938,11 +1943,15 @@ def _tto_bulk_forward(model: Model) -> None:
         b.input("T%d" % r, None, fmt=NUM4)
         b.set("U%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($T%(r)d))),"",(($T%(r)d/Forward!$G$2)*(1+$K%(r)d/100*' + eur_days
                           + '/360)-1)*360/' + eur_days + '*100),"")') % f, fmt="0.0000", bold=True)
+        for col in (BULK_PAIR, BULK_DIR, BULK_CPT):
+            b.input("%s%d" % (col, r), None)
+        b.input("%s%d" % (BULK_AMOUNT, r), None, fmt=INT0)
     b.note("B%d" % (BULK_FIRST + BULK_ROWS + 1),
            "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. "
            "Valör ve manuel TRY faizi boş başlar; yazdıklarınız sizin kalır (Excel'den bir sütun da yapıştırabilirsiniz). "
            "Elle forward (USDTRY / EURTRY) yazın ya da yapıştırın: yanındaki İma TRY %, USDTRY / EURTRY fwd'nin tersi - aynı spot, USD / EUR "
-           "faizi ve gün.")
+           "faizi ve gün. İşlem: satıra Parite (boş = USDTRY), Yön (AL / SAT) ve Tutar (paritenin ilk dövizinde: 10m) yazıp \"İşleme al\"a "
+           "basın - Tutar'ı yazılı satırlar Günlük İşlemler'in Excel'den yapıştır penceresinde açılır; kaydedilen satırların Tutar'ı silinir.")
 
 
 _BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", "H": "0.000", "J": "0.000", "K": "0.000",

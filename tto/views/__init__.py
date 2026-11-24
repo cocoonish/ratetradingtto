@@ -82,10 +82,18 @@ saves nothing.  The amount and the counterparty are the user's to type.
 * the instrument is read from the clicked row's own cells, never from its place (rows move: the PPK calendar, the
   VİOP roll, the bond lists).  A forward: ``"pair"`` and its value date - ``"date": "B45"`` (one cell for the table,
   ``"MASA!E60"`` on another sheet), ``"date_col": "B"`` (each row's date) or ``"tenor_col": "V"`` (each row's tenor,
-  dated from the pair's spot).  An OIS level: ``"strategy"`` ``"outright"`` with ``"tenor_col"``, or ``"mpc"`` with
-  ``"start_col"`` / ``"end_col"`` (a meeting swap's two days).  A bond: ``"isin_col"``.
+  dated from the pair's spot).  A table of two pairs side by side names a price cell's own pair in ``"pairs"``, keyed
+  as ``"cells"`` (``{"P": "EURTRY", "T": "EURTRY"}``: TOPLU FORWARD's EURTRY columns; every other price is the table's
+  ``"pair"``) - each key a forward price of ``"cells"``.  An OIS level: ``"strategy"`` ``"outright"`` with
+  ``"tenor_col"``, or ``"mpc"`` with ``"start_col"`` / ``"end_col"`` (a meeting swap's two days).  A bond:
+  ``"isin_col"``.
 * ``"label"`` / ``"alt"`` / ``"alt_when"`` / ``"bid"`` / ``"ask"`` (a forward table): the "İşlem gir" button in the table's
   header as well - a row and a side picked in a dialog, its swap points filled.
+
+A button of the dashboard's own in a table's header (``"action"``): ``"ret"`` the RET editor, ``"add-isin"`` a bond
+list's "+ ISIN ekle" (with ``"add"``), ``"toplu-islem"`` TOPLU FORWARD's "İşleme al" - every row with a Tutar into
+Günlük İşlemler's "Excel'den yapıştır" (FX Forward), its preview and save as they are, the booked rows' Tutar emptied
+(``/api/blotter/bulk/toplu-forward``: :func:`tto.entry.bulk_forward_paste`).
 """
 from __future__ import annotations
 

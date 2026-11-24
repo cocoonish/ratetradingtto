@@ -843,6 +843,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                              data.get("header"), data.get("rows"), _lang(request)))
 
     @handler
+    async def bulk_from_forward(request: Request):
+        # TOPLU FORWARD's "İşleme al": the user's rows with a Tutar as the paste dialog's text (nothing saved here)
+        return ok(await call(svc().bulk_from_forward, _user(request), _lang(request)))
+
+    @handler
     async def trade_prefill(request: Request):
         # a price of a page right-clicked ("İşlem gir"): the trade Günlük İşlemler's form is filled with (nothing saved)
         return ok(await call(svc().trade_prefill, _user(request), await _body(request), _lang(request)))
@@ -1420,6 +1425,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/templates", blotter_templates, methods=["GET", "POST"]),
         Route("/api/blotter/templates/{tid:int}", blotter_template, methods=["POST", "DELETE"]),
         Route("/api/blotter/bulk/preview", bulk_preview, methods=["POST"]),
+        Route("/api/blotter/bulk/toplu-forward", bulk_from_forward),
         Route("/api/blotter/bulk", bulk_save, methods=["POST"]),
         Route("/api/trade/prefill", trade_prefill, methods=["POST"]),
         Route("/api/history/status", history_status),

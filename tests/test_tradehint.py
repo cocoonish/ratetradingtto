@@ -70,7 +70,7 @@ def test_the_tables_that_take_part():
     """The forward tables of Masa and Forward, the RET rows, the calculators, OIS quotes, the bond lists, VİOP."""
     names = {"%s/%s" % (v["id"], p["id"]) for v, p in HINTED}
     assert names == {"masa/EKS", "masa/EKSE", "masa/B3", "masa/B8", "masa/B10", "masa/B15", "masa/B22", "forward/FR1",
-                     "forward/FR2", "forward/EKF1", "forward/EKF5", "forward/B19", "ois/B3", "ois/B13", "dibs/B3",
+                     "forward/FR2", "forward/EKF1", "forward/EKF5", "forward/B19", "forward/BK1", "ois/B3", "ois/B13", "dibs/B3",
                      "dibslive/L1", "kagitlar/U1", "asw/tbl"}
     with pytest.raises(ValueError):
         th.parse("sp mid")
@@ -127,6 +127,47 @@ def test_a_single_date_table_and_its_ret_row(service):
     assert go(service, "forward", "FR1", "C50", "36,3435")["basis"] == "RET_MID"
     eur = go(service, "forward", "FR2", "D61", "36,7674")
     assert (eur["pair"], eur["basis"], eur["dir"], eur["date"]) == ("EURTRY", "RET_ASK", "S", day(cell(service, "EK_FWD!B56")))
+
+
+def test_a_bulk_row_of_either_pair(service):
+    """TOPLU FORWARD (the desk, 24.11.2026: "3 ekle"): USDTRY and EURTRY side by side - each price is its own column's
+    pair (the hint's ``"pairs"``): USDTRY fwd / puan, the typed USDTRY fwd and its implied TRY % are USDTRY's, the
+    EURTRY ones EURTRY's; the value date is the row's own (B); mid or typed prices, so no side.  A row without a valör,
+    a rate that is no forward's price (RET mid %), the header row: refused."""
+    u = service.login("Toplu Fiyat")["user"]
+    try:
+        assert service.set_inputs(u, "tto", [{"ref": "EK_BULK!B7", "value": "15.03.2027"},
+                                             {"ref": "EK_BULK!R7", "value": "53,1"}, {"ref": "EK_BULK!T7", "value": "60,2"}])["errors"] == []
+        note = "Fiyat: (Forward · TOPLU FORWARD FİYATLAMA · 100 valöre kadar)"
+        got = {c: go(service, "forward", "BK1", c + "7", t, user=u) for c, t in (("N", "53,0632"), ("O", "4.213"), ("P", "59,5801"),
+                                                                              ("Q", "3.456"), ("R", "53,1"), ("S", "41,2345"),
+                                                                              ("T", "60,2"), ("U", "40,9876"))}
+        assert got["N"] == {"kind": "fwd", "pair": "USDTRY", "dir": None, "date": "15.03.2027", "basis": "FWD", "value": "53,0632",
+                            "note": note}
+        assert {c: (s["pair"], s["basis"], s["dir"], s["date"]) for c, s in got.items()} == {
+            "N": ("USDTRY", "FWD", None, "15.03.2027"), "O": ("USDTRY", "SP", None, "15.03.2027"),
+            "P": ("EURTRY", "FWD", None, "15.03.2027"), "Q": ("EURTRY", "SP", None, "15.03.2027"),
+            "R": ("USDTRY", "FWD", None, "15.03.2027"), "S": ("USDTRY", "TRY", None, "15.03.2027"),
+            "T": ("EURTRY", "FWD", None, "15.03.2027"), "U": ("EURTRY", "TRY", None, "15.03.2027")}
+        assert got["Q"]["value"] == "3.456" and got["U"]["value"] == "40,9876"
+        assert "valör tarihi yok" in str(refused(service, "forward", "BK1", "P8", "59,5", user=u))
+        assert "fiyat değil" in str(refused(service, "forward", "BK1", "G7", "41,0", user=u))
+        assert "fiyat değil" in str(refused(service, "forward", "BK1", "N4", "1", user=u))
+        # the browser gets its price cells with the table, the pairs stay the server's
+        bk = next(p for p in service.view(u, "forward")["panels"] if p["id"] == "BK1")
+        assert bk["data"]["trade"] == {"view": "forward", "panel": "BK1", "first": 5, "last": 104,
+                                       "cells": dict.fromkeys("NOPQRSTU", "")} and "trade" not in bk
+    finally:
+        service.reset_inputs(u, "tto")
+    # the per-cell pair: a key of a forward price, a pair that is one; elsewhere the table's pair
+    hint = {"pair": "USDTRY", "date_col": "B", "cells": {"N": "fwd", "P": "fwd", "P9": "sp"}, "pairs": {"P": "EURTRY", "P9": "GBPTRY"}}
+    assert th.check(hint) == [] and [th.pair_at(hint, 7, c) for c in "NP"] == ["USDTRY", "EURTRY"] and th.pair_at(hint, 9, "P") == "GBPTRY"
+    assert th.check(dict(hint, pairs={"Q": "EURTRY"})) == ["pairs: 'Q' bir forward fiyat hücresinin anahtarı değil"]
+    assert th.check(dict(hint, pairs={"P": "LIRA"})) == ["pairs: parite anlaşılamadı: 'LIRA' (örn. EURTRY, GBP)"]
+    assert th.check(dict(hint, pairs={"P": ""})) == ["pairs: parite yok: 'P'"]
+    assert th.check(dict(hint, pairs=[])) == ["pairs bir nesne olmalı"]
+    assert th.check({"tenor_col": "A", "cells": {"B": "ois"}, "pairs": {"B": "EURTRY"}}) == [
+        "pairs: 'B' bir forward fiyat hücresinin anahtarı değil"]
 
 
 def test_ret_rows_are_dated_by_their_tenor(service):

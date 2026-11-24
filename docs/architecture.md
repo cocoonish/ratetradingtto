@@ -173,7 +173,7 @@ priority:
 | EK_XAU | tto | gold forwards, VİOP gold calculator |
 | EK_VIOP | tto | VİOP contract history for charts |
 | EK_KAYNAK | tto | pricing-source order for OIS / offshore / XCCY (see [market-data.md](market-data.md#pricing-sources)) |
-| EK_BULK | tto | 100-row bulk forward table |
+| EK_BULK | tto | 100-row bulk forward table; each row's Parite / Yön / Tutar / Karşı taraf (V..Y) for "İşleme al" (below, *Prices and rows as trades*) |
 | EK_DIBS | tto | DİBS Trading: live T0/T1/T2 quotes, repo, "FX swap'a göre" fair values |
 | EK_EVREN | tto | Tüm Kâğıtlar (the service writes its rows) |
 | EK_CARRY | tto | carry along a chosen TLREF path |
@@ -294,6 +294,23 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
 - **Where its numbers come from.** Prices: `tradevalue.market` (request-free; cached 5 s, `MARKET_SECONDS`). K/Z: the
   tab's last "MTM yenile" as `tradebook.listing` returns it. Stops: `tradevalue.value` of each open trade on that market
   (Bootstrap, as the stop alarms), off the engine thread.
+
+### Prices and rows as trades
+
+Günlük İşlemler's entry is filled from other pages; nothing below saves a trade but the blotter's own endpoints.
+
+- **A price right-clicked** ("İşlem gir", `tto/tradehint.py`): a table opts in with its `"trade"` hint (schema in
+  `tto/views/__init__.py`). `client` sends the price cells with the table (`data.trade`); a right click posts
+  `/api/trade/prefill` → `prefill` reads the clicked row's own cells on the engine thread → the browser's
+  `ctx.openTrade(spec)` fills the form. A table of two pairs names each price's own pair in `"pairs"` (`pair_at`:
+  TOPLU FORWARD's USDTRY and EURTRY columns side by side).
+- **TOPLU FORWARD's rows** ("İşleme al"; [desk-decisions.md](desk-decisions.md), *TOPLU FORWARD → işlem*):
+  the header button (`"action": "toplu-islem"`, `view.js` → `blotterentry.js` `bookBulkForward`) → `GET
+  /api/blotter/bulk/toplu-forward` (`Service.bulk_from_forward`: the user's EK_BULK rows read on the engine thread →
+  `entry.bulk_forward_paste`: a tab-separated paste, a line per row with a Tutar, its price to the last digit, and a
+  "Satır" column the dialog does not read) → `openBulk(page, from)`: "Excel'den yapıştır" with its own preview
+  (`/api/blotter/bulk/preview`) and save (`/api/blotter/bulk`, one transaction) → the browser then resets the kept rows'
+  Tutar cells (`/api/reset`, found by "Satır").
 
 ### Kâğıt Fiyatlama
 

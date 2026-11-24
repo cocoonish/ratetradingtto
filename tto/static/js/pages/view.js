@@ -8,6 +8,7 @@ import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
 import { Grid, copyGrid, findCell, reviveEditor, trackWrite } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
+import { bookBulkForward } from './blotterentry.js';
 import { quoteButton, quoteRowItems, quoteRows } from '../kotasyon.js';
 import { addButton, loadLayout } from '../layout.js';
 
@@ -494,6 +495,15 @@ export class ViewPage {
       const b = h('button', { class: 'btn sm', type: 'button', title: 'RET faizlerini değiştir, kaydır ya da göndermek için kopyala' }, 'RET faizlerini düzenle / kopyala');
       b.dataset.action = 'ret';
       b.addEventListener('click', () => this.ctx.openRet());
+      head.appendChild(b);
+    }
+    if (p.action === 'toplu-islem' && p.data && !p.copy) {
+      // TOPLU FORWARD: its rows with a Tutar into Günlük İşlemler's "Excel'den yapıştır" - preview, then "N satırı kaydet"
+      const b = h('button', { class: 'btn sm', type: 'button',
+        title: 'Tutar\'ı yazılı her satırı Günlük İşlemler\'in "Excel\'den yapıştır" penceresinde FX Forward olarak açar (Parite boşsa USDTRY; '
+          + 'fiyat satırın gösterdiği): önizlemeden sonra "N satırı kaydet". Kaydedilen satırların Tutar\'ı silinir.' }, 'İşleme al');
+      b.dataset.action = 'toplu-islem';
+      b.addEventListener('click', () => { bookBulkForward(this.ctx); });
       head.appendChild(b);
     }
     if (p.type === 'chart' && p.pick && !p.copy && this.ctx.setInputs) {

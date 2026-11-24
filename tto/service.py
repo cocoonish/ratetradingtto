@@ -4418,6 +4418,31 @@ class Service(object):
         rec = self._bond_record(user, payload, lang)
         return [("bond", rec, None)], rec
 
+    def bulk_from_forward(self, user: Optional[str], lang: Optional[str] = None) -> Dict[str, Any]:
+        """TOPLU FORWARD FİYATLAMA's "İşleme al" (the Forward page, ``EK_BULK``; the desk, 24.11.2026: "3 ekle"): every
+        row of ``user``'s own table with a Tutar as the rows "Excel'den yapıştır" reads (:func:`entry.bulk_forward_paste`)
+        - the text the dialog opens with on FX Forward, the rows taken and left out, and each taken row's Tutar cell (the
+        browser empties those of the rows the save kept).  Nothing is priced or saved here: the dialog's preview and its
+        save (``bulk_preview`` / ``bulk_save``) are the paste's own."""
+        user = self.require_user(user)
+        return self.et.call(self._bulk_from_forward, user, lang or self.settings.locale)
+
+    def _bulk_from_forward(self, user: str, lang: str) -> Dict[str, Any]:
+        book = self._book("tto")
+        if ex.BULK_SHEET not in book.model.sheet_index:
+            raise ServiceError("TOPLU FORWARD tablosu yok (çalışma kitabına uymadığı için dışarıda bırakıldı)", 404)
+        calc = self._calc(user, book)
+        si = book.model.sheet_index[ex.BULK_SHEET]
+        cols = {"date": "B", "ret_mid": "G", "manual": "L", "eur_fwd": "P", "usd_typed": "R", "eur_typed": "T",
+                "pair": ex.BULK_PAIR, "dir": ex.BULK_DIR, "amount": ex.BULK_AMOUNT, "cpt": ex.BULK_CPT}
+        rows = []
+        for k in range(ex.BULK_ROWS):
+            r = ex.BULK_FIRST + k
+            row: Dict[str, Any] = {key: calc.get(si, r, col_to_index(col)) for key, col in cols.items()}
+            row.update(n=k + 1, ref="%s!%s%d" % (ex.BULK_SHEET, ex.BULK_AMOUNT, r))
+            rows.append(row)
+        return entry.bulk_forward_paste(rows, lang)
+
     # ================================================================== what Bloomberg does not know
     #: what a ticker of a known shape is, when Bloomberg does not know it
     _UNKNOWN_NOTES = (
