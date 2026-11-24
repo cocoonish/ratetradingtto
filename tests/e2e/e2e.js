@@ -243,6 +243,30 @@ async function clipAfter(page, action) {
     await page.keyboard.press('Delete');
     await waitCell(page, 'Forward!AH11', 't.trim() === "' + sp0 + '"');
     check('blanking it returns to the market spot', await page.evaluate(() => window.tto.findCell('Forward!AH8').classList.contains('auto')));
+    // the calculators two-way (the desk, 24.11.2026: "tüm tablolar bu şekilde olmalı"): an SP typed into Interest 2 SP stays,
+    // its TRY follows; the SP marked as the typed value (✎, its tooltip), the TRY as worked out from it; Delete on the TRY
+    // (worked out): the block as the workbook has it
+    const fwdCalcTw = () => page.evaluate(() => {
+      const one = (r) => { const td = window.tto.findCell(r); return { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' }; };
+      const note = document.querySelector('#content .panel[data-panel="B7"] .note');
+      return { try: one('Forward!AH10'), sp: one('Forward!AH11'), note: note ? note.textContent : '' };
+    });
+    const fwdCalcTry0 = (await cellText(page, 'Forward!AH10')).trim();
+    await typeInto(page, 'Forward!AH11', '5000');
+    await waitCell(page, 'Forward!AH11', 't.trim() === "5.000"');
+    await page.waitForFunction((b) => { const td = window.tto.findCell('Forward!AH10'); return td && td.textContent.trim() !== b; }, fwdCalcTry0, { timeout: 15000 });
+    await page.waitForFunction(() => window.tto.findCell('Forward!AH11').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const fwdCalcA = await fwdCalcTw();
+    check('Forward calculators are two-way: an SP typed into Interest 2 SP stays and its TRY follows, the SP marked as typed (✎, its tooltip), the TRY as '
+      + 'worked out from it; the note under the table says how it works',
+      fwdCalcA.sp.anchor && /Yazdığınız değer/.test(fwdCalcA.sp.tip) && !fwdCalcA.try.anchor && /Hesaplanan: bu satırda yazılan değer SP · AH11/.test(fwdCalcA.try.tip)
+      && fwdCalcA.try.t !== fwdCalcTry0 && /%$/.test(fwdCalcA.try.t) && /hangisini yazarsanız o kalır, diğerleri ondan hesaplanır/.test(fwdCalcA.note), fwdCalcA);
+    await (await cellHandle(page, 'Forward!AH10')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'Forward!AH10', 't.trim() === "' + fwdCalcTry0 + '"');
+    const fwdCalcB = await fwdCalcTw();
+    check('... Delete on the TRY (worked out from the SP): the block back to the workbook\'s TRY and SP, nothing marked',
+      !fwdCalcB.sp.anchor && !fwdCalcB.try.anchor && fwdCalcB.sp.t === sp0 && fwdCalcB.try.t === fwdCalcTry0, fwdCalcB);
 
     // ------------------------------------------------------------------ copy to Excel
     await (await cellHandle(page, 'EK_FWD!A46')).click();

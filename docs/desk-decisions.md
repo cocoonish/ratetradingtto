@@ -1292,6 +1292,68 @@ Code: `tto/twoway.py`, `tto/extras.py` (`_fwd_quote_cells`, `fwd_outright`, `fwd
 `_mark_formulas`, `_overlay`), `tto/render.py`, `tto/copies.py`, `grid.js` / `app.css` (✎). Tests: `tests/test_twoway.py`
 (the mechanism), `tests/test_fwd_twoway.py` (the matrices), the browser test's checks after "EURTRY points typed by hand".
 
+### Forward hesaplayıcıları iki yönlü (24.11.2026)
+
+After FORWARD KOTASYON, the desk on every table (24.11.2026):
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+
+> "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için."
+
+**What became two-way** (the Forward page; the one typed last stands, the others are worked out from it with the block's
+own formulas and their exact inverses; Delete on any cell of the block: its default):
+- **Interest 2 SP, SP 2 Interest, its all-in, Interest 2 SP · O/N** (`Forward!AG4:AK58`, B7–B10; USDTRY `AH` and EURTRY
+  `AK` apart): TRY, SP, All In S -> E (and E -> S in B8 / B9), ON Karşılık, Günlük SP. SP = spot·((1 + TRY·g/b)/(1 +
+  USD·g/b) − 1)·10000 and back (`extras.fx_calc_points` / `fx_calc_rate`; b 360 - B7's USDTRY half: its Gün Bazı `AH15`,
+  as the workbook has it, its ON on 360); All In = spot ± SP/10000; ON = 360·((1 + TRY·g/360)^(1/g) − 1) and back
+  (`on_equivalent` / `on_simple`); Günlük SP = SP/g. The dates, spot and USD / EUR rate (and their chain B7 → B8 → B9 →
+  B10 as formula defaults) stay the blocks' inputs: when they change, the typed member stays and the others follow.
+- **Basit ↔ bileşik · Repo** (`AG60:AK68`, B11): each converter's two rates (daily compounded ↔ the period's simple rate,
+  on its Gün Basis and Gün).
+- **Forward DV01** (`N31:P49`, B18): Tutar, DV01_USD, DV01_TRY, TRY_USD_DV01. A DV01 typed is read as an absolute value -
+  the size it takes -, its sign the B/S row's (`O44`), as the block's formulas sign it (S: USD DV01 +, TRY DV01 −).
+- **Tahvil carry** (`U56:W72`, B24): Carry (the repo), B/E, Px Drop, its daily figure. A B/E (or a drop) typed gives the
+  repo "İma repo"'s formula gives that price (`extras.bond_carry_repo`, one implementation for both); the 24.11 box "Fwd
+  temiz fiyat (elle)" → "İma repo" stays.
+- **TRY OIS w/Spread** (`O57:P68`, B23) - one value for the column: a tenor's rate typed gives the Spread (rate − OIS,
+  %-points) and the other tenors; and **the OIS mid at the value date + spread** (`O27` / `P27`, in B4): the rate typed
+  gives the spread. Their defaults stay the desk's one spread (`MASA!I60`, "Tek OIS spread'i").
+
+**Choices made while building it** (ask the desk before changing):
+- **Nothing typed, every number is as before**: each block's driver - its input until now (TRY `AH10` / `AK10`, SP
+  `AH25` / `AK25`, all-in `AH40` / `AK40`, O/N `AH56` / `AK56`, the converters' `AH60`, `AH65`, `AK63`, Tutar `O45`) -
+  holds the workbook's own value as its default (the file's numbers, EURTRY's SP its `=22119-2540`); every value of the
+  Forward sheet checked cell for cell against the commit before.
+- **These blocks are copyable**, so every member keeps what is typed into it in a store of its own (hidden columns `AL`,
+  `AM`, `Q` of the members' rows; helper tables IY1–IY2): in a temporary copy any member can be typed, also where the
+  table itself has another one typed (twoway.py's limit concerns a member kept in place). What users typed into the
+  drivers before is the block's typed value (moved once to its store, `twoway.TwoWay.adopt`); a formula typed into a
+  driver before goes (the cell is no input now) and its value stays; a temporary copy opened before keeps a typed driver
+  under the old cell, which it no longer reads (typed again in the copy, it stands).
+- **Kept in place** (tables that are not copyable, no value moves): the bond carry's Carry (`V61`; its default blank as
+  before - a formula's "" now, which Carry Maliyet reads as 0, as it read the blank), TRY OIS w/Spread's Spread (`P58`),
+  the OIS mid's shift (`O27`). B/E, Px Drop and the daily drop in `X67`, `Y70`, `Z70` (helper IY3), the tenors in
+  `Q59:Q68`, the shifted mid in `Q27`.
+- **Every member reads all the stores of its block**, whatever is typed: a formula typed into a member that reads its own
+  block is refused as a cycle when it is typed (`extras.two_way_member`). Not so for a member kept in place while it
+  holds a typed value (Carry, the two spreads: the value read is the typed one) - a formula reading it typed into another
+  member of its block is taken, and stops with the cycle's reason once the typed value goes (inputformula.py).
+
+**Left out** (on the survey, low): **XARTRY** (B21) - a chain of six values over both legs (the gold forward × the USDTRY
+forward → points scaled by the customer's days), its dates, the gold swap and the customer's dates blank until typed:
+not small; **Tarih yardımcısı** (B13) - its End is a date, and a store has no `"tenor"` of its own (a date shortcut typed
+into it would count as the member's formula says, not as the input's declaration), and its End starts blank; **the bond
+carry's yields** (B/E Yield `V68`, Yield Drop `V69`): a price at a typed yield is a new `YAS_BOND_YLD` request each time.
+No new Bloomberg request of any kind.
+
+Code: `tto/extras.py` (`FWD_CALC_TW_NAME`, `_fwd_calc_tw_check`, `_tto_fwd_calc_tw`, `FX_CALC_*`, `FWD_DV01_TW`,
+`OIS_W_SPREAD`, `OIS_SHIFT`, `fx_calc_points`, `fx_calc_rate`, `on_equivalent`, `on_simple`, `two_way_member`; the bond
+carry in `_bond_back_check` / `_tto_bond_back`, `BOND_TW_*`, `bond_carry_repo`), `tto/views/30_forward.json` (`"twoway"`:
+the `fwdcalc-*` groups; panels IY1–IY3). Tests: `tests/test_fwdcalc_twoway.py`, the browser test's checks "Forward
+calculators are two-way …".
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

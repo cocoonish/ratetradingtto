@@ -147,10 +147,12 @@ def test_the_calculators_values_of_the_save_day_start_empty(service):
     day counter, the XAU leg's dates and swap, the bond carry, the OIS page's two dates, the VİOP calculators' TRY rates,
     DİBS RV's switch, the Eurobond page's own asks and the USD page's FOMC scenario steps start empty."""
     for ref in ("TM_OIS!A10", "TM_OIS!B11", "TM_OIS!C12", "Forward!E20", "Forward!E22", "Forward!C59", "Forward!C60", "Forward!C63",
-                "Forward!E61", "Forward!E67", "Forward!V56", "Forward!V57", "Forward!V58", "Forward!V61", "Forward!V62",
+                "Forward!E61", "Forward!E67", "Forward!V56", "Forward!V57", "Forward!V58", "Forward!V62",
                 "OIS_MAIN!B122", "OIS_MAIN!B123", "VIOP!M37", "VIOP!P37", "VIOP!S37", "DİBS RV!A64", "DİBS RV!B64", "DİBS RV!C64",
                 "Bulk Bond!D3", "Bulk Bond!D4", "Bulk Bond!D5"):
         assert cell(service, ref) is None, ref
+    # (the bond carry's Carry: empty too - its formula default, the two-way block's: the repo of a B/E, Px Drop typed)
+    assert cell(service, "Forward!V61") == ""
     for ref in ("SOFR_FOMC!R74", "SOFR_FOMC!S77", "SOFR_FOMC!T83"):
         assert cell(service, ref, book="sofr") is None, ref
     # their captions, the formulas beside them and the rest of the lists stay
