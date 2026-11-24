@@ -112,21 +112,27 @@ class EngineThread(object):
     """Runs every calculation on one thread with a large stack (formula chains recurse deeply).
 
     Work waits in order of priority, first come first served within one: what a user typed goes before the header
-    strip, the header before a page, a page before the background (the watch lists, warming up)."""
+    strip, the header before a page, a page before the background (the watch lists, warming up).
+
+    ``wrote`` is called on the thread at the end of every WRITE job - before its caller has the answer and before the
+    next job starts (the service's: a new generation, :meth:`Service._wrote`) - unless the job said it changed nothing
+    (:meth:`wrote_nothing`)."""
 
     WRITE, HEADER, VIEW, BACKGROUND = 0, 1, 2, 3
     _STOP = 99
 
-    def __init__(self, name: str = "tto-engine"):
+    def __init__(self, name: str = "tto-engine", wrote: Optional[Callable[[], None]] = None):
         self._q: "queue.PriorityQueue" = queue.PriorityQueue()
         self._seq = itertools.count()
         self._busy_since = 0.0                 # when the job running now began (0: idle)
+        self._wrote = wrote
+        self._nothing = False                  # the WRITE job running now changed nothing (wrote_nothing)
         # a big stack: long chains are evaluated in one go (engine.DEEP_LIMIT deep) instead of unwound and restarted
         self._t = big_stack_thread(self._loop, name, daemon=True)
 
     def _loop(self) -> None:
         while True:
-            _, _, item = self._q.get()
+            priority, _, item = self._q.get()
             if item is None:
                 return
             fut, fn, args, kw = item
@@ -134,11 +140,25 @@ class EngineThread(object):
                 continue
             self._busy_since = time.time()
             try:
-                fut.set_result(fn(*args, **kw))
+                fut.set_result(self._run(priority, fn, args, kw))
             except BaseException as exc:  # noqa: BLE001 - delivered to the caller
                 fut.set_exception(exc)
             finally:
                 self._busy_since = 0.0
+
+    def _run(self, priority: int, fn: Callable, args: tuple, kw: Dict[str, Any]) -> Any:
+        self._nothing = False
+        try:
+            return fn(*args, **kw)
+        finally:
+            # (a write that failed half way may have changed something too)
+            if priority == self.WRITE and self._wrote is not None and not self._nothing:
+                self._wrote()
+
+    def wrote_nothing(self) -> None:
+        """Said on the thread by the WRITE job running now when it changed nothing (the input formulas' round, the
+        market's tick with nothing new): no new generation after it."""
+        self._nothing = True
 
     def queued(self) -> int:
         """Jobs waiting for the calculation thread (the one running not counted)."""
@@ -248,7 +268,8 @@ class Service(object):
         # the desk's alarms: set once, they ring for everyone; the system's own (deskalarms.py)
         from .deskalarms import DeskAlarms
         self.desk_alarms = DeskAlarms(self)
-        self.et = EngineThread()
+        # (a write done there moves the generation before anything after it reads it: _wrote)
+        self.et = EngineThread(wrote=self._wrote)
         # the generation: what the pages compare - it starts above any number a page could still hold from before
         # a restart (a page that sent "since" an old number would otherwise take everything for unchanged)
         self.gen = int(time.time() * 1000)
@@ -831,6 +852,8 @@ class Service(object):
         interp = getattr(self, "interp", None)
         if interp is not None and interp.listed():
             interp.refresh_list()                # (the list's curves follow the quotes they are made of)
+        if not (changed or keys):
+            self.et.wrote_nothing()              # (the clock's tick alone: no new generation, nobody told - as before)
         return changed or bool(keys)
 
     #: the real-time fields whose change tells that a security traded: its last price, its volume of the day
@@ -923,6 +946,19 @@ class Service(object):
     #: the pages are told of a new generation at most this often (seconds): a busy market bumps every 0.3 s, and
     #: every page asks again each time it is told
     NOTIFY_EVERY = 1.0
+
+    def _wrote(self) -> None:
+        """The calculation thread, at the end of a WRITE job (an input typed or deleted, a paste, a scenario, the market
+        ...): a new generation at once, before the next job there - a page - reads it.  The writer's ``bump`` tells
+        the pages afterwards, from its own thread.
+
+        Without it a page made in between - asked for after the write was applied, before that bump (the browser's
+        refresh that the previous write's answer started) - took the generation from before the write and made what
+        the write changed: a browser that had that generation took it all for unchanged, and every later answer too
+        (what they made was the same), so the page never showed the write (24.11.2026: DİBS RV's bond moved to another
+        row, its price still on the old row; typed back there, nothing was sent - it was what the page showed)."""
+        with self._gen_lock:
+            self.gen += 1
 
     def bump(self, market: bool = False) -> int:
         kick = getattr(self, "_watch_kick", None)
