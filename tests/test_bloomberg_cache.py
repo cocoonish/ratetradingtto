@@ -342,6 +342,51 @@ def test_bloombergs_own_limit_stops_everything_until_a_probe_the_next_day(server
     assert sim.get(new) != REQUESTING                            # (a first answer goes out in any hour)
 
 
+# ================================================================================================ a whole day
+def test_a_day_of_the_workbooks_keys_on_the_office_terminal_stays_well_under_20000_hits(service):
+    """Every Bloomberg key the four workbooks ask for (the replay day's, as the engine forms them) through a working day
+    on a terminal like the office's - the BIST swap tenors mostly unknown (448 of 800) or there without a quote, 6 % of
+    the other securities not streaming (refused) and 10 % of the other quote fields silent in their subscription, their
+    answers moving on every request -, the pages read all day: the first answers, the quotes that do not stream every
+    15 minutes, the empty ones every 3 hours - nothing else asked again; nothing after 19:00.  (The old rules cost 163 787
+    hits on this day: the 60-second class 101 486, the quotes 48 794; the measurement in docs/market-data.md.)"""
+    import zlib
+    from helpers import server_from_snapshot
+    keys = sorted((k for k in service._market_callers() if k[0] in ("BDP", "BDS", "BDH")), key=repr)
+    snapshot = {k: v for k, v in service.provider.snapshot.items() if k[0] not in ("BFX", "RT")}
+    server = server_from_snapshot(snapshot)
+    valued = {k[1] for k in snapshot if k[0] == "BDP" and k[1].startswith("TYB") and isinstance(snapshot[k], float)}
+
+    class Missing(set):
+        def __contains__(self, sec):
+            return isinstance(sec, str) and sec.startswith("TYB") and " BFX" in sec and sec not in valued \
+                and zlib.crc32(sec.encode()) % 800 < 448 * 800 // (800 - len(valued))
+
+    server.invalid = Missing()
+    quotes = [k for k in snapshot if k[0] == "BDP" and not k[3] and k[2] in bloomberg.RT_FIELDS and isinstance(snapshot[k], float)]
+    others = sorted({k[1] for k in quotes if not k[1].startswith("TYB")})
+    refused = set(others[::17])                                  # ~6 %
+    server.refused.update(refused)
+    for i, k in enumerate(sorted(quotes, key=repr)):
+        if k[1] in refused or (not k[1].startswith("TYB") and i % 10 == 0):
+            server.ref[(k[1], k[2], ())] = (lambda v: (lambda c=[0]: (c.__setitem__(0, c[0] + 1), v * (1 + 1e-5 * c[0]))[1]))(snapshot[k])
+            if k[1] not in refused:
+                server.rt.pop((k[1], bloomberg.RT_FIELDS[k[2]]), None)        # silent in its subscription
+    sim = Sim(server, start=dt.datetime(2026, 11, 3, 8, 0))       # the replay day, a Tuesday
+    sim.run(11 * 3600 + 3600, step=60.0, read=keys)               # 08:00 - 20:00
+    st = sim.p.status()
+    kinds = st["kinds"]
+    assert st["hits_today"] == sim.asked() < 20000 and kinds["first"] == len(sim.p._items) > 4000
+    assert set(kinds) <= {"first", "poll", "hourly"}, kinds         # nothing else asked again the same day
+    polled = st["polled"]
+    assert kinds["poll"] <= 44 * polled["value"] + 3 * polled["empty"]   # 15 minutes / 3 hours, 08:00 - 19:00
+    # hourly: only what follows the stream of a security nothing streams (its subscription refused, no last price)
+    unfed = [k for k, it in sim.p._items.items() if it.policy in bloomberg.FED and k[1] in refused]
+    assert kinds.get("hourly", 0) <= 11 * len(unfed)
+    print("a day of the workbooks' keys: %d hits - %s; %d keys, %d subscriptions (%d failed), polled %s"
+          % (st["hits_today"], kinds, len(sim.p._items), st["subscriptions"], st["subscriptions_failed"], polled))
+
+
 # ================================================================================================ the status's breakdown
 def test_the_days_hits_by_kind_and_by_key(server):
     """What the status window shows: today's hits by kind (first answer, poll, static, daily, hourly, history, a user's

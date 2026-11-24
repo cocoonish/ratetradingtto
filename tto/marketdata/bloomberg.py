@@ -126,8 +126,9 @@ KINDS = (FIRST, POLL, STATIC, DAILY, HOURLY, HISTORY, USER, RESYNC, BARS, PROBE)
 #: a quote that does not stream (its subscription failed, refused the field or stays silent) and has a value: asked at
 #: most this often (seconds) in the desk's hours, whatever its answer does (``price_poll`` may make it longer) ...
 POLL_EVERY = 15 * 60.0
-#: ... and at twice the interval while its answer stays the same, up to this
-POLL_MAX = 60 * 60.0
+#: ... and at twice the interval while its answer stays the same, up to this (an idle quote that answers its old price
+#: all day - a BIST swap tenor - costs as little as an empty one; one that moves stays at 15 minutes)
+POLL_MAX = 3 * 3600.0
 #: a quote without any value ("#N/A N/A"): at the start, then this often in the desk's hours
 POLL_EMPTY = 3 * 3600.0
 #: a quote that streamed and whose subscription then failed: this often in the desk's hours
