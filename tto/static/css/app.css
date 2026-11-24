@@ -218,6 +218,10 @@ a { color: var(--accent-ink); }
 .prop-pop .pp-field .inp { width: 112px; text-align: right; font-variant-numeric: tabular-nums; }
 .prop-pop .pp-field #prop-pair { text-align: left; text-transform: uppercase; }
 .prop-pop .pp-field .seg button, .prop-pop .pp-rhead .seg button { padding: 3px 9px; font-size: 12px; }
+/* a two-way box (prop.js, swaption.js; the desk, 24.11.2026): the one typed last - bold, ✎ by its label; the others show
+   (greyed, as placeholders) what it gives */
+.inp.tw-anchor { font-weight: 700; box-shadow: inset 0 -2px 0 var(--hand-line); }
+.prop-pop .pp-field.tw-anchored .lbl::after, .swaption .tw-anchored > span::after { content: " ✎"; color: var(--hand-line); }
 .prop-pop .pp-mid { font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .prop-pop .errtxt { margin-top: 8px; }
 .prop-pop .errtxt:empty { display: none; }

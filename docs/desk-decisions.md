@@ -1254,6 +1254,10 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
 - **VİOP Target** (rows 331-338): Hedef değer, Hedef faiz, Uzak limit fiyatı, Spread fiyatı or Hedef − piyasa. The target
   rate is the row's hub: a far price gives the rate it implies (the Fiyat type's inverse, the near limit by the row's
   side), a spread price the far limit near limit + spread, a gap the market's implied rate + gap.
+- **Prop** (the top bar's calculator): the size may be typed in place of the loss - the stop as given (stop, loss and
+  size have two degrees of freedom), the last typed of loss / size stands, the other is worked out: a size typed
+  gives the loss it makes at the stop (size · |entry − stop| in the loss's currency); a loss typed gives the size
+  rounded down to 1M, as before.
 
 **Choices made while building them** (said on the pages and in README; ask the desk before changing):
 - **Each calculator has a hub**, the input its block computes from (Volatilite, Basit, DF ...): a value typed into another
@@ -1275,13 +1279,16 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
   while any of its five is typed; a contract that rolled off leaves it "Geçersiz" with the typed value kept. Typing is on
   the VİOP page; Masa's strip of the target's inputs types Hedef değer (the same store). Masa's summary shows a worked-out
   Hedef değer to four decimals.
+- **Prop: a typed size is not rounded** (it is the user's: 2,5M stays 2,5M); only the size worked out from a loss is
+  rounded down to 1M (the desk's rule of 19.11). The panel keeps nothing: the typed one is marked while it is open.
 
 Left out (with the reason): the RET tables and RET adil değer (shared, not this group's); Fiyatlama's optional new kinds;
 Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye endeksli and the hidden copies (survey).
 
 Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_STORES`, `viop_fx_implied`,
 `_tto_viop_tw`), `tto/views/90_calc.json`, `70_dv01.json`, `40_viop.json` (`"twoway"`, helper tables B36 / B11s / VT1),
-`10_masa.json` (TARGET's note). Tests: `tests/test_hesap_twoway.py`, `tests/test_viop_twoway.py`.
+`10_masa.json` (TARGET's note); `tto/prop.py` (`size`'s `amount`, `Prop.calc`'s `size`), `tto/static/js/prop.js`
+(`typed`, `markAnchor`). Tests: `tests/test_hesap_twoway.py`, `tests/test_viop_twoway.py`, `tests/test_prop.py`.
 
 ## Process
 

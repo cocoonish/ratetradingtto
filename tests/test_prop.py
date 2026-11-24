@@ -128,6 +128,47 @@ def test_the_loss_in_the_pair_s_quote_currency_every_way():
     assert "USDJPY: canlı fiyat yok" in _refused(pp.size, m2, "USDJPY", 151.0, 1e4, "USD")
 
 
+def test_a_size_typed_gives_the_loss_at_the_stop():
+    """Two-way (the desk, 24.11.2026: "tüm tablolar bu şekilde olmalı"): the size typed instead of the loss - the stop as
+    given, the loss it makes there worked out (size · |entry − stop| into the loss's currency), the size as typed (not
+    rounded).  The desk's example the other way round: 2,5M at 0,20 is 500.000 TL; each loss's size typed back gives that
+    loss again; the loss typed gives what it did before (the anchor said)."""
+    m = _market()
+    r = pp.size(m, "USDTRY", 44.55, None, "TRY", entry=44.35, amount=2.5e6)
+    assert (r["anchor"], r["direction"], r["size"], r["lots"], r["under_1m"]) == ("size", "short", 2.5e6, 2.5, False)
+    assert _near(r["loss"], 5e5) and _near(r["real_loss"]["try"], 5e5) and _near(r["loss_quote"], 5e5) and _near(r["per_1m"]["try"], 2e5)
+    assert r["note"] == "SHORT · SAT 2,5M USD · kayıp 500.000 TRY"
+    assert pp.size(m, "USDTRY", 44.55, 5e5, "TRY", entry=44.35)["anchor"] == "loss"
+    # every conversion path, and back: the loss found typed as the loss gives the size typed (raw, before rounding)
+    for pair, stop, entry, amount, ccy, loss in (("USDTRY", 41.0, 42.0, 2e6, "USD", 2e6 / 42.0), ("EURUSD", 1.14, 1.15, 2e6, "TRY", 840000.0),
+                                                 ("USDJPY", 151.0, 150.0, 1e6, "USD", 1e6 / 150.0), ("EURTRY", 48.0, 48.3, 3e6, "TRY", 9e5)):
+        r = pp.size(m, pair, stop, None, ccy, entry=entry, amount=amount)
+        assert _near(r["loss"], loss) and _near(r["real_loss"]["ccy"], loss) and r["size"] == amount, pair
+        back = pp.size(m, pair, stop, r["loss"], ccy, entry=entry)
+        assert _near(back["size_raw"], amount, 1e-9) and back["size"] <= amount, pair
+        assert _near(pp.size(m, pair, stop, None, ccy, entry=entry, amount=back["size"])["loss"], back["real_loss"]["ccy"]), pair
+    # a size under 1M is a size too (the loss it makes, nothing rounded away)
+    r = pp.size(m, "USDTRY", 41.0, None, "TRY", entry=42.0, amount=500000.0)
+    assert r["size"] == 5e5 and r["lots"] == 0.5 and not r["under_1m"] and _near(r["loss"], 5e5)
+    assert "stop girişe eşit olamaz" in _refused(pp.size, m, "USDTRY", 42.0, None, "TRY", amount=1e6)
+
+
+def test_the_panel_reads_the_size_or_the_loss(monkeypatch):
+    """The panel's request: ``size`` in place of ``loss`` (the one the user typed last); both - the loss, as before; a size
+    read as an amount (2,5m) and refused with the reason."""
+    _, store, _, prop, _ = _desk(monkeypatch)
+    ali = _user(store, "Prop İki Yön")
+    q = {"pair": "usdtry", "entry": "44,35", "stop": "44,55", "ccy": "TRY"}
+    r = prop.calc(ali, dict(q, size="2,5m"))
+    assert r["anchor"] == "size" and r["size"] == 2.5e6 and _near(r["loss"], 5e5)
+    r = prop.calc(ali, dict(q, size="2,5m", loss="500k"))
+    assert r["anchor"] == "loss" and r["size"] == 2e6
+    assert prop.calc(ali, dict(q, loss="", size="3m"))["anchor"] == "size"
+    assert _refused(prop.calc, ali, dict(q, size="0")) == "Büyüklük sıfırdan büyük olmalı"
+    assert _refused(prop.calc, ali, dict(q, size="çok")) == "Büyüklük anlaşılamadı: çok (örn. 500k, 1mn, 2,5mn)"
+    assert _refused(prop.calc, ali, q) == "Kayıp gerekli"
+
+
 class _Svc(object):
     """What Trades' book and the panel need of the service: its store, who is signed in, a way to tell the pages."""
     require_user = Service.require_user
@@ -462,6 +503,9 @@ def test_the_panel_over_http(client, module_service):
     assert (got["direction"], got["size"], got["base"]) == ("short", 2e6, "USD")
     assert abs(got["real_loss"]["try"] - 4e5) < 1e-6 and abs(got["per_1m"]["try"] - 2e5) < 1e-6 and abs(got["real_loss"]["usd"] - 4e5 / usdtry) < 1e-6
     assert client.get("/api/prop/size", params=dict(q, entry=""), headers=ali).json()["entry"] == usdtry     # (no entry: the mid)
+    # two-way: the size typed in place of the loss - the loss it makes at the stop; the old request reads as before
+    two = client.get("/api/prop/size", params=dict(q, loss="", size="2,5m"), headers=ali).json()
+    assert (two["anchor"], two["size"]) == ("size", 2.5e6) and abs(two["loss"] - 5e5) < 1e-6 and got["anchor"] == "loss"
     for bad, why in ((dict(q, stop=""), "Stop gerekli"), (dict(q, pair="1234"), "parite anlaşılamadı: 1234"),
                      (dict(q, pair="xyz"), "XYZTRY masanın FX listesinde yok"),          # (a currency alone: against TL)
                      (dict(q, pair="USDSGD"), "USDSGD masanın FX listesinde yok"), (dict(q, stop="44,35"), "stop girişe eşit olamaz"),

@@ -343,7 +343,8 @@ that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hes
 - **Endpoints** (`Service.prop_*`, each needs a session; a `PropError` is a 400 with the Turkish reason):
   - `GET /api/prop` - the desk's FX pairs that have a price (`quant.fx_pair_list`, then the Spot / FX board's), each with
     its mid, and the user's limit;
-  - `GET /api/prop/size?pair=&stop=&loss=&ccy=TRY|USD[&entry=]` - the calculator (`prop.size`);
+  - `GET /api/prop/size?pair=&stop=&loss=&ccy=TRY|USD[&entry=]` - the calculator (`prop.size`); `size=` in place of
+    `loss` (two-way: the size typed, the loss it makes at the stop; with both the loss is read, as before);
   - `GET /api/prop/risk?scope=personal|desk` - the loss at every stop, the tab's "Günlük" K/Z, the limit, the room;
   - `GET` / `POST /api/prop/limit` - the user's own daily loss limit (`prop.limit:<user>` in kv).
 - **Where its numbers come from.** Prices: `tradevalue.market` (request-free; cached 5 s, `MARKET_SECONDS`). K/Z: the
