@@ -250,6 +250,15 @@ bump and NPV at a typed price.
 | XCCY | FX spot `Forward!I2`, TRY holidays | annual ACT/360 | counted back from maturity: 18M = 6M + 12M, 2Y3M = 3M + 12M + 12M |
 | FX forward | - | - | `F = S · DF_TRY(spot) / DF_TRY(value) / (1 + r·d/360)`, on the **offshore** curve and the **USD / EUR** OIS (`Forward!U:X`, `AA:AD`) - not TRY OIS |
 
+**Each DV01 bucket shows its quote** (24.11.2026, [desk-decisions.md](desk-decisions.md#fiyatlama-kovaların-kotası-24112026)):
+the market quote the bucket's +1 bp moves, the rate its hedge trades at (`Curves.pillars`; the bucket row's `quote`).
+- **TRY OIS and FRA:** the OIS quote Motor's bootstrap reads, `Motor!A306:B321` (= `OIS_MAIN!B9:B26` without 15M and
+  21M; 1Y is `OIS_MAIN!B14`). On a desk's list that differs from the default: the list's points. ON / 1W / 2W have none.
+- **XCCY and FX forward:** the offshore quote (`ppkcurve.offshore_quotes`): `TRYI` mid `Forward!J8:J16` (one period,
+  simple ACT/360), `TRYSAQ` mid `Forward!E125:E134` (annual ACT/360 par). Never an OIS quote.
+- **One column for both curves.** Bootstrap gives every quote back at its own maturity by construction, PPK basamak by its
+  calibration (1e-12). On the replay day the worst miss over the 16 OIS and 14 offshore quotes is 3·10⁻¹⁰ bp.
+
 **The ways back** (24.11.2026, [desk-decisions.md](desk-decisions.md#fiyatlamanın-tersi-ve-fx-opsiyonun-prim-volü-24112026)):
 - **An NPV or an upfront typed gives the level** that prices to it - `pricing.level_for`, `value`'s exact inverse: a
   swap K = ((DF(start) − DF(end)) − NPV / (side · N)) / Σ τ·DF, an FX forward K = F − NPV / (side · A · DF(value date)).

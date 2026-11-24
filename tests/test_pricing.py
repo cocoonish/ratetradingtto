@@ -6,7 +6,8 @@ bumped, values and their signs - and on the replay day: the curves built again a
 Motor's own bucket bumps (``Motor!T86``); every asset at MASA's broken-date block's own date is the block's number on
 both curves (its own date and a broken one); OIS · PPK's FRA list and the quotes come back; PPK equals Bootstrap at a
 quoted maturity of a zero coupon instrument; the DV01 buckets sum to the total and to a parallel bump, a bucket away from
-the maturity is 0; NPV 0 at mid, + in the trader's favour; the page's inputs each user's own, per asset; the HTTP route."""
+the maturity is 0, each bucket says the quote it bumps (OIS or offshore, one for both curves); NPV 0 at mid, + in the
+trader's favour; the page's inputs each user's own, per asset; the HTTP route."""
 from __future__ import annotations
 
 import datetime as dt
@@ -446,6 +447,68 @@ def test_dv01_buckets_sum_to_the_total_and_to_a_parallel_bump_a_far_one_is_zero(
     kept = dict(svc._pricing_kept)
     svc.pricing(u, {"asset": "ois"})
     assert all(svc._pricing_kept.get(k) is v for k, v in kept.items())
+
+
+def test_each_dv01_bucket_says_its_quote_the_rate_its_bump_moves(svc):
+    """The desk (24.11.2026, on a photo of the page - FRA 12x24 RECEIVE, DV01 2.000 $): "Bu fiyatlama kısmına bunları
+    ayırdığımızda denk gelen faizleri de yazalım" - each DV01 bucket says its quote, the rate its +1 bp moves (the hedge's):
+    TRY OIS and FRA the OIS quote Motor's bootstrap reads (``Motor!A306:B321``, OIS_MAIN's), none at ON / 1W / 2W; XCCY and
+    FX forward the offshore curve's TRYI / XCCY quote (``Forward!J8:J16`` / ``E125:E134``), never an OIS one.  One for both
+    curves: Bootstrap and PPK basamak each give every quote back at its own maturity, and the bucket's bumped curve gives
+    that quote + 1 bp; a PPK user sees the same quotes.  The rows answer as before plus the quote; the Toplu lines have no
+    buckets, so none."""
+    u = svc.login("Fiyatlama Kova Kotası")["user"]
+    cv, mk = curves(svc, u), market(svc, u)
+    made = pr.Curves(cv, mk)
+    sheet = {pr.ON: {pk.tenor_label(int(cell(svc, "Motor!A%d" % r, u))): cell(svc, "Motor!B%d" % r, u) for r in range(306, 322)},
+             pr.OFF: {}}
+    for label, rate, rows in (("H", "J", range(8, 17)), ("C", "E", range(125, 135))):
+        for r in rows:
+            x = cell(svc, "Forward!%s%d" % (rate, r), u)
+            if type(x) is float:                                                 # (TRYSAQ6–10: #N/A in the replay file)
+                sheet[pr.OFF]["%s %s" % ("TRYI" if label == "H" else "XCCY", cell(svc, "Forward!%s%d" % (label, r), u))] = x / 100.0
+
+    def check(got, family):
+        quotes = {q.name: q for q in (cv["quotes"] if family == pr.ON else cv["off_quotes"])}
+        assert got["buckets"]["family"] == family and "error" not in got, got.get("error")
+        for r in got["buckets"]["rows"]:
+            assert set(r) == {"name", "pillar", "day", "dv01", "quote"}           # (as before, plus the quote)
+            if not r["pillar"]:
+                assert r["name"] in pr.SHORT_BUCKETS and r["quote"] is None and r["dv01"] == {"boot": None, "ppk": None}
+                continue
+            q = quotes[r["name"]]
+            assert r["quote"] == sheet[family][r["name"]] == q.rate, r["name"]   # the sheet's own quote
+            for m in pr.METHODS:
+                # both curves give it back at its maturity (one column); the bucket's bump moves exactly it
+                assert pk.par(made.curve(family, m), q.pays, q.accruals) == pytest.approx(q.rate, abs=1e-12), (r["name"], m)
+                bumped = dict(made.bumped(family, m)[1])[r["name"]]
+                assert pk.par(bumped, q.pays, q.accruals) == pytest.approx(q.rate + 1e-4, abs=1e-12), (r["name"], m)
+        return [(r["name"], r["quote"]) for r in got["buckets"]["rows"]]
+
+    fra = svc.pricing(u, {"asset": "fra", "start": "12", "end": "24", "side": "RECEIVE", "size_kind": "dv01", "size": "2000",
+                          "price": ""})
+    seen = check(fra, pr.ON)
+    assert fra["label"] == "FRA 12x24" and seen[:3] == [("ON", None), ("1W", None), ("2W", None)]
+    assert [n for n, _ in seen[3:]] == [pk.tenor_label(int(m)) for m, _ in sorted(mk.ois_quotes)]        # (1M … 10Y)
+    assert dict(seen)["1Y"] == cell(svc, "OIS_MAIN!B14", u) and dict(seen)["2Y"] == cell(svc, "OIS_MAIN!B18", u)
+    assert check(svc.pricing(u, {"asset": "ois", "start": "", "end": "2Y3M", "side": "PAY"}), pr.ON) == seen
+    # offshore: the TRYI / XCCY quotes, by their own conventions - never OIS's
+    for req in ({"asset": "xccy", "start": "", "end": "2Y3M", "side": "RECEIVE"},
+                {"asset": "fx", "pair": "USDTRY", "end": "18M", "side": "AL", "size_kind": "amount", "size": "10m"},
+                {"asset": "fx", "pair": "EURTRY"}):
+        off = check(svc.pricing(u, req), pr.OFF)
+        assert [n for n, _ in off] == [q.name for q in sorted(cv["off_quotes"], key=lambda q: q.end)]
+        assert dict(off)["XCCY 1Y"] == cell(svc, "Forward!E125", u) / 100.0 != dict(seen)["1Y"]
+    # a PPK user: the same quotes beside their own curve's DV01s
+    svc.set_interp(u, "ppk")
+    try:
+        p = svc.pricing(u, {"asset": "fra"})
+        assert p["methods"] == ["ppk", "boot"] and [(r["name"], r["quote"]) for r in p["buckets"]["rows"]] == seen
+    finally:
+        svc.set_interp(u, "boot")
+    # the Toplu lines: DV01 by the annuity rule, no buckets - so no quote
+    lines = svc.pricing(u, {"asset": "ois", "bulk": "1Y\n12x15"})["bulk"]["rows"]
+    assert len(lines) == 2 and all("dv01" in x and "quote" not in x and "buckets" not in x for x in lines), lines
 
 
 def test_npv_is_zero_at_mid_and_plus_in_the_trader_s_favour(svc):

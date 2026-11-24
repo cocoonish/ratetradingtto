@@ -1050,6 +1050,28 @@ Code: `tto/tradevalue.py` (`implied_vol`, `gk_bounds`, `premium_vol`, `_fxopt_ma
 (`test_the_form_says_an_option_s_premium_as_a_vol_beside_the_smile_and_the_row_keeps_it`), the browser test's Trades
 checks.
 
+### Fiyatlama: kovaların kotası (24.11.2026)
+
+On a photo of the page (FRA 12x24 RECEIVE, DV01 2.000 $, the "DV01 kovaları ($/bp)" table) the desk asked:
+
+> "Bu fiyatlama kısmına bunları ayırdığımızda denk gelen faizleri de yazalım"
+
+- **Each DV01 bucket shows its quote**: the market quote its +1 bp moves, the rate its hedge trades at. It is a column
+  right after "Kova", named for the curve:
+  - **OIS kotası** (TRY OIS, FRA): OIS_MAIN's quote, the one Motor's bootstrap reads;
+  - **Offshore kotası** (XCCY, FX forward): the `TRYI` / `TRYSAQ` mid, each by its own convention.
+
+  The two curves are never mixed: an offshore bucket never shows an OIS quote.
+- **ON / 1W / 2W show "–"**: the OIS curve has no quote there (its bootstrap starts at the 1M quote).
+- **One column for both curves**: Bootstrap and PPK basamak both give every quote back at its own maturity (PPK basamak
+  is calibrated to them), so the quote is the same beside both DV01 columns.
+- **Toplu fiyatlama** has no buckets (a line's DV01 is by the annuity rule), so no quote there.
+- No new Bloomberg request: the quotes are the ones the curves are built from.
+
+Code: `tto/pricing.py` (`Curves.pillars`, the bucket rows of `price`), `tto/static/js/pages/pricing.js` (`drawBuckets`).
+Tests: `tests/test_pricing.py` (`test_each_dv01_bucket_says_its_quote_the_rate_its_bump_moves`), `tests/test_curvepoints.py`
+(a typed point's quote), the browser test's Fiyatlama checks.
+
 ### Ways back: a quote's spread, a forward price's repo, a move's vol (24.11.2026)
 
 Fourteen pricing tools that worked one way only were listed to the desk; the desk answered "1-2-3-4-5-6-7-8-11-11-13",
