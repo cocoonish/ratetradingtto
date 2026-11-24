@@ -165,17 +165,19 @@ class Copies(object):
                 found = self._range_cells(book, v, q)
             except (KeyError, ValueError):
                 return "%s: aralık okunamadı" % q.get("id")
-            for cell in found:
-                h = book.twoway.get(cell)
-                if h is not None and h.redirected:
-                    cell = h.store_cell                  # (a two-way table's member: its store is the copy's input)
-                d = book.inputs.get(cell)
-                if d is None or d.group in ("adhoc", "adhoc-shared"):
-                    continue
-                if d.scope == "shared":
-                    return "ortak girdisi var (%s)" % book.ref(*cell)
-                if cell not in cells:
-                    cells.append(cell)
+            for shown in found:
+                h = book.twoway.get(shown)
+                # a two-way table's cell (twoway.py): every store of its row-side is the copy's input - its own, and those of
+                # the members the copy does not show, so that a value typed in the copy clears them in the copy's layer
+                # (a table showing one member of a row: a value the table holds in another one must not show through)
+                for cell in (h.group.stores(h.pos) if h is not None else (shown,)):
+                    d = book.inputs.get(cell)
+                    if d is None or d.group in ("adhoc", "adhoc-shared"):
+                        continue
+                    if d.scope == "shared":
+                        return "ortak girdisi var (%s)" % book.ref(*cell)
+                    if cell not in cells:
+                        cells.append(cell)
         if not cells:
             return "kişisel girdisi yok"
         return _Table(v, p, book, leads, cells)
@@ -247,6 +249,16 @@ class Copies(object):
             if not _ID.match(cp.id) or cp.id in seen or (cp.view, cp.panel) not in self.tables:
                 dropped = True                               # (its table is not copyable in this version: gone)
                 continue
+            # a value the copy kept at a cell that has since become a two-way table's member (the page's input it was when
+            # the copy was opened): the copy's value of its row, in the member's store (twoway.TwoWay.adopt_copy)
+            tw = getattr(self.svc, "twoway", None)
+            adopted = tw.adopt_copy(self.tables[(cp.view, cp.panel)].book, cp.values) if tw is not None else None
+            if adopted is not None:
+                log.info("iki yönlü tablo: %s'nin geçici kopyası %s (%s/%s) - önceki değerleri satırlarının yazılan değeri "
+                         "oldu: %s → %s", user, cp.id, cp.view, cp.panel, sorted(set(cp.values) - set(adopted)),
+                         sorted(k for k in adopted if adopted[k] is not None and cp.values.get(k) != adopted[k]))
+                cp = Copy(cp.id, cp.view, cp.panel, cp.n, cp.at, adopted)
+                dropped = True                               # (saved as it is now)
             seen.add(cp.id)
             items.append(cp)
         self._items[user] = items

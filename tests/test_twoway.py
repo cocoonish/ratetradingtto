@@ -15,7 +15,7 @@ import pytest
 
 from conftest import cell, make_service
 from tto import extras, views
-from tto.xl.model import COLS, parse_a1
+from tto.twoway import ROW_CYCLE
 
 SHEET = "EK_TWT"
 ROWS = (3, 4)
@@ -41,6 +41,7 @@ def _toy(model) -> None:
             b.set("%(z)s%(r)d" % f, '=IF(ISBLANK($%(zs)s%(r)d),$%(y)s%(r)d+100,$%(zs)s%(r)d)' % f)
             b.input("%(ys)s%(r)d" % f, None)
             b.input("%(zs)s%(r)d" % f, None)
+        b.set("P%d" % r, "=$G%d/10" % r)          # (a cell computed from the row: z bid / 10)
     # the desk's: x6 (default 5) and y6 = 2x6, kept in K6
     b.set("A6", "Masa")
     b.set("B6", 0.0)
@@ -68,6 +69,7 @@ VIEW = {"id": "twt", "title": "İki yönlü test", "group": "Test", "book": "tto
                    {"id": "twt-masa", "scope": "shared",
                     "members": [{"name": "x", "range": "C6"}, {"name": "y", "range": "E6", "store": "K6"}]}],
         "panels": [{"id": "T1", "type": "table", "range": "A1:H4", "copyable": True},
+                   {"id": "T4", "type": "table", "range": "E2:E4", "copyable": True, "title": "Yalnız y bid"},
                    {"id": "T2", "type": "table", "range": "A6:E6"},
                    {"id": "T3", "type": "table", "range": "K2:N4", "hidden": True, "keep_title": True,
                     "title": "Yardımcı · yazılanlar"}],
@@ -244,6 +246,112 @@ def test_formulas_on_a_member(svc):
     assert ("tto", SHEET + "!K3") not in svc.store.user_formulas(u) and row(svc, u, 3) == [2.0, 14.0, 114.0]
 
 
+def test_a_formula_reading_its_own_row_is_refused_as_typed(svc):
+    """A formula typed into a member that reads its own row-side is a cycle once it stands (the row's other members are
+    then worked out from it): refused as typed, the reason naming the members' cells - also when what it reads is the
+    in-place member holding a typed value now (the write empties it; its formula default then reads the new store), and
+    when it reads a cell computed from the row (P = z / 10).  The other side and the other row may be read."""
+    u = svc.login("tw kendi satırı")["user"]
+    put(svc, u, {"C3": "4"})                                                         # x typed: the row's value
+    res = put(svc, u, {"E3": "=C3*3"})
+    assert res["applied"] == 0 and res["errors"] == [
+        SHEET + "!E3: " + ROW_CYCLE % " → ".join([SHEET + "!E3", SHEET + "!C3", SHEET + "!E3"])]
+    assert stored(svc, u) == {"C3": 4.0} and row(svc, u, 3) == [4.0, 18.0, 118.0]   # the row as it was
+    for text, read in (("=P3*2", "P3"), ("=G3-100", "G3"), ("=M3+1", "G3")):        # (a store said as its member)
+        res = put(svc, u, {"E3": text})
+        assert len(res["errors"]) == 1 and res["errors"][0].startswith(SHEET + "!E3: döngüsel başvuru: ")
+        assert "%s!%s" % (SHEET, read) in res["errors"][0] and "!K3" not in res["errors"][0] and "!M3" not in res["errors"][0], res
+    assert stored(svc, u) == {"C3": 4.0}
+    res = put(svc, u, {"E3": "=D3*3+C4"})                                            # the ask side, another row: fine
+    assert res["errors"] == [] and row(svc, u, 3)[1] == 4.0 and stored(svc, u) == {"K3": 4.0}
+
+
+def test_a_stored_formula_reading_its_own_row_stops_naming_the_members(svc):
+    """A formula kept on a store that reads its own row-side (a scenario saved before it was refused): taken, it
+    stops with #CALC! (its value keeps moving) - the reason names the members' cells, never the store."""
+    u = svc.login("tw durdu")["user"]
+    svc.store.save_scenario(u, "eski formül", {("tto", SHEET + "!K3"): 50.0}, {("tto", SHEET + "!K3"): "=C3*3"})
+    svc.load_scenario(u, "eski formül")
+    v = cell(svc, SHEET + "!E3", u)
+    err = svc.cell_info(u, "tto", SHEET + "!E3")["input"].get("error") or ""
+    assert getattr(v, "code", None) == "#CALC!" and err.startswith(
+        "Döngüsel başvuru: %s!E3 → %s!C3 → %s!E3 - formül durduruldu" % (SHEET, SHEET, SHEET)) and "!K3" not in err, (v, err)
+    _, m = marks(svc, u)
+    assert "!K3" not in m["E3"]["fe"] and "%s!E3" % SHEET in m["E3"]["fe"]
+
+
+def test_a_formula_typed_into_a_cell_that_became_a_member_stays_live(svc, caplog):
+    """An input formula typed into a cell before the cell became a two-way member (kept at that cell): not dropped as
+    "no input any more" - moved with its value to the member's store when the user's values are read (logged), the
+    row-side's other values emptied, and live there: what it reads changes, the row follows; ƒ on the member."""
+    u = svc.login("tw eski formül")["user"]
+    svc.store.set_user_inputs(u, "tto", {SHEET + "!E4": 70.0, SHEET + "!C4": 3.0}, {SHEET + "!E4": "=B8*10"})
+    with caplog.at_level(logging.INFO, logger="tto"):
+        svc.et.call(svc._reload_user, u)
+    assert stored(svc, u) == {"K4": 70.0} and svc.store.user_formulas(u) == {("tto", SHEET + "!K4"): "=B8*10"}
+    assert any("%s!E4 → %s!K4 (formülüyle)" % (SHEET, SHEET) in r.getMessage() for r in caplog.records)
+    assert not any("girdi formülü kaldırıldı" in r.getMessage() and "!E4" in r.getMessage() for r in caplog.records)
+    put(svc, u, {"B8": "9"})
+    assert row(svc, u, 4) == [35.0, 90.0, 190.0]
+    _, m = marks(svc, u)
+    assert m["E4"]["ff"] == "=B8*10" and m["E4"]["an"] == "x, z"
+
+
+def test_a_copy_opened_before_its_table_was_two_way(svc, caplog):
+    """Temporary copies are kept on the server, by cell: one opened before its table was two-way holds a value at a
+    member's own cell (the input it was then).  Read again, it is the copy's value of its row - into the member's store,
+    the row's other stores the copy's own empty values, an in-place value of the copy the table's again -, saved so,
+    logged; a store the copy holds already stands (the old value goes)."""
+    u = svc.login("tw eski kopya")["user"]
+    cid = svc.copy_action(u, "open", {"view": "twt", "panel": "T1"})["copy"]["id"]
+    key = "copies." + u
+    kept = svc.store.get(key)
+    kept["items"][0]["values"] = {SHEET + "!E3": 50.0, SHEET + "!D4": 2.0, SHEET + "!H4": 300.0, SHEET + "!E4": 70.0,
+                                  SHEET + "!M4": 150.0}
+    svc.store.put(key, kept)
+    svc.copies._items.pop(u, None)                                                   # (read again, as after a restart)
+    with caplog.at_level(logging.INFO, logger="tto"):
+        values = next(c for c in svc.copies.items(u) if c.id == cid).values
+    assert values == {SHEET + "!K3": 50.0, SHEET + "!M3": None,                     # row 3 bid: y
+                      SHEET + "!N4": 300.0, SHEET + "!L4": None,                    # row 4 ask: z (the copy's x the table's)
+                      SHEET + "!M4": 150.0}                                        # row 4 bid: its store stands, E4 goes
+    assert svc.store.get(key)["items"][0]["values"] == values
+    assert any("geçici kopyası %s" % cid in r.getMessage() for r in caplog.records)
+    pane = next(p for p in svc.view(u, "twt")["panels"] if (p.get("copy") or {}).get("id") == cid)["data"]
+    cells = {"%s%d" % (c, r): x["t"] for r, line in zip(pane["r"], pane["rows"]) for c, x in zip(pane["c"], line)}
+    assert [cells[c] for c in ("C3", "E3", "G3", "C4", "E4", "G4", "D4", "F4", "H4")] == [
+        "20", "50", "150", "15", "50", "150", "90", "200", "300"]
+    assert row(svc, u, 3) == [1.0, 12.0, 112.0]                                     # the table's own
+    svc.copy_action(u, "close", {"copy": cid})
+
+
+def test_a_copy_showing_one_member_of_a_row_holds_the_whole_row(svc):
+    """A copy of a table that shows only some of a row's members (T4: y bid alone): every store of the row-side is the
+    copy's input - a value the table holds in another member (z) is the copy's to begin with, a member typed in the copy
+    clears it in the copy's layer (it no longer shows through), Delete follows the table again."""
+    u = svc.login("tw kopya tek sütun")["user"]
+    put(svc, u, {"G3": "200"})                                                       # z bid typed in the table
+    cid = svc.copy_action(u, "open", {"view": "twt", "panel": "T4"})["copy"]["id"]
+    book = svc.books["tto"]
+    assert {book.ref(*c) for c in svc.copies.tables[("twt", "T4")].cells} == {
+        "%s!%s" % (SHEET, c) for c in ("C3", "K3", "M3", "C4", "K4", "M4")}
+
+    def own():
+        return next(c for c in svc.copies.items(u) if c.id == cid).values
+
+    def in_copy(ref):
+        return svc.cell_info(u, "tto", SHEET + "!" + ref, copy=cid)["cell"].get("v")
+
+    assert own() == {SHEET + "!M3": 200.0} and [in_copy(c) for c in ("C3", "E3", "G3")] == [45.0, 100.0, 200.0]
+    res = svc.copy_action(u, "inputs", {"copy": cid, "items": [{"ref": SHEET + "!E3", "value": "50"}]})
+    assert res["errors"] == [] and own() == {SHEET + "!K3": 50.0, SHEET + "!M3": None}
+    assert [in_copy(c) for c in ("C3", "E3", "G3")] == [20.0, 50.0, 150.0]          # z from the copy's y, not 200
+    assert row(svc, u, 3) == [45.0, 100.0, 200.0]                                   # the table's own
+    svc.copy_action(u, "inputs", {"copy": cid, "items": [{"ref": SHEET + "!E3", "value": ""}]})
+    assert own() == {} and in_copy("G3") == 200.0 and in_copy("E3") == 100.0
+    svc.copy_action(u, "close", {"copy": cid})
+
+
 def test_the_page_marks_the_typed_value_and_says_what_the_table_does(svc):
     """The page: every member an input (``i``); the anchor ``m`` and ``an`` (the members worked out from it), the others
     ``ao`` (the anchor's name and cell); a row-side with nothing typed has no mark; the group's note under the table;
@@ -287,7 +395,7 @@ def test_a_value_typed_over_a_member_before_becomes_its_row_sides_typed_value(sv
     u = svc.login("tw eski")["user"]
     put(svc, u, {"C3": "3", "D4": "5"})
     svc.store.set_user_inputs(u, "tto", {SHEET + "!E3": 60.0, SHEET + "!H4": 300.0, SHEET + "!G3": 1.0})
-    svc._reload_user(u)
+    svc.et.call(svc._reload_user, u)
     # (row 3's bid had y and z typed over: the later member, z, is its value; row 4's ask, z)
     assert stored(svc, u) == {"M3": 1.0, "N4": 300.0} and row(svc, u, 3) == [-54.5, -99.0, 1.0]
     assert row(svc, u, 4, 1) == [90.0, 200.0, 300.0]
@@ -345,6 +453,18 @@ def test_a_desk_wide_group(svc):
     assert cell(svc, SHEET + "!E6", a) == 8.0 and svc.store.shared_inputs("tto").get(("tto", SHEET + "!K6")) is None
     svc.reset_inputs(a, "tto", [SHEET + "!E6"], shared=True)
     assert cell(svc, SHEET + "!C6") == 5.0 and cell(svc, SHEET + "!E6") == 10.0
+
+
+def test_a_desk_value_kept_at_a_member_before(svc):
+    """The desk's value (a shared input) kept at a member's own cell from before the table was two-way, with its
+    formula: moved to the member's store at the start (``adopt_shared``), the row's other stores emptied."""
+    a = svc.login("tw masa eski")["user"]
+    svc.store.set_shared_inputs("tto", {SHEET + "!E6": 30.0, SHEET + "!C6": 4.0}, a, {SHEET + "!E6": "=B6+30"})
+    svc.twoway.adopt_shared(svc.books["tto"])
+    shared = {ref: v for (_, ref), v in svc.store.shared_inputs("tto").items() if ref.startswith(SHEET)}
+    assert shared == {SHEET + "!K6": 30.0} and svc.store.shared_formulas("tto") == {("tto", SHEET + "!K6"): "=B6+30"}
+    svc.reset_inputs(a, "tto", [SHEET + "!E6"], shared=True)
+    assert {ref for (_, ref) in svc.store.shared_inputs("tto") if ref.startswith(SHEET)} == set()
 
 
 def test_the_http_api(svc):

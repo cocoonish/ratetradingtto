@@ -509,7 +509,10 @@ class Service(object):
         from .rowkeys import RowKeys
         self.rowkeys = RowKeys(self)
         self.rowkeys.start()
-        # shared inputs saved earlier (RET curve, calendars ...)
+        # shared inputs saved earlier (RET curve, calendars ...) - a desk value kept at a two-way member's own cell from
+        # before the table was two-way first goes to the member's store (twoway.TwoWay.adopt_shared)
+        for book in self.books.values():
+            self.twoway.adopt_shared(book)
         for (bid, ref), val in self.store.shared_inputs().items():
             book = self.books.get(bid)
             if book is None:
@@ -1388,7 +1391,11 @@ class Service(object):
             dropped = []
             rows = self.store.user_inputs(user, book.id)
             if book.twoway:
-                rows = self.twoway.adopt(user, book, rows)   # (a value typed over a two-way cell before: its row's)
+                # (a value kept at a two-way member's own cell from before - "Elle değer", or the input it was, with its
+                # formula: its row's typed value, in the member's store; a formula moved is read in again at once)
+                rows, moved = self.twoway.adopt(user, book, rows)
+                if moved and self.formulas is not None:
+                    self.formulas.reread()
             for (bid, ref), val in rows.items():
                 try:
                     cell = book.cell(ref)
@@ -2859,6 +2866,13 @@ class Service(object):
                                                     list(user_forms.values()) + list(shared_forms.values()))
                 except FormulaError as exc:
                     errors.append("%s: %s" % (shown, self.twoway.said(book, str(exc))))
+                    continue
+                # a two-way member's formula reading its own row-side: a cycle once it stands (the row-side's other
+                # values are then worked out from it - a typed value it reads now is emptied by this write)
+                ring = self.twoway.own_row_ring(book, tw, self.formulas.boxes(ent)) if tw is not None else None
+                if ring:
+                    from .twoway import ROW_CYCLE
+                    errors.append("%s: %s" % (shown, ROW_CYCLE % " → ".join(ring)))
                     continue
                 if ent.scope:
                     user_vals[(si, rc)] = val
