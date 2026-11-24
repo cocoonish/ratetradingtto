@@ -9,7 +9,7 @@ belongs to the meeting in a slot is registered here, cell by cell, in four kinds
 * ``typed`` - what is typed per meeting: TCMB's scenario steps ``U:W`` and Motor's prior mean and start step of the slot
   (``Motor!D4311:D4390``, ``A4481:A4560``), and the rate / MPC spread typed on the OIS page to read the PPK step it
   prices (``EK_PPK!G``, ``S`` - from row 3: the row of the meeting that starts the row's window); Fed's decision flag,
-  WIRP and scenario steps (``C``, ``P``, ``R:T``).
+  WIRP and scenario steps (``C``, ``P``, ``R:T``) and the window OIS rate typed to read the FOMC step (``AB``).
   Every user's value, the desk's and the saved scenarios' go with the meeting; a reference to the cell
   (``=OIS_MAIN!U12+25``) follows it; no formula is typed there.
 * ``label`` - the desk's name of a meeting (``OIS_MAIN!O``): as ``typed`` - but the file's own names are the slots'
@@ -110,6 +110,9 @@ TCMB = Calendar("tcmb", "PPK", "tto", "OIS_MAIN", (10, 89), "P", (
 FED = Calendar("fed", "FOMC", "sofr", "SOFR_FOMC", (74, 83), "B", (
     Band("SOFR_FOMC", 74, ("C", "P", "R", "S", "T"), TYPED),
     Band("SOFR_FOMC", 74, tuple("DEFGHIJKLMNO") + ("Q",) + tuple("UVWXYZ"), COMPUTED),
+    # the way back of a window's OIS rate (extras.FOMC_BACK_NAME): typed per meeting, and what it gives
+    Band("SOFR_FOMC", 74, ("AB",), TYPED),
+    Band("SOFR_FOMC", 74, ("AA", "AC", "AD", "AE"), COMPUTED),
 ), header=73, where="USD · FOMC sayfası")
 CALENDARS = (TCMB, FED)
 BY_ID = {c.id: c for c in CALENDARS}

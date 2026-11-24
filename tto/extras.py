@@ -2183,6 +2183,61 @@ def _tto_fra_leg(model: Model) -> None:
                                             '(%(e)s*$P%(r)d-$%(u)s%(r)d*($P%(r)d-$O%(r)d))/$O%(r)d,""),"")') % f, fmt=PCT3, bold=True)
 
 
+# ---------------------------------------------------------------------------------------------- USD · FOMC: window OIS -> step
+#: The FOMC table of the USD sheet (SOFR_FOMC!A71:Z83, a meeting a row) gives each meeting's implied O/N, K: (exp((ln DF
+#: start − ln DF end) / days) − 1)·36000 between its effective day and the next meeting's - ACT/360, compounded daily -
+#: and the step at it, N: (K − L)·100 / B9, L the O/N before it (the previous active meeting's K; the first's: the stub
+#: O/N, B7 + B16/100).  İŞLEM 1 prices the same window as an OIS: E88, (exp(ln DF start − ln DF end) − 1)·36000 / days.
+#: The way back (the desk, 24.11.2026, item 13): a window's OIS rate typed per meeting (AB, %) -> its O/N - K's formula on
+#: the rate's own DF ratio, ((1 + r·days/36000)^(1/days) − 1)·36000 (AC) - and the step it prices against the same L, in
+#: bp (AD) and as N does, in steps of B9 (AE); beside them the market's window rate (AA: İŞLEM 1's E).  The market's own
+#: window rate typed gives K and N back.  A rate typed goes with its meeting (``meetings.FED``).
+FOMC_BACK_NAME = "FOMC pencere OIS'ten adım"
+FOMC_BACK_ROWS = (74, 83)
+FOMC_BACK_RATE = "AB"
+FOMC_BACK_COLS = ("AA", "AB", "AC", "AD", "AE")
+FOMC_TRADE_OFFSET = 14             # İŞLEM 1's row of a meeting: its FOMC row + 14 (E88 for row 74)
+
+
+def _fomc_back_check(model: Model) -> None:
+    """K, N and L of the FOMC table and İŞLEM 1's window rate, as the way back inverts them; its columns are empty."""
+    _need_sheets(model, "SOFR_FOMC")
+    _need_captions(model, (("SOFR_FOMC", "H73", "Gün"), ("SOFR_FOMC", "K73", "İma O/N %"), ("SOFR_FOMC", "L73", "Önceki ima %"),
+                           ("SOFR_FOMC", "N73", "Toplantı adımı %"), ("SOFR_FOMC", "E87", "Piyasa fwd %")))
+    r0, r1 = FOMC_BACK_ROWS
+    _need_formula(model, "SOFR_FOMC", "L%d" % r0, "($B$7+$B$16/100)")
+    for r in range(r0, r1 + 1):
+        _need_formula(model, "SOFR_FOMC", "K%d" % r, "(EXP((I%d-J%d)/H%d)-1)*360*100" % (r, r, r))
+        _need_formula(model, "SOFR_FOMC", "N%d" % r, "(K%d-L%d)*100/$B$9" % (r, r))
+        _need_formula(model, "SOFR_FOMC", "E%d" % (r + FOMC_TRADE_OFFSET), "(EXP($I%d-$J%d)-1)*36000/$H%d" % (r, r, r))
+        if r > r0:
+            _need_formula(model, "SOFR_FOMC", "L%d" % r, "LOOKUP(2,1/($D$%d:D%d=1),$K$%d:K%d)" % (r0, r - 1, r0, r - 1))
+    sh = model.sheet("SOFR_FOMC")
+    for r in range(r0 - 2, r1 + 1):
+        for col in FOMC_BACK_COLS:
+            rc = parse_a1("%s%d" % (col, r))
+            if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+                raise ValueError("SOFR_FOMC!%s%d boş değil" % (col, r))
+
+
+def _usd_fomc_back(model: Model) -> None:
+    """The FOMC table's AA:AE: a window's OIS rate typed -> its O/N and the step it prices."""
+    b = SheetBuilder(model, "SOFR_FOMC")
+    r0, r1 = FOMC_BACK_ROWS
+    b.set("AA%d" % (r0 - 2), "PENCERE OIS → FOMC ADIMI", bold=True)
+    for col, text in zip(FOMC_BACK_COLS, ("Piyasa pencere OIS %", "Pencere OIS (elle) %", "Elle O/N %", "Elle adım (bp)",
+                                          "Elle toplantı adımı %")):
+        b.set("%s%d" % (col, r0 - 1), text, like="K%d" % (r0 - 1))
+    for r in range(r0, r1 + 1):
+        f = {"r": r, "e": r + FOMC_TRADE_OFFSET, "x": FOMC_BACK_RATE}
+        b.set("AA%d" % r, "=$E%(e)d" % f, like="K%d" % r)
+        b.set("%(x)s%(r)d" % f, None, like="P%d" % r)                     # typed, with the sheet's input look
+        b.set("AC%d" % r, ('=IFERROR(IF(AND($D%(r)d=1,ISNUMBER($%(x)s%(r)d),N($H%(r)d)>0),'
+                           '((1+$%(x)s%(r)d*$H%(r)d/36000)^(1/$H%(r)d)-1)*36000,""),"")') % f, like="K%d" % r)
+        b.set("AD%d" % r, '=IFERROR(IF(ISNUMBER($AC%(r)d),($AC%(r)d-$L%(r)d)*100,""),"")' % f, fmt="0.0", bold=True)
+        b.set("AE%d" % r, '=IFERROR(IF(ISNUMBER($AC%(r)d),($AC%(r)d-$L%(r)d)*100/$B$9,""),"")' % f, like="N%d" % r)
+
+
 # ---------------------------------------------------------------------------------------------- live quotes
 #: Is a bid / ask of Borsa İstanbul a live quote?  When no order stands, Bloomberg's ``PX_BID`` / ``PX_ASK`` of the
 #: exchange's sources (ISL0 / ISL1 / ISLN) still give a price - the last trade, for a bill the last trade's yield on
@@ -4265,7 +4320,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
-    "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty),),
+    "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }
 
 
