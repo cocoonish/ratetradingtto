@@ -1258,6 +1258,10 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
   size have two degrees of freedom), the last typed of loss / size stands, the other is worked out: a size typed
   gives the loss it makes at the stop (size · |entry − stop| in the loss's currency); a loss typed gives the size
   rounded down to 1M, as before.
+- **Swaption** (its page): the vol, or a payer / receiver / straddle premium (running bp, upfront bp, TL) or breakeven
+  typed in its own cell of the options table - the normal vol at which that option is worth it (a 1-D Brent solve
+  on the page's own premiums, the closed form at the money), everything else from that vol; of the vol boxes and
+  these cells the one typed last stands, as typed, when the market moves.
 
 **Choices made while building them** (said on the pages and in README; ask the desk before changing):
 - **Each calculator has a hub**, the input its block computes from (Volatilite, Basit, DF ...): a value typed into another
@@ -1281,6 +1285,9 @@ back, a computed value gives the same numbers, 1e-9); Delete on any of them goes
   Hedef değer to four decimals.
 - **Prop: a typed size is not rounded** (it is the user's: 2,5M stays 2,5M); only the size worked out from a loss is
   rounded down to 1M (the desk's rule of 19.11). The panel keeps nothing: the typed one is marked while it is open.
+- **Swaption: a premium under its intrinsic value has no vol** - refused with the intrinsic value said (vol 0 already
+  gives the intrinsic value); the straddle's breakevens are its two legs' premium either side of the strike. The
+  old requests (`vol` in bp/day, bp/year, % Black) and the inputs kept in the browser read as before.
 
 Left out (with the reason): the RET tables and RET adil değer (shared, not this group's); Fiyatlama's optional new kinds;
 Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye endeksli and the hidden copies (survey).
@@ -1288,7 +1295,9 @@ Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye
 Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_STORES`, `viop_fx_implied`,
 `_tto_viop_tw`), `tto/views/90_calc.json`, `70_dv01.json`, `40_viop.json` (`"twoway"`, helper tables B36 / B11s / VT1),
 `10_masa.json` (TARGET's note); `tto/prop.py` (`size`'s `amount`, `Prop.calc`'s `size`), `tto/static/js/prop.js`
-(`typed`, `markAnchor`). Tests: `tests/test_hesap_twoway.py`, `tests/test_viop_twoway.py`, `tests/test_prop.py`.
+(`typed`, `markAnchor`); `tto/swaption.py` (`PREMIUM_UNITS`, `premium_of`, `normal_from_premium`),
+`tto/static/js/pages/swaption.js` (`editable`, `markTyped`). Tests: `tests/test_hesap_twoway.py`,
+`tests/test_viop_twoway.py`, `tests/test_prop.py`, `tests/test_swaption.py`.
 
 ## Process
 

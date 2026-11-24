@@ -27,6 +27,11 @@ a TRY OIS, to look at only - nothing is booked, nothing is stored.
 * **Which vol prices:** realized over 60 changes by default; one typed in any unit (bp/day, bp/year or % Black)
   overrides it, and the page shows the vol used in all three.  **Strike** ATM (K = F) unless one is typed (%).
   **Notional** 100 mn TL unless typed (``100m``, ``2,5mn``: :func:`tto.inputs.parse_amount`).
+* **Two-way** (the desk, 24.11.2026: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için"): the
+  vol may be given by a premium or a breakeven instead (:data:`PREMIUM_UNITS`: payer / receiver / straddle, its running
+  bp, upfront bp, TL or breakeven) - the normal vol at which that option is worth it (:func:`normal_from_premium`: a 1-D
+  Brent solve on :func:`premiums`, the closed form at the money), everything else from that vol.  Of the vol boxes and
+  these, the one typed last stands (the page sends that one, ``vol`` / ``vol_unit`` as before).
 
 Signs are the buyer's (a long option): premium paid, delta + for a payer and − for a receiver, gamma and vega +, theta −.
 Rates are decimals, dates Excel serials, days of a curve calendar days from its spot.
@@ -58,9 +63,15 @@ MAX_MONTHS = 120
 DEFAULT_NOTIONAL = "100m"
 #: the units a vol is typed in: bp a day, bp a year (both normal), % Black (lognormal)
 DAY, ANNUAL, BLACK = "day", "year", "black"
-UNITS = (DAY, ANNUAL, BLACK)
 PAYER, RECEIVER, STRADDLE = "payer", "receiver", "straddle"
 KINDS = (PAYER, RECEIVER, STRADDLE)
+#: the two-way vol: an option's premium or breakeven typed in its place (``<kind>:<measure>``) - running bp (the
+#: forward premium p), upfront bp (A·p), TL (N·A·p), the breakeven at expiry (payer K + p, receiver K − p; the straddle's
+#: low K − p and high K + p, p both legs')
+RUNNING, UPFRONT, TL, BE, BE_LOW, BE_HIGH = "running", "upfront", "tl", "be", "be_low", "be_high"
+PREMIUM_UNITS = tuple("%s:%s" % (k, m) for k in KINDS for m in (RUNNING, UPFRONT, TL)) + (
+    "%s:%s" % (PAYER, BE), "%s:%s" % (RECEIVER, BE), "%s:%s" % (STRADDLE, BE_LOW), "%s:%s" % (STRADDLE, BE_HIGH))
+UNITS = (DAY, ANNUAL, BLACK) + PREMIUM_UNITS
 #: one basis point
 BP = 1e-4
 SQRT_YEAR = math.sqrt(YEAR)
@@ -119,13 +130,83 @@ def read_inputs(query: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         raise SwaptionError("vol birimi okunamadı: %r (day: bp/gün, year: bp/yıl, black: %% Black)" % unit)
     vol = _text(q, "vol")
     typed = None
-    if vol:
+    if vol and unit in PREMIUM_UNITS:
+        typed = _premium_typed(unit, vol)
+    elif vol:
         x = parse_number(vol.replace("%", ""), prefer_decimal=True)
         if x is None or not x > 0 or not math.isfinite(x):
             raise SwaptionError("vol okunamadı: %r (bp/gün 5,5; bp/yıl 87; %% Black 4,2) - sıfırdan büyük olmalı" % vol)
         typed = x / 100.0 if unit == BLACK else x
     return {"expiry": expiry, "tenor": tenor, "strike": strike, "notional": notional, "vol": vol, "vol_unit": unit,
             "expiry_m": e, "tenor_m": t, "k": k, "n": n, "typed": typed}
+
+
+#: what a premium or a breakeven typed in its unit's box looks like (the Turkish error's example)
+PREMIUM_EXAMPLE = {RUNNING: "bp: 125,5", UPFRONT: "bp: 120", TL: "TL: 1,2mn", BE: "%: 36,25", BE_LOW: "%: 33,5", BE_HIGH: "%: 38,5"}
+
+
+def _premium_typed(unit: str, text: str) -> float:
+    """A premium (running / upfront bp, TL) or a breakeven (a rate: 36,25 = %36,25) typed for the vol's two-way unit."""
+    measure = unit.split(":")[1]
+    if measure in (RUNNING, UPFRONT):
+        x = parse_number(text, prefer_decimal=True)
+    elif measure == TL:
+        x = parse_amount(text)
+    else:
+        x = pr._rate(text)
+    if x is None or not math.isfinite(x) or (measure in (RUNNING, UPFRONT, TL) and not x > 0):
+        raise SwaptionError("%s okunamadı: %r (%s)%s" % (UNIT_TEXT[unit], text, PREMIUM_EXAMPLE[measure],
+                                                       "" if measure in (BE, BE_LOW, BE_HIGH) else " - sıfırdan büyük olmalı"))
+    return x
+
+
+#: the units' names on the page (the errors say them)
+UNIT_TEXT = {**{"%s:%s" % (k, m): "%s %s" % (k.capitalize(), t) for k in KINDS
+                for m, t in ((RUNNING, "prim (bp, running)"), (UPFRONT, "prim (bp, peşin)"), (TL, "prim (TL)"))},
+             "%s:%s" % (PAYER, BE): "Payer başabaşı", "%s:%s" % (RECEIVER, BE): "Receiver başabaşı",
+             "%s:%s" % (STRADDLE, BE_LOW): "Straddle alt başabaşı", "%s:%s" % (STRADDLE, BE_HIGH): "Straddle üst başabaşı"}
+
+
+def premium_of(unit: str, typed: float, K: float, A: float, N: float) -> float:
+    """The forward premium p (a rate: running, per unit of annuity) a premium or breakeven typed in ``unit`` means - the
+    straddle's both legs'."""
+    measure = unit.split(":")[1]
+    if measure == RUNNING:
+        return typed * BP
+    if measure == UPFRONT:
+        return typed * BP / A
+    if measure == TL:
+        return typed / (N * A)
+    if unit.startswith(RECEIVER) or measure == BE_LOW:
+        return K - typed
+    return typed - K                                    # (payer's breakeven, the straddle's high one)
+
+
+def normal_from_premium(kind: str, F: float, K: float, T: float, p: float) -> Optional[float]:
+    """The normal vol (decimal a year) at which the option of ``kind`` is worth ``p`` per unit of annuity (the forward
+    premium: :func:`premiums`, a straddle both legs); ``None`` where no vol gives it - at or under its intrinsic value.
+    At the money the closed form (each leg s/√(2π)); elsewhere a 1-D Brent solve on the stdev s = σN·√T."""
+    if not (T > 0.0 and math.isfinite(p)):
+        return None
+    pick = (lambda s: sum(premiums(F, K, s))) if kind == STRADDLE else (lambda s: premiums(F, K, s)[0 if kind == PAYER else 1])
+    if not p > pick(0.0):
+        return None
+    root = math.sqrt(T)
+    if K == F:
+        return p * fv.SQRT2PI / (2.0 if kind == STRADDLE else 1.0) / root
+
+    def miss(s: float) -> float:
+        return pick(s) - p
+
+    hi = max(1e-6, 2.0 * p * fv.SQRT2PI)
+    while miss(hi) < 0.0:
+        hi *= 2.0
+        if hi > 10.0:
+            return None
+    try:
+        return fv.brent(miss, 0.0, hi, xtol=1e-17) / root
+    except fv.MATH_ERRORS:
+        return None
 
 
 # ================================================================================================== the dates
@@ -384,6 +465,17 @@ def price(inputs: Dict[str, Any], cv: Dict[str, Any], mk: pr.Market, method: str
             if sigma is None:
                 raise SwaptionError("%% Black vol bu forward ve strike'ta normal vol'e çevrilemiyor (F ve K sıfırdan büyük olmalı)")
             vol.update(year=sigma / BP, black=typed)
+        elif unit in PREMIUM_UNITS:
+            # two-way: the vol at which the option is worth the premium (or the breakeven) typed
+            kind = unit.split(":")[0]
+            p = premium_of(unit, typed, K, A, N)
+            sigma = normal_from_premium(kind, F, K, T, p)
+            if sigma is None:
+                pay, rec = premiums(F, K, 0.0)
+                floor = pay + rec if kind == STRADDLE else (pay if kind == PAYER else rec)
+                raise SwaptionError("%s: hiçbir vol bunu vermez - running prim %s bp, opsiyonun içsel değeri %s bp; prim (başabaşta "
+                                    "strike'a uzaklık) içsel değerden büyük olmalı" % (UNIT_TEXT[unit], _bp_text(p), _bp_text(floor)))
+            vol.update(year=sigma / BP, unit_text=UNIT_TEXT[unit])
         else:
             vol["year"] = typed if unit == ANNUAL else typed * SQRT_YEAR
     else:
@@ -430,6 +522,11 @@ def _date_text(serial: float) -> str:
     return serial_to_date(serial).strftime("%d.%m.%Y")
 
 
+def _bp_text(rate: float) -> str:
+    """A rate in bp, two decimals, as the page writes them (12,50)."""
+    return ("%.2f" % (rate / BP)).replace(".", ",")
+
+
 def _no_vol_text(history: Dict[str, Any]) -> str:
     missing = [pk.tenor_label(m) for m in history.get("missing") or []]
     if missing:
@@ -451,7 +548,10 @@ TEXTS = {
     "time": "Vol zamanı: T = piyasa gününden opsiyon vadesine TRY iş günü / 252 - bp/yıl = bp/gün · √252, günlük bp vol günlük "
             "başabaş hareketidir. İskonto annuity'nin içinde (eğrinin kendi ACT/365'i).",
     "vol": "Vol: varsayılan, 60 değişimlik gerçekleşen vol; herhangi bir birimde (bp/gün, bp/yıl, % Black) yazılan vol onun "
-           "yerine geçer ve kullanılan vol üç birimde de gösterilir.",
+           "yerine geçer ve kullanılan vol üç birimde de gösterilir. İki yönlü: vol yerine tablodaki payer / receiver / "
+           "straddle primi (bp running, bp peşin, TL) ya da başabaşı da yazılabilir - o primi veren normal vol bulunur (ATM'de "
+           "kapalı formül, değilse tek boyutlu Brent), tablonun gerisi ondan. Vol kutularından ve bunlardan son yazdığınız "
+           "kalır (kalın, ✎); silince gerçekleşen vol.",
     "realized": "Gerçekleşen vol: aynı opsiyon vadesi × swap vadesi forward'ının günlük bp değişimlerinin örneklem standart "
                 "sapması (son 20 / 60 / 120 / 250 değişim, Realized Vol · Carry sayfası gibi), yıllık = günlük · √252. Geçmiş "
                 "bir günün forward'ı o günün OIS spot'undan tarihlenir ve o günün kapanışlarından Motor'un yöntemiyle kurulan "
