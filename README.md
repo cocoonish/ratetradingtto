@@ -403,15 +403,6 @@ PPK'nın interpolasyon grafiği (aşağıda, *TRY faizleri iki yoldan*).
   değişse de aynen durur, diğerleri piyasayla değişir. `Delete` (ya da sağ tık → "Kendi girdimi sil", "formüle dön")
   satırın **herhangi** bir hücresinde satırı varsayılanına döndürür. Excel'den yapıştırılan blokta bir satırın her
   tarafının (bid / ask) en sağdaki dolu değeri o tarafın yazılanıdır (aynı taraftaki boş hücre onu silmez); yalnız
-  boşlardan oluşan taraf varsayılana döner. Formül (`=`) de yazılabilir; satırın kendi başka bir değerini okuyan formül döngüdür, reddedilir.
-  Senaryolar, "Girdilerimi sıfırla" ve geçici kopyalar yazılan değerleri olduğu gibi tutar (kopyada tablonun kendisine
-  yazılmış bir değerin satırına kopyada başka bir sütun yazılamaz: nedeni söylenir). Bu özellikten önce bu hücrelerin
-  üzerine "Elle değer" ile yazılmış bir değer varsa o satırın yazılanı olur.
-  İki yönlü tablolar: Forward'ın FORWARD KOTASYON'u; Hesaplayıcılar sayfasının hesaplayıcıları ve DV01 Risk'in
-  Senaryo P&L'i (*Hesaplayıcılar iki yönlü*, aşağıda); VİOP'un Target tablosu (*VİOP Target — iki yönlü*); sayfası
-  tablo olmayanlarda aynı kural kendi kutularında: Prop panelinde kayıp ya da büyüklük, Swaption'da vol ya da bir
-  prim / başabaş.
-
   boşlardan oluşan taraf varsayılana döner. Formül (`=`) de yazılabilir; satırın (aynı tarafın) kendi başka bir değerini
   ya da ondan hesaplanan bir hücreyi okuyan formül döngüdür, **yazarken** reddedilir - okuduğu değer o an elle yazılmış
   olsa da (yazınca o silinir, sonra o da bu formülden hesaplanırdı); nedeni de, durmuş bir formülün nedeni de sayfadaki
@@ -422,6 +413,10 @@ PPK'nın interpolasyon grafiği (aşağıda, *TRY faizleri iki yoldan*).
   olmadan önce** bu hücrelere yazılmış değerler - "Elle değer" ya da o zamanki girdinin değeri, **formülüyle** - satırlarının
   yazılanı olur, formül canlı kalır; masanın ortak değerleri ve o tablonun daha önce açılmış geçici kopyalarındaki
   değerler de öyle (günlük dosyasına yazılır).
+  İki yönlü tablolar: Forward'ın FORWARD KOTASYON'u; Hesaplayıcılar sayfasının hesaplayıcıları ve DV01 Risk'in
+  Senaryo P&L'i (*Hesaplayıcılar iki yönlü*, aşağıda); VİOP'un Target tablosu (*VİOP Target — iki yönlü*); sayfası
+  tablo olmayanlarda aynı kural kendi kutularında: Prop panelinde kayıp ya da büyüklük, Swaption'da vol ya da bir
+  prim / başabaş.
 * **Girdiye formül (Excel'deki gibi `=`).** Sarı ya da yeşil bir girdi hücresine `=` yazıp başka bir hücreye tıklayın:
   adresi formüle girer - aynı tablonun, sayfanın başka bir tablosunun, **başka bir sekmenin** (sekmeye tıklayınca formül
   pencerenin üstündeki kendi çubuğunda sürer), yan panelin ya da bir launchpad kutusunun hücresi. Aynı sayfanın hücresi
