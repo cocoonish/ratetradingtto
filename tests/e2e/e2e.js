@@ -2578,6 +2578,87 @@ async function clipAfter(page, action) {
       await open(page, 'asw');                                    // (the page the next checks found here before)
     }
 
+    // ------------------------------------------------------------------ the bonds' tables two-way (the desk, 24.11.2026)
+    // "hangisine ben girdiysem diğerini hesaplasın ... Genel olarak tablolar bu şekilde olmalı": a level typed in the table
+    // itself stands (✎), the clean price and the others follow; Delete: the market again
+    console.log('bonds\' tables two-way: DİBS RV, SWITCH / PAIR, DİBS ASW, Manuel Tahvil');
+    const twOne = (ref) => page.evaluate((r) => {
+      const td = window.tto.findCell(r);
+      return td ? { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' } : null;
+    }, ref);
+    const twMarked = (ref) => page.waitForFunction((r) => window.tto.findCell(r) && window.tto.findCell(r).classList.contains('anchor'),
+      ref, { timeout: 20000 }).catch(() => {});
+    const twNote = (pid) => page.evaluate((p) => { const n = document.querySelector('#content .panel[data-panel="' + p + '"] .note'); return n ? n.textContent : ''; }, pid);
+    const twReset = [['asw', []], ['tto', []]];
+    try {
+      // DİBS RV: an ASW typed in the bonds' table stays; the manual clean price is the one "ASW / DM → temiz fiyat" gives
+      await open(page, 'dibs');
+      const twR = await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24');
+      const twAsw = (await ktV('tto', 'DİBS RV!Z' + twR)) + 15;
+      twReset[1][1].push('DİBS RV!Z' + twR, 'DİBS RV!BK' + twR);
+      await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'DİBS RV!BK' + twR, value: ktTyped(twAsw) }] });
+      await typeInto(page, 'DİBS RV!Z' + twR, ktTyped(twAsw));
+      await twMarked('DİBS RV!Z' + twR);
+      const twA = { z: await twOne('DİBS RV!Z' + twR), n: await twOne('DİBS RV!N' + twR), nv: await ktV('tto', 'DİBS RV!N' + twR),
+        back: await ktV('tto', 'DİBS RV!BL' + twR), zv: await ktV('tto', 'DİBS RV!Z' + twR), j: (await cellText(page, 'DİBS RV!J' + twR)).trim(),
+        note: await twNote('B3') };
+      check('DİBS RV is two-way: an ASW typed in the bonds\' table stays as typed (✎, its tooltip), the manual clean price follows - '
+        + 'the price "ASW / DM → temiz fiyat" gives for that ASW (1e-9) - marked as worked out from it; "Fiyat durumu" and the note say so',
+      twA.z.anchor && /Yazdığınız değer/.test(twA.z.tip) && !twA.n.anchor && /Hesaplanan: bu satırda yazılan değer ASW \/ DM · Z/.test(twA.n.tip)
+        && twA.zv === twAsw && Math.abs(twA.nv - twA.back) < 1e-9 && twA.j === 'ASW\'den (yazılan)'
+        && /hangisini yazarsanız o kalır, diğerleri ondan hesaplanır/.test(twA.note), twA);
+      // SWITCH / PAIR: a yield difference typed - the Al leg's price in the row's own column, the ASW/DM difference at it
+      const twAl = await ktRow('tto', 'DİBS RV!A', 5, 'TRT130928T38');
+      twReset[1][1].push('DİBS RV!A65', 'DİBS RV!B65', 'DİBS RV!G65');
+      await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'DİBS RV!A65', value: 'TRT150328T24' },
+        { ref: 'DİBS RV!B65', value: 'TRT130928T38' }] });
+      await waitCell(page, 'DİBS RV!G65', 't.trim() !== ""');
+      const twI0 = await ktV('tto', 'DİBS RV!I65');
+      await typeInto(page, 'DİBS RV!G65', ktTyped((await ktV('tto', 'DİBS RV!G65')) + 10));
+      await waitCell(page, 'DİBS RV!AA65', 't.trim() !== ""');
+      await twMarked('DİBS RV!G65');
+      const twS = { g: await twOne('DİBS RV!G65'), i: await twOne('DİBS RV!I65'), iv: await ktV('tto', 'DİBS RV!I65'), i0: twI0,
+        aa: await ktV('tto', 'DİBS RV!AA65'), al: await ktV('tto', 'DİBS RV!O' + twAl), n: await ktV('tto', 'DİBS RV!N' + twAl) };
+      check('SWITCH / PAIR is two-way: a yield difference typed stays (✎), the Al leg\'s price it gives in the row\'s own column (cheaper: '
+        + '10 bp wider), the ASW/DM difference worked out at it - the Al bond\'s own row untouched',
+      twS.g.anchor && /Hesaplanan: bu satırda yazılan değer Getiri farkı · G65/.test(twS.i.tip) && typeof twS.aa === 'number'
+        && twS.aa < twS.al && twS.iv > twS.i0 && typeof twS.n !== 'number', twS);
+      // DİBS ASW: the dirty price at the spot typed - the manual clean price and the ASW follow; Delete: the market
+      await open(page, 'asw');
+      const twW = await ktRow('asw', 'ASW!B', 7, 'TRT150328T24');
+      const twMkt = { l: await ktV('asw', 'ASW!L' + twW), r: (await cellText(page, 'ASW!R' + twW)).trim() };
+      twReset[0][1].push('ASW!O' + twW);
+      await typeInto(page, 'ASW!O' + twW, ktTyped((await ktV('asw', 'ASW!O' + twW)) - 0.5));
+      await twMarked('ASW!O' + twW);
+      const twD = { o: await twOne('ASW!O' + twW), d: await twOne('ASW!D' + twW), dv: await ktV('asw', 'ASW!D' + twW),
+        l: await ktV('asw', 'ASW!L' + twW), r: (await cellText(page, 'ASW!R' + twW)).trim(), mkt: twMkt };
+      await (await cellHandle(page, 'ASW!D' + twW)).click();
+      await page.keyboard.press('Delete');
+      await waitCell(page, 'ASW!R' + twW, 't.trim() === ' + JSON.stringify(twMkt.r));
+      twD.after = { o: await twOne('ASW!O' + twW), l: await ktV('asw', 'ASW!L' + twW) };
+      check('DİBS ASW is two-way: a dirty price typed stays (✎), the manual clean price follows (half a point lower), the ASW from it; '
+        + 'Delete on the clean price worked out from it: the market again, nothing marked',
+      twD.o.anchor && /Hesaplanan: bu satırda yazılan değer Kirli @spot · O/.test(twD.d.tip) && twD.l === twD.dv
+        && Math.abs(twD.dv - (twMkt.l - 0.5)) < 0.01 && twD.r !== twMkt.r && !twD.after.o.anchor && twD.after.l === twMkt.l, twD);
+      // Manuel Tahvil: a BIST yield typed in the results - the clean price is the one its target "BIST basit getiri" gives
+      await open(page, 'manuel');
+      twReset[1][1].push('Manuel Tahvil!F7', 'Manuel Tahvil!I10');
+      await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'Manuel Tahvil!I10', value: '37,25' }] });
+      await typeInto(page, 'Manuel Tahvil!F7', '37,25');
+      await twMarked('Manuel Tahvil!F7');
+      const twM = { f7: await twOne('Manuel Tahvil!F7'), b14: await twOne('Manuel Tahvil!B14'), price: await ktV('tto', 'Manuel Tahvil!B14'),
+        target: await ktV('tto', 'Manuel Tahvil!J10'), f7v: await ktV('tto', 'Manuel Tahvil!F7'), note: await twNote('B3') };
+      check('Manuel Tahvil is two-way: a BIST yield typed in the results stays (✎), the clean price is the one its target table gives '
+        + 'for that yield (1e-9), marked as worked out from it; the note says how',
+      twM.f7.anchor && Math.abs(twM.f7v - 0.3725) < 1e-12 && /Hesaplanan: bu satırda yazılan değer BIST basit getiri · F7/.test(twM.b14.tip)
+        && Math.abs(twM.price - twM.target) < 1e-9 && /İki yönlü: temiz fiyat ya da sonuçlardan biri/.test(twM.note), twM);
+    } catch (err) {
+      check('bonds\' tables two-way: the checks ran to their end', false, String((err && err.stack) || err));
+    } finally {
+      for (const [book, refs] of twReset) if (refs.length) await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book, refs });
+      await open(page, 'asw');                                    // (the page the next checks found here before)
+    }
+
     // ------------------------------------------------------------------ history: matrix, meeting pricing, calendar
     console.log('history: end-of-day matrix, meeting pricing, calendar');
     // the server fills the history of the recorded month in the background (about a minute after its start)
