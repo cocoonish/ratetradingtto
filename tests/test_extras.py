@@ -70,7 +70,9 @@ def test_the_extra_sheets_are_ordinary_workbook_sheets(svc):
     assert formula_text(plain["tto"], *plain["tto"].cell("VIOP!M58")) == '=_xll.BFXFORWARD("XAUUSD",M46,"AskOutright")'
     assert plain["borsa"].model.sheet("bu").fml.get(parse_a1("O9")) is None
     info = svc.cell_info(None, "tto", "EK_FWD!J5")
-    assert info["formula"] == '=IFERROR(IF($C5="","",$F5*(1+$M5/100*$C5/360)/(1+$O5/100*$C5/360)),"")'
+    # (two-way, test_fwd_twoway.py: a fwd typed - kept in AR5 - stands; a puan typed gives spot + puan; else OIS + spread)
+    assert info["formula"] == ('=IF(ISBLANK($AR5),IFERROR(IF($C5="","",IF(ISBLANK($AP5),$F5*(1+$M5/100*$C5/360)/(1+$O5/100*$C5/360),'
+                               '$F5+$AP5/10000)),""),$AR5)')
     assert svc.cell_info(None, "tto", "EK_XAU!E27")["formula"] == '=IFERROR(IF(OR($C27="",$D27=""),"",$B$6*(1+$D27/100*$C27/360)),"")'
     assert svc.cell_info(None, "borsa", "bu!O9")["formula"] == '=IF(AND(ISNUMBER(H9),ISNUMBER(E9),N(E9)>0),360*((1+H9*E9/360)^(1/E9)-1),"")'
     grid = svc.grid(None, "tto", "EK_FWD", "A3:C5")["data"]
@@ -319,7 +321,8 @@ def test_matrix_panels_are_on_the_forward_page_with_their_inputs(svc):
     assert head[:11] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask",
                          "Fwd bid", "Fwd ask"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    assert len(inputs) == 1 + 1 + 2 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, general, dates, per date
+    # curve, spread source, general, dates, per date - and the two-way TRY %, puan and fwd (test_fwd_twoway.py)
+    assert len(inputs) == 1 + 1 + 2 + 10 + 20 + 60 and all(i == "u" for i, _ in inputs)
     assert inputs[0][1] == list(extras.FWD_CURVES)                                       # the curve is a drop-down
     assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "forward", True)["panels"]}
 
@@ -585,7 +588,8 @@ def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
     assert [c.get("t") for c in rows[1]][:15] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid",
                                                   "Puan ask", "Fwd bid", "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "EUR %"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    assert len(inputs) == 1 + 1 + 4 + 10 + 20 and all(i == "u" for i, _ in inputs)      # curve, spread source, spreads and spot, dates, per date
+    # curve, spread source, spreads and spot, dates, per date - and the two-way TRY %, puan and fwd
+    assert len(inputs) == 1 + 1 + 4 + 10 + 20 + 60 and all(i == "u" for i, _ in inputs)
     assert inputs[0][1] == list(extras.FWD_CURVES)
     assert len([c for row in panels["EKF6"]["data"]["rows"] for c in row if c.get("i")]) == 20
     # each way back by a rate, right after its way back by points: 20 inputs (TRY bid / ask % of the 10 dates)

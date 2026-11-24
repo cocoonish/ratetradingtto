@@ -221,6 +221,10 @@ The desk's list of points each curve is built from, one list for OIS and one for
   spot → value date).
 - **The ways back read a quote in the same convention:** the block's box (`EK_TARIH!C110`) and the Forward page's
   FAİZ → SPREAD take an ACT/360 simple rate, so the spread found, typed back, gives the quote.
+- **The forward quote matrices are two-way** (24.11.2026, `tto/twoway.py`): a TRY % typed into one is read as that
+  ACT/360 simple rate too (spread = TRY − OIS of the chosen curve); a puan or fwd typed gives the TRY rate the outright
+  implies on the matrix's own spot, USD / EUR rate and days (`extras.fwd_rate`, the exact inverse of
+  `extras.fwd_outright`) - no curve is read for it.
 - **EK_TARIH's Kote % is read in the basis the table shows** (ACT/360, ACT/365 or O/N (360)); its difference to a curve is
   in that basis too. Only with ACT/360 is it the row's spread (desk decision 24.11.2026).
 
@@ -362,7 +366,7 @@ offshore side, ask the desk first.
 | E | `rvfair` FX side | The dirty price at spot is carried with TLREF. This is the ASW sheet's own formula. |
 | F | `ppkcurve` offshore PPK | The offshore PPK curve takes the OIS-implied MPC path's **shape**. Its level comes from the offshore quotes (a flat basis between them). |
 | G | `retfair` scenarios | The offshore and VİOP bases move by the OIS scenario's change, `market + (scenario − reference)`. |
-| H | EK_FWD, "FORWARD KOTASYON" (`extras._tto_forward`) | USDTRY forward quotes priced as OIS + spread: the chosen OIS curve's rate (MASA's own discount factors, default "MPC ima") plus a typed spread or the market's (offshore ICAP implied − OIS). The desk's pricing design, not a fallback. |
+| H | EK_FWD, "FORWARD KOTASYON" (`extras._tto_forward`) | USDTRY forward quotes priced as OIS + spread: the chosen OIS curve's rate (MASA's own discount factors, default "MPC ima") plus a typed spread or the market's (offshore ICAP implied − OIS). The desk's pricing design, not a fallback. Two-way since 24.11.2026: a TRY %, puan or fwd typed instead gives the spread (that rate − OIS); offshore still enters only as the "Piyasa spread" default. |
 | I | `retfair` "karma" base | A blend of the OIS, VİOP and offshore mids: a tenor's own weights, else the administrators' default, 50 / 25 / 25 to start with (`retfair.DEFAULTS["blend"]`). A desk design, not a fallback. |
 
 **Not fallbacks** (each curve keeps its own):

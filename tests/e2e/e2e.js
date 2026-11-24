@@ -2077,6 +2077,41 @@ async function clipAfter(page, action) {
     await waitCell(page, 'EK_FWD!L119', 't.trim() !== ""');
     check('EURTRY points typed by hand show their spread over OIS', Math.abs(trNumber(await cellText(page, 'EK_FWD!L119')) + 50) <= 1,
       await cellText(page, 'EK_FWD!L119'));
+    // FORWARD KOTASYON two-way (the desk, 24.11.2026: "hangisine ben girdiysem diğerini hesaplasın"): a TRY % typed stays and
+    // the spread follows; a spread typed - the TRY % follows; the one typed is marked (✎, its tooltip); Delete: the default
+    const twOf = () => page.evaluate(() => {
+      const one = (r) => { const td = window.tto.findCell(r); return { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' }; };
+      const note = document.querySelector('#content .panel[data-panel="EKF1"] .note');
+      return { d: one('EK_FWD!D6'), m: one('EK_FWD!M6'), h: one('EK_FWD!H6'), j: one('EK_FWD!J6'), f: one('EK_FWD!F6'), note: note ? note.textContent : '' };
+    });
+    const ois2m = trNumber(await cellText(page, 'EK_FWD!L6'));
+    const twRate = (ois2m + 0.55).toFixed(2).replace('.', ',');
+    await typeInto(page, 'EK_FWD!M6', twRate);
+    await waitCell(page, 'EK_FWD!D6', 'Math.abs(Number(t.replace(".", "").replace(",", ".")) - 55) <= 1');
+    await page.waitForFunction(() => window.tto.findCell('EK_FWD!M6').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const twA = await twOf();
+    check('FORWARD KOTASYON is two-way: a TRY % typed stays as typed and the spread follows (TRY − OIS), the TRY % marked as the typed value (✎, its tooltip), the spread as worked out from it',
+      twA.m.t === twRate && twA.m.anchor && /Yazdığınız değer/.test(twA.m.tip) && !twA.d.anchor && /Hesaplanan: bu satırda yazılan değer TRY % · M6/.test(twA.d.tip)
+      && Math.abs(trNumber(twA.d.t) - 55) <= 1, twA);
+    await typeInto(page, 'EK_FWD!D6', '-120');
+    await waitCell(page, 'EK_FWD!M6', 'Math.abs(Number(t.replace(",", ".")) - ' + (ois2m - 1.2) + ') < 0.011');
+    await page.waitForFunction(() => window.tto.findCell('EK_FWD!D6').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const twB = await twOf();
+    check('... a spread typed in the same row: the TRY % follows (OIS + spread) and the mark moves to the spread; the note under the table says how it works',
+      twB.d.t === '-120' && twB.d.anchor && !twB.m.anchor && Math.abs(trNumber(twB.m.t) - (ois2m - 1.2)) < 0.011
+      && /hangisini yazarsanız o kalır, diğerleri ondan hesaplanır/.test(twB.note), twB);
+    await typeInto(page, 'EK_FWD!H6', '20000');
+    await waitCell(page, 'EK_FWD!H6', 't.trim() === "20.000"');
+    await page.waitForFunction(() => window.tto.findCell('EK_FWD!H6').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const twC = await twOf();
+    check('... a puan typed: the fwd is spot + puan, the spread follows it, the puan marked',
+      twC.h.anchor && !twC.d.anchor && Math.abs(trNumber(twC.j.t) - (trNumber(twC.f.t) + 2)) < 0.00011 && twC.d.t !== '-120', twC);
+    await (await cellHandle(page, 'EK_FWD!D6')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_FWD!D6', 't.trim() === "-300"');
+    const twD = await twOf();
+    check('... Delete on any cell of the row (here the spread, worked out from the puan): back to the general spread, nothing marked',
+      twD.d.t === '-300' && !twD.h.anchor && !twD.d.anchor && !twD.m.anchor && Math.abs(trNumber(twD.m.t) - (ois2m - 3)) < 0.011, twD);
     await shot(page, '10-forward-quotes');
 
     await open(page, 'viop');

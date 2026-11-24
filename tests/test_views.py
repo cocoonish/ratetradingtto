@@ -202,6 +202,15 @@ def test_every_input_can_be_reached_on_its_page(view):
         for r in range(r1, r2 + 1):
             for c in range(c1, c2 + 1):
                 assert any(a <= r <= b2 and b <= c <= d for a, b, b2, d in boxes.get(sheet, [])), (view["id"], inp["range"])
+    # a two-way table's members and their stores (tto/twoway.py: inputs declared by the group, not in "inputs")
+    for g in view.get("twoway") or ():
+        sheet = g.get("sheet") or view["sheet"]
+        for m in g["members"]:
+            for rng in [m["range"]] + ([m["store"]] if m.get("store") else []):
+                r1, c1, r2, c2 = parse_range(rng.rpartition("!")[2])
+                for r in range(r1, r2 + 1):
+                    for c in range(c1, c2 + 1):
+                        assert any(a <= r <= b2 and b <= c <= d for a, b, b2, d in boxes.get(sheet, [])), (view["id"], g["id"], rng)
 
 
 def test_nothing_the_workbooks_compute_is_missing_from_the_pages(service, models):
@@ -365,7 +374,8 @@ def test_each_calculator_has_one_home():
 
 def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service):
     """Masa's forward quote summary: Spread bid, TRY bid %, Spread ask, TRY ask % side by side - the spreads still
-    the sheet's own inputs (a spread typed on Masa moves the TRY rate beside it: OIS + spread)."""
+    the sheet's own inputs (a spread typed on Masa moves the TRY rate beside it: OIS + spread); the TRY rates, points and
+    forwards typeable too (two-way: test_fwd_twoway.py)."""
     from conftest import cell
     from tto.service import _pick_columns
     user = service.login("forward özeti")["user"]
@@ -374,7 +384,7 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
     assert [c.get("t") for c in d["rows"][d["r"].index(3)]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
     one = d["rows"][d["r"].index(5)]                                     # 1M
-    assert [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "E"]
+    assert [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "M", "E", "N", "H", "I", "J", "K"]
     # the curve the TRY rates are read from (MPC ima, a scenario, bootstrap ...): the matrix's own input, above it
     curve = d["rows"][0]
     assert d["r"][0] == 2 and curve[0]["t"] == "Eğri" and curve[1]["i"] == "u" and curve[1]["t"] == "MPC ima"
@@ -395,7 +405,7 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     assert [c.get("t") for c in d["rows"][d["r"].index(102)]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
     assert d["r"][0] == 101 and d["rows"][0][0]["t"] == "Eğri" and d["rows"][0][1]["i"] == "u"        # its own curve
     one = d["rows"][d["r"].index(104)]                                   # 1M
-    assert one[0]["t"] == "1M" and [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "E"]
+    assert one[0]["t"] == "1M" and [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "M", "E", "N", "H", "I", "J", "K"]
     service.set_inputs(user, "tto", [{"ref": "EK_FWD!E104", "value": "-40"}])    # 1M ask spread: 40 bp under OIS
     try:
         ekse = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKSE")
@@ -562,7 +572,8 @@ def _tabs(view):
 
 def _shown_cells(book, view, p):
     """The cells a table shows on its page: its range (its first ``max_rows`` rows) without the columns Excel hides
-    (unless it hides them all) - only the ``cols`` named, when they are."""
+    (unless it hides them all) - only the ``cols`` named, when they are.  A two-way table's member shown is where its
+    store is typed (tto/twoway.py): the store counts as shown with it."""
     sheet = book.model.sheet(p.get("sheet", view["sheet"]))
     r1, c1, r2, c2 = parse_range(p["range"])
     if p.get("max_rows"):
@@ -571,7 +582,8 @@ def _shown_cells(book, view, p):
     if p.get("cols"):
         named = {col_to_index(x) for x in p["cols"]}
         cols = [c for c in cols if c in named]
-    return [(sheet.index, r * COLS + c) for r in range(r1, r2 + 1) for c in cols]
+    cells = [(sheet.index, r * COLS + c) for r in range(r1, r2 + 1) for c in cols]
+    return cells + [book.twoway[c].store_cell for c in cells if c in book.twoway and book.twoway[c].redirected]
 
 
 def _inputs_away_from_their_tables(service, views=None, reference=None):
