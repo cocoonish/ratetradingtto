@@ -165,6 +165,89 @@ def test_values_dv01_signs_and_sizing_on_a_small_curve():
         pr.swap_deal(pr.OIS, ("d", SPOT - 3.0), ("m", 12.0), mk)                               # before the spot
 
 
+# ---------------------------------------------------------------- the ways back (the desk, 24.11.2026: "…-4-…", item 4)
+def test_an_npv_or_an_upfront_gives_the_level_that_prices_back_to_it():
+    """"Type an NPV (TL or $) or an upfront in bp and get the fixed rate": ``level_for`` is ``value``'s exact inverse -
+    value(level_for(v)) = v to 1e-9 and level_for(value(K)) = K - for swaps (spot, forward start, a date) and an FX
+    forward, both sides, small and large; an NPV in $ is TL at USDTRY, an upfront bp of the nominal, + in the trader's
+    favour as the NPV (a payer's + upfront is a rate under the mid, a receiver's over it)."""
+    mk = synthetic_market()
+    curve = pk.LogLinear([0.0, 365.0, 730.0, 1095.0], [0.0, -0.33, -0.66, -0.97])
+    deals = [pr.swap_deal(pr.OIS, ("spot", 0.0), ("m", 27.0), mk), pr.swap_deal(pr.FRA, ("m", 12.0), ("m", 15.0), mk),
+             pr.swap_deal(pr.XCCY, ("spot", 0.0), ("d", SPOT + 500.0), mk), pr.fx_deal("USDTRY", ("m", 18.0), mk),
+             pr.fx_deal("EURTRY", ("d", SPOT + 200.0), mk)]
+    for deal in deals:
+        m = pr.mid(deal, curve)
+        for side in (1, -1):
+            for size in (1e6, 1e8, 3.7e9):
+                for v in (1e6, -250e3, 12345.678, -3e7):
+                    k = pr.level_for(deal, curve, side, size, v)
+                    assert pr.value(deal, curve, side, size, k) == pytest.approx(v, rel=1e-9), (deal.label, side, size, v)
+                k0 = m - side * (0.25 if deal.asset == pr.FX else 0.0012)
+                assert pr.level_for(deal, curve, side, size, pr.value(deal, curve, side, size, k0)) == pytest.approx(k0, rel=1e-12)
+            assert pr.level_for(deal, curve, side, 1e8, 0.0) == pytest.approx(m, rel=1e-14)          # NPV 0: the mid
+    assert pr.npv_of("npv_usd", 2e4, 1e8, 50.0) == 1e6 and pr.npv_of("upfront", 25.0, 1e8, 50.0) == 250000.0
+    assert pr.npv_of("npv_tl", -3.0, 1e8, 50.0) == -3.0
+    ois = deals[0]
+    paid = pr.level_for(ois, curve, 1, 1e8, pr.npv_of("upfront", 25.0, 1e8, 50.0))
+    assert paid < pr.mid(ois, curve) < pr.level_for(ois, curve, -1, 1e8, 250000.0)
+    assert (pr.mid(ois, curve) - paid) * pr.annuity(ois, curve) * 1e4 == pytest.approx(25.0, abs=1e-9)
+
+
+def test_the_price_box_holds_each_asset_s_kinds_and_kept_inputs_read_as_before():
+    mk = synthetic_market()
+    deal = pr.swap_deal(pr.OIS, ("spot", 0.0), ("m", 24.0), mk)
+    fx = pr.fx_deal("USDTRY", ("m", 12.0), mk)
+    rp = pr.read_price
+    assert rp("rate", "35,10", deal) == pytest.approx(0.351, abs=1e-15) and rp("rate", "%35,10", deal) == pytest.approx(0.351, abs=1e-15)
+    assert rp("npv_tl", "1.000.000", deal) == 1e6 and rp("npv_tl", "-250k", deal) == -250e3 and rp("npv_tl", "−250k", deal) == -250e3
+    assert rp("npv_usd", "2,5m", deal) == 2.5e6 and rp("upfront", "25", deal) == 25.0 and rp("upfront", "-12,5", deal) == -12.5
+    assert rp("upfront", "%0,5", deal) == pytest.approx(50.0, abs=1e-12)                    # (0,5 % of the nominal: 50 bp)
+    assert rp("outright", "79,05", fx) == 79.05 and rp("points", "100", fx) == pytest.approx(50.01, abs=1e-12)
+    assert rp("npv_tl", "1m", fx) == 1e6 and rp("rate", "", deal) is None and rp("npv_tl", "  ", deal) is None
+    for kind, text, why in (("npv_tl", "abc", "NPV okunamadı"), ("upfront", "x", "peşin okunamadı"), ("rate", "?", "fiyat okunamadı"),
+                            ("outright", "-1", "forward kur pozitif")):
+        with pytest.raises(pr.PricingError, match=why):
+            rp(kind, text, fx if kind == "outright" else deal)
+    # the kinds per asset; inputs kept before 24.11.2026 (no kind, no Toplu box) read as they did: a rate, an FX
+    # forward's own kind
+    old = {"asset": "ois", "by": {"ois": {"start": "", "end": "2Y", "side": "PAY", "size_kind": "dv01", "size": "1000", "price": "35"},
+                                  "fx": {"end": "1Y", "side": "AL", "size_kind": "amount", "size": "10m", "price": "100",
+                                         "price_kind": "points", "pair": "USDTRY"}}}
+    got = pr.clean_inputs(None, old)
+    assert (got["by"]["ois"]["price_kind"], got["by"]["fx"]["price_kind"], got["by"]["ois"]["bulk"]) == ("rate", "points", "")
+    assert pr.price_kind("ois", old["by"]["ois"]) == "rate" and pr.price_kind("fx", {}) == "outright"
+    assert pr.clean_inputs({"price_kind": "upfront"}, got)["by"]["ois"]["price_kind"] == "upfront"
+    assert pr.clean_inputs({"asset": "fx", "price_kind": "upfront"}, got)["by"]["fx"]["price_kind"] == "points"   # (no upfront)
+    assert pr.clean_inputs({"asset": "fx", "price_kind": "npv_usd"}, got)["by"]["fx"]["price_kind"] == "npv_usd"
+    assert pr.clean_inputs({"asset": "xccy", "price_kind": "points"}, got)["by"]["xccy"]["price_kind"] == "rate"   # (no points)
+    # the Toplu box: kept as typed (line ends, blanks at the ends off), per asset, at most BULK_CHARS
+    kept = pr.clean_inputs({"bulk": "1Y \r\n2Y\r\n\r\n"}, got)
+    assert kept["by"]["ois"]["bulk"] == "1Y\n2Y" and kept["by"]["xccy"]["bulk"] == ""
+    assert len(pr.clean_inputs({"bulk": "1Y\n" * 5000}, got)["by"]["ois"]["bulk"]) == pr.BULK_CHARS
+
+
+def test_a_line_of_the_toplu_box():
+    """A maturity (the whole line first: "2Y 3M" is 2Y3M), a start × end ("12x15"), two dates (a tab, ";" or " - "
+    between them), then the price - one word: a bare number after a maturity is its price, not months; an FX forward's
+    line is a value date."""
+    def p(text, asset=pr.OIS):
+        return pr.parse_line(text, asset)
+    sp, d1, d2 = ("spot", 0.0), ("d", day("2027-05-04")), ("d", day("2028-05-04"))
+    assert p("2Y3M") == p("2Y 3M") == (sp, ("m", 27.0), "") and p("1 yıl 6 ay") == (sp, ("m", 18.0), "")
+    assert p("15") == (sp, ("m", 15.0), "") and p("12x15") == p("12 x 15") == p("12X15") == (("m", 12.0), ("m", 15.0), "")
+    assert p("1Y × 18M -1m") == (("m", 12.0), ("m", 18.0), "-1m") and p("12x15 34,9") == (("m", 12.0), ("m", 15.0), "34,9")
+    assert p("04.05.2027 04.05.2028") == p("04.05.2027;04.05.2028") == p("04.05.2027\t04.05.2028") == (d1, d2, "")
+    assert p("04.05.2027 - 04.05.2028") == (d1, d2, "") and p("04.05.2027;04.05.2028;35,1") == (d1, d2, "35,1")
+    assert p("04.05.2028 35,10") == (sp, d2, "35,10") and p("2Y 38,50") == (sp, ("m", 24.0), "38,50")
+    assert p("1Y 500") == (sp, ("m", 12.0), "500") and p("1Y\t1.000.000") == (sp, ("m", 12.0), "1.000.000")
+    assert p("2Y 3M 38,50") == (sp, ("m", 27.0), "38,50") and p("2Y -250k") == (sp, ("m", 24.0), "-250k")
+    assert p("18M", pr.FX) == (sp, ("m", 18.0), "") and p("04.05.2028 79,10", pr.FX) == (sp, d2, "79,10")
+    for bad, asset in (("abc", pr.OIS), ("12x15", pr.FX), ("", pr.OIS), ("2Y 38,50 1", pr.OIS)):
+        with pytest.raises(pr.PricingError, match="satır okunamadı"):
+            p(bad, asset)
+
+
 # ================================================================================================== on the replay day
 @pytest.fixture(scope="module")
 def svc(module_service):
@@ -430,6 +513,143 @@ def test_on_the_replay_day(svc):
     assert round(f["mid"]["boot"], 4) == 79.0537 and f["end"] == date_to_serial(dt.date(2028, 5, 4))
 
 
+def test_an_npv_or_an_upfront_typed_gives_the_rate_on_the_user_s_curve_every_number_at_it(svc):
+    """The page with an NPV (TL, $) or an upfront (bp) typed: the rate that prices to it on the user's curve (a PPK user's
+    on PPK), the other curve's rate for it beside; NPV, NPV $ and Peşin read back what was typed (forward(reverse(x)) = x to
+    1e-9); the DV01 buckets and Fiyat − mid at that rate, as with that rate typed; an FX forward's outright the same."""
+    u = svc.login("Fiyatlama NPV'den Faiz")["user"]
+    first = svc.pricing(u, {"asset": "ois", "start": "", "end": "2Y3M", "side": "PAY", "size_kind": "nominal", "size": "1mr", "price": ""})
+    assert first["price_kind"] == "rate" and first["npv"] is None
+    usdtry = first["usdtry"]
+    cv, mk = curves(svc, u), market(svc, u)
+    deal = pr.swap_deal(pr.OIS, ("spot", 0.0), ("m", 27.0), mk)
+    for kind, typed_text, tl in (("npv_tl", "1.000.000", 1e6), ("npv_usd", "-20.000", -2e4 * usdtry), ("upfront", "25", 2.5e6),
+                                 ("upfront", "-0,1%", -1e6)):
+        got = svc.pricing(u, {"price_kind": kind, "price": typed_text})
+        n = got["npv"]
+        assert "error" not in got and got["price_kind"] == kind and n["from"]["kind"] == kind and n["from"]["method"] == "boot"
+        assert n["level"] == n["from"]["level"]["boot"]
+        assert n["tl"]["boot"] == pytest.approx(tl, rel=1e-9) and n["usd"]["boot"] == pytest.approx(tl / usdtry, rel=1e-9)
+        assert n["upfront"]["boot"] == pytest.approx(tl / 1e9 * 1e4, rel=1e-9)
+        # the rate: the NPV's inverse on the Bootstrap curve; PPK's own rate for that NPV beside; the same rate on PPK
+        assert n["level"] == pytest.approx(pr.level_for(deal, cv["boot"], 1, 1e9, tl), rel=1e-14)
+        assert n["from"]["level"]["ppk"] == pytest.approx(pr.level_for(deal, cv["ppk"], 1, 1e9, tl), rel=1e-14)
+        assert n["tl"]["ppk"] == pytest.approx(pr.value(deal, cv["ppk"], 1, 1e9, n["level"]), rel=1e-12)
+        assert n["dist"]["boot"] == pytest.approx((n["level"] - got["mid"]["boot"]) * 1e4, abs=1e-9)
+        # every number at that rate - as with the rate itself typed
+        typed = svc.pricing(u, {"price_kind": "rate", "price": "%" + repr(n["level"] * 100.0).replace(".", ",")})
+        assert typed["npv"]["tl"]["boot"] == pytest.approx(tl, rel=1e-6) and "from" not in typed["npv"]
+        for a, b in zip(got["buckets"]["rows"], typed["buckets"]["rows"]):
+            assert a["name"] == b["name"] and (a["dv01"]["boot"] is None or a["dv01"]["boot"] == pytest.approx(b["dv01"]["boot"], abs=1e-6))
+    # a PPK user: the rate solved on PPK, Bootstrap's beside
+    svc.set_interp(u, "ppk")
+    try:
+        got = svc.pricing(u, {"price_kind": "npv_tl", "price": "-500k"})
+        n = got["npv"]
+        assert got["methods"] == ["ppk", "boot"] and n["from"]["method"] == "ppk" and n["level"] == n["from"]["level"]["ppk"]
+        assert n["tl"]["ppk"] == pytest.approx(-5e5, rel=1e-9)
+        assert n["tl"]["boot"] == pytest.approx(pr.value(deal, cv["boot"], 1, 1e9, n["level"]), rel=1e-12)
+    finally:
+        svc.set_interp(u, "boot")
+    # an FX forward sold: + over its forward; the outright solved is F + NPV / (amount · DF(value date))
+    fx = svc.pricing(u, {"asset": "fx", "pair": "USDTRY", "end": "1Y", "side": "SAT", "size_kind": "amount", "size": "5m",
+                         "price_kind": "npv_tl", "price": "250k"})
+    n = fx["npv"]
+    assert n["tl"]["boot"] == pytest.approx(250e3, rel=1e-9) and n["from"]["kind"] == "npv_tl" and "upfront" not in n
+    assert n["level"] > fx["mid"]["boot"] and n["unit"] == "puan"
+    assert n["level"] == pytest.approx(fx["mid"]["boot"] + 250e3 / (5e6 * fx["fx"]["df"]["boot"]), rel=1e-12)
+
+
+def test_inputs_kept_before_the_price_kinds_read_as_they_did(svc):
+    """A user's inputs kept before 24.11.2026 - no price kind, no Toplu box: a swap's price is its rate, an FX forward's
+    its kept kind (points here); the Toplu box empty."""
+    u = svc.login("Fiyatlama Eski Girdi")["user"]
+    svc.store.put(svc.PRICING_KEY + u, {"asset": "fra", "by": {
+        "fra": {"start": "12", "end": "15", "side": "PAY", "size_kind": "nominal", "size": "1mr", "price": "35"},
+        "fx": {"start": "", "end": "1Y", "side": "AL", "size_kind": "amount", "size": "5m", "price": "100", "price_kind": "points",
+               "pair": "USDTRY"}}})
+    got = svc.pricing(u)
+    assert got["price_kind"] == "rate" and got["npv"]["level"] == 0.35 and got["inputs"]["by"]["fra"]["bulk"] == ""
+    deal = pr.swap_deal(pr.FRA, ("m", 12.0), ("m", 15.0), market(svc, u))
+    assert got["npv"]["tl"]["boot"] == pytest.approx(pr.value(deal, curves(svc, u)["boot"], 1, 1e9, 0.35), rel=1e-12)
+    fx = svc.pricing(u, {"asset": "fx"})
+    assert fx["price_kind"] == "points" and fx["npv"]["level"] == pytest.approx(fx["fx"]["spot"] + 0.01, abs=1e-12)
+    assert fx["bulk"]["rows"] == [] and fx["bulk"]["lines"] == 0
+
+
+def test_the_toplu_box_prices_each_line_off_the_page_s_curves(svc, monkeypatch):
+    """Toplu fiyatlama (item 4's "a box that prices a list of tenors at once"): each line as the page prices its
+    instrument - its side, size and price kind - off the very curves of the page: nothing is built for a line (no
+    bootstrap, no bump); each instrument on its own curve (OIS lines on OIS, XCCY and FX forwards offshore); a line
+    that cannot be priced says why and the others are priced; at most 100 lines; the instrument's own error is not
+    the lines'."""
+    u = svc.login("Fiyatlama Toplu")["user"]
+    lines = "2Y3M\n12x15\n04.05.2027 04.05.2028\n2Y 38,50\nabc\n12x9\n1Y 1.000.000"
+    page = svc.pricing(u, {"asset": "ois", "start": "", "end": "2Y3M", "side": "PAY", "size_kind": "dv01", "size": "1000",
+                           "price": "", "price_kind": "rate", "bulk": lines})
+    b, rows = page["bulk"], page["bulk"]["rows"]
+    assert [r["n"] for r in rows] == list(range(1, 8)) and [r["line"] for r in rows] == lines.split("\n")
+    assert (b["family"], b["kind"], b["methods"], b["left_out"], b["side"]) == ("ois", "rate", ["boot", "ppk"], 0, "PAY")
+    # the page's own instrument as a line: its very numbers (DV01: the size's, signed as the page's - a payer's +)
+    one = rows[0]
+    assert one["label"] == page["label"] and one["mid"] == page["mid"] and one["annuity"] == page["annuity"]
+    assert one["size"] == page["size"]["size"] and one["dv01"]["boot"] == page["size"]["dv01"] > 0 and one["npv"] is None
+    # a forward start on OIS: the FRA the page prices; two dates: that start and end
+    fra = svc.pricing(u, {"asset": "fra", "start": "12", "end": "15"})
+    assert rows[1]["mid"] == fra["mid"] and rows[1]["label"] == "TRY OIS 1Y × 15M"
+    assert (text(rows[2]["start"]), text(rows[2]["end"])) == ("04.05.2027", "04.05.2028")
+    # a price on the line: its NPV as the page gives it for that instrument and price
+    two = svc.pricing(u, {"asset": "ois", "end": "2Y", "price": "38,50"})
+    assert rows[3]["npv"]["tl"] == two["npv"]["tl"] and rows[3]["npv"]["dist"] == two["npv"]["dist"] and rows[3]["price"] == "38,50"
+    # what cannot be priced says why on its own line
+    assert rows[4]["error"].startswith("satır okunamadı") and "mid" not in rows[4]
+    assert rows[5]["error"] == "vade başlangıçtan sonra olmalı"
+    # the page's price kind for the lines: an NPV - each line's rate that prices to it, on the user's curve
+    npv = svc.pricing(u, {"end": "2Y3M", "price": "", "price_kind": "npv_tl"})
+    last = npv["bulk"]["rows"][6]
+    assert last["npv"]["from"]["kind"] == "npv_tl" and last["npv"]["tl"]["boot"] == pytest.approx(1e6, rel=1e-9)
+    assert npv["bulk"]["rows"][0]["npv"] is None and npv["bulk"]["kind"] == "npv_tl"
+    svc.pricing(u, {"price_kind": "rate"})
+    # XCCY lines on the offshore curve, FX forwards too - never OIS
+    cv, mk = curves(svc, u), market(svc, u)
+    x = svc.pricing(u, {"asset": "xccy", "start": "", "end": "2Y3M", "bulk": "2Y3M\n18M\n1Yx2Y"})
+    xr = x["bulk"]["rows"]
+    d18 = pr.swap_deal(pr.XCCY, ("spot", 0.0), ("m", 18.0), mk)
+    assert x["bulk"]["family"] == "off" and xr[0]["mid"] == x["mid"] and xr[0]["label"] == "XCCY 2Y3M"
+    assert xr[1]["mid"]["boot"] == pr.mid(d18, cv["off_boot"]) and xr[1]["mid"]["ppk"] == pr.mid(d18, cv["off_ppk"])
+    assert xr[2]["label"] == "XCCY 1Y × 2Y" and abs(xr[1]["mid"]["boot"] - pr.mid(pr.swap_deal(pr.OIS, ("spot", 0.0), ("m", 18.0), mk), cv["boot"])) > 1e-4
+    f = svc.pricing(u, {"asset": "fx", "pair": "USDTRY", "end": "18M", "bulk": "18M\n1M\n12x15"})
+    fr = f["bulk"]["rows"]
+    assert f["bulk"]["family"] == "off" and fr[0]["mid"] == f["mid"] and fr[0]["points"] == f["fx"]["points"]
+    assert fr[2]["error"].startswith("satır okunamadı") and "valör" in fr[2]["error"]
+    # the instrument's own error is not the lines'
+    bad = svc.pricing(u, {"asset": "ois", "end": "2Q", "bulk": "1Y"})
+    assert bad["error"].startswith("vade okunamadı") and bad["bulk"]["rows"][0]["label"] == "TRY OIS 1Y"
+    # at most 100 lines priced, the rest counted
+    many = svc.pricing(u, {"end": "1Y", "bulk": "\n".join(["1Y"] * 105)})
+    assert len(many["bulk"]["rows"]) == 100 and many["bulk"]["lines"] == 105 and many["bulk"]["left_out"] == 5
+    # a PPK user's lines: their curve first, sized on it
+    svc.set_interp(u, "ppk")
+    try:
+        p = svc.pricing(u, {"end": "2Y3M", "bulk": "2Y3M"})
+        assert p["bulk"]["methods"] == ["ppk", "boot"] and p["bulk"]["rows"][0]["size"] == p["size"]["size"]
+        assert p["bulk"]["rows"][0]["dv01"]["ppk"] == p["size"]["dv01"]
+        ppk_cv = curves(svc, u)
+    finally:
+        svc.set_interp(u, "boot")
+    # nothing is built for a line: Motor's bootstrap, the offshore bootstrap, the bumps, the PPK calibration untouched
+    def built(*a, **k):
+        raise AssertionError("a curve built for a line")
+    inputs = pr.clean_inputs({"asset": "xccy", "bulk": "2Y3M\n18M\n04.05.2027 04.05.2028 41"})
+    for name in ("motor_curve", "quote_curve", "recalibrated", "slopes"):
+        monkeypatch.setattr(pr, name, built)
+    for name in ("calibrate", "bootstrap", "list_ois_curve"):
+        monkeypatch.setattr(pk, name, built)
+    monkeypatch.setattr(pr.Curves, "bumped", built)
+    out = pr.bulk(inputs, pr.Curves(ppk_cv, mk), "ppk")
+    assert [r.get("error") for r in out["rows"]] == [None, None, None] and out["rows"][2]["npv"]["level"] == 0.41
+
+
 # ================================================================================================== over HTTP (last: it stops the service)
 def test_the_route(svc):
     with TestClient(create_app(svc)) as c:
@@ -439,6 +659,12 @@ def test_the_route(svc):
         got = c.post("/api/pricing", json={"asset": "xccy", "end": "2Y3M", "side": "RECEIVE"}, headers=h).json()
         assert got["label"] == "XCCY 2Y3M" and len(got["schedule"]) == 3 and got["buckets"]["family"] == "off"
         assert c.get("/api/pricing", headers=h).json()["label"] == "XCCY 2Y3M"
+        # an upfront typed and a Toplu box: the rate solved, every line priced; GET gives the same back
+        up = c.post("/api/pricing", json={"price_kind": "upfront", "price": "25", "bulk": "2Y3M\n1Y 10"}, headers=h).json()
+        assert up["npv"]["from"]["kind"] == "upfront" and abs(up["npv"]["upfront"]["boot"] - 25.0) < 1e-9
+        assert [r["label"] for r in up["bulk"]["rows"]] == ["XCCY 2Y3M", "XCCY 1Y"] and up["bulk"]["rows"][1]["npv"]["from"]["typed"] == 10.0
+        assert c.get("/api/pricing", headers=h).json()["bulk"]["rows"][0]["mid"] == up["bulk"]["rows"][0]["mid"]
+        c.post("/api/pricing", json={"price_kind": "rate", "price": "", "bulk": ""}, headers=h)
         assert c.post("/api/pricing", json={"end": "yok"}, headers=h).json()["error"].startswith("vade okunamadı")
         assert c.post("/api/pricing", content=b"[1]", headers=dict(h, **{"Content-Type": "application/json"})).status_code == 400
         assert c.get("/api/pricing", headers=ANON).status_code == 401

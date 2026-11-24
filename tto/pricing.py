@@ -26,6 +26,14 @@ again (MPC ima as it is; the flat overnight shift of the bumped quote's stretch 
 sum of the buckets.  **NPV** of the position at the typed price on each curve (+ = in the trader's favour, as Günlük
 İşlemler's "Mid'e göre"), and the price's distance from mid.
 
+**The ways back** (the desk, 24.11.2026: "1-2-3-4-5-6-7-8-11-11-13" - 4 was "type an NPV (TL or $) or an upfront in bp and
+get the fixed rate; a box that prices a list of tenors at once"): the price box holds what ``price_kind`` says - a swap's
+rate, or an NPV in TL or $ or an upfront in bp of the nominal; an FX forward's outright or points, or an NPV in TL or $.
+An NPV (an upfront: NPV = nominal · bp / 10 000) gives the level that prices to it - :func:`level_for`, :func:`value`'s
+exact inverse - on the user's own curve, the other curve's beside it; every number (NPV, DV01 buckets, price − mid) is
+then at that level.  **Toplu** (:func:`bulk`): every line of a box - a maturity, a start × end, two dates; a price after
+it - priced as the page prices its instrument, off the same curves (nothing built again for a line).
+
 Days are calendar days from a curve's spot, rates decimals, dates Excel serials.  :func:`read` takes what is not in the
 curves (:func:`tto.ppkcurve.read` and the service's offshore curve) from the workbook through a cell getter; the rest
 knows no workbook.
@@ -59,6 +67,16 @@ RATE_SIDES, FX_SIDES = ("PAY", "RECEIVE"), ("AL", "SAT")
 ON, OFF = "ois", "off"
 #: the desk's OIS buckets the curve has no pillar at (its bootstrap starts at the 1M quote; Günlük İşlemler Q89:Q91)
 SHORT_BUCKETS = ("ON", "1W", "2W")
+#: what the price box holds (``price_kind``, kept per asset; the first: what it held before 24.11.2026): a swap's fixed
+#: rate, or the NPV (TL, $) or the upfront (bp of the nominal) its rate is solved from; an FX forward's outright or points,
+#: or the NPV (TL, $) its outright is solved from
+RATE_KINDS = ("rate", "npv_tl", "npv_usd", "upfront")
+FX_KINDS = ("outright", "points", "npv_tl", "npv_usd")
+NPV_KINDS = ("npv_tl", "npv_usd", "upfront")
+KIND_TEXT = {"rate": "Faiz", "outright": "Outright", "points": "Puan", "npv_tl": "NPV TL", "npv_usd": "NPV $",
+             "upfront": "Peşin bp"}
+#: the Toplu box: the lines priced (the rest are counted, not priced) and the text kept, at most
+BULK_LINES, BULK_CHARS = 100, 8000
 
 # where the TRY workbook keeps what the curves do not hold (1-based rows / columns)
 #: the EURTRY spot date (Forward!K2: T+2 on TRY + EUR)
@@ -608,6 +626,28 @@ def value(deal: Deal, curve: Any, side: int, size: float, level: float) -> float
     return side * size * ((curve.df(deal.start - sp) - curve.df(deal.end - sp)) - level * annuity(deal, curve))
 
 
+def level_for(deal: Deal, curve: Any, side: int, size: float, npv: float) -> float:
+    """:func:`value`'s inverse: the level - a swap's fixed rate, an FX forward's outright - at which the position (``side``,
+    ``size``) is worth ``npv`` (TL, + in the holder's favour) on ``curve``.  A swap: K = ((DF(start) − DF(end)) − NPV /
+    (side · N)) / Σ τ·DF; an FX forward: K = F − NPV / (side · A · DF(value date)) - the same terms :func:`value` reads, so
+    ``value(level_for(v)) = v`` to the last digits."""
+    sp = deal.spot
+    if deal.asset == FX:
+        return forward(deal, curve) - npv / (side * size * curve.df(deal.end - sp))
+    return ((curve.df(deal.start - sp) - curve.df(deal.end - sp)) - npv / (side * size)) / annuity(deal, curve)
+
+
+def npv_of(kind: str, x: float, size: float, usdtry: float) -> float:
+    """The NPV in TL an NPV or upfront typed stands for (``kind``, :data:`NPV_KINDS`): TL as it is; $ at USDTRY
+    (``OIS_MAIN!D2``, what the page turns its NPV into $ with); an upfront in bp of the nominal, NPV = N · bp / 10 000 -
+    + in the trader's favour, as the NPV."""
+    if kind == "npv_usd":
+        return x * usdtry
+    if kind == "upfront":
+        return size * x / 10000.0
+    return x
+
+
 def unit_dv01(deal: Deal, curve: Any) -> float:
     """TL per bp of one unit of size on ``curve`` - what a DV01 is sized on: a swap's annuity · 1 bp (OIS_MAIN's rule,
     the blotter's), an FX forward's F · d/360 · DF_simple · DF (the forward's change for 1 bp on the TRY simple rate,
@@ -627,19 +667,23 @@ round_half_away = _round_half_away
 # ================================================================================================== the inputs
 #: what the page starts with, per asset (each user's own are kept per asset: switching back finds them)
 DEFAULTS: Dict[str, Dict[str, str]] = {
-    OIS: {"start": "", "end": "1Y", "side": "PAY", "size_kind": "dv01", "size": "1000", "price": ""},
-    FRA: {"start": "12", "end": "15", "side": "PAY", "size_kind": "dv01", "size": "1000", "price": ""},
-    XCCY: {"start": "", "end": "2Y3M", "side": "RECEIVE", "size_kind": "dv01", "size": "1000", "price": ""},
+    OIS: {"start": "", "end": "1Y", "side": "PAY", "size_kind": "dv01", "size": "1000", "price": "", "price_kind": "rate",
+          "bulk": ""},
+    FRA: {"start": "12", "end": "15", "side": "PAY", "size_kind": "dv01", "size": "1000", "price": "", "price_kind": "rate",
+          "bulk": ""},
+    XCCY: {"start": "", "end": "2Y3M", "side": "RECEIVE", "size_kind": "dv01", "size": "1000", "price": "",
+           "price_kind": "rate", "bulk": ""},
     FX: {"start": "", "end": "18M", "side": "AL", "size_kind": "amount", "size": "10m", "price": "", "price_kind": "outright",
-         "pair": "USDTRY"},
+         "pair": "USDTRY", "bulk": ""},
 }
 TEXT_KEYS = ("start", "end", "size", "price")
 
 
 def clean_inputs(raw: Any, kept: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """A user's inputs as stored: ``{"asset", "by": {asset: {start, end, side, size_kind, size, price, price_kind,
-    pair}}}`` - what was typed (texts, read when priced) over what was kept (``kept``) over the defaults.  A field of
-    ``raw`` is the asset's (``raw["asset"]``, else the one kept)."""
+    pair, bulk}}}`` - what was typed (texts, read when priced) over what was kept (``kept``) over the defaults.  A field
+    of ``raw`` is the asset's (``raw["asset"]``, else the one kept).  Inputs kept before a field was there take its
+    default: a price kept before 24.11.2026 is a rate (an FX forward's: as kept), the Toplu box empty."""
     out = {"asset": OIS, "by": {a: dict(DEFAULTS[a]) for a in ASSETS}}
     for src in (kept or {}, raw if isinstance(raw, dict) else {}):
         if not isinstance(src, dict):
@@ -668,11 +712,29 @@ def _merge(into: Dict[str, Any], fields: Dict[str, Any], asset: str) -> None:
     kind = str(fields.get("size_kind") or "")
     if kind in (("amount", "dv01") if asset == FX else ("nominal", "dv01")):
         into["size_kind"] = kind
+    if str(fields.get("price_kind") or "") in (FX_KINDS if asset == FX else RATE_KINDS):
+        into["price_kind"] = str(fields["price_kind"])
+    if fields.get("bulk") is not None:
+        into["bulk"] = bulk_text(fields["bulk"])
     if asset == FX:
-        if str(fields.get("price_kind") or "") in ("outright", "points"):
-            into["price_kind"] = fields["price_kind"]
         if str(fields.get("pair") or "").upper() in PAIRS:
             into["pair"] = str(fields["pair"]).upper()
+
+
+def bulk_text(raw: Any) -> str:
+    """The Toplu box's text as kept: its lines as typed or pasted (Windows line ends, blanks at their ends and empty
+    lines at the end off), at most :data:`BULK_CHARS` characters."""
+    lines = [s.rstrip() for s in str(raw).replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)[:BULK_CHARS]
+
+
+def price_kind(asset: str, f: Dict[str, Any]) -> str:
+    """What the price box of ``asset`` holds (:data:`RATE_KINDS` / :data:`FX_KINDS`); none kept: a rate, an outright."""
+    kinds = FX_KINDS if asset == FX else RATE_KINDS
+    k = f.get("price_kind")
+    return k if k in kinds else kinds[0]
 
 
 def _rate(text: str) -> Optional[float]:
@@ -684,6 +746,118 @@ def _rate(text: str) -> Optional[float]:
 
 
 # ================================================================================================== pricing
+def instrument(asset: str, f: Dict[str, Any], mk: Market) -> Deal:
+    """The page's instrument from what was typed (``f``: the asset's inputs) - :class:`PricingError` for what does not
+    read."""
+    if asset == FX:
+        end_when = parse_when(f["end"])
+        if end_when is None:
+            raise PricingError("valör okunamadı: %r (1Y, 18M, 2Y3M ya da gg.aa.yyyy)" % f["end"])
+        return fx_deal(f["pair"], end_when, mk)
+    start_text, end_text = f["start"], f["end"]
+    both = split_pair(start_text) if asset == FRA else None
+    if both is not None:
+        start_text, end_text = both
+    start_when, end_when = parse_when(start_text), parse_when(end_text)
+    if start_when is None:
+        raise PricingError("başlangıç okunamadı: %r (Spot, 1Y, 12, 18M ya da gg.aa.yyyy)" % start_text)
+    if end_when is None:
+        raise PricingError("vade okunamadı: %r (1Y, 18M, 2Y3M, 15 ya da gg.aa.yyyy)" % end_text)
+    return swap_deal(asset, start_when, end_when, mk)
+
+
+def read_price(kind: str, text: str, deal: Deal) -> Optional[float]:
+    """The price typed, read in its kind (``None``: nothing typed): a swap's rate as a decimal ("35,10" is 35,10 %); an
+    FX forward's outright, or the outright its points give (spot + points / 10 000); an NPV in TL or $ ("1.000.000",
+    "-250k", "2,5m"); an upfront in bp of the nominal ("25", "-12,5"; "%0,5" of the nominal is 50 bp).
+    :class:`PricingError` for what does not read."""
+    text = text or ""
+    if not text.strip():
+        return None
+    if kind in ("npv_tl", "npv_usd"):
+        x = parse_amount(text.replace("−", "-").replace("–", "-"))
+        if x is None:
+            raise PricingError("NPV okunamadı: %r (1.000.000, -250k, 2,5m)" % text)
+        return x
+    if kind == "upfront":
+        x = parse_number(text, prefer_decimal=True)
+        if x is None:
+            raise PricingError("peşin okunamadı: %r (bp: 25, -12,5; nominalin yüzdesi: %%0,5)" % text)
+        return x * 10000.0 if "%" in text else x
+    if deal.asset == FX:
+        x = parse_number(text, prefer_decimal=True)
+        if x is None:
+            raise PricingError("fiyat okunamadı: %r" % text)
+        level = deal.fx_rate + x / 10000.0 if kind == "points" else x
+        if not level > 0:
+            raise PricingError("forward kur pozitif olmalı")
+        return level
+    level = _rate(text)
+    if level is None:
+        raise PricingError("fiyat okunamadı: %r (35,10 = %%35,10)" % text)
+    return level
+
+
+def sized(deal: Deal, f: Dict[str, Any], mk: Market, unit: float, usdtry: float) -> Tuple[float, float, str]:
+    """The position's size, ``(typed, size, rule)``: a nominal (an FX forward's amount in its currency) as typed, or one
+    from a DV01 in $ on ``unit`` (:func:`unit_dv01` on the user's curve), rounded as ``rule`` says."""
+    size_text = f.get("size") or ""
+    typed = parse_amount(size_text) if size_text else None
+    if typed is None or not typed > 0:
+        raise PricingError("büyüklük okunamadı: %r (10m, 250k, 1.000)" % size_text if size_text else "büyüklük yazın")
+    if f["size_kind"] != "dv01":
+        return typed, typed, ""
+    raw = typed * usdtry / unit
+    if deal.asset == FX:
+        size = round(raw / 1000.0) * 1000.0
+        rule = "tutar = DV01 · USDTRY / (F · gün/360 · DF_basit · DF · 0,0001), 1.000'e yuvarlı"
+    else:
+        size = round_half_away(raw / mk.lot) * mk.lot
+        rule = "nominal = DV01 · USDTRY / (annuity · 0,0001), %s TL'ye yuvarlı (OIS_MAIN'in kuralı)" % _int_text(mk.lot)
+    if not size > 0:
+        raise PricingError("DV01 bu vadede sıfır nominale yuvarlanıyor: daha büyük yazın")
+    return typed, size, rule
+
+
+def leveled(deal: Deal, kind: str, typed: Optional[float], side: int, size: float, base: Dict[str, Any], method: str,
+            usdtry: float) -> Tuple[Optional[float], Optional[Dict[str, Optional[float]]]]:
+    """The level the position is priced at, ``(level, implied)``: a rate / outright typed as it is (``implied`` None); an
+    NPV or upfront typed: the level that prices to it on each curve (:func:`level_for`), the user's curve's (``method``)
+    the level.  Nothing typed: ``(None, None)``."""
+    if typed is None:
+        return None, None
+    if kind not in NPV_KINDS:
+        return typed, None
+    v = npv_of(kind, typed, size, usdtry)
+    implied = {m: (level_for(deal, base[m], side, size, v) if base[m] is not None else None) for m in METHODS}
+    level = implied[method]
+    if deal.asset == FX and not (level is not None and level > 0):
+        raise PricingError("bu NPV'yi veren forward kur pozitif değil (%s)" % (_fx_text(level) if level is not None else "-"))
+    return level, implied
+
+
+def _fx_text(x: float) -> str:
+    return ("%.4f" % x).replace(".", ",")
+
+
+def npv_block(deal: Deal, base: Dict[str, Any], side: int, size: float, level: float, mids: Dict[str, Optional[float]],
+              usdtry: float, kind: str, typed: Optional[float], implied: Optional[Dict[str, Optional[float]]],
+              method: str) -> Dict[str, Any]:
+    """The position at ``level`` on each curve: its NPV in TL and $ (+ in the trader's favour), a swap's upfront (NPV /
+    nominal, bp), the level's distance from each curve's mid - and, the level solved from an NPV or upfront typed
+    (``implied``), what was typed and each curve's level for it (``from``)."""
+    tl = {m: (value(deal, base[m], side, size, level) if base[m] is not None else None) for m in METHODS}
+    scale = 10000.0
+    out = {"level": level, "tl": tl, "usd": {m: (v / usdtry if v is not None else None) for m, v in tl.items()},
+           "dist": {m: ((level - mids[m]) * scale if mids[m] is not None else None) for m in METHODS},
+           "unit": "puan" if deal.asset == FX else "bp"}
+    if deal.asset != FX:
+        out["upfront"] = {m: (v / size * scale if v is not None else None) for m, v in tl.items()}
+    if implied is not None:
+        out["from"] = {"kind": kind, "text": KIND_TEXT[kind], "typed": typed, "method": method, "level": implied}
+    return out
+
+
 def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]:
     """The page's numbers for the user's inputs (:func:`clean_inputs`) on ``curves``, ``method`` the user's own curve
     setting (shown first; the other beside).  :class:`PricingError` for inputs it cannot price."""
@@ -691,22 +865,7 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
     asset = inputs["asset"]
     f = inputs["by"][asset]
     methods = [method] + [m for m in METHODS if m != method]
-    if asset == FX:
-        end_when = parse_when(f["end"])
-        if end_when is None:
-            raise PricingError("valör okunamadı: %r (1Y, 18M, 2Y3M ya da gg.aa.yyyy)" % f["end"])
-        deal = fx_deal(f["pair"], end_when, mk)
-    else:
-        start_text, end_text = f["start"], f["end"]
-        both = split_pair(start_text) if asset == FRA else None
-        if both is not None:
-            start_text, end_text = both
-        start_when, end_when = parse_when(start_text), parse_when(end_text)
-        if start_when is None:
-            raise PricingError("başlangıç okunamadı: %r (Spot, 1Y, 12, 18M ya da gg.aa.yyyy)" % start_text)
-        if end_when is None:
-            raise PricingError("vade okunamadı: %r (1Y, 18M, 2Y3M, 15 ya da gg.aa.yyyy)" % end_text)
-        deal = swap_deal(asset, start_when, end_when, mk)
+    deal = instrument(asset, f, mk)
     family = deal.family
     base = {m: curves.curve(family, m) for m in METHODS}
     if base[method] is None:
@@ -719,40 +878,14 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
     usdtry = mk.usdtry
     if not usdtry:
         raise PricingError("USDTRY yok (OIS_MAIN!D2)")
-    # the price typed: a swap's rate, an FX forward's outright (or points on the spot)
-    level = None
-    price_text = f.get("price") or ""
-    if price_text:
-        if asset == FX:
-            x = parse_number(price_text, prefer_decimal=True)
-            if x is None:
-                raise PricingError("fiyat okunamadı: %r" % price_text)
-            level = deal.fx_rate + x / 10000.0 if f.get("price_kind") == "points" else x
-            if not level > 0:
-                raise PricingError("forward kur pozitif olmalı")
-        else:
-            level = _rate(price_text)
-            if level is None:
-                raise PricingError("fiyat okunamadı: %r (35,10 = %%35,10)" % price_text)
+    # the price typed, in its kind: a swap's rate, an FX forward's outright (or points on the spot) - or an NPV / upfront
+    kind = price_kind(asset, f)
+    typed_price = read_price(kind, f.get("price") or "", deal)
     # the size: a nominal (an FX forward's amount in its currency) or a DV01 in $ sized on the user's curve
-    size_text = f.get("size") or ""
-    typed = parse_amount(size_text) if size_text else None
-    if typed is None or not typed > 0:
-        raise PricingError("büyüklük okunamadı: %r (10m, 250k, 1.000)" % size_text if size_text else "büyüklük yazın")
     unit = unit_dv01(deal, base[method])
-    if f["size_kind"] == "dv01":
-        raw = typed * usdtry / unit
-        if asset == FX:
-            size = round(raw / 1000.0) * 1000.0
-            rule = "tutar = DV01 · USDTRY / (F · gün/360 · DF_basit · DF · 0,0001), 1.000'e yuvarlı"
-        else:
-            size = round_half_away(raw / mk.lot) * mk.lot
-            rule = "nominal = DV01 · USDTRY / (annuity · 0,0001), %s TL'ye yuvarlı (OIS_MAIN'in kuralı)" % _int_text(mk.lot)
-        if not size > 0:
-            raise PricingError("DV01 bu vadede sıfır nominale yuvarlanıyor: daha büyük yazın")
-    else:
-        size = typed
-        rule = ""
+    typed, size, rule = sized(deal, f, mk, unit, usdtry)
+    # the level: the one typed, or the one that gives the NPV typed - on the user's curve (the other's beside)
+    level, implied = leveled(deal, kind, typed_price, side, size, base, method, usdtry)
     # the DV01 of the position at the price typed (at mid without one): every pillar bumped on each method
     rows: Dict[str, Dict[str, Optional[float]]] = {}
     totals: Dict[str, Optional[float]] = {}
@@ -779,16 +912,13 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
     for name, day in pillars:
         got = rows.get(name, {})
         bucket_rows.append({"name": name, "pillar": True, "day": day, "dv01": {m: got.get(m) for m in METHODS}})
-    # the NPV at the price typed and its distance from mid
+    # the NPV at the price typed (or solved for) and its distance from mid
     npv = None
     if level is not None:
-        tl = {m: (value(deal, base[m], side, size, level) if base[m] is not None else None) for m in METHODS}
-        scale = 10000.0
-        npv = {"level": level, "tl": tl, "usd": {m: (v / usdtry if v is not None else None) for m, v in tl.items()},
-               "dist": {m: ((level - mids[m]) * scale if mids[m] is not None else None) for m in METHODS},
-               "unit": "puan" if asset == FX else "bp"}
+        npv = npv_block(deal, base, side, size, level, mids, usdtry, kind, typed_price, implied, method)
     out: Dict[str, Any] = {
         "asset": asset, "label": deal.label, "family": family, "method": method, "methods": methods,
+        "price_kind": kind, "price_kind_text": KIND_TEXT[kind],
         "side": f["side"], "spot": deal.spot, "start": deal.start, "end": deal.end, "days": deal.end - deal.start,
         "mid": mids, "diff": ((mids[PPK] - mids[BOOT]) * 10000.0 if mids[PPK] is not None and mids[BOOT] is not None else None),
         "size": {"kind": f["size_kind"], "typed": typed, "size": size, "rule": rule,
@@ -809,7 +939,7 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
         out["annuity"] = {m: (annuity(deal, base[m]) if base[m] is not None else None) for m in METHODS}
     out["notes"] = notes(deal, curves)
     out["texts"] = {"conventions": CONVENTIONS[asset], "dv01": DV01_TEXT, "npv": NPV_TEXT,
-                    "short": SHORT_TEXT if family == ON else ""}
+                    "short": SHORT_TEXT if family == ON else "", "price": PRICE_TEXT[FX if asset == FX else OIS]}
     return out
 
 
@@ -865,3 +995,132 @@ SHORT_TEXT = "ON / 1W / 2W: eğrinin orada kotası yok (bootstrap 1A kotasından
 #: what the NPV is
 NPV_TEXT = ("NPV: pozisyonun yazılan fiyattaki bugünkü değeri (eğrinin spot'una iskontolu), + = lehine (Günlük İşlemler'in "
             "\"Mid'e göre\"si gibi: mid'in altında PAY, üstünde RECEIVE; FX'te mid'in altında AL, üstünde SAT).")
+#: what the price box can hold, and how a level is found from an NPV / upfront (by the swaps', by an FX forward's)
+PRICE_TEXT = {
+    OIS: "Fiyat tipi: Faiz (sabit oran; 35,10 = %35,10), NPV TL, NPV $ ya da Peşin bp (nominalin bp'si; %0,5 = 50 bp). NPV ya da "
+         "peşin yazılınca o NPV'yi veren sabit faiz eğrinizde çözülür - NPV'nin tam tersi: K = ((DF(başlangıç) − DF(vade)) − NPV / "
+         "(yön · N)) / Σ τ·DF, yön PAY +1, RECEIVE −1 - ve her sayı (NPV, DV01 kovaları, Fiyat − mid) o faizdedir; öbür eğrinin aynı "
+         "NPV için faizi yanında. Peşin = NPV / nominal · 10.000, NPV gibi + = lehine (swap'ın size değeri: karşılığında bu tutarı "
+         "siz ödersiniz). NPV $, OIS_MAIN!D2'deki USDTRY ile TL'dir.",
+    FX: "Fiyat tipi: Outright, Puan (forward = spot + puan / 10.000), NPV TL ya da NPV $. NPV yazılınca o NPV'yi veren forward kur "
+        "eğrinizde çözülür - NPV'nin tam tersi: K = F − NPV / (yön · tutar · DF(valör)), yön AL +1, SAT −1 -; öbür eğrininki "
+        "yanında. NPV $, OIS_MAIN!D2'deki USDTRY ile TL'dir.",
+}
+#: what the Toplu box does
+BULK_TEXT = ("Toplu fiyatlama: her satır bir enstrüman - vade (2Y3M, 18M, 15, tarih), başlangıç × bitiş (12x15, 1Yx18M) ya da iki "
+             "tarih (04.05.2027 04.05.2028); FX forward'da valör - ve satırın sonunda isteğe bağlı fiyat, yukarıdaki Fiyat tipiyle "
+             "(2Y 38,50; NPV TL'de 2Y -1m). Yön ve büyüklük yukarıdaki gibi (DV01 yazılıysa her satırın nominali o DV01'den). Satırlar "
+             "sayfanın eğrileriyle fiyatlanır, satır için eğri yeniden kurulmaz: TRY OIS ve FRA OIS eğrisinde, XCCY ve FX forward "
+             "offshore eğride. DV01 büyüklüğün DV01'idir (N · annuity · 0,0001 / USDTRY, OIS_MAIN'in kuralı; FX'te forward'ın 1 bp'si; "
+             "+ = faizler yükselince kazanır) - kova kova DV01 için satırı yukarıda fiyatlayın. En çok %d satır." % BULK_LINES)
+#: how a line of the Toplu box is written, by the swaps' and by an FX forward's
+LINE_HINT = {OIS: "2Y3M, 15, 12x15, 1Yx18M ya da iki tarih; fiyat satırın sonunda",
+             FX: "valör: 1Y, 18M ya da tarih; fiyat satırın sonunda"}
+
+
+# ================================================================================================== Toplu
+#: what may stand between a line's parts: a tab, ";", "|", a dash between spaces, an arrow
+_LINE_GAPS = re.compile(r"[\t;|]+|\s+[-–—]\s+|\s*→\s*")
+#: what joins a start and an end ("12x15", "1Y × 18M")
+_PAIR_MARKS = ("x", "×", "*")
+
+
+def parse_line(text: str, asset: str) -> Tuple[Tuple[str, float], Tuple[str, float], str]:
+    """A line of the Toplu box: ``(start, maturity, price text)``.  The instrument - a maturity from the spot ("2Y3M",
+    "18M", "15", "04.05.2028"; the whole line first, so "2Y 3M" is 2Y3M and "1 yıl 6 ay" 18M), a start × end ("12x15",
+    "1Y × 18M"; not an FX forward's) or two dates ("04.05.2027 04.05.2028"; a tab, ";" or " - " between them as well) -
+    then, after a space, the price in the page's price kind ("2Y 38,50", "12x15 -1m"): one word, so a bare number after a
+    maturity is its price, not months.  :class:`PricingError` for a line it cannot read."""
+    flat = " ".join(_LINE_GAPS.sub(" ", str(text or "")).split())
+    tokens: List[str] = []
+    for tok in flat.split(" ") if flat else []:
+        low = tok.lower()
+        if tokens and (low in _PAIR_MARKS or low[0] in _PAIR_MARKS or tokens[-1].lower()[-1] in _PAIR_MARKS):
+            tokens[-1] += tok                          # ("12 x 15", "1Y ×18M": one word)
+        else:
+            tokens.append(tok)
+    for k in (len(tokens), len(tokens) - 1):
+        if k <= 0:
+            break
+        got = _line_instrument(tokens[:k], asset)
+        if got is not None:
+            return got[0], got[1], " ".join(tokens[k:])
+    raise PricingError("satır okunamadı: %r (%s)" % (str(text or "").strip(), LINE_HINT[FX if asset == FX else OIS]))
+
+
+def _line_instrument(tokens: List[str], asset: str) -> Optional[Tuple[Tuple[str, float], Tuple[str, float]]]:
+    """The start and maturity ``tokens`` say (:func:`parse_line`); ``None`` when they are not an instrument."""
+    if asset != FX and len(tokens) == 1:
+        both = split_pair(tokens[0].replace("X", "x"))
+        if both is not None:
+            return parse_when(both[0]), parse_when(both[1])
+    if asset != FX and len(tokens) == 2:
+        a, b = parse_when(tokens[0]), parse_when(tokens[1])
+        if a is not None and b is not None and a[0] == "d" and b[0] == "d":
+            return a, b
+    w = parse_when(" ".join(tokens))
+    return (("spot", 0.0), w) if w is not None else None
+
+
+def bulk(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]:
+    """Toplu fiyatlama: every line of the asset's Toplu box (``bulk``, :func:`parse_line`) priced as :func:`price` prices
+    the page's instrument - its side, size and price kind - off the same curves: the page's ``curves`` are read for each
+    line and nothing is built for it (no bootstrap, no bump: its DV01 is the size's, by the annuity rule).  Each instrument
+    on its own curve: TRY OIS and FRA on OIS, XCCY and FX forwards offshore.  A line that cannot be priced says why
+    (``error``); the others are priced.  ``rows``: per line ``{n, line, label, start, end, days, spot, mid, diff, size,
+    dv01, annuity | points, price, npv}`` - ``dv01`` signed as the page's (+ = gains when rates rise), ``npv`` as
+    :func:`price`'s (none without a price)."""
+    mk = curves.mk
+    asset = inputs["asset"]
+    f = inputs["by"][asset]
+    kind = price_kind(asset, f)
+    family = OFF if asset in (XCCY, FX) else ON
+    base = {m: curves.curve(family, m) for m in METHODS}
+    if base[method] is None:
+        method = BOOT
+    lines = [s.strip() for s in (f.get("bulk") or "").split("\n")]
+    lines = [s for s in lines if s]
+    out: Dict[str, Any] = {"rows": [], "lines": len(lines), "left_out": max(0, len(lines) - BULK_LINES), "asset": asset,
+                           "family": family, "kind": kind, "kind_text": KIND_TEXT[kind], "side": f["side"],
+                           "size_kind": f["size_kind"], "size": f.get("size") or "", "method": method,
+                           "methods": [method] + [m for m in METHODS if m != method], "text": BULK_TEXT,
+                           "hint": LINE_HINT[FX if asset == FX else OIS]}
+    side = 1 if f["side"] in ("PAY", "AL") else -1
+    for n, line in enumerate(lines[:BULK_LINES], 1):
+        try:
+            if base[BOOT] is None:
+                raise PricingError("eğri kurulamadı: %s" % ("; ".join(curves.errors) or "kota yok"))
+            if not mk.usdtry:
+                raise PricingError("USDTRY yok (OIS_MAIN!D2)")
+            row = _bulk_row(asset, f, kind, line, mk, base, method, side)
+        except PricingError as exc:
+            row = {"line": line, "error": str(exc)}
+        except (ValueError, ZeroDivisionError, OverflowError) as exc:      # (a number that cannot be: said on its line)
+            row = {"line": line, "error": "hesaplanamadı: %s" % exc}
+        row["n"] = n
+        out["rows"].append(row)
+    return out
+
+
+def _bulk_row(asset: str, f: Dict[str, Any], kind: str, line: str, mk: Market, base: Dict[str, Any], method: str,
+              side: int) -> Dict[str, Any]:
+    """One line of the Toplu box, priced (:func:`bulk`)."""
+    usdtry = mk.usdtry
+    start_when, end_when, price_text = parse_line(line, asset)
+    deal = fx_deal(f["pair"], end_when, mk) if asset == FX else swap_deal(asset, start_when, end_when, mk)
+    mids = {m: (mid(deal, base[m]) if base[m] is not None else None) for m in METHODS}
+    typed_price = read_price(kind, price_text, deal)
+    _, size, _ = sized(deal, f, mk, unit_dv01(deal, base[method]), usdtry)
+    level, implied = leveled(deal, kind, typed_price, side, size, base, method, usdtry)
+    row: Dict[str, Any] = {
+        "line": line, "label": deal.label, "start": deal.start, "end": deal.end, "days": deal.end - deal.start,
+        "spot": deal.spot, "mid": mids,
+        "diff": ((mids[PPK] - mids[BOOT]) * 10000.0 if mids[PPK] is not None and mids[BOOT] is not None else None),
+        "size": size, "dv01": {m: (side * size * unit_dv01(deal, base[m]) / usdtry if base[m] is not None else None) for m in METHODS},
+        "price": price_text,
+        "npv": npv_block(deal, base, side, size, level, mids, usdtry, kind, typed_price, implied, method) if level is not None else None}
+    if asset == FX:
+        row["points"] = {m: ((mids[m] - deal.fx_rate) * 10000.0 if mids[m] is not None else None) for m in METHODS}
+    else:
+        row["annuity"] = {m: (annuity(deal, base[m]) if base[m] is not None else None) for m in METHODS}
+    return row

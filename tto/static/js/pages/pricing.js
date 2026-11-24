@@ -1,8 +1,10 @@
 // Fiyatlama: one instrument at any start and maturity - TRY OIS, FRA, XCCY, FX forward - priced on the desk's TRY curves
 // both ways (the user's own "Eğri interpolasyonu" first, the other beside): the mid, the DV01 bucket by bucket (each
 // pillar's quote +1 bp, the curve built again on the same method) and, with a price typed, the NPV (tto/pricing.py).
-// What is typed is the user's own - kept with the account, per asset (switching back finds it); the numbers follow the
-// market: every refresh asks again.
+// The price box holds what "Fiyat tipi" says: a rate (an FX forward's outright or points) - or an NPV in TL or $ or an
+// upfront in bp, and the rate that prices to it is solved on the user's curve.  "Toplu fiyatlama" prices a list of lines
+// the same way, off the same curves.  What is typed is the user's own - kept with the account, per asset (switching back
+// finds it); the numbers follow the market: every refresh asks again.
 import { api } from '../api.js';
 import { h, clear, errorToast } from '../ui.js';
 import { num, pct, serialDate } from '../format.js';
@@ -14,6 +16,22 @@ const ASSETS = [
   ['fx', 'FX forward', 'USDTRY / EURTRY outright ve puan: offshore TRY eğrisi ve USD (EUR) OIS faizi'],
 ];
 const METHOD = { boot: 'Bootstrap (Murex)', ppk: 'PPK basamak' };
+// what the price box holds ("Fiyat tipi"), a swap's and an FX forward's: [kind, button, tip, placeholder]
+const KINDS = {
+  rate: [['rate', 'Faiz', 'Sabit oran, % (35,10 = %35,10)', 'boş: mid'],
+    ['npv_tl', 'NPV TL', 'NPV (TL, + lehine) yazın: o NPV\'yi veren sabit faiz eğrinizde çözülür', 'örn. 1.000.000'],
+    ['npv_usd', 'NPV $', 'NPV ($, + lehine; OIS_MAIN!D2\'deki USDTRY ile) yazın: o NPV\'yi veren sabit faiz', 'örn. 25.000'],
+    ['upfront', 'Peşin bp', 'Peşin, nominalin bp\'si (%0,5 = 50 bp; + lehine): o peşini veren sabit faiz', 'örn. 25']],
+  fx: [['outright', 'Outright', 'Forward kur (outright)', 'boş: mid'],
+    ['points', 'Puan', 'Swap puanı: forward = spot + puan / 10.000', 'örn. 290.000'],
+    ['npv_tl', 'NPV TL', 'NPV (TL, + lehine) yazın: o NPV\'yi veren forward kur eğrinizde çözülür', 'örn. 1.000.000'],
+    ['npv_usd', 'NPV $', 'NPV ($, + lehine; OIS_MAIN!D2\'deki USDTRY ile) yazın: o NPV\'yi veren forward kur', 'örn. 25.000']],
+};
+// what the Toplu box shows when empty, a swap's and an FX forward's
+const BULK_PLACEHOLDER = {
+  rate: '1Y\n2Y3M\n12x15\n04.05.2027 04.05.2028\n2Y 38,50',
+  fx: '1M\n18M\n04.05.2028\n1Y 62,50',
+};
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const signed = (v, d) => (isNum(v) ? (v > 0 && Number(v.toFixed(d)) !== 0 ? '+' : '') + num(Number(v.toFixed(d)) === 0 ? 0 : v, d) : '–');
 const tone = (v, d) => (isNum(v) && Number(v.toFixed(d)) !== 0 ? (v > 0 ? 'pos' : 'neg') : '');
@@ -60,8 +78,7 @@ export class PricingPage {
     this.pairSeg = seg('pr-pair', [['USDTRY', 'USDTRY'], ['EURTRY', 'EURTRY']], (v) => send({ pair: v }));
     this.sideSeg = seg('pr-side', [], (v) => send({ side: v }));
     this.sizeKindSeg = seg('pr-size-kind', [], (v) => send({ size_kind: v }));
-    this.priceKindSeg = seg('pr-price-kind', [['outright', 'Outright'], ['points', 'Puan', 'Swap puanı: forward = spot + puan / 10.000']],
-      (v) => send({ price_kind: v }));
+    this.priceKindSeg = seg('pr-price-kind', [], (v) => send({ price_kind: v }));
     const text = (id, key, placeholder, cls) => {
       const el = h('input', { type: 'text', id, class: 'inp' + (cls ? ' ' + cls : ''), placeholder, autocomplete: 'off', spellcheck: 'false' });
       const commit = () => {
@@ -103,11 +120,38 @@ export class PricingPage {
     this.schedTitle = h('h2', null, 'Ödeme takvimi');
     this.schedPanel = h('section', { class: 'panel', id: 'pr-schedule-panel' }, h('header', null, this.schedTitle), this.schedBody);
     this.notes = h('div', { class: 'body pr-notes', id: 'pr-notes' });
-    const notesPanel = h('section', { class: 'panel wide', id: 'pr-notes-panel' }, h('header', null, h('h2', null, 'Konvansiyonlar ve hesap')), this.notes);
+    this.notesPanel = h('section', { class: 'panel wide', id: 'pr-notes-panel' }, h('header', null, h('h2', null, 'Konvansiyonlar ve hesap')), this.notes);
     this.result = h('div', { class: 'panels', id: 'pr-result' },
       h('section', { class: 'panel wide pr-summary' }, h('div', { class: 'pad' }, this.head, this.tiles)),
-      this.bucketPanel, this.schedPanel, notesPanel);
-    this.host.appendChild(h('div', { class: 'panels pricing', id: 'pricing' }, form, this.result));
+      this.bucketPanel, this.schedPanel);
+    // Toplu fiyatlama: a list of lines priced as the instrument above, off the same curves (its own errors line by line)
+    this.bulkIn = h('textarea', { id: 'pr-bulk', class: 'inp pr-bulk-in', rows: '6', spellcheck: 'false', autocomplete: 'off' });
+    this.bulkDirty = false;                   // (typed and not sent yet: a refresh leaves it alone)
+    this.bulkIn.addEventListener('input', () => { this.bulkDirty = true; });
+    this.bulkIn.addEventListener('change', () => this.sendBulk());
+    this.bulkIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.sendBulk(); } });
+    const run = h('button', { type: 'button', class: 'btn primary', id: 'pr-bulk-run', title: 'Satırları fiyatla (Ctrl+Enter)' }, 'Fiyatla');
+    run.addEventListener('click', () => this.sendBulk());
+    this.bulkHint = h('div', { class: 'muted small', id: 'pr-bulk-hint' });
+    this.bulkInfo = h('span', { class: 'muted', id: 'pr-bulk-info' });
+    this.bulkBody = h('div', { class: 'body', id: 'pr-bulk-body' });
+    this.bulkNote = h('div', { class: 'note', id: 'pr-bulk-note' });
+    this.bulkPanel = h('section', { class: 'panel wide', id: 'pr-bulk-panel' },
+      h('header', null, h('h2', null, 'Toplu fiyatlama'), this.bulkInfo),
+      h('div', { class: 'pr-bulk-form' }, this.bulkIn, h('div', { class: 'pr-bulk-side' }, run, this.bulkHint)),
+      this.bulkBody, this.bulkNote);
+    this.host.appendChild(h('div', { class: 'panels pricing', id: 'pricing' }, form, this.result, this.bulkPanel, this.notesPanel));
+  }
+
+  /** The Toplu box sent as it is (the server keeps it with the account, per asset, and prices every line) - once: leaving
+   * the box for "Fiyatla" sends it, the click does not send it again. */
+  sendBulk() {
+    const text = this.bulkIn.value;
+    const now = Date.now();
+    if (this.lastBulk && this.lastBulk.text === text && now - this.lastBulk.at < 1500) return;
+    this.lastBulk = { text, at: now };
+    this.bulkDirty = false;
+    this.send({ bulk: text });
   }
 
   async load() {
@@ -141,10 +185,12 @@ export class PricingPage {
     const fx = asset === 'fx';
     pickSeg(this.assetSeg, asset);
     this.pairField.classList.toggle('hidden', !fx);
-    this.priceKindField.classList.toggle('hidden', !fx);
     this.startField.classList.toggle('hidden', fx);
     pickSeg(this.pairSeg, f.pair || 'USDTRY');
-    pickSeg(this.priceKindSeg, f.price_kind || 'outright');
+    const kinds = KINDS[fx ? 'fx' : 'rate'];
+    const kind = kinds.some((k) => k[0] === f.price_kind) ? f.price_kind : kinds[0][0];
+    this.relabel(this.priceKindSeg, kinds, (v) => this.send({ price_kind: v }));
+    pickSeg(this.priceKindSeg, kind);
     const ccy = fx ? (f.pair === 'EURTRY' ? 'EUR' : 'USD') : 'TL';
     const sides = fx ? [['AL', 'AL', ccy + ' alış (vadede ' + ccy + ' alınır)'], ['SAT', 'SAT', ccy + ' satış']]
       : [['PAY', 'PAY', (asset === 'xccy' ? 'TRY sabit öde' : 'Sabit öde') + ' (faiz yükselince kazanır)'],
@@ -157,14 +203,16 @@ export class PricingPage {
     this.endLabel.textContent = fx ? 'Valör' : asset === 'fra' ? 'Bitiş' : 'Vade';
     this.startIn.placeholder = asset === 'fra' ? '12, 1Y ya da 12x15' : 'Spot';
     this.endIn.placeholder = asset === 'fra' ? '15, 18M ya da tarih' : '1Y, 18M, 2Y3M ya da tarih';
-    this.priceIn.placeholder = 'boş: mid';
-    this.priceIn.title = fx ? (f.price_kind === 'points' ? 'Swap puanı: forward = spot + puan / 10.000' : 'Forward kur (outright)')
-      : 'Faiz, % (35,10 = %35,10)';
+    const k = kinds.find((x) => x[0] === kind);
+    this.priceIn.placeholder = k[3];
+    this.priceIn.title = k[2];
     // a box being typed into is left alone - unless what is in it is what was just sent (the server's reading replaces it)
     for (const [el, key] of [[this.startIn, 'start'], [this.endIn, 'end'], [this.sizeIn, 'size'], [this.priceIn, 'price']]) {
       const sent = this.sent && this.sent.key === key && el.value.trim() === this.sent.value;
       if (document.activeElement !== el || sent) el.value = f[key] || '';
     }
+    this.bulkIn.placeholder = BULK_PLACEHOLDER[fx ? 'fx' : 'rate'];
+    if (!this.bulkDirty) this.bulkIn.value = f.bulk || '';
   }
 
   relabel(box, items, onPick) {
@@ -187,6 +235,8 @@ export class PricingPage {
     this.stamp.textContent = new Date().toLocaleTimeString('tr-TR');
     this.errorLine.textContent = d.error || '';
     this.result.classList.toggle('stale', !!d.error);
+    this.notesPanel.classList.toggle('stale', !!d.error);
+    this.drawBulk(d);                         // (the lines have their own errors: priced whatever the instrument above says)
     if (d.error || !d.label) return;          // (the last numbers stay on the page, dimmed, under the message)
     this.drawHead(d);
     this.drawTiles(d);
@@ -226,12 +276,25 @@ export class PricingPage {
         + num(sz.dv01, 0) + ' $ - kırık vadede kova toplamı ondan biraz ayrılabilir (kotalar 1 bp kayınca bu enstrümanın fiyatı tam 1 bp oynamaz)' }));
     if (d.npv) {
       const n = d.npv;
+      const from = n.from;
+      if (from) {
+        // an NPV / upfront typed: the rate (outright) that prices to it on the user's curve - every number below is at it
+        const typedText = from.kind === 'upfront' ? signed(from.typed, 2) + ' bp' : signed(from.typed, 0) + (from.kind === 'npv_usd' ? ' $' : ' TL');
+        box.appendChild(tile((fx ? 'Outright' : 'Faiz') + ' ← ' + from.text + ' · ' + METHOD[m1], rate(n.level), { big: true, id: 'pr-implied',
+          title: 'Yazılan ' + from.text + ' ' + typedText + ': eğrinizde (' + METHOD[m1] + ') bunu veren ' + (fx ? 'forward kur' : 'sabit faiz')
+            + ' - NPV, DV01 kovaları ve Fiyat − mid bu ' + (fx ? 'kurda' : 'faizde') + '. ' + METHOD[m2] + ' eğrisinde aynı NPV: ' + rate(from.level[m2]) }));
+      }
       box.appendChild(tile('NPV (TL)', signed(n.tl[m1], 0), { id: 'pr-npv-tl', tone: tone(n.tl[m1], 0),
         title: METHOD[m1] + '. ' + METHOD[m2] + ': ' + signed(n.tl[m2], 0) + ' TL. + lehine, − aleyhine' }));
       box.appendChild(tile('NPV ($)', signed(n.usd[m1], 0), { id: 'pr-npv-usd', tone: tone(n.usd[m1], 0),
         title: METHOD[m2] + ': ' + signed(n.usd[m2], 0) + ' $ (USDTRY ' + num(d.usdtry, 4) + ')' }));
+      if (n.upfront) {
+        box.appendChild(tile('Peşin (bp)', signed(n.upfront[m1], 2), { id: 'pr-upfront', tone: tone(n.upfront[m1], 2),
+          title: 'NPV / nominal · 10.000: swap\'ın değeri nominalin bp\'si olarak (+ lehine: karşılığında bu peşini siz ödersiniz). '
+            + METHOD[m2] + ': ' + signed(n.upfront[m2], 2) + ' bp' }));
+      }
       box.appendChild(tile('Fiyat − mid (' + n.unit + ')', signed(n.dist[m1], fx ? 1 : 2), { id: 'pr-dist',
-        title: 'Yazılan fiyat ' + (fx ? num(n.level, 4) : pct(n.level, 4)) + ' · ' + METHOD[m2] + ' mid\'ine: ' + signed(n.dist[m2], fx ? 1 : 2) }));
+        title: (from ? 'Çözülen fiyat ' : 'Yazılan fiyat ') + (fx ? num(n.level, 4) : pct(n.level, 4)) + ' · ' + METHOD[m2] + ' mid\'ine: ' + signed(n.dist[m2], fx ? 1 : 2) }));
     }
   }
 
@@ -296,8 +359,86 @@ export class PricingPage {
     line(d.texts.dv01);
     if (d.texts.short) line(d.texts.short);
     if (d.npv) line(d.texts.npv);
+    if (d.texts.price) line(d.texts.price);
     if (d.size.kind === 'dv01') line('Büyüklük: DV01 ' + num(d.size.typed, 0) + ' $ → ' + d.size.rule + '.');
     for (const e of d.errors || []) line(e, 'pr-warn');
+  }
+
+  /** Toplu fiyatlama: one row a line - the mid on both curves, the annuity (an FX forward's points), the size and its
+   * DV01 and, with a price on the line, the NPV (or the rate an NPV / upfront gives) - or the line's own error. */
+  drawBulk(d) {
+    const b = d.bulk;
+    const body = clear(this.bulkBody);
+    if (!b) {
+      this.bulkInfo.textContent = '';
+      this.bulkHint.textContent = '';
+      this.bulkNote.textContent = '';
+      return;
+    }
+    const fx = b.asset === 'fx';
+    const [m1, m2] = b.methods;
+    const asset = (ASSETS.find((a) => a[0] === b.asset) || [0, b.asset])[1];
+    const size = b.size_kind === 'dv01' ? 'DV01 ' + b.size + ' $' : (fx ? 'tutar ' : 'nominal ') + b.size;
+    this.bulkInfo.textContent = asset + ' · ' + b.side + ' · ' + size + ' · fiyat tipi ' + b.kind_text + ' · ' + (b.family === 'off' ? 'offshore' : 'OIS')
+      + ' eğrisi, ' + METHOD[m1] + ' önde';
+    this.bulkHint.textContent = b.hint;
+    this.bulkNote.textContent = b.text;
+    if (!b.rows.length) {
+      body.appendChild(h('div', { class: 'muted pad', id: 'pr-bulk-empty' }, 'Satır yok: kutuya her satıra bir enstrüman yazın ya da yapıştırın, sonra "Fiyatla".'));
+      return;
+    }
+    const priced = b.rows.some((r) => r.npv);
+    const solved = b.rows.some((r) => r.npv && r.npv.from);
+    const rate = (v) => (isNum(v) ? (fx ? num(v, 4) : pct(v, 4)) : '–');
+    const other = (what, v) => what + ' · ' + METHOD[m2] + ': ' + v;
+    const heads = [['#', ''], ['Satır', 'l'], [fx ? 'Valör' : 'Enstrüman', 'l'], [(fx ? 'Outright · ' : 'Mid · ') + METHOD[m1], ''],
+      [(fx ? 'Outright · ' : 'Mid · ') + METHOD[m2], ''], ['PPK − Bootstrap (' + (fx ? 'puan' : 'bp') + ')', ''],
+      [fx ? 'Puan' : 'Annuity', ''], [fx ? 'Tutar' : 'Nominal (TL)', ''], ['DV01 ($)', '']];
+    if (priced) {
+      heads.push(['Fiyat', '']);
+      if (solved) heads.push([(fx ? 'Outright ← ' : 'Faiz ← ') + b.kind_text, '']);
+      heads.push(['NPV (TL)', ''], ['NPV ($)', '']);
+      if (!fx) heads.push(['Peşin (bp)', '']);
+      heads.push(['Fiyat − mid (' + (fx ? 'puan' : 'bp') + ')', '']);
+    }
+    const t = h('table', { class: 'plain', id: 'pr-bulk-table' },
+      h('tr', null, ...heads.map(([text, cls]) => h('th', { class: cls || null }, text))));
+    b.rows.forEach((r, i) => {
+      const tr = h('tr', { class: r.error ? 'err' : null });
+      tr.dataset.line = String(i);
+      tr.appendChild(h('td', { class: 'muted' }, String(r.n)));
+      tr.appendChild(h('td', { class: 'l mono' }, r.line));
+      if (r.error) {
+        tr.appendChild(h('td', { class: 'l errtxt', colspan: String(heads.length - 2) }, r.error));
+        t.appendChild(tr);
+        return;
+      }
+      const when = serialDate(r.start) + ' → ' + serialDate(r.end) + ' · ' + num(r.days, 0) + ' gün';
+      tr.appendChild(h('td', { class: 'l', title: when }, fx ? serialDate(r.end) : r.label));
+      tr.appendChild(h('td', null, rate(r.mid[m1])));
+      tr.appendChild(h('td', null, rate(r.mid[m2])));
+      tr.appendChild(h('td', null, signed(r.diff, fx ? 1 : 2)));
+      tr.appendChild(fx ? h('td', { title: other('Puan', num(r.points[m2], 1)) }, num(r.points[m1], 1))
+        : h('td', { title: other('Annuity', num(r.annuity[m2], 6)) }, num(r.annuity[m1], 6)));
+      tr.appendChild(h('td', null, num(r.size, 0)));
+      tr.appendChild(h('td', { class: tone(r.dv01[m1], 0) === 'pos' ? 'buy' : tone(r.dv01[m1], 0) === 'neg' ? 'sell' : null,
+        title: 'Büyüklüğün DV01\'i (+ = faizler yükselince kazanır). ' + other('DV01', signed(r.dv01[m2], 0)) }, signed(r.dv01[m1], 0)));
+      if (priced) {
+        const n = r.npv;
+        tr.appendChild(h('td', { class: 'mono' }, r.price || ''));
+        if (solved) {
+          tr.appendChild(h('td', { title: n && n.from ? other(fx ? 'Outright' : 'Faiz', rate(n.from.level[m2])) : null }, n && n.from ? rate(n.level) : ''));
+        }
+        const cell = (v, d, title) => h('td', { class: tone(v, d) || null, title: title || null }, n ? signed(v, d) : '');
+        tr.appendChild(cell(n && n.tl[m1], 0, n ? other('NPV', signed(n.tl[m2], 0) + ' TL') : null));
+        tr.appendChild(cell(n && n.usd[m1], 0, n ? other('NPV', signed(n.usd[m2], 0) + ' $') : null));
+        if (!fx) tr.appendChild(cell(n && n.upfront[m1], 2, n ? other('Peşin', signed(n.upfront[m2], 2) + ' bp') : null));
+        tr.appendChild(cell(n && n.dist[m1], fx ? 1 : 2, n ? other('Fiyat − mid', signed(n.dist[m2], fx ? 1 : 2)) : null));
+      }
+      t.appendChild(tr);
+    });
+    body.appendChild(t);
+    if (b.left_out) body.appendChild(h('div', { class: 'muted pad' }, b.left_out + ' satır daha var: en çok ' + b.rows.length + ' satır fiyatlanır.'));
   }
 
   destroy() {}

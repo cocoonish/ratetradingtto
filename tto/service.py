@@ -7847,9 +7847,11 @@ class Service(object):
 
     def pricing(self, user: Optional[str], payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Fiyatlama: the user's instrument - TRY OIS, FRA, XCCY, FX forward at any start and maturity - on the TRY curves
-        both ways, their own curve setting first: the mid, the DV01 bucket by bucket and, with a price, the NPV
-        (:mod:`tto.pricing`).  ``payload``: what they typed (kept with their account, per asset); none: what they typed
-        last.  Inputs it cannot price come back with ``error`` - the page says it beside them, the inputs kept."""
+        both ways, their own curve setting first: the mid, the DV01 bucket by bucket and, with a price, the NPV - a price
+        typed as an NPV or an upfront gives the rate (outright) that prices to it -, and the Toplu box's lines (``bulk``)
+        off the same curves (:mod:`tto.pricing`).  ``payload``: what they typed (kept with their account, per asset); none:
+        what they typed last.  Inputs it cannot price come back with ``error`` - the page says it beside them, the inputs
+        kept."""
         key = self.require_user(user)
         inputs = pr.clean_inputs(payload, self.store.get(self.PRICING_KEY + key))
         if payload is not None:
@@ -7872,9 +7874,16 @@ class Service(object):
         idx = book.model.sheet_index
         try:
             mk = pr.read(lambda sheet, r, c: base.get(idx[sheet], r, c))
-            out.update(pr.price(inputs, pr.Curves(cv, mk, self.__dict__.setdefault("_pricing_kept", {})), method))
         except pr.PricingError as exc:
             out["error"] = str(exc)
+            return out
+        curves = pr.Curves(cv, mk, self.__dict__.setdefault("_pricing_kept", {}))
+        try:
+            out.update(pr.price(inputs, curves, method))
+        except pr.PricingError as exc:
+            out["error"] = str(exc)
+        # the Toplu box: its lines off the same curves (each its own error; the page's instrument's error not theirs)
+        out["bulk"] = pr.bulk(inputs, curves, method)
         return out
 
     # ================================================================== Swaption (swaption.py)

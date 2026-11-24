@@ -1126,6 +1126,12 @@ class TradeBook(object):
                            for x in v["risk"] if isinstance(x, dict)]
         if greeks and isinstance(v.get("greeks"), dict):
             out["greeks"] = {str(k): _f(x) for k, x in v["greeks"].items() if _f(x) is not None}
+        if greeks and isinstance(v.get("vols"), dict):
+            # (an FX option's vol used and the one its premium implies on the same market - the row's "prim vol"; a "now"
+            # number like the greeks: the daily closes do not keep it)
+            pv = v["vols"]
+            out["vols"] = {"used": _f(pv.get("used")), "premium": _f(pv.get("premium")),
+                           "model": str(pv.get("model") or "") or None, "why": str(pv.get("why") or "") or None}
         if isinstance(v.get("coupon_info"), dict):
             out["coupon_info"] = v["coupon_info"]            # (a swap's coupons in a line: how many ended, the last, the next)
         legs = v.get("legs")
@@ -2196,8 +2202,32 @@ class TradeBook(object):
             # (what did read goes back too: the form's defaults follow a pair, a trade date or an expiry typed)
             return {"ok": False, "fields": f.errors, "echo": f.echo, "trade": t}
         word = "PPK" if t.get("product") == "ois" else "FOMC"
-        return {"ok": True, "trade": t, "text": describe(t, word), "price_text": price_text(t),
-                "legs": [leg_text(lg, t) for lg in t.get("legs") or []], "echo": f.echo}
+        out = {"ok": True, "trade": t, "text": describe(t, word), "price_text": price_text(t),
+               "legs": [leg_text(lg, t) for lg in t.get("legs") or []], "echo": f.echo}
+        if t.get("product") == "fxopt":
+            out["vol"] = self.premium_vol(t)
+        return out
+
+    def premium_vol(self, t: Dict[str, Any]) -> Dict[str, Any]:
+        """An FX option's premium as a vol, for the form (tradevalue.premium_vol): the vol at which it is worth its premium
+        now - the MTM is 0 at it -, beside the smile's at its strike (or the vol typed by hand) and the premium that vol
+        gives; on the form's market (Bootstrap, at most ``FORM_MARKET_SECONDS`` old - its DV01 sizing's).  Never raises:
+        ``ok`` False with the reason."""
+        try:
+            got = tv.premium_vol(t, self._form_market())
+        except Exception as exc:  # noqa: BLE001 - the form says it, the rest of the form works
+            return {"ok": False, "why": "hesaplanamadı: %s" % (str(exc)[:200] or type(exc).__name__)}
+        if not isinstance(got, dict):
+            return {"ok": False, "why": "hesaplanamadı"}
+        out: Dict[str, Any] = {}
+        for k, v in got.items():
+            if isinstance(v, float):
+                out[k] = _f(v)                           # (a number that cannot go out as JSON: none)
+            elif isinstance(v, dict):
+                out[k] = {kk: _f(vv) if isinstance(vv, float) else vv for kk, vv in v.items()}
+            else:
+                out[k] = v
+        return out
 
     def _read(self, raw: Any, lang: str) -> Dict[str, Any]:
         t, f = self.normalize(raw if isinstance(raw, dict) else {}, lang)

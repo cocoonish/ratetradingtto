@@ -2866,6 +2866,53 @@ async function clipAfter(page, action) {
       (await page.textContent('#pr-mid .v')) === prFx.mid.boot.toFixed(4).replace('.', ',') && prFx.mid.boot > prFx.fx.spot
       && Math.abs(prFx.fx.points.boot - (prFx.mid.boot - prFx.fx.spot) * 1e4) < 1e-6
       && /^\+/.test(await page.textContent('#pr-dv01 .v')), { mid: prFx.mid, points: prFx.fx.points });
+    // the ways back (the desk, 24.11.2026 - item 4): an upfront or an NPV typed gives the rate that prices to it on the
+    // user's curve; the Toplu box prices a list of lines off the page's curves
+    await page.click('#pr-asset button[data-v="ois"]');
+    await prWait('^TRY OIS 1Y');
+    const prKinds = await page.evaluate(() => [...document.querySelectorAll('#pr-price-kind button')].map((b) => b.dataset.v).join(' '));
+    await page.click('#pr-price-kind button[data-v="upfront"]');
+    await page.waitForFunction(() => (document.querySelector('#pr-price-kind button.on') || { dataset: {} }).dataset.v === 'upfront', null, { timeout: 30000 });
+    await prType('#pr-price', '25');
+    await page.waitForSelector('#pr-implied', { timeout: 60000 }).catch(() => null);
+    const prUp = await prApi();
+    const prUpTiles = await page.evaluate(() => ({ implied: (document.querySelector('#pr-implied .v') || {}).textContent,
+      label: (document.querySelector('#pr-implied .l') || {}).textContent || '', upfront: (document.querySelector('#pr-upfront .v') || {}).textContent }));
+    check('Fiyatlama\'s ways back: "Fiyat tipi" Faiz / NPV TL / NPV $ / Peşin bp; 25 bp upfront typed on a payer: the fixed rate that prices to it on '
+      + 'the user\'s curve (under the mid), the upfront read back', prKinds === 'rate npv_tl npv_usd upfront' && !!prUp.npv && !!prUp.npv.from
+      && prUp.npv.from.kind === 'upfront' && Math.abs(prUp.npv.upfront.boot - 25) < 1e-9 && prUp.npv.level === prUp.npv.from.level.boot
+      && prUpTiles.implied === prPct(prUp.npv.level) && /^Faiz ← Peşin bp · Bootstrap/.test(prUpTiles.label) && prUpTiles.upfront === '+25,00'
+      && prUp.npv.level < prUp.mid.boot, { prKinds, npv: prUp.npv, prUpTiles });
+    await page.click('#pr-price-kind button[data-v="npv_tl"]');
+    await page.waitForFunction(() => /NPV TL/.test((document.querySelector('#pr-implied .l') || {}).textContent || ''), null, { timeout: 60000 })
+      .catch(() => null);
+    await prType('#pr-price', '-1.000.000');
+    await page.waitForFunction(() => ((document.querySelector('#pr-npv-tl .v') || {}).textContent || '') === '-1.000.000', null, { timeout: 60000 })
+      .catch(() => null);
+    const prNpvBack = await prApi();
+    check('... an NPV of -1.000.000 TL typed: its rate (a payer\'s over the mid), the NPV read back on the page; PPK basamak\'s rate for it beside',
+      !!prNpvBack.npv && !!prNpvBack.npv.from && Math.abs(prNpvBack.npv.tl.boot + 1e6) < 1e-3 && prNpvBack.npv.from.kind === 'npv_tl'
+      && prNpvBack.npv.level > prNpvBack.mid.boot && typeof prNpvBack.npv.from.level.ppk === 'number'
+      && (await page.textContent('#pr-npv-tl .v').catch(() => '')) === '-1.000.000', { npv: prNpvBack.npv });
+    await page.fill('#pr-bulk', '1Y\n2Y3M\n12x15\n04.05.2027 04.05.2028\n2Y -500k\nyok');
+    await page.click('#pr-bulk-run');
+    await page.waitForFunction(() => document.querySelectorAll('#pr-bulk-table tr[data-line]').length === 6, null, { timeout: 60000 }).catch(() => null);
+    const prBulk = (await prApi()).bulk;
+    const prBulkRows = await page.evaluate(() => [...document.querySelectorAll('#pr-bulk-table tr[data-line]')].map((tr) => ({
+      err: tr.classList.contains('err'), cells: [...tr.children].map((td) => td.textContent) })));
+    check('... Toplu fiyatlama: six lines priced as the page\'s instrument off its curves - 1Y the page\'s own mid, 12x15 the FRA\'s, two dates, '
+      + '"2Y -500k" the rate for that NPV; a line it cannot read says why on its own row',
+      prBulk.rows.length === 6 && prBulkRows.length === 6 && prBulk.rows[0].mid.boot === prNpvBack.mid.boot
+      && Math.abs(prBulk.rows[2].mid.boot - prF.mid.boot) < 1e-15
+      && prBulk.rows[3].label === 'TRY OIS 04.05.2027 × 04.05.2028' && Math.abs(prBulk.rows[4].npv.tl.boot + 5e5) < 1e-3
+      && prBulk.rows[4].npv.from.kind === 'npv_tl' && /^satır okunamadı/.test(prBulk.rows[5].error) && prBulkRows[5].err && !prBulkRows[0].err
+      && prBulkRows[0].cells[3] === prPct(prBulk.rows[0].mid.boot) && prBulkRows[2].cells[2] === 'TRY OIS 1Y × 15M',
+      { rows: prBulk.rows.map((r) => r.label || r.error), prBulkRows: prBulkRows.map((r) => r.cells.slice(0, 5).join(' | ')) });
+    await shot(page, '16c-fiyatlama-toplu');
+    await prType('#pr-price', '');
+    await page.waitForFunction(() => !document.getElementById('pr-implied'), null, { timeout: 60000 }).catch(() => null);
+    await page.click('#pr-price-kind button[data-v="rate"]');
+    await page.waitForFunction(() => (document.querySelector('#pr-price-kind button.on') || { dataset: {} }).dataset.v === 'rate', null, { timeout: 30000 });
     await page.click('#pr-asset button[data-v="fra"]');
     await prWait('^FRA 12x15');
 
@@ -6058,6 +6105,55 @@ async function clipAfter(page, action) {
     check('... "Quant\'tan": the list keeps only the trades taken from a line; its table per family: count (desk / own), open, closed, P&L, hits',
       quantView.rows === 1 && /^Trend1 \(0 \/ 1\)10/.test(quantView.fam), quantView);
     await shot(page, 'trades');
+    // an FX option's premium as a vol beside the screen's smile (the desk, 24.11.2026 - item 11): in the form while it is
+    // typed, on the row after "MTM yenile" (the trade made for the row is deleted again; the form saves nothing)
+    const optStrike = String(Math.round(prFx.fx.spot * 1.04));
+    await page.click('#trades-new');
+    await page.waitForSelector('#trade-form #tf-trade_date');
+    await page.click('#tf-product button[data-v="fxopt"]');
+    await page.waitForSelector('#tf-strike');
+    await page.fill('#tf-pair', 'USDTRY');
+    await page.click('#tf-call_put button[data-v="call"]');
+    await page.click('#tf-side button[data-v="B"]');
+    await page.fill('#tf-strike', optStrike);
+    await page.fill('#tf-expiry', '1A');
+    await page.fill('#tf-notional', '10m');
+    await page.fill('#tf-price', '5m');
+    await page.waitForFunction(() => /^Primin vol'ü|^Bu prime hiçbir vol/.test((document.getElementById('tf-vol') || {}).textContent || ''), null, { timeout: 20000 })
+      .catch(() => null);
+    const optLine = await page.evaluate(() => (document.getElementById('tf-vol') || {}).textContent || '');
+    await shot(page, 'trades-fxopt-form');
+    const optParts = /^Primin vol'ü ([\d,]+) · (?:smile \(([A-Z]+), strike'ta\) ([\d,]+) · fark ([+-]?[\d,]+) vol · smile'la prim [\d.]+ TRY|smile yok)/.exec(optLine);
+    await page.fill('#tf-price', '5.000m');
+    await page.waitForFunction(() => /^Bu prime hiçbir vol ulaşmıyor/.test((document.getElementById('tf-vol') || {}).textContent || ''), null, { timeout: 20000 })
+      .catch(() => null);
+    const optNone = await page.evaluate(() => (document.getElementById('tf-vol') || {}).textContent || '');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('trade-form'), null, { timeout: 10000 }).catch(() => null);
+    check('FX option in the form: "Primin vol\'ü" - the vol its premium implies on today\'s market - beside the smile\'s at the strike and their '
+      + 'difference (or "smile yok"); a premium over the option\'s ceiling: no vol reaches it, said why',
+      !!optParts && (!optParts[2] || Math.abs(trNumber(optParts[4]) - (trNumber(optParts[1]) - trNumber(optParts[3]))) < 0.011)
+      && /^Bu prime hiçbir vol ulaşmıyor: prim, opsiyonun alabileceği en yüksek değerin/.test(optNone), { optLine, optNone, optStrike });
+    const optAdd = await api(page, 'ayşe yilmaz', 'POST', '/api/trades', { scope: 'personal', product: 'fxopt', pair: 'USDTRY', trade_date: tradesToday,
+      settle_date: '+1', call_put: 'call', side: 'B', strike: optStrike, expiry: '1A', notional: '10m', price: '5m', premium_ccy: 'TRY', manual_price: '15' });
+    const optSel = '#trades-open tr[data-id="' + (optAdd.json && optAdd.json.id) + '"]';
+    await page.waitForSelector(optSel, { timeout: 20000 }).catch(() => null);
+    await page.click('#trades-mtm');
+    await page.waitForSelector(optSel + ' .pvol', { timeout: 30000 }).catch(() => null);
+    const optRow = await page.evaluate((sel) => {
+      const p = document.querySelector(sel + ' .pvol');
+      return p ? { text: p.parentNode.textContent, tip: p.parentNode.title } : { text: '', tip: '' };
+    }, optSel);
+    await shot(page, 'trades-fxopt-row');
+    const optVal = ((((await api(page, 'ayşe yilmaz', 'GET', '/api/trades?scope=personal')).json || {}).mtm || {}).values || {})[String(optAdd.json && optAdd.json.id)] || {};
+    const optVols = optVal.vols || {};
+    const optFix = (v) => (typeof v === 'number' ? v.toFixed(2).replace('.', ',') : '');
+    const optDel = await api(page, 'ayşe yilmaz', 'DELETE', '/api/trades/' + (optAdd.json && optAdd.json.id));
+    await page.waitForFunction((sel) => !document.querySelector(sel), optSel, { timeout: 20000 }).catch(() => null);
+    check('... on the row after "MTM yenile": under the vol used (15, typed) "prim vol" and its difference - the valuation\'s vols - its tip saying what it is',
+      optAdd.status === 200 && optVal.ok && Math.abs(optVols.used - 15) < 1e-9 && typeof optVols.premium === 'number'
+      && optRow.text.endsWith('prim vol ' + optFix(optVols.premium) + ' (' + (optVols.premium - 15 > 0 ? '+' : '') + optFix(optVols.premium - 15) + ')')
+      && /MTM'in 0 olduğu vol/.test(optRow.tip) && optDel.status === 200, { optRow, optVols, why: optVal.why, del: optDel.status });
 
     // ------------------------------------------------------------------ Prop: the top bar's calculator and prop risk
     console.log('prop');

@@ -189,6 +189,37 @@ function greeksText(g) {
   return Object.keys(g).map((k) => (names[k] || k) + ' ' + num(g[k], Math.abs(g[k]) < 10 ? 4 : 0)).join(' · ');
 }
 
+const PREMIUM_VOL_TIP = 'Primin vol\'ü: bugünkü spot, forward ve iskontoyla (değerlemenin kendi girdileri) opsiyonu tam primine '
+  + 'eşitleyen Garman-Kohlhagen vol\'ü - MTM\'in 0 olduğu vol. İşlem günü bayinin primindeki vol\'dür; sonra spot ve zaman '
+  + 'değiştikçe değişir.';
+
+/** The form's line for an FX option (``/api/trades/check``'s ``vol``): the vol its premium implies, beside the vol the
+ * valuation uses - the smile's at the strike, or the one typed - and the premium that vol gives; or why no vol reaches
+ * the premium. */
+function premiumVolLine(v) {
+  const el = h('div', { class: 'tf-vol', id: 'tf-vol', title: PREMIUM_VOL_TIP });
+  if (!v || !v.ok) {
+    el.classList.add('muted');
+    el.textContent = 'Primin vol\'ü: ' + ((v && v.why) || 'hesaplanamadı');
+    return el;
+  }
+  if (typeof v.vol !== 'number') {
+    el.classList.add('errtxt');
+    el.textContent = 'Bu prime hiçbir vol ulaşmıyor: ' + (v.vol_why || '');
+    return el;
+  }
+  const bits = ['Primin vol\'ü ' + num(v.vol, 2)];
+  if (typeof v.used === 'number') {
+    bits.push((v.model === 'elle vol' ? 'elle vol ' : 'smile' + (v.model ? ' (' + v.model.toUpperCase() + ', strike\'ta) ' : ' ')) + num(v.used, 2));
+    bits.push('fark ' + signed(v.vol - v.used, 2) + ' vol');
+    if (typeof v.used_premium === 'number') bits.push((v.model === 'elle vol' ? 'o vol\'le prim ' : 'smile\'la prim ') + num(v.used_premium, 0) + ' ' + v.premium_ccy);
+  } else {
+    bits.push('smile yok' + (v.used_why ? ': ' + v.used_why : ''));
+  }
+  el.textContent = bits.join(' · ');
+  return el;
+}
+
 export class TradesPage {
   constructor(host, ctx) {
     this.host = host;
@@ -524,7 +555,7 @@ export class TradesPage {
     tr.appendChild(this.whatCell(it));
     tr.appendChild(td(isoToTr(it.trade_date), null, 'Valör ' + isoToTr(it.settle_date)));
     tr.appendChild(td(it.price_text));
-    tr.appendChild(td(v && v.ok ? (v.price_text || num(v.price_now, 4)) : '', null, v && v.ok && it.fields && it.fields.manual_price != null ? 'elle fiyat' : null));
+    tr.appendChild(this.nowCell(it, v));
     tr.appendChild(this.levelsCell(it));
     if (v && !v.ok) tr.appendChild(td(v.why || 'değerlenemedi', 'muted why', v.why || ''));
     else {
@@ -542,6 +573,28 @@ export class TradesPage {
     if (desk) tr.appendChild(td(it.created_by_name || '', 'l muted'));
     tr.appendChild(this.actions(it));
     return tr;
+  }
+
+  /** "Güncel": the price now as the valuation reads it - for an FX option its vol (the smile's at the strike, or the one
+   * typed) and under it the vol its premium implies on the same market ("prim vol": the MTM is 0 at it). */
+  nowCell(it, v) {
+    const ok = v && v.ok;
+    const cell = td(ok ? (v.price_text || num(v.price_now, 4)) : '', null, ok && it.fields && it.fields.manual_price != null ? 'elle fiyat' : null);
+    const pv = ok && it.product === 'fxopt' ? v.vols : null;
+    if (pv) {
+      const has = typeof pv.premium === 'number';
+      const diff = has && typeof pv.used === 'number' ? ' (' + signed(pv.premium - pv.used, 2) + ')' : '';
+      cell.appendChild(h('div', { class: 'muted small pvol' }, has ? 'prim vol ' + num(pv.premium, 2) + diff : 'prim vol yok'));
+      const tip = [PREMIUM_VOL_TIP];
+      if (has && typeof pv.used === 'number') {
+        tip.push('Prim vol ' + num(pv.premium, 2) + ' · ' + (pv.model === 'elle vol' ? 'elle vol ' : 'smile ') + num(pv.used, 2)
+          + ' · fark (prim − ' + (pv.model === 'elle vol' ? 'elle' : 'smile') + ') ' + signed(pv.premium - pv.used, 2) + ' vol');
+      }
+      if (!has && pv.why) tip.push(pv.why);
+      if (it.fields && it.fields.manual_price != null) tip.push('elle fiyat (vol)');
+      cell.title = tip.join('\n');
+    }
+    return cell;
   }
 
   /** The trade in the desk's words - its book and note, and the quant line it was taken from. */
@@ -1555,6 +1608,8 @@ class TradeForm {
     if (res.ok) {
       this.previewEl.appendChild(h('div', { class: 'tf-text', id: 'tf-text' }, res.text));
       for (const lg of res.legs || []) this.previewEl.appendChild(h('div', { class: 'muted' }, '↳ ' + lg));
+      // an FX option: its premium as a vol, beside the screen's smile (a dealer's premium checked before it is saved)
+      if (res.vol) this.previewEl.appendChild(premiumVolLine(res.vol));
     } else {
       this.previewEl.appendChild(h('div', { class: 'muted' }, 'Eksik ya da hatalı alanları doldurun.'));
     }
