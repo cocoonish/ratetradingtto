@@ -122,6 +122,11 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   (the table's inverse formulas: one implementation, as `extras.fwd_outright` / `fwd_rate`); the view declares the group;
   the tests cover each member typed -> the others, exact round trips, the last typed wins, Delete, a paste, a scenario,
   the values typed before - and rows that move (`meetings.py`, `rowkeys.py`) must move the stores too.
+- **Calculators of a workbook sheet** (`extras.TW_HUBS`: Hesaplayıcılar, DV01 Risk's scenario P&L): one `_BUILDERS` entry
+  per calculator (a block the workbook changed is left out by itself). Each has a hub - the input its block computes
+  from -: the other members keep their workbook formula wrapped in their store, the hub is its store, else the value the
+  typed member gives (the block's formula solved), else its old default (the file's constant, or its formula default when
+  it stays in place). A copyable calculator keeps every member in a store, so a temporary copy is never refused.
 
 ## Books and the formula engine
 

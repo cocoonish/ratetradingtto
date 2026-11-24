@@ -4162,6 +4162,194 @@ def _tto_move_back(model: Model) -> None:
         b.set(out, '=IFERROR(IF(N(%s)>0,%s/SQRT($O$37/$O$38),""),"")' % ("$%s$%s" % (typed[0], typed[1:]), move), fmt="0.00%", bold=True)
 
 
+# ---------------------------------------------------------------------------------------------- calculators: two-way
+#: The calculators of Hesaplayıcılar (the Calculators sheet) and DV01 Risk's scenario P&L, two-way (tto/twoway.py; the
+#: desk, 24.11.2026: "hangisine ben girdiysem diğerini hesaplasın ... Bu söylediklerin ve tüm tablolar bu şekilde olmalı,
+#: kolay çalışmamız için"): any value of a calculator can be typed - the one typed last stands, the others are worked out
+#: from it with the block's own formulas and their exact inverses.
+#:
+#: Each calculator has a **hub**, the input its block computes from (Implied Move's Volatilite, Basit → Bileşik's Basit,
+#: DF to Rate's DF ...).  Every other member keeps its workbook formula, wrapped: ``IF(ISBLANK(<its store>), <formula>,
+#: <its store>)``; the hub is ``IF(ISBLANK(<its store>), <the hub the typed member gives - the block's formula solved for
+#: it -, else its old default>, <its store>)``.  The stores are blank inputs of the twoway group, in one column per
+#: calculator, each on its member's row (a hidden helper table of the page shows them).  A copyable calculator keeps every
+#: member in a store (a temporary copy works fully then: mechanism.md) - a value typed into its hub before it was two-way
+#: is its store's at the user's next read (twoway.TwoWay.adopt).  A hub kept **in place** (``own``: the top band's
+#: Forward, DV01's shocks - inputs of tables no copy is made of) stays the page's input: its default is the value the typed
+#: member gives, else what it was (the market's forward, the file's shock), and what users typed there keeps its meaning.
+#: A hub's old constant default is the workbook's value of the cell, as the block showed it.
+class TwHub(object):
+    """One two-way calculator of a workbook sheet: its hub and the members worked out from it."""
+
+    __slots__ = ("name", "sheet", "col", "hub", "own", "members", "captions")
+
+    def __init__(self, name: str, sheet: str, col: str, hub: str, own: bool,
+                 members: Sequence[Tuple[str, str, str]], captions: Sequence[Tuple[str, str]]):
+        self.name = name                    # the addition's name (the page's table)
+        self.sheet = sheet
+        self.col = col                      # the column of its stores, each on its member's row
+        self.hub = hub                      # the input the block computes from
+        self.own = own                      # the hub kept in place (no store of its own)
+        self.members = tuple(members)       # (cell, what its workbook formula holds, the hub from {x} typed in it)
+        self.captions = tuple(captions)     # (cell, text) the block is checked by
+
+    def store(self, cell: str, fixed: bool = False) -> str:
+        """Where a value typed into ``cell`` is kept (``fixed``: as an absolute reference)."""
+        row = re.sub(r"^[A-Z]+", "", cell)
+        return ("$%s$%s" if fixed else "%s%s") % (self.col, row)
+
+    def cells(self) -> List[str]:
+        return [self.hub] + [m for m, _, _ in self.members]
+
+
+_SQ = "SQRT($O$37/$O$38)"                  # Implied Move's √(Gün / Gün Basis)
+TW_HUBS = (
+    # Ana girdiler (top band): Forward (the market's forward until typed) - its difference to the spot, its points
+    TwHub("Ana girdiler iki yönlü", "Calculators", "AH", "AA10", True,
+          (("AA11", "AA10-AA9", "$AA$9+{x}"), ("AA12", "AA11*10000", "$AA$9+{x}/10000")),
+          (("Z9", "Spot"), ("Z10", "Forward"))),
+    TwHub("Basit → Bileşik iki yönlü", "Calculators", "AI", "O12", False,
+          (("O15", "((1+O12*O14/O13)^(O13/O14)-1)", "((1+{x})^($O$14/$O$13)-1)*$O$13/$O$14"),),
+          (("N12", "Basit"), ("N13", "Gün Basis"), ("N14", "Gün"), ("N15", "Bileşik"))),
+    TwHub("Bileşik → Basit iki yönlü", "Calculators", "AJ", "R12", False,
+          (("R15", "(((R12+1)^(1/(R13/R14)))-1)*(R13/R14)", "(1+{x}*$R$14/$R$13)^($R$13/$R$14)-1"),),
+          (("Q12", "Bileşik"), ("Q13", "Gün Basis"), ("Q14", "Gün"), ("Q15", "Basit"))),
+    TwHub("DF to Rate iki yönlü", "Calculators", "AK", "R38", False,
+          (("R39", "((1/R38)-1)/((R37-R36)/R41)", "1/(1+{x}*($R$37-$R$36)/$R$41)"),
+           ("R40", "-LN(R38)/((R37-R36)/R41)", "EXP(-{x}*($R$37-$R$36)/$R$41)")),
+          (("Q38", "DF"), ("Q39", "Simple"), ("Q40", "Continous"), ("Q41", "Gün Basis"))),
+    TwHub("Exponential faizden fiyat iki yönlü", "Calculators", "AL", "O8", False,
+          (("O9", "O7*EXP(O8*O6/360)", "LN({x}/$O$7)*360/$O$6"),),
+          (("N3", "Interest 2 Price"), ("N8", "Interest"), ("N9", "Forward"))),
+    TwHub("Exponential fiyattan faiz iki yönlü", "Calculators", "AM", "R9", False,
+          (("R8", "LN(R9/R7)*360/R6", "$R$7*EXP({x}*$R$6/360)"),),
+          (("Q3", "Price 2 Interest"), ("Q8", "Interest"), ("Q9", "Forward"))),
+    TwHub("Simple faizden fiyat iki yönlü", "Calculators", "AN", "U8", False,
+          (("U9", "U7+U7*U8*U6/360", "({x}/$U$7-1)*360/$U$6"),),
+          (("T3", "Interest 2 Price"), ("T8", "Interest"), ("T9", "Forward"))),
+    TwHub("Simple fiyattan faiz iki yönlü", "Calculators", "AO", "X9", False,
+          (("X8", "((X9-X7)/X7)*360/X6", "$X$7*(1+{x}*$X$6/360)"),),
+          (("W3", "Price 2 Interest"), ("W8", "Interest"), ("W9", "Forward"))),
+    # Implied Move: Volatilite - the move (% of the spot), the upper and lower bound, the move in pips
+    TwHub("Implied Move iki yönlü", "Calculators", "AP", "O39", False,
+          (("O40", "SQRT(O37/O38)*O39", "{x}/" + _SQ), ("O41", "(1+O40)*O36", "({x}/$O$36-1)/" + _SQ),
+           ("O42", "(1-O40)*O36", "(1-{x}/$O$36)/" + _SQ), ("O43", "O36*O40*10000", "{x}/($O$36*10000)/" + _SQ)),
+          (("N36", "Spot"), ("N39", "Volatilite"), ("N40", "Implied Move"), ("N41", "Upper Bound"), ("N42", "Lower Bound"),
+           ("N43", "Move By Pips"))),
+    TwHub("TLREF Spread iki yönlü", "Calculators", "AQ", "C54", False,
+          (("C56", "(100-C54)/100*365/C55*10000", "100-{x}/10000*$C$55/365*100"),),
+          (("B54", "Fiyat"), ("B55", "Gün"), ("B56", "Spread"))),
+    # Forward Volatility: the end vol from a forward vol typed, the start vol held
+    TwHub("Forward Volatility iki yönlü", "Calculators", "AR", "F55", False,
+          (("F56", "SQRT((F55^2*F53-F54^2*F52)/(F53-F52))", "SQRT(({x}^2*($F$53-$F$52)+$F$54^2*$F$52)/$F$53)"),),
+          (("E54", "Start Vol"), ("E55", "End Vol"), ("E56", "Fwd Vol"))),
+    TwHub("Yıllık getiriden forward fiyat iki yönlü", "Calculators", "AS", "O56", False,
+          (("O57", "O55*O56/360*O53+O55", "({x}/$O$55-1)*360/$O$53"),),
+          (("N55", "Spot"), ("N56", "Ann. Yield"), ("N57", "Forward"))),
+    TwHub("İki fiyat arası yıllık getiri iki yönlü", "Calculators", "AT", "O66", False,
+          (("O65", "(O66-O64)/O64*365/O62", "$O$64*(1+{x}*$O$62/365)"),),
+          (("N64", "First Price"), ("N65", "Ann. Yield"), ("N66", "Last Price"))),
+    # DV01 Risk's scenario P&L: each shock (in place) - the P&L it makes
+    TwHub("Senaryo P&L iki yönlü (tek toplantı)", "DV01_RISK", "G", "E69", True,
+          (("C69", "SUMPRODUCT((COLUMN($AJ$2:$DL$2)-COLUMN($AJ$2)>=$D$69)*$AJ$2:$DL$2)*$E$69",
+            "{x}/SUMPRODUCT((COLUMN($AJ$2:$DL$2)-COLUMN($AJ$2)>=$D$69)*$AJ$2:$DL$2)"),),
+          (("B69", "Tek toplantı sürprizi"),)),
+    TwHub("Senaryo P&L iki yönlü (TLREF)", "DV01_RISK", "G", "E70", True,
+          (("C70", "$AJ$2*$E$70", "{x}/$AJ$2"),), (("B70", "TLREF fixing şoku (MPC1'e kadar)"),)),
+    TwHub("Senaryo P&L iki yönlü (paralel)", "DV01_RISK", "G", "E71", True,
+          (("C71", "$C$26*$E$71", "{x}/$C$26"),), (("B71", "Paralel par şoku"),)),
+)
+#: the captions of the stores' columns (row 1 of the Calculators sheet; DV01 Risk: the scenario P&L's header row)
+TW_HUB_HEADS = {"Calculators!AH1": "Ana girdiler (yazılan)", "Calculators!AI1": "Basit → Bileşik (yazılan)",
+                "Calculators!AJ1": "Bileşik → Basit (yazılan)", "Calculators!AK1": "DF to Rate (yazılan)",
+                "Calculators!AL1": "Exponential faizden fiyat (yazılan)", "Calculators!AM1": "Exponential fiyattan faiz (yazılan)",
+                "Calculators!AN1": "Simple faizden fiyat (yazılan)", "Calculators!AO1": "Simple fiyattan faiz (yazılan)",
+                "Calculators!AP1": "Implied Move (yazılan)", "Calculators!AQ1": "TLREF Spread (yazılan)",
+                "Calculators!AR1": "Forward Volatility (yazılan)", "Calculators!AS1": "Yıllık getiriden forward (yazılan)",
+                "Calculators!AT1": "İki fiyat arası getiri (yazılan)", "DV01_RISK!G65": "Yazılan P&L (TL)"}
+
+
+def _numfmt(model: Model, sheet: str, addr: str) -> str:
+    """A cell's number format (``General`` when it has none)."""
+    xf = model.sheet(sheet).styles.get(parse_a1(addr), 0)
+    return model.numfmts[xf] if xf < len(model.numfmts) else "General"
+
+
+def _hub_default(model: Model, t: TwHub) -> str:
+    """What the hub shows with nothing typed in its calculator: its formula default (an input of the page, in place) or
+    the workbook's value of the cell (a number, written so that it reads back the same)."""
+    sh = model.sheet(t.sheet)
+    rc = parse_a1(t.hub)
+    if rc in sh.fml:
+        return formula_of(model, t.sheet, t.hub).lstrip("+")
+    x = sh.consts.get(rc)
+    if isinstance(x, bool) or not isinstance(x, (int, float)):
+        raise ValueError("%s!%s bir sayı değil (%r)" % (t.sheet, t.hub, x))
+    text = repr(float(x))
+    if float(text) != float(x):                                     # (repr always reads back: a guard, not a case)
+        raise ValueError("%s!%s yazılamadı" % (t.sheet, t.hub))
+    return text
+
+
+def _tw_hub_check(t: TwHub, model: Model) -> None:
+    """The block the calculator's formulas solve: its captions, each member's workbook formula, the hub's default (a
+    number - a formula when it stays in place), its stores' cells empty."""
+    _need_sheets(model, t.sheet)
+    _need_captions(model, tuple((t.sheet, addr, text) for addr, text in t.captions))
+    sh = model.sheet(t.sheet)
+    if (parse_a1(t.hub) in sh.fml) and not t.own:
+        raise ValueError("%s!%s bir formül (değeri bekleniyordu)" % (t.sheet, t.hub))
+    _hub_default(model, t)
+    for cell, holds, _ in t.members:
+        _need_formula(model, t.sheet, cell, holds)
+    for cell in t.cells():
+        if t.own and cell == t.hub:
+            continue
+        rc = parse_a1(t.store(cell))
+        if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+            raise ValueError("%s!%s boş değil" % (t.sheet, t.store(cell)))
+    for ref in TW_HUB_HEADS:
+        sheet, addr = ref.split("!")
+        if sheet == t.sheet and parse_a1(addr) in sh.fml:
+            raise ValueError("%s boş değil" % ref)
+
+
+def tw_hub_formula(t: TwHub, model: Model) -> str:
+    """The hub's formula: its store (unless in place), else the value the member typed gives, else its default."""
+    out = _hub_default(model, t)
+    for cell, _, back in reversed(t.members):
+        s = t.store(cell, True)
+        out = "IF(ISBLANK(%s),%s,%s)" % (s, out, back.format(x=s))
+    if not t.own:
+        s = t.store(t.hub, True)
+        out = "IF(ISBLANK(%s),%s,%s)" % (s, out, s)
+    return "=" + out
+
+
+def _tto_tw_hub(t: TwHub, model: Model) -> None:
+    """A calculator two-way: its stores (blank, each in its member's number format), the members' formulas wrapped and
+    the hub worked out from whichever is typed."""
+    b = SheetBuilder(model, t.sheet)
+    for ref, text in TW_HUB_HEADS.items():
+        sheet, addr = ref.split("!")
+        if sheet == t.sheet and re.match(r"^%s\d+$" % t.col, addr):
+            b.set(addr, text, bold=True, color=NOTE_COLOR)
+    for cell in t.cells():
+        if not (t.own and cell == t.hub):
+            b.input(t.store(cell), None, fmt=_numfmt(model, t.sheet, cell))
+    hub = tw_hub_formula(t, model)
+    for cell, _, _ in t.members:
+        s = t.store(cell, True)
+        b.patch(cell, "=IF(ISBLANK(%s),%s,%s)" % (s, formula_of(model, t.sheet, cell).lstrip("+"), s))
+    b.patch(t.hub, hub)
+
+
+def _tw_hub_builders() -> Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]:
+    """``_BUILDERS`` entries: one per calculator, so that a block the workbook changed is left out by itself."""
+    import functools
+    return tuple((t.name, functools.partial(_tw_hub_check, t), functools.partial(_tto_tw_hub, t)) for t in TW_HUBS)
+
+
 # ---------------------------------------------------------------------------------------------- VİOP target: a far price
 #: The target table of the VİOP sheet (VIOP!K330:Y338) goes from a target rate to the far contract's limit price: "Hedef
 #: tipi" FRA+bp (OIS FRA + bp), FXswap+bp (the FX swap implied rate + bp) or Faiz % (a rate typed), "Hedef değer" its
@@ -4862,6 +5050,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
             (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
+            # (two-way calculators: Hesaplayıcılar and DV01's scenario P&L - after the market defaults and the way back of
+            # the implied move, whose formulas they keep)
+            *_tw_hub_builders(),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }

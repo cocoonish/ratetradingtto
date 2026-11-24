@@ -1231,6 +1231,47 @@ Code: `tto/twoway.py`, `tto/extras.py` (`_fwd_quote_cells`, `fwd_outright`, `fwd
 `_mark_formulas`, `_overlay`), `tto/render.py`, `tto/copies.py`, `grid.js` / `app.css` (✎). Tests: `tests/test_twoway.py`
 (the mechanism), `tests/test_fwd_twoway.py` (the matrices), the browser test's checks after "EURTRY points typed by hand".
 
+### Hesaplayıcılar, VİOP Target, Swaption, Prop iki yönlü (24.11.2026)
+
+The desk, of every table (after FORWARD KOTASYON, above):
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+>
+> "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için."
+
+**What became two-way** - of a calculator's (a row's) values any can be typed; the one typed last stands, exactly as typed
+when the market moves; the others are worked out from it with the block's own formulas and their exact inverses (typed
+back, a computed value gives the same numbers, 1e-9); Delete on any of them goes back to the default:
+- **Hesaplayıcılar** (`extras.TW_HUBS`, the mechanism of `tto/twoway.py`): Ana girdiler (Forward, Forward − Spot, puan),
+  Basit → Bileşik and Bileşik → Basit (basit, bileşik), DF to Rate (DF, Simple, Continous), Exponential and Simple - each
+  two calculators, Interest 2 Price and Price 2 Interest - (Interest, Forward), Implied Move (Volatilite, Implied Move,
+  Upper / Lower Bound, Move By Pips; the 24.11 "… (elle)" boxes stay beside it), TLREF Spread (Fiyat, Spread), Forward
+  Volatility (End Vol, Fwd Vol; Start Vol held), Yıllık getiriden forward fiyat (Ann. Yield, Forward), İki fiyat arası
+  yıllık getiri (Last Price, Ann. Yield; First Price held).
+- **DV01 Risk's Senaryo P&L** (rows 69-71): each shock (bp) or the P&L it makes; shock = P&L / the P&L of 1 bp.
+
+**Choices made while building them** (said on the pages and in README; ask the desk before changing):
+- **Each calculator has a hub**, the input its block computes from (Volatilite, Basit, DF ...): a value typed into another
+  member gives the hub by the block's formula solved for it, the rest follows by the block's own formulas.
+- **Copyable calculators keep every member in a store** (none in place), so that a temporary copy works fully: in a copy
+  any member can be typed whatever the table holds. The top band's Forward and DV01's shocks (tables no copy is made of)
+  stay the page's inputs in place.
+- **Values typed before keep their meaning**: a hub typed when it was the page's input (Volatilite, Basit, the DF ...) is
+  its calculator's typed value at the user's next read (moved to its store once: `TwoWay.adopt`). An input formula typed
+  there keeps its value and loses its formula (the cell is no input of its own any more - inputformula's rule, logged);
+  a temporary copy opened before this version follows the table at that cell (type it again in the copy).
+- **No guard added**: an inverse with no answer shows Excel's error, as the blocks' own formulas do (a move with zero days,
+  a P&L with no position: `#DIV/0!`); a bound on the wrong side of the spot gives a negative vol (the formula solved).
+- Nothing typed: every calculator shows what it showed (the file's values, the market's forward).
+
+Left out (with the reason): the RET tables and RET adil değer (shared, not this group's); Fiyatlama's optional new kinds;
+Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye endeksli and the hidden copies (survey).
+
+Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`), `tto/views/90_calc.json`, `70_dv01.json`
+(`"twoway"`, helper tables B36 / B11s). Tests: `tests/test_hesap_twoway.py`.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

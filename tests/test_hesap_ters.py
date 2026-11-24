@@ -149,4 +149,6 @@ def test_left_out_when_a_block_is_not_what_it_reads():
     assert ex.formula_of(tto, "Forward", "V67") == "+V57-V66+V65" and "EK_TARIH" in tto.sheet_index
     tto = Model.load(path)
     ex.SheetBuilder(tto, "Calculators").patch("O40", "=SQRT(O37/365)*O39")              # another basis
-    assert ex.apply("tto", tto) == [ex.MOVE_BACK_NAME + ": Calculators!O40 beklenen formül değil (SQRT(O37/O38)*O39 yok)"]
+    # (the block two-way - test_hesap_twoway.py - solves the same formula: left out with it)
+    assert ex.apply("tto", tto) == [ex.MOVE_BACK_NAME + ": Calculators!O40 beklenen formül değil (SQRT(O37/O38)*O39 yok)",
+                                    "Implied Move iki yönlü: Calculators!O40 beklenen formül değil (SQRT(O37/O38)*O39 yok)"]
