@@ -3659,41 +3659,41 @@ async function clipAfter(page, action) {
     // TOPLU FORWARD - a USDTRY fwd typed stays (✎), its Manuel TRY % is the rate it implies and the row's EURTRY fwd follows
     // (one TRY rate); Delete on the worked-out rate: back to RET mid.  ÇAPRAZ FORWARD - a manual forward typed stays, its
     // Manuel TRY % follows; the currency changed: the forward typed goes
-    const twOne = (ref) => page.evaluate((r) => {
+    const ftOne = (ref) => page.evaluate((r) => {
       const td = window.tto.findCell(r);
       return td ? { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' } : null;
     }, ref);
-    const twN5 = (await cellText(page, 'EK_BULK!N5')).trim();
-    const twP5 = (await cellText(page, 'EK_BULK!P5')).trim();
-    const twFwd = (trNumber(twN5) + 0.05).toFixed(4).replace('.', ',');
-    await typeInto(page, 'EK_BULK!N5', twFwd);
+    const ftN5 = (await cellText(page, 'EK_BULK!N5')).trim();
+    const ftP5 = (await cellText(page, 'EK_BULK!P5')).trim();
+    const ftFwd = (trNumber(ftN5) + 0.05).toFixed(4).replace('.', ',');
+    await typeInto(page, 'EK_BULK!N5', ftFwd);
     await waitCell(page, 'EK_BULK!L5', 't.trim() !== ""');
     await page.waitForFunction(() => window.tto.findCell('EK_BULK!N5').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
-    const twBulk = { n: await twOne('EK_BULK!N5'), l: await twOne('EK_BULK!L5'), p: await twOne('EK_BULK!P5'),
+    const ftBulk = { n: await ftOne('EK_BULK!N5'), l: await ftOne('EK_BULK!L5'), p: await ftOne('EK_BULK!P5'),
       g: (await cellText(page, 'EK_BULK!G5')).trim() };
-    const twNote = await page.evaluate(() => { const n = document.querySelector('#content .panel[data-panel="BK1"] .note'); return n ? n.textContent : ''; });
+    const ftNote = await page.evaluate(() => { const n = document.querySelector('#content .panel[data-panel="BK1"] .note'); return n ? n.textContent : ''; });
     await (await cellHandle(page, 'EK_BULK!L5')).click();
     await page.keyboard.press('Delete');
     await waitCell(page, 'EK_BULK!L5', 't.trim() === ""');
-    const twBack = { n: await twOne('EK_BULK!N5'), p: (await cellText(page, 'EK_BULK!P5')).trim() };
+    const ftBack = { n: await ftOne('EK_BULK!N5'), p: (await cellText(page, 'EK_BULK!P5')).trim() };
     check('TOPLU FORWARD is two-way: a USDTRY fwd typed stays (✎ and its tooltip), its Manuel TRY % is the rate it implies (above RET mid) and the row\'s EURTRY fwd follows it - one TRY rate, the note says so; Delete on the worked-out rate: the row back to RET mid',
-      twBulk.n.t === twFwd && twBulk.n.anchor && /Yazdığınız değer/.test(twBulk.n.tip) && !twBulk.l.anchor && /Hesaplanan/.test(twBulk.l.tip)
-      && trNumber(twBulk.l.t) > trNumber(twBulk.g) && twBulk.p.t !== twP5 && /tek TRY faiziyle/.test(twNote)
-      && twBack.n.t === twN5 && !twBack.n.anchor && twBack.p === twP5, { twBulk, twN5, twP5, twNote, twBack });
-    const twQ = trNumber(await cellText(page, 'Forward!Q200'));
-    const twCross = (twQ + 0.1).toFixed(4).replace('.', ',');
-    await typeInto(page, 'Forward!Q200', twCross);
+      ftBulk.n.t === ftFwd && ftBulk.n.anchor && /Yazdığınız değer/.test(ftBulk.n.tip) && !ftBulk.l.anchor && /Hesaplanan/.test(ftBulk.l.tip)
+      && trNumber(ftBulk.l.t) > trNumber(ftBulk.g) && ftBulk.p.t !== ftP5 && /tek TRY faiziyle/.test(ftNote)
+      && ftBack.n.t === ftN5 && !ftBack.n.anchor && ftBack.p === ftP5, { ftBulk, ftN5, ftP5, ftNote, ftBack });
+    const ftQ = trNumber(await cellText(page, 'Forward!Q200'));
+    const ftCross = (ftQ + 0.1).toFixed(4).replace('.', ',');
+    await typeInto(page, 'Forward!Q200', ftCross);
     await page.waitForFunction(() => window.tto.findCell('Forward!Q200').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
-    const twC = { q: await twOne('Forward!Q200'), f: await twOne('Forward!F200') };
+    const ftC = { q: await ftOne('Forward!Q200'), f: await ftOne('Forward!F200') };
     await (await cellHandle(page, 'Forward!C197')).click();          // (a drop-down cell: Enter opens its list)
     await page.keyboard.press('Enter');
     await page.click('.menu button:text-is("EUR")');
     await waitCell(page, 'Forward!C197', 't.trim() === "EUR"');
     await waitCell(page, 'Forward!Q200', 't.trim() === ""');
-    const twC2 = { q: await twOne('Forward!Q200'), f: await twOne('Forward!F200') };
+    const ftC2 = { q: await ftOne('Forward!Q200'), f: await ftOne('Forward!F200') };
     check('ÇAPRAZ FORWARD is two-way: a manual forward typed stays (✎), its Manuel TRY % follows (above the 41 % it was priced at); the currency changed, the forward typed goes - the row empty again',
-      twC.q.t === twCross && twC.q.anchor && !twC.f.anchor && trNumber(twC.f.t) > 41 && !twC2.q.anchor && twC2.q.t === '' && twC2.f.t === '',
-      { twC, twC2, twCross });
+      ftC.q.t === ftCross && ftC.q.anchor && !ftC.f.anchor && trNumber(ftC.f.t) > 41 && !ftC2.q.anchor && ftC2.q.t === '' && ftC2.f.t === '',
+      { ftC, ftC2, ftCross });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!C197', 'Forward!F200:F214', 'Forward!R200'] });
     // OIS · PPK and USD · FOMC, the ways back (the desk, 24.11.2026: items 2, 3 and 13): a meeting window's market rate
     // typed reads the market's own PPK step; an MPC spread typed reads the later window's rate (the earlier's market +
