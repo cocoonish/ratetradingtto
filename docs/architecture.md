@@ -181,6 +181,7 @@ priority:
 | EK_TARIH | tto | TOPLU TARİH ARASI FAİZ: MASA's date-to-date block (`MASA!B59:N70`) for 100 start / end pairs, the block's formulas carried to each row (`_tarih_formulas`); on the Masa page right after the block |
 | EK_VFRA | tto | VİOP target FRA. The target type "Fiyat" (a far price → its implied rate, the inverse of `VIOP!S331`) is an addition of its own, "VİOP hedef fiyatı" (`_tto_viop_price`), applied just before: it patches the target rate `VIOP!Q331:Q338` and the type list |
 | EK_RET | tto | RET tenors on the OIS scenario curves |
+| EK_PPK | tto | OIS · PPK's ways back: a meeting window's rate / an MPC spread typed -> the PPK step it prices (Broker Chat's implied step, cell for cell). Its typed and computed columns are bands of `meetings.TCMB` (row 3 + k: meeting slot k). Formula-only beside it: "FRA ikinci bacak" (`OIS_MAIN!U335:W438`) and, in book `sofr`, "FOMC pencere OIS'ten adım" (`SOFR_FOMC!AA72:AE83`, bands of `meetings.FED`) |
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
 | EK_FX | asw | the offshore rates ASW FX is built on |
 
@@ -411,6 +412,8 @@ new feature that stores anything by cell, row or position must use one of them *
    - It covers the PPK list (`OIS_MAIN!P10:P89`) and FOMC (`SOFR_FOMC!B74:B83`).
    - A row is a slot. `change()` moves every value of a meeting across users, scenarios, formulas and watch items in
      one transaction.
+   - A band may sit on another sheet of the book, its k-th row the k-th slot: Motor's per-meeting inputs, `EK_PPK`'s
+     rate / spread typed per window (from row 3). The watch anchors alarms to a meeting only on the list's own sheet.
    - Meetings that leave are parked in `calendar.parked`.
    - Typed meeting dates reach it through `_set_inputs`.
 2. **`tto/rowkeys.py`: bond lists and VİOP gold contracts.**

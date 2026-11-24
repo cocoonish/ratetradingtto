@@ -274,6 +274,34 @@ from the OIS spot in calendar days) to the bond's maturity less today's zero rat
 compounded once a year (ACT/365) - the base's move beyond the roll-down the other models already have. OIS only; no
 offshore, no PPK.
 
+## Meeting steps from a rate
+
+The ways back of 24.11.2026 ([desk-decisions.md](desk-decisions.md#ways-back-rate--ppk--fomc-step-an-fras-other-leg-24112026)).
+
+**TRY OIS - a meeting window's rate → the PPK step** (`EK_PPK`, Broker Chat's `Service._mpc_implied`):
+- A window of 'MPC OIS' runs from a meeting's effective day to the next one's (`OIS_MAIN!B84:C99`, Motor's `C5:C21` from
+  the OIS spot). Its market rate is simple ACT/365 off the table's ln DFs (`D` = (DF start / DF end − 1)·365 / days, `BK`
+  / `BL` read on `BOOT_*`): **the viewer's curve** - Bootstrap, or a PPK basamak user's.
+- O/N equivalent: **compounded every calendar day, ACT/365**: 365·((1 + r·d/365)^(1/d) − 1) (`Service._overnight`,
+  `extras.overnight(…, 365)`).
+- Step = the rate's O/N − the O/N of the market's rate for the period before (the window before; for the first window the
+  bootstrap's stub from the OIS spot, ln DF 0 there). An MPC spread typed: the later window's rate = the earlier window's
+  market + the spread, on the same base.
+- **Not Motor's MPC path convention.** Motor's "MPC ima" model (`OIS_MAIN!BJ`, `BD:BF`, `Motor!K / L`) compounds TLREF on
+  business days with a weekend term, ln growth = d·ln(1 + x/365) − Pcum·(x/365)² (`Motor!F528:F4228`). On the replay
+  windows (03.11.2026) its O/N is 1.3–2.3 bp above the chat's for the same rate, and a step differs by at most 0.95 bp
+  (most under 0.3 bp). The page uses the chat's, so the two give the same answer (the desk's request); do not mix the two
+  in one step.
+
+**USD (SOFR / FF OIS) - a FOMC window's rate → the step** (`SOFR_FOMC!AA:AE`): the window from a meeting's effective day
+to the next active meeting's (`F:H`); its rate simple **ACT/360** (İşlem 1's `E` = (exp(ln DF start − ln DF end) − 1)·36000 /
+days); O/N compounded daily, ((1 + r·d/36000)^(1/d) − 1)·36000 - the page's own `K` on the rate's DF ratio; step = O/N −
+`L` (the previous active meeting's `K`, the first's the stub O/N `B7 + B16/100`), in bp and in steps of `B9` (as `N`).
+
+**FRA from two spot swaps** (`OIS_MAIN!S336:S438`, TRY OIS): FRA = (R·P − Q·O) / (P − O), O / P the annuities to the start
+/ end month on Motor's quarterly calendar (ACT/365), a blank fill the market's par (`I` / `J`). Its inverse (`U:W`): end
+leg = (F·(P − O) + Q·O) / P, start leg = (R·P − F·(P − O)) / O.
+
 ## Spot and value dates
 
 | Pair / use | Spot | Holidays |

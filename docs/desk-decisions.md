@@ -941,6 +941,57 @@ Code: `tto/extras.py` (`_tto_tarih`, `_tarih_formulas`; `_tto_viop_price`, `viop
 `tto/views/10_masa.json` (TAF, TAFH). Tests: `tests/test_toplufaiz.py`, `tests/test_viopfra.py` (the Fiyat section), the
 browser test's checks after "VİOP target: the FRA's curve".
 
+### Ways back: rate → PPK / FOMC step, an FRA's other leg (24.11.2026)
+
+Fourteen pricing tools that work one way only were listed to the desk; the desk answered:
+
+> "1-2-3-4-5-6-7-8-11-11-13"
+
+Items 2, 3 and 13 of that list (as they were put to the desk, in English):
+
+> 2. MPC OIS / MPC SPREAD: rate → PPK step. "Type a meeting swap's rate or an MPC spread and see how many bp of cut or
+> hike it prices in. Broker Chat already does this for single-period lines it reads, but not for spreads and not on the
+> page."
+>
+> 3. FRA second leg. "Today TÜM FORWARD / FRA takes both legs' fills and shows the realized FRA. Instead, type the target
+> FRA and the first leg's fill, and see the rate you need on the second leg."
+>
+> 13. USD · FOMC: "a window's OIS rate → the implied FOMC step."
+
+**What was built** (each the exact inverse of what the page computes forward; README, *Faizden PPK / FOMC adımı ve FRA'nın
+öbür bacağı*):
+- **MPC OIS → PPK ADIMI / MPC SPREAD → PPK ADIMI** (OIS · PPK → PPK ima, right after each source table; `EK_PPK`): a
+  window's rate typed -> the step = the rate's O/N equivalent − that of the period before's market rate; a spread typed
+  -> the later window's rate (the earlier window's market + the spread) and its step.
+- **TÜM FORWARD / FRA** (`OIS_MAIN!U:W`): a target FRA -> the end leg it needs with the start leg's fill, and the start
+  leg it needs with the end leg's (a blank fill is the market's par, as "Gerçekleşen FRA" reads it).
+- **USD · FOMC** (`SOFR_FOMC!AA:AE`): a window's OIS rate -> its O/N and the step against "Önceki ima %", in bp and in
+  steps of Adım as "Toplantı adımı %".
+
+**Choices made while building them** (said in README; ask the desk before changing):
+- **The PPK step is Broker Chat's** (`Service._mpc_implied`), cell for cell: the O/N equivalent compounds every calendar
+  day on ACT/365, and the period before is the market's - the 'MPC OIS' table's own "Piyasa (bootstrap)" of the window
+  before, for the first window the bootstrap's stub from the OIS spot. So a chat line and the page give the same bp
+  (tested). The workbook's own MPC path (Motor, the "MPC ima" model) compounds TLREF on business days with a weekend
+  term instead; the two conversions differ slightly (see [curves.md](curves.md#meeting-steps-from-a-rate)).
+- **The market follows the viewer's curve setting**, as the MPC OIS table and the chat do: Bootstrap (Murex's MTM) by
+  default, a PPK basamak user's own curve otherwise.
+- **A spread's step is the later window's**, on the same base as a rate typed for that window (the earlier window's
+  market). Broker Chat still does not read spread lines (`brokerchat._MPC_NOT`); not asked.
+- **What is typed goes with its meeting** (`meetings.TCMB` / `FED`): a rate or spread typed on a row stays with the meeting
+  that starts the row's (first) window when the calendar changes, a meeting is added or a meeting passes; a meeting that
+  leaves the list takes it aside, as anything typed per meeting. (An "Elle değer" over the MPC OIS / MPC SPREAD tables
+  themselves stays on its slot, as before.)
+- **FRA**: both legs are shown whenever a target is typed, each against the other leg as "Gerçekleşen FRA" reads it
+  (typed, else the market's par); a spot start has no start leg.
+- **FOMC**: the step is against the page's own "Önceki ima %" (the previous meeting's implied O/N, the stub O/N for the
+  first), on the curve chosen in Girdiler; a meeting without a decision (Karar 0) gives nothing.
+- No new Bloomberg request; no existing number changes.
+
+Code: `tto/extras.py` (`PPK_SHEET` / `_tto_ppk_back`, `FRA_LEG_NAME` / `_tto_fra_leg`, `FOMC_BACK_NAME` /
+`_usd_fomc_back`), `tto/meetings.py` (the bands), `tto/views/20_ois.json` (PPK1, PPK2, B21), `tto/views/80_usd.json` (fomc).
+Tests: `tests/test_ppkters.py`, the browser test's checks after "Forward starting swap".
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`
