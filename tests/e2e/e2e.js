@@ -3744,6 +3744,17 @@ async function clipAfter(page, action) {
     check('OIS · PPK: TÜM FORWARD / FRA - a target FRA (35 %) and the start leg\'s fill typed read the end leg it needs; typed into '
       + 'the end leg\'s fill, the realized FRA is the target',
       /^\d+,\d{3}%$/.test(fraNeedEnd) && fraBack.realized === '35,00%' && /^\d+,\d{3}%$/.test(fraBack.needStart), fraBack);
+    // two-way (the desk's "Ok", 24.11.2026): an FRA typed stays and the end leg's fill is the one that makes it, the start
+    // leg's fill (36,8 %) held
+    await typeInto(page, 'OIS_MAIN!S337', '34');
+    await waitCell(page, 'OIS_MAIN!S337', 't.trim() === "34,00%"');
+    await page.waitForFunction(() => window.tto.findCell('OIS_MAIN!S337').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const fraTw = { s: await twCell('OIS_MAIN!S337'), r: await twCell('OIS_MAIN!R337'), rv: await cellV('OIS_MAIN!R337'),
+      o: await cellV('OIS_MAIN!O337'), p: await cellV('OIS_MAIN!P337') };
+    check('OIS · PPK: TÜM FORWARD / FRA is two-way - an FRA typed (34 %) stays and the end leg\'s fill is the one that makes it, the start '
+      + 'leg\'s fill (36,8 %) held; the FRA marked (✎), the end leg worked out from it',
+      fraTw.s.anchor && /Yazdığınız değer/.test(fraTw.s.tip) && Math.abs(fraTw.rv - (0.34 * (fraTw.p - fraTw.o) + 0.368 * fraTw.o) / fraTw.p) < 1e-12
+      && /Hesaplanan: bu satırda yazılan değer Gerçekleşen FRA · S337/.test(fraTw.r.tip), fraTw);
     for (const ref of ['OIS_MAIN!U337', 'OIS_MAIN!Q337', 'OIS_MAIN!R337']) await ppkClear(ref);
     await page.evaluate(() => window.tto.state.page.items.get('B21').toggle(true));           // (folded again, as it was)
     await open(page, 'usd');

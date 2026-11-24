@@ -342,8 +342,10 @@ leg = (F·(P − O) + Q·O) / P, start leg = (R·P − F·(P − O)) / O.
 **Two-way** (24.11.2026): the PPK tables and the FOMC table invert their own conversions in place - a step typed: O/N =
 the period before's O/N + the step, then the window's simple rate = ((1 + O/N/basis)^days − 1)·basis/days
 (`extras.overnight_back`, the exact inverse of `overnight`: ACT/365 for TRY OIS, ACT/360 in % for USD); a pair's later
-rate or its O/N or step gives the spread (later − the earlier window's market rate). Same curves and bases as above; the
-FRA list is not two-way (two fills and the FRA: the mechanism keeps one typed value a row).
+rate or its O/N or step gives the spread (later − the earlier window's market rate). Same curves and bases as above. The
+FRA list too (the desk's "Ok", 24.11.2026): an FRA typed into Gerçekleşen FRA holds the start leg (its fill, else its
+market par) and gives the end leg's fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula
+(`extras.fra_end_leg`, one implementation for both).
 
 ## Spot and value dates
 
