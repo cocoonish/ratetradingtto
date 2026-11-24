@@ -392,6 +392,8 @@ def test_fiyatlama_s_dv01_buckets_are_the_list_s_points(module_service, desk):
         assert list(rows) == names0[:6] + ["15M"] + names0[6:]
         for m in pr.METHODS:                                       # (a quote now: the 15M swap's DV01 is its bucket's)
             assert rows["15M"][m] > 900.0 and abs(rows["1Y"][m]) < 1e-3 and abs(rows["18M"][m]) < 1e-3, m
+        quotes = {r["name"]: r["quote"] for r in got["buckets"]["rows"]}           # (the bucket's quote: the rate typed)
+        assert quotes["15M"] == pytest.approx(0.35, abs=1e-15) and quotes["1Y"] == dict(market(svc, u).ois_quotes)[12.0]
         assert not [n for n in rows if n.startswith(("MPC", "PPK"))]
         for m in pr.METHODS:
             assert got["buckets"]["total"][m] == pytest.approx(sum(r[m] for r in rows.values()), abs=1e-9)

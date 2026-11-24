@@ -23,8 +23,11 @@ again - **Bootstrap**: Motor's own bucket bump (``Motor!T86``, "her kota +1bp bo
 nodes linear in months again, Motor's bootstrap again, ln DF linear in days); **PPK basamak**: the calibration solved
 again (MPC ima as it is; the flat overnight shift of the bumped quote's stretch and of every later one solved again);
 **offshore**: the FX swap / XCCY bootstrap again (Bootstrap), the offshore calibration again (PPK).  The total is the
-sum of the buckets.  **NPV** of the position at the typed price on each curve (+ = in the trader's favour, as Günlük
-İşlemler's "Mid'e göre"), and the price's distance from mid.
+sum of the buckets.  Each bucket says its **quote** - the rate its bump moves, the one its hedge trades at (the desk,
+24.11.2026: "Bu fiyatlama kısmına bunları ayırdığımızda denk gelen faizleri de yazalım"): OIS the OIS quote, offshore the
+TRYI / XCCY quote, each by its own convention; one for both curves, as each gives every quote back at its own maturity
+(Bootstrap by its bootstrap, PPK basamak by its calibration).  **NPV** of the position at the typed price on each curve
+(+ = in the trader's favour, as Günlük İşlemler's "Mid'e göre"), and the price's distance from mid.
 
 **The ways back** (the desk, 24.11.2026: "1-2-3-4-5-6-7-8-11-11-13" - 4 was "type an NPV (TL or $) or an upfront in bp and
 get the fixed rate; a box that prices a list of tenors at once"): the price box holds what ``price_kind`` says - a swap's
@@ -428,16 +431,18 @@ class Curves(object):
         key = ("boot" if method == BOOT else "ppk") if family == ON else ("off_boot" if method == BOOT else "off_ppk")
         return self.cv.get(key)
 
-    def pillars(self, family: str) -> List[Tuple[str, float]]:
-        """The pillars of a family, in maturity order: (name, its maturity in days) - the quotes the curve is built from
-        (the desk's list of points when it differs from the default: its points that carry a rate and are on - no
-        computed point, no PPK meeting)."""
+    def pillars(self, family: str) -> List[Tuple[str, float, float]]:
+        """The pillars of a family, in maturity order: (name, its maturity in days, its quote) - the quotes the curve is
+        built from (the desk's list of points when it differs from the default: its points that carry a rate and are on -
+        no computed point, no PPK meeting), each the rate :meth:`bumped` moves +1 bp, by its own convention: OIS Motor's
+        copy of OIS_MAIN's quotes (``Motor!A306:B321``) or the list's points; offshore the TRYI / XCCY quotes
+        (:func:`tto.ppkcurve.offshore_quotes`)."""
         if family == ON and self.cv.get("ois_nodes") is not None:
-            return [(q.name, q.end) for q in sorted(self.cv.get("quotes") or [], key=lambda q: q.end)]
+            return [(q.name, q.end, q.rate) for q in sorted(self.cv.get("quotes") or [], key=lambda q: q.end)]
         if family == ON:
             node = {int(round(m)): d for m, d in self.mk.nodes}
-            return [(pk.tenor_label(int(round(m))), node.get(int(round(m)), m * 30.4375)) for m, _ in sorted(self.mk.ois_quotes)]
-        return [(q.name, q.end) for q in sorted(self.cv.get("off_quotes") or [], key=lambda q: q.end)]
+            return [(pk.tenor_label(int(round(m))), node.get(int(round(m)), m * 30.4375), r) for m, r in sorted(self.mk.ois_quotes)]
+        return [(q.name, q.end, q.rate) for q in sorted(self.cv.get("off_quotes") or [], key=lambda q: q.end)]
 
     def bumped(self, family: str, method: str) -> Optional[Tuple[Any, List[Tuple[str, Any]]]]:
         """``(base, [(pillar, curve with that pillar's quote +1 bp)])`` of a family on a method; ``None`` when it cannot
@@ -903,15 +908,16 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
             rows.setdefault(name, {})[m] = dv
             tot += dv
         totals[m] = tot
+    # each bucket with its quote - the rate its bump moves, the hedge's (none at ON / 1W / 2W: no quote of the curve)
     pillars = curves.pillars(family)
     bucket_rows = []
     if family == ON:
-        named = {n for n, _ in pillars}                       # (a point of the desk's list at 1W: its own bucket)
-        bucket_rows += [{"name": b, "pillar": False, "day": None, "dv01": {m: None for m in METHODS}} for b in SHORT_BUCKETS
-                        if b not in named]
-    for name, day in pillars:
+        named = {p[0] for p in pillars}                       # (a point of the desk's list at 1W: its own bucket)
+        bucket_rows += [{"name": b, "pillar": False, "day": None, "quote": None, "dv01": {m: None for m in METHODS}}
+                        for b in SHORT_BUCKETS if b not in named]
+    for name, day, quote in pillars:
         got = rows.get(name, {})
-        bucket_rows.append({"name": name, "pillar": True, "day": day, "dv01": {m: got.get(m) for m in METHODS}})
+        bucket_rows.append({"name": name, "pillar": True, "day": day, "quote": quote, "dv01": {m: got.get(m) for m in METHODS}})
     # the NPV at the price typed (or solved for) and its distance from mid
     npv = None
     if level is not None:
@@ -958,7 +964,7 @@ def notes(deal: Deal, curves: Curves) -> List[str]:
                                                                                                     day(pillars[-1][1])))
     # a swap a few days off a quote's own day (the offshore curve's XCCY quotes on Bloomberg's days, a weekend not rolled;
     # a maturity typed as a date): its mid is not that quote
-    for name, d in (pillars if deal.asset != FX else ()):
+    for name, d, _ in (pillars if deal.asset != FX else ()):
         if 0.5 < abs(far - d) <= 3.5:
             out.append("Vade %s kotasının gününe (%s) %d gün uzak: eğri o kotayı kendi gününde fiyatlar, bu yüzden mid kotadan "
                        "biraz farklı." % (name, day(d), abs(far - d)))
