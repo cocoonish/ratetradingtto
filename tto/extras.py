@@ -2132,6 +2132,57 @@ def _tto_ppk_back(model: Model) -> None:
         b.set("W%d" % r, "=$M%(n)d" % f, fmt="0.0")
 
 
+# ---------------------------------------------------------------------------------------------- OIS · PPK: an FRA's other leg
+#: TÜM FORWARD / FRA (OIS_MAIN!A334:T438) gives the FRA two spot swaps make (S, "Gerçekleşen FRA"): (R·P − Q·O) / (P − O) -
+#: Q / R the start / end leg's fill typed (blank: the market's par, I / J), O / P the annuities to the start / end month
+#: (Motor's quarterly calendar; M = 0: no start leg, S = R).  The way back (the desk, 24.11.2026, item 3): a target FRA
+#: typed per row (U) -> the end leg's rate that makes it with the start leg as S reads it (V: (F·(P − O) + Q·O) / P; M = 0:
+#: the target itself) and the start leg's rate that makes it with the end leg as S reads it (W: (R·P − F·(P − O)) / O;
+#: none when M = 0).  Either typed back into its fill makes S the target.  A row is the user's own FRA (M / N), as Q / R.
+FRA_LEG_NAME = "FRA ikinci bacak"
+FRA_LEG_ROWS = (336, 438)
+FRA_LEG_TARGET, FRA_LEG_END, FRA_LEG_START = "U", "V", "W"
+#: S's formula, the one the way back inverts (row ``r``)
+FRA_LEG_S = ('IF(M%(r)d=0,IF(R%(r)d="",J%(r)d,R%(r)d),(IF(R%(r)d="",J%(r)d,R%(r)d)*P%(r)d-IF(Q%(r)d="",I%(r)d,Q%(r)d)*O%(r)d)'
+             '/(P%(r)d-O%(r)d))')
+
+
+def _fra_leg_check(model: Model) -> None:
+    """S of every row of TÜM FORWARD / FRA is the formula inverted; the columns the way back takes are empty."""
+    _need_sheets(model, "OIS_MAIN")
+    h = FRA_LEG_ROWS[0] - 1
+    _need_captions(model, (("OIS_MAIN", "A334", "TÜM FORWARD / FRA"), ("OIS_MAIN", "I%d" % h, "Başlangıç bacağı oranı"),
+                           ("OIS_MAIN", "J%d" % h, "Bitiş bacağı oranı"), ("OIS_MAIN", "M%d" % h, "Başlangıç (ay)"),
+                           ("OIS_MAIN", "O%d" % h, "A başlangıç"), ("OIS_MAIN", "P%d" % h, "A bitiş"),
+                           ("OIS_MAIN", "Q%d" % h, "Başl. bacağı dolum"), ("OIS_MAIN", "R%d" % h, "Bitiş bacağı dolum"),
+                           ("OIS_MAIN", "S%d" % h, "Gerçekleşen FRA")))
+    for r in range(FRA_LEG_ROWS[0], FRA_LEG_ROWS[1] + 1):
+        _need_formula(model, "OIS_MAIN", "S%d" % r, FRA_LEG_S % {"r": r})
+    sh = model.sheet("OIS_MAIN")
+    for r in range(h, FRA_LEG_ROWS[1] + 1):
+        for col in (FRA_LEG_TARGET, FRA_LEG_END, FRA_LEG_START):
+            rc = parse_a1("%s%d" % (col, r))
+            if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+                raise ValueError("OIS_MAIN!%s%d boş değil" % (col, r))
+
+
+def _tto_fra_leg(model: Model) -> None:
+    """TÜM FORWARD / FRA's U:W: a target FRA typed -> the end leg / the start leg it needs."""
+    b = SheetBuilder(model, "OIS_MAIN")
+    h = FRA_LEG_ROWS[0] - 1
+    for col, text in ((FRA_LEG_TARGET, "Hedef FRA"), (FRA_LEG_END, "Gereken bitiş bacağı"), (FRA_LEG_START, "Gereken başl. bacağı")):
+        b.set("%s%d" % (col, h), text, like="S%d" % h)
+    for r in range(FRA_LEG_ROWS[0], FRA_LEG_ROWS[1] + 1):
+        f = {"r": r, "u": FRA_LEG_TARGET}
+        f["q"] = 'IF($Q%(r)d="",$I%(r)d,$Q%(r)d)' % f            # the start leg as S reads it ...
+        f["e"] = 'IF($R%(r)d="",$J%(r)d,$R%(r)d)' % f            # ... and the end leg
+        b.set("%(u)s%(r)d" % f, None, like="Q%d" % r)             # typed, with the fills' look
+        b.set("%s%d" % (FRA_LEG_END, r), ('=IFERROR(IF(ISNUMBER($%(u)s%(r)d),IF($M%(r)d=0,$%(u)s%(r)d,'
+                                          '($%(u)s%(r)d*($P%(r)d-$O%(r)d)+%(q)s*$O%(r)d)/$P%(r)d),""),"")') % f, fmt=PCT3, bold=True)
+        b.set("%s%d" % (FRA_LEG_START, r), ('=IFERROR(IF(AND(ISNUMBER($%(u)s%(r)d),$M%(r)d<>0),'
+                                            '(%(e)s*$P%(r)d-$%(u)s%(r)d*($P%(r)d-$O%(r)d))/$O%(r)d,""),"")') % f, fmt=PCT3, bold=True)
+
+
 # ---------------------------------------------------------------------------------------------- live quotes
 #: Is a bid / ask of Borsa İstanbul a live quote?  When no order stands, Bloomberg's ``PX_BID`` / ``PX_ASK`` of the
 #: exchange's sources (ISL0 / ISL1 / ISLN) still give a price - the last trade, for a bill the last trade's yield on
@@ -4200,7 +4251,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
             ("Forward puandan faize", _fwd_back_check, _tto_fwd_back),
-            (PPK_SHEET, _ppk_back_check, _tto_ppk_back),
+            (PPK_SHEET, _ppk_back_check, _tto_ppk_back), (FRA_LEG_NAME, _fra_leg_check, _tto_fra_leg),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
             ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),

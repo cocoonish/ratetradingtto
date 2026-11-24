@@ -255,6 +255,13 @@
    "label": "'Başl. bacağı dolum', 'Bitiş bacağı dolum'"
   },
   {
+   "range": "U336:U438",
+   "scope": "user",
+   "group": "ois-fra-target",
+   "kind": "pct",
+   "label": "'Hedef FRA' of each forward: the FRA wanted, to read the rate the other leg needs (V: the end leg with the start leg's fill, W: the start leg with the end leg's)"
+  },
+  {
    "range": "EK_PPK!G3:G18",
    "scope": "user",
    "group": "ppk-rate",
@@ -555,11 +562,12 @@
    "id": "B21",
    "type": "table",
    "title": "TÜM FORWARD / FRA",
-   "range": "A334:T438",
+   "range": "A334:W438",
    "ppk": "fra",
    "append": "fra_buckets",
    "hidden": false,
-   "collapsed": true
+   "collapsed": true,
+   "note": "\"Hedef FRA\": bir FRA hedefi yazın. \"Gereken bitiş bacağı\": başlangıç bacağının dolumuyla (\"Başl. bacağı dolum\"; boşsa piyasa) bu FRA'yı veren bitiş bacağı oranı; \"Gereken başl. bacağı\": bitiş bacağının dolumuyla (\"Bitiş bacağı dolum\"; boşsa piyasa) bu FRA'yı veren başlangıç bacağı oranı. \"Gerçekleşen FRA\"nın formülünün tersi, (R·P − Q·O) / (P − O): bulunan oran dolum sütununa yazılınca Gerçekleşen FRA hedefe eşit olur. Spot başlangıçlı satırda bitiş bacağı FRA'nın kendisidir. OIS eğrisi (TLREF, ACT/365)."
   },
   {
    "id": "B22",
