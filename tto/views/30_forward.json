@@ -85,13 +85,6 @@
    }
   },
   {
-   "range": "O45",
-   "scope": "user",
-   "group": "forward-9",
-   "kind": "amount",
-   "label": "Forward DV01 'Tutar'"
-  },
-  {
    "range": "O33:O34",
    "scope": "user",
    "group": "forward-dv01-dates",
@@ -227,74 +220,11 @@
    "label": "ÇAPRAZ 'XXXTRY fwd (elle)': a forward typed, to read the TRY rate it implies (the foreign leg held)"
   },
   {
-   "range": "AH10",
-   "scope": "user",
-   "group": "forward-21",
-   "kind": "pct",
-   "label": "'Interest 2 SP' TRY rate, USDTRY / EURTRY (B7)"
-  },
-  {
-   "range": "AK10",
-   "scope": "user",
-   "group": "forward-21",
-   "kind": "pct",
-   "label": "'Interest 2 SP' TRY rate, USDTRY / EURTRY (B7)"
-  },
-  {
    "range": "AH15",
    "scope": "user",
    "group": "forward-22",
    "kind": "auto",
    "label": "'Gün Bazı' day basis of AH11"
-  },
-  {
-   "range": "AH25",
-   "scope": "user",
-   "group": "forward-23",
-   "kind": "auto",
-   "label": "'SP 2 Interest' swap points (B8); AK25 typed =22119-2540"
-  },
-  {
-   "range": "AK25",
-   "scope": "user",
-   "group": "forward-23",
-   "kind": "auto",
-   "label": "'SP 2 Interest' swap points (B8); AK25 typed =22119-2540"
-  },
-  {
-   "range": "AH40",
-   "scope": "user",
-   "group": "forward-24",
-   "kind": "auto",
-   "label": "'SP 2 Interest' all-in forward (B9)"
-  },
-  {
-   "range": "AK40",
-   "scope": "user",
-   "group": "forward-24",
-   "kind": "auto",
-   "label": "'SP 2 Interest' all-in forward (B9)"
-  },
-  {
-   "range": "AH56",
-   "scope": "user",
-   "group": "forward-25",
-   "kind": "pct",
-   "label": "'Interest 2 SP' O/N-equivalent rate (B10)"
-  },
-  {
-   "range": "AK56",
-   "scope": "user",
-   "group": "forward-25",
-   "kind": "pct",
-   "label": "'Interest 2 SP' O/N-equivalent rate (B10)"
-  },
-  {
-   "range": "AH60",
-   "scope": "user",
-   "group": "forward-26",
-   "kind": "number",
-   "label": "'Basit', 'Gün Basis', 'Gün' (B11)"
   },
   {
    "range": "AH61",
@@ -309,13 +239,6 @@
    "group": "forward-26",
    "kind": "number",
    "label": "'Basit', 'Gün Basis', 'Gün' (B11)"
-  },
-  {
-   "range": "AH65",
-   "scope": "user",
-   "group": "forward-27",
-   "kind": "number",
-   "label": "'Bileşik', 'Gün Basis', 'Gün' (B11)"
   },
   {
    "range": "AH66",
@@ -340,13 +263,6 @@
   },
   {
    "range": "AK62",
-   "scope": "user",
-   "group": "forward-28",
-   "kind": "number",
-   "label": "'Gün Basis', 'Gün', 'Bileşik' of the 'Repo' converter (B11)"
-  },
-  {
-   "range": "AK63",
    "scope": "user",
    "group": "forward-28",
    "kind": "number",
@@ -1201,6 +1117,184 @@
    "group": "ekfwd-eur-rates",
    "kind": "number",
    "label": "TRY bid / ask % typed by hand for the EURTRY matrix's dates, to read their spread over OIS, points and forward"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "fwdcalc-b7-usd",
+   "label": "Interest 2 SP · USDTRY",
+   "note": "İki yönlü: TRY, SP, All In, ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AH10", "store": "AL10", "kind": "pct"},
+    {"name": "SP", "range": "AH11", "store": "AL11"},
+    {"name": "All In S -> E", "range": "AH12", "store": "AL12"},
+    {"name": "ON Karşılık", "range": "AH14", "store": "AL14", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AH16", "store": "AL16"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b7-eur",
+   "label": "Interest 2 SP · EURTRY",
+   "note": "İki yönlü: TRY, SP, All In, ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AK10", "store": "AM10", "kind": "pct"},
+    {"name": "SP", "range": "AK11", "store": "AM11"},
+    {"name": "All In S -> E", "range": "AK12", "store": "AM12"},
+    {"name": "ON Karşılık", "range": "AK14", "store": "AM14", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AK16", "store": "AM16"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b8-usd",
+   "label": "SP 2 Interest · USDTRY",
+   "note": "İki yönlü: TRY, SP, All In (S -> E ya da E -> S), ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AH24", "store": "AL24", "kind": "pct"},
+    {"name": "SP", "range": "AH25", "store": "AL25"},
+    {"name": "All In S -> E", "range": "AH26", "store": "AL26"},
+    {"name": "All In E -> S", "range": "AH27", "store": "AL27"},
+    {"name": "ON Karşılık", "range": "AH28", "store": "AL28", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AH30", "store": "AL30"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b8-eur",
+   "label": "SP 2 Interest · EURTRY",
+   "note": "İki yönlü: TRY, SP, All In (S -> E ya da E -> S), ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AK24", "store": "AM24", "kind": "pct"},
+    {"name": "SP", "range": "AK25", "store": "AM25"},
+    {"name": "All In S -> E", "range": "AK26", "store": "AM26"},
+    {"name": "All In E -> S", "range": "AK27", "store": "AM27"},
+    {"name": "ON Karşılık", "range": "AK28", "store": "AM28", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AK30", "store": "AM30"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b9-usd",
+   "label": "SP 2 Interest (all-in) · USDTRY",
+   "note": "İki yönlü: TRY, SP, All In (S -> E ya da E -> S), ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AH38", "store": "AL38", "kind": "pct"},
+    {"name": "SP", "range": "AH39", "store": "AL39"},
+    {"name": "All In S -> E", "range": "AH40", "store": "AL40"},
+    {"name": "All In E -> S", "range": "AH41", "store": "AL41"},
+    {"name": "ON Karşılık", "range": "AH42", "store": "AL42", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AH44", "store": "AL44"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b9-eur",
+   "label": "SP 2 Interest (all-in) · EURTRY",
+   "note": "İki yönlü: TRY, SP, All In (S -> E ya da E -> S), ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AK38", "store": "AM38", "kind": "pct"},
+    {"name": "SP", "range": "AK39", "store": "AM39"},
+    {"name": "All In S -> E", "range": "AK40", "store": "AM40"},
+    {"name": "All In E -> S", "range": "AK41", "store": "AM41"},
+    {"name": "ON Karşılık", "range": "AK42", "store": "AM42", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AK44", "store": "AM44"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b10-usd",
+   "label": "Interest 2 SP (O/N) · USDTRY",
+   "note": "İki yönlü: TRY, SP, All In, ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AH52", "store": "AL52", "kind": "pct"},
+    {"name": "SP", "range": "AH53", "store": "AL53"},
+    {"name": "All In S -> E", "range": "AH54", "store": "AL54"},
+    {"name": "ON Karşılık", "range": "AH56", "store": "AL56", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AH58", "store": "AL58"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b10-eur",
+   "label": "Interest 2 SP (O/N) · EURTRY",
+   "note": "İki yönlü: TRY, SP, All In, ON karşılık ya da günlük SP - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; USDTRY ve EURTRY ayrı; silince hesaplayıcı varsayılanına döner).",
+   "members": [
+    {"name": "TRY", "range": "AK52", "store": "AM52", "kind": "pct"},
+    {"name": "SP", "range": "AK53", "store": "AM53"},
+    {"name": "All In S -> E", "range": "AK54", "store": "AM54"},
+    {"name": "ON Karşılık", "range": "AK56", "store": "AM56", "kind": "pct"},
+    {"name": "Günlük SP", "range": "AK58", "store": "AM58"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b11-basit",
+   "label": "Basit → bileşik",
+   "note": "İki yönlü: her çeviricinin iki faizinden hangisini yazarsanız o kalır, diğeri ondan hesaplanır (✎ yazılan değer; silince çevirici varsayılanına döner).",
+   "members": [
+    {"name": "Basit", "range": "AH60", "store": "AL60", "kind": "pct"},
+    {"name": "Bileşik", "range": "AH63", "store": "AL63", "kind": "pct"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b11-bilesik",
+   "label": "Bileşik → basit",
+   "note": "İki yönlü: her çeviricinin iki faizinden hangisini yazarsanız o kalır, diğeri ondan hesaplanır (✎ yazılan değer; silince çevirici varsayılanına döner).",
+   "members": [
+    {"name": "Bileşik", "range": "AH65", "store": "AL65", "kind": "pct"},
+    {"name": "Basit", "range": "AH68", "store": "AL68", "kind": "pct"}
+   ]
+  },
+  {
+   "id": "fwdcalc-b11-repo",
+   "label": "Repo çevirici",
+   "note": "İki yönlü: her çeviricinin iki faizinden hangisini yazarsanız o kalır, diğeri ondan hesaplanır (✎ yazılan değer; silince çevirici varsayılanına döner).",
+   "members": [
+    {"name": "Repo", "range": "AK60", "store": "AM60", "kind": "pct"},
+    {"name": "Bileşik", "range": "AK63", "store": "AM63", "kind": "pct"}
+   ]
+  },
+  {
+   "id": "fwdcalc-dv01",
+   "label": "Forward DV01",
+   "note": "İki yönlü: Tutar, DV01_USD, DV01_TRY ya da TRY_USD_DV01 - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (yazılan DV01'in mutlak değeri tutarı verir, işareti B/S'den gelir; ✎ yazılan değer; silince tutar varsayılanına döner).",
+   "members": [
+    {"name": "Tutar", "range": "O45", "store": "Q45", "kind": "amount"},
+    {"name": "DV01_USD", "range": "O47", "store": "Q47"},
+    {"name": "DV01_TRY", "range": "O48", "store": "Q48"},
+    {"name": "TRY_USD_DV01", "range": "O49", "store": "Q49"}
+   ]
+  },
+  {
+   "id": "fwdcalc-carry",
+   "label": "Tahvil carry",
+   "note": "İki yönlü: Carry (repo), B/E, Px Drop ya da günlük Px Drop - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince Carry boşa döner). B/E Yield ve Yield Drop yazılmaz: yazılan getiriden fiyat her seferinde yeni bir Bloomberg isteği olurdu.",
+   "members": [
+    {"name": "Carry", "range": "V61"},
+    {"name": "B/E", "range": "V67", "store": "X67"},
+    {"name": "Px Drop", "range": "V70", "store": "Y70"},
+    {"name": "Px Drop (gün başı)", "range": "W70", "store": "Z70"}
+   ]
+  },
+  {
+   "id": "fwdcalc-ois-spread",
+   "label": "TRY OIS w/Spread",
+   "note": "İki yönlü: Spread ya da bir vadenin spread'li faizi - hangisini yazarsanız o kalır, Spread ondan, öbür vadeler Spread'den hesaplanır (✎ yazılan değer; silince Spread Masa'daki spread'e döner).",
+   "members": [
+    {"name": "Spread", "range": "P58"},
+    {"name": "1W", "range": "P59", "store": "Q59"},
+    {"name": "2W", "range": "P60", "store": "Q60"},
+    {"name": "1M", "range": "P61", "store": "Q61"},
+    {"name": "2M", "range": "P62", "store": "Q62"},
+    {"name": "3M", "range": "P63", "store": "Q63"},
+    {"name": "6M", "range": "P64", "store": "Q64"},
+    {"name": "9M", "range": "P65", "store": "Q65"},
+    {"name": "1Y", "range": "P66", "store": "Q66"},
+    {"name": "18M", "range": "P67", "store": "Q67"},
+    {"name": "2Y", "range": "P68", "store": "Q68"}
+   ]
+  },
+  {
+   "id": "fwdcalc-ois-shift",
+   "label": "TRY OIS mid + spread (valör)",
+   "note": "İki yönlü: valörün OIS mid'ine eklenen spread (O27) ya da spread'li faiz (P27) - hangisini yazarsanız o kalır, diğeri ondan hesaplanır (✎ yazılan değer; silince spread Masa'daki spread'e döner).",
+   "members": [
+    {"name": "Spread", "range": "O27"},
+    {"name": "OIS mid + spread", "range": "P27", "store": "Q27", "kind": "pct"}
+   ]
   }
  ],
  "panels": [
@@ -2106,6 +2200,30 @@
    "title": "Basit ↔ bileşik çevirici · Repo",
    "range": "AG60:AK68",
    "hidden": false,
+   "keep_title": true
+  },
+  {
+   "id": "IY1",
+   "type": "table",
+   "title": "Yardımcı · hesaplayıcılar (Interest 2 SP … Repo): iki yönlü hücrelere yazılan değerler",
+   "range": "AL3:AN68",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "IY2",
+   "type": "table",
+   "title": "Yardımcı · Forward DV01, TRY OIS + spread: iki yönlü hücrelere yazılan değerler",
+   "range": "Q26:R68",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "IY3",
+   "type": "table",
+   "title": "Yardımcı · Tahvil carry: iki yönlü hücrelere yazılan değerler (Carry kendi hücresinde)",
+   "range": "X66:Z70",
+   "hidden": true,
    "keep_title": true
   },
   {

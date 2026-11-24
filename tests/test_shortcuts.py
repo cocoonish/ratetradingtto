@@ -300,7 +300,8 @@ def test_formulas_rates_and_plain_values_are_untouched(desk):
         book = svc.books["tto"]
         for ref, texts in plain.items():
             si, rc = book.cell(ref)
-            d = book.inputs[(si, rc)]
+            h = book.twoway.get((si, rc))                    # (a two-way table's member - Tutar -: typed into its store)
+            d = book.inputs[h.store_cell if h is not None and h.redirected else (si, rc)]
             fmt = book.model.numfmts[book.model.sheets[si].styles.get(rc, 0)]
             from tto.xl import numfmt
             for text in texts:

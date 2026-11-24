@@ -4094,9 +4094,41 @@ def _tarih_back(b: "SheetBuilder") -> None:
 #: fiyat (elle)" (V71, a clean price as B/E is) -> "İma repo" (V72) = (price − V57 + V66) · 365 / (V60 · N), B/E's formula
 #: solved for the repo - typed into Carry it makes B/E the price typed.  The dirty price and the coupon are the calculator's
 #: own cells (V60, V64): no Bloomberg request of its own.
+#:
+#: The block is two-way as well (tto/twoway.py; the desk, 24.11.2026: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı,
+#: kolay çalışmamız için"): Carry (V61), B/E (V67), Px Drop (V70) and its daily figure (W70) can each be typed - the one
+#: typed last stands, the others are worked out from it: a B/E typed -> Carry = :func:`bond_carry_repo` ("İma repo"'s
+#: formula); a Px Drop -> B/E = Temiz Fiyat − Px Drop; a daily drop -> Px Drop = it · N.  Carry keeps what is typed in its
+#: own cell as before (its formula default: blank - Carry Maliyet reads a blank as 0, as it did -, or the repo the typed one
+#: gives); B/E, Px Drop and the daily one keep theirs in ``BOND_TW_STORES``.  "Fwd temiz fiyat (elle)" → "İma repo" stays as
+#: it is.  The yields (B/E Yield V68, Yield Drop V69: Bloomberg's YAS_BOND_YLD at a price) are no members: a price at a typed
+#: yield would be a new Bloomberg request each time.
 BOND_BACK_NAME = "Tahvil carry fiyattan repo"
 BOND_BACK_PRICE, BOND_BACK_REPO = "V71", "V72"
 BOND_BACK_CELLS = ("U71", "V71", "W71", "U72", "V72", "W72")          # empty in the workbook; no input ever stood there
+#: where a B/E, a Px Drop or a daily Px Drop typed is kept (member -> its store, in its row; a helper table of the page
+#: shows them under the captions of ``BOND_TW_HEAD``)
+BOND_TW_STORES = (("V67", "X67"), ("V70", "Y70"), ("W70", "Z70"))
+BOND_TW_HEAD = (("X66", "Yazılan B/E"), ("Y66", "Yazılan Px Drop"), ("Z66", "Yazılan Px Drop (gün başı)"))
+
+
+def _need_exact_formula(model: Model, sheet: str, addr: str, text: str) -> None:
+    """A cell whose formula a two-way block keeps as its default must be that very formula (its text, as
+    :func:`formula_of` gives it): the block's inverses solve it."""
+    if parse_a1(addr) not in model.sheet(sheet).fml or formula_of(model, sheet, addr) != text:
+        raise ValueError("%s!%s beklenen formül değil (%s)" % (sheet, addr, text))
+
+
+def _absolute(addr: str) -> str:
+    """``"X67"`` -> ``"$X$67"``."""
+    m = re.match(r"^([A-Z]+)(\d+)$", addr)
+    return "$%s$%s" % (m.group(1), m.group(2))
+
+
+def bond_carry_repo(price: str) -> str:
+    """The repo a clean forward price implies in the bond carry calculator - B/E's formula solved for Carry:
+    (price − Temiz Fiyat + Kupon) · 365 / (Dirty Price · N) ("İma repo", V72; Carry when a B/E is typed)."""
+    return "(%s-$V$57+$V$66)*365/($V$60*$V$63)" % price
 
 
 def _bond_back_check(model: Model) -> None:
@@ -4106,8 +4138,14 @@ def _bond_back_check(model: Model) -> None:
                            ("Forward", "U63", "N"), ("Forward", "U66", "Kupon"), ("Forward", "U67", "B/E")))
     for addr, text in (("V67", "V57-V66+V65"), ("V65", "V60*V61/365*V63"), ("V66", "V64*V63/364*100"), ("V63", "V62-V58")):
         _need_formula(model, "Forward", addr, text)
+    # (two-way: the drop and its daily figure as the block works them out; Carry an input without a formula of its own)
+    _need_captions(model, (("Forward", "U70", "Px Drop"),))
+    for addr, text in (("V70", "+V57-V67"), ("W70", "+V70/V63")):
+        _need_exact_formula(model, "Forward", addr, text)
     sh = model.sheet("Forward")
-    for addr in BOND_BACK_CELLS:
+    if parse_a1("V61") in sh.fml:
+        raise ValueError("Forward!V61 bir formül")
+    for addr in BOND_BACK_CELLS + tuple(s for _, s in BOND_TW_STORES) + tuple(a for a, _ in BOND_TW_HEAD):
         if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
             raise ValueError("Forward!%s boş değil" % addr)
 
@@ -4118,8 +4156,338 @@ def _tto_bond_back(model: Model) -> None:
     b.set("U%s" % price[1:], "Fwd temiz fiyat (elle)", like="U67")
     b.input(price, None, like="V57")                                           # the calculator's own look of a price typed
     b.set("U%s" % repo[1:], "İma repo", like="U67")
-    b.set(repo, '=IFERROR(IF(ISNUMBER($V$71),($V$71-$V$57+$V$66)*365/($V$60*$V$63),""),"")', fmt="0.00%", bold=True,
-          align="center")
+    b.set(repo, '=IFERROR(IF(ISNUMBER($V$71),%s,""),"")' % bond_carry_repo("$V$71"), fmt="0.00%", bold=True, align="center")
+    # two-way (tto/twoway.py): Carry, B/E, Px Drop or its daily figure - the one typed last stands, the others from it
+    st = dict(BOND_TW_STORES)
+    f = {"be": _absolute(st["V67"]), "pd": _absolute(st["V70"]), "day": _absolute(st["W70"])}
+    for addr, store in BOND_TW_STORES:
+        fmt = model.numfmts[model.sheet("Forward").styles.get(parse_a1(addr), 0)]
+        b.input(store, None, fmt=fmt)
+    for addr, text in BOND_TW_HEAD:
+        b.set(addr, text, bold=True)
+    # Carry (in place): blank, or the repo of the B/E the typed one gives; Carry Maliyet reads a blank Carry as 0, as it did
+    typed_be = "IF(ISBLANK(%(be)s),IF(ISBLANK(%(pd)s),$V$57-%(day)s*$V$63,$V$57-%(pd)s),%(be)s)" % f
+    b.patch("V61", '=IF(AND(ISBLANK(%(be)s),ISBLANK(%(pd)s),ISBLANK(%(day)s)),"",%(repo)s)' % dict(f, repo=bond_carry_repo(typed_be)))
+    b.patch("V65", '=V60*IF(V61="",0,V61)/365*V63')
+    # B/E, Px Drop, the daily drop: nothing typed (no store, and Carry its blank) the block's own formulas
+    none = ["ISBLANK(%(be)s)" % f, "ISBLANK(%(pd)s)" % f, "ISBLANK(%(day)s)" % f, "ISTEXT($V$61)"]
+    be, pd, day = (formula_of(model, "Forward", a) for a in ("V67", "V70", "W70"))
+    b.patch("V67", two_way_member(none, f["be"], be, "IF(ISBLANK(%(pd)s),IF(ISBLANK(%(day)s),%(own)s,$V$57-%(day)s*$V$63),$V$57-%(pd)s)"
+                                  % dict(f, own=be)))
+    b.patch("V70", two_way_member(none, f["pd"], pd, "IF(ISBLANK(%(day)s),%(own)s,%(day)s*$V$63)" % dict(f, own=pd)))
+    b.patch("W70", two_way_member(none, f["day"], day, day))
+
+
+# ---------------------------------------------------------------------------------------------- Forward: the calculators, two-way
+#: The Forward page's hand calculators, two-way (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde
+#: olmalı karışıklık olmaması için", "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için"): of a
+#: block's values that say the same thing, any can be typed - the one typed last stands, the others are worked out from
+#: it with the block's own formulas and their exact inverses.
+#:
+#: * Interest 2 SP, SP 2 Interest, its all-in and Interest 2 SP · O/N (``FX_CALC_BLOCKS``; the USDTRY half in AH, the
+#:   EURTRY half in AK - a group each): TRY, SP, All In S -> E (and E -> S where the block has it), ON Karşılık, Günlük SP.
+#:   SP = spot·((1 + TRY·g/b)/(1 + USD·g/b) − 1)·10000 (b 360 - Interest 2 SP's USDTRY half: its Gün Bazı, AH15) and back
+#:   (:func:`fx_calc_points`, :func:`fx_calc_rate`); All In S -> E = spot + SP/10000, E -> S = spot − SP/10000; ON Karşılık =
+#:   360·((1 + TRY·g/360)^(1/g) − 1) and back (:func:`on_equivalent`, :func:`on_simple`); Günlük SP = SP/g.
+#: * Basit ↔ bileşik · Repo (``FX_CALC_CONVERTERS``): each converter's two rates - a rate compounded daily and the simple
+#:   rate of the period it gives, on the converter's own Gün Basis and Gün.
+#: * Forward DV01 (``FWD_DV01_TW``): Tutar, DV01_USD, DV01_TRY, TRY_USD_DV01.  A DV01 typed is read as an absolute value -
+#:   the size it takes -, its sign the block's B/S (O44) as its formulas give it: S a positive USD DV01 and a negative TRY
+#:   one, B the other way round.
+#: * TRY OIS w/Spread (``OIS_W_SPREAD``, the "Eğriler" tab): its Spread (%-points, P58) and each tenor's TRY OIS + spread
+#:   (P59:P68 = the OIS simple zero rate P6:P15 + Spread) - one row-side for the column: a tenor's rate typed gives the
+#:   Spread (rate − OIS), the other tenors follow it; and the TRY OIS mid at the value date with its shift (O27, a
+#:   fraction; P27 = P24 + O27): the rate typed gives the shift.  Both spreads keep what is typed in their own cells, as
+#:   before (in place: these tables are no copyable ones); their defaults stay the desk's spread (MASA!I60, "Tek OIS
+#:   spread'i").
+#:
+#: The blocks are copyable (copies.py), so every member keeps what is typed into it in a store of its own - a copy of a
+#: calculator whose members all have stores works fully (twoway.py): the member's row of column AL for AH's (USDTRY, and
+#: the left converters), of AM for AK's (EURTRY, the repo converter), of Q for Forward DV01's; hidden helper tables of the
+#: page show them.  The member a block was driven by - its input until now: TRY AH10 / AK10, SP AH25 / AK25, all-in AH40 /
+#: AK40, O/N AH56 / AK56, the converters' AH60, AH65 and AK63, Tutar O45 - is worked out from whichever other member is
+#: typed, else holds the workbook's own value: with nothing typed every number is the workbook's, cell for cell.  What a
+#: user typed into those inputs before is the block's typed value (moved once to its store: twoway.TwoWay.adopt).
+FWD_CALC_TW_NAME = "Forward hesaplayıcıları iki yönlü"
+#: (the block's panel, its name, the member it was driven by, the rows of its days, spot, foreign rate and members)
+FX_CALC_BLOCKS = (("B7", "Interest 2 SP", "try",
+                   {"days": 7, "spot": 8, "ccy": 9, "try": 10, "sp": 11, "se": 12, "on": 14, "day": 16}),
+                  ("B8", "SP 2 Interest", "sp",
+                   {"days": 21, "spot": 22, "ccy": 23, "try": 24, "sp": 25, "se": 26, "es": 27, "on": 28, "day": 30}),
+                  ("B9", "SP 2 Interest (all-in)", "se",
+                   {"days": 35, "spot": 36, "ccy": 37, "try": 38, "sp": 39, "se": 40, "es": 41, "on": 42, "day": 44}),
+                  ("B10", "Interest 2 SP (O/N)", "on",
+                   {"days": 49, "spot": 50, "ccy": 51, "try": 52, "sp": 53, "se": 54, "on": 56, "day": 58}))
+#: the members, by kind, and their caption in the workbook (AG / AJ) - their name on the page
+FX_CALC_KINDS = (("try", "TRY"), ("sp", "SP"), ("se", "All In S -> E"), ("es", "All In E -> S"), ("on", "ON Karşılık"),
+                 ("day", "Günlük SP"))
+FX_CALC_SP = ("sp", "se", "es", "day")                     # the members said in swap points (linear in SP)
+#: the halves: (column, its stores' column, its captions' column, the pair)
+FX_CALC_SIDES = (("AH", "AL", "AG", "USDTRY"), ("AK", "AM", "AJ", "EURTRY"))
+#: Basit ↔ bileşik · Repo: (column, stores' column, the rate it was driven by, the other rate, the rows of Gün Basis and
+#: Gün, their captions, whether the driver is the daily compounded one); the other's formula as the workbook writes it
+FX_CALC_CONVERTERS = (("AH", "AL", 60, 63, 61, 62, ("Basit", "Bileşik"), True, "(((1+AH60/AH61)^AH62)-1)/AH62*AH61"),
+                      ("AH", "AL", 65, 68, 66, 67, ("Bileşik", "Basit"), False, "((AH65*AH67/AH66+1)^(1/AH67)-1)*AH66"),
+                      ("AK", "AM", 63, 60, 61, 62, ("Bileşik", "Repo"), False, "AK61*((1+AK63*AK62/AK61)^(1/AK62)-1)"))
+#: Forward DV01: (member, its store, its caption - its name on the page, the workbook's formula; the first one: Tutar, the
+#: block's input until now)
+FWD_DV01_TW = (("O45", "Q45", "Tutar", None),
+               ("O47", "Q47", "DV01_USD", 'IF(O44="S",O45*O43*O42/10000,O45*O43*O42/10000*-1)'),
+               ("O48", "Q48", "DV01_TRY", 'IF(O44="S",O45*O46*O43*O37/10000*-1,O45*O46*O43*O37/10000)'),
+               ("O49", "Q49", "TRY_USD_DV01", "+O48/O32"))
+#: TRY OIS w/Spread: (the Spread, in place; each tenor's rate: its row, the OIS rate's row it adds the Spread to) and the
+#: OIS mid's shift (in place) and the shifted mid; their stores in Q
+OIS_W_SPREAD = ("P58", tuple((r, r - 53) for r in range(59, 69)))
+OIS_SHIFT = ("O27", "P27", "Q27")
+#: the captions of the stores' columns (the hidden helper tables show them)
+FX_CALC_STORE_HEAD = (("AL3", "Yazılan · AH"), ("AM3", "Yazılan · AK"), ("AN3", "Hesaplayıcı · değer (AH | AK)"),
+                      ("Q26", "Yazılan"), ("R26", "Değer"))
+
+
+def fx_calc_points(rate: str, spot: str, ccy: str, days: str, basis: str = "360") -> str:
+    """The calculators' swap points off a TRY rate (fractions, simple on ``basis`` days - 360, or Interest 2 SP's Gün Bazı):
+    spot·((1 + TRY·g/b)/(1 + CCY·g/b) − 1)·10000, as the workbook writes it (AH11, AH53)."""
+    return "%s*((1+%s/%s*%s)/(1+%s/%s*%s)-1)*10000" % (spot, rate, basis, days, ccy, basis, days)
+
+
+def fx_calc_rate(points: str, spot: str, ccy: str, days: str, basis: str = "360") -> str:
+    """:func:`fx_calc_points`' exact inverse, the TRY rate swap points imply: ((1 + SP/10000/spot)·(1 + CCY·g/b) − 1)·b/g,
+    as the workbook writes it (SP 2 Interest: AH24, AH38)."""
+    return "((1+%s/10000/%s)*(1+%s*%s/%s)-1)*%s/%s" % (points, spot, ccy, days, basis, basis, days)
+
+
+def on_equivalent(rate: str, days: str, basis: str = "360") -> str:
+    """The rate compounded daily that a simple rate over ``days`` is: b·((1 + r·g/b)^(1/g) − 1), as the workbook writes it
+    ("ON Karşılık" AH14, AH28, AH42 on 360; the repo converter AK60 on its Gün Basis)."""
+    return "%s*((1+%s*%s/%s)^(1/%s)-1)" % (basis, rate, days, basis, days)
+
+
+def on_simple(rate: str, days: str, basis: str = "360") -> str:
+    """:func:`on_equivalent`'s exact inverse, the simple rate over ``days`` a rate compounded daily gives: ((1 + r/b)^g −
+    1)·b/g, as the workbook writes it (Interest 2 SP · O/N: AH52)."""
+    return "((1+%s/%s)^%s-1)*%s/%s" % (rate, basis, days, basis, days)
+
+
+def _fx_calc_own(bid: str, x: Dict[str, str], basis: str) -> Dict[str, str]:
+    """The workbook's formulas of a block's members but its driver (``x``: the block's cells by kind), as it writes them:
+    the check wants them so - the inverses solve them -, and with nothing typed the members keep them."""
+    s, c, d = x["spot"], x["ccy"], x["days"]
+    if bid == "B7":
+        return {"sp": fx_calc_points(x["try"], s, c, d, basis), "se": "+%s/10000+%s" % (x["sp"], s),
+                "on": on_equivalent(x["try"], d), "day": "%s/%s" % (x["sp"], d)}
+    if bid == "B8":
+        return {"try": fx_calc_rate(x["sp"], s, c, d), "se": "+%s+%s/10000" % (s, x["sp"]), "es": "+%s-%s/10000" % (s, x["sp"]),
+                "on": on_equivalent(x["try"], d), "day": "+%s/%s" % (x["sp"], d)}
+    if bid == "B9":
+        return {"try": fx_calc_rate(x["sp"], s, c, d), "sp": "(%s-%s)*10000" % (x["se"], s), "es": "+%s-%s/10000" % (s, x["sp"]),
+                "on": on_equivalent(x["try"], d), "day": "+%s/%s" % (x["sp"], d)}
+    return {"try": on_simple(x["on"], d), "sp": fx_calc_points(x["try"], s, c, d), "se": "+%s/10000+%s" % (x["sp"], s),
+            "day": "%s/%s" % (x["sp"], d)}
+
+
+def _fx_calc_side(bid: str, rows: Dict[str, int], col: str,
+                  store: str) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str], str]:
+    """A block's half: (its cells by kind, the stores of its members, the workbook's formulas of its members but the driver,
+    the day basis of its swap points)."""
+    x = {k: "%s%d" % (col, r) for k, r in rows.items()}
+    s = {k: "%s%d" % (store, rows[k]) for k, _ in FX_CALC_KINDS if k in rows}
+    basis = "AH15" if (bid, col) == ("B7", "AH") else "360"          # (Interest 2 SP's USDTRY half: its Gün Bazı)
+    return x, s, _fx_calc_own(bid, x, basis), basis
+
+
+def _driver_value(model: Model, addr: str) -> str:
+    """The value a block's driver holds in the workbook - a number, or a formula (EURTRY's SP: =22119-2540) - as a
+    formula's text: its default while nothing of the block is typed."""
+    sh = model.sheet("Forward")
+    rc = parse_a1(addr)
+    if rc in sh.fml:
+        return "(%s)" % formula_of(model, "Forward", addr)
+    v = sh.consts.get(rc)
+    if type(v) is not float:
+        raise ValueError("Forward!%s bir sayı değil" % addr)
+    return repr(v)
+
+
+def _fwd_calc_tw_check(model: Model) -> None:
+    """The blocks as they are written: their captions, the members' formulas the inverses solve, a driver that holds a
+    number (or a formula), and the cells the stores and their captions take empty."""
+    _need_sheets(model, "Forward")
+    sh = model.sheet("Forward")
+    free = [a for a, _ in FX_CALC_STORE_HEAD] + [s for _, s, _, _ in FWD_DV01_TW]
+    for bid, _, hub, rows in FX_CALC_BLOCKS:
+        for col, store, cap, _ in FX_CALC_SIDES:
+            x, s, own, _ = _fx_calc_side(bid, rows, col, store)
+            _need_captions(model, [("Forward", "%s%d" % (cap, rows[k]), text) for k, text in FX_CALC_KINDS if k in rows]
+                           + [("Forward", "%s%d" % (cap, rows["spot"]), "Spot")])
+            for kind, text in own.items():
+                _need_exact_formula(model, "Forward", x[kind], text)
+            _driver_value(model, x[hub])
+            free += list(s.values()) + ["AN%s" % a[2:] for a in s.values()]           # (and the helper's labels beside)
+    for col, store, hub, other, basis, days, names, _, text in FX_CALC_CONVERTERS:
+        cap = "AG" if col == "AH" else "AJ"
+        _need_captions(model, (("Forward", "%s%d" % (cap, hub), names[0]), ("Forward", "%s%d" % (cap, other), names[1]),
+                               ("Forward", "%s%d" % (cap, basis), "Gün Basis"), ("Forward", "%s%d" % (cap, days), "Gün")))
+        _need_exact_formula(model, "Forward", "%s%d" % (col, other), text)
+        _driver_value(model, "%s%d" % (col, hub))
+        free += ["%s%d" % (store, hub), "%s%d" % (store, other), "AN%d" % hub, "AN%d" % other]
+    _need_captions(model, [("Forward", "N%s" % addr[1:], name) for addr, _, name, _ in FWD_DV01_TW] + [("Forward", "N44", "B/S")])
+    for addr, _, _, text in FWD_DV01_TW[1:]:
+        _need_exact_formula(model, "Forward", addr, text)
+    _driver_value(model, FWD_DV01_TW[0][0])
+    free += ["R%s" % addr[1:] for addr, _, _, _ in FWD_DV01_TW]
+    # TRY OIS w/Spread and the OIS mid's shift: their spreads the formula defaults "Tek OIS spread'i" gave them
+    spread, tenors = OIS_W_SPREAD
+    shift, mid, q27 = OIS_SHIFT
+    _need_captions(model, (("Forward", "O57", "TRY OIS w/Spread"), ("Forward", "O58", "Spread")))
+    for r, base in tenors:
+        _need_exact_formula(model, "Forward", "P%d" % r, "+P%d+$P$58" % base)
+        if not isinstance(sh.consts.get(parse_a1("O%d" % r)), str):
+            raise ValueError("Forward!O%d bir vade değil" % r)
+        free += ["Q%d" % r, "R%d" % r]
+    _need_exact_formula(model, "Forward", mid, "+P24+O27")
+    for addr in (spread, shift):
+        _need_formula(model, "Forward", addr, OIS_SPREAD)
+    free += [q27, "R" + q27[1:]]
+    for addr in free:
+        if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+            raise ValueError("Forward!%s boş değil" % addr)
+
+
+def _pick(stores: Dict[str, str], cases: List[Tuple[str, str]], last: str) -> str:
+    """The value from the first member of ``cases`` (kind, its value from its store) whose store holds one, else
+    ``last``."""
+    out = last
+    for k, value in reversed(cases):
+        out = "IF(ISBLANK(%s),%s,%s)" % (stores[k], out, value)
+    return out
+
+
+def two_way_member(none: Sequence[str], own: str, nothing: str, worked: str, shown: Optional[str] = None) -> str:
+    """A two-way member's formula (tto/twoway.py): what its store ``own`` holds when it holds a value (``shown``: that
+    value as the cell shows it - a DV01's size with the sign of its B/S), else ``worked`` (from the member typed in its
+    row-side); with nothing typed (``none``: the tests that every store of the row-side is blank) ``nothing`` - the
+    block's own formula, or its driver's own value.  Every store is read whatever is typed, so a formula typed into a
+    member that reads its own row-side is a cycle the input formulas see when it is typed (inputformula.py follows what
+    a formula read)."""
+    return "=IF(AND(%s),%s,IF(ISBLANK(%s),%s,%s))" % (",".join(none), nothing, own, worked, shown or own)
+
+
+def _tto_fwd_calc_tw(model: Model) -> None:
+    b = SheetBuilder(model, "Forward")
+    fmt = lambda addr: model.numfmts[b.sheet.styles.get(parse_a1(addr), 0)]  # noqa: E731 - a member's number format
+    labels: Dict[int, List[str]] = {}
+    for bid, name, hub, rows in FX_CALC_BLOCKS:
+        for col, store, _, _ in FX_CALC_SIDES:
+            x, s, own, basis = _fx_calc_side(bid, rows, col, store)
+            spot, ccy, days = x["spot"], x["ccy"], x["days"]
+            kinds = [k for k, _ in FX_CALC_KINDS if k in rows]
+
+            def sp_of(k: str) -> str:
+                """The SP a value typed into member ``k`` gives."""
+                v = s[k]
+                if k == "sp":
+                    return v
+                if k == "se":
+                    return "(%s-%s)*10000" % (v, spot)
+                if k == "es":
+                    return "(%s-%s)*10000" % (spot, v)
+                if k == "day":
+                    return "%s*%s" % (v, days)
+                return fx_calc_points(try_of(k), spot, ccy, days, basis)
+
+            def try_of(k: str) -> str:
+                """The TRY rate a value typed into member ``k`` gives."""
+                if k == "try":
+                    return s[k]
+                if k == "on":
+                    return on_simple(s[k], days)
+                return fx_calc_rate(sp_of(k), spot, ccy, days, basis)
+
+            def value_of(kind: str, k: str) -> str:
+                """Member ``kind``'s value from a value typed into member ``k`` (the driver's, and the two the others
+                follow: TRY and SP)."""
+                if kind == "try":
+                    return try_of(k)
+                if kind == "sp":
+                    return sp_of(k)
+                if kind == "se":
+                    return "%s+%s/10000" % (spot, sp_of(k))
+                if kind == "on":
+                    return on_equivalent(try_of(k), days)
+                raise ValueError("%s: %s bir sürücü değil" % (bid, kind))
+
+            default = _driver_value(model, x[hub])
+            none = ["ISBLANK(%s)" % s[k] for k in kinds]
+            for kind in kinds:
+                others = [k for k in kinds if k != kind]
+                if kind == hub:
+                    # the driver: from whichever other member is typed; nothing typed, the workbook's value
+                    nothing = default
+                    worked = _pick(s, [(k, value_of(kind, k)) for k in others], default)
+                elif kind in ("try", "sp"):
+                    # TRY and SP, which the block's others are worked out from: straight from a typed member, else the
+                    # workbook's formula (which reads the driver)
+                    nothing = own[kind]
+                    worked = _pick(s, [(k, value_of(kind, k)) for k in others if k != hub], own[kind])
+                else:
+                    nothing = worked = own[kind]          # (the workbook's formula, of TRY or SP)
+                b.patch(x[kind], two_way_member(none, s[kind], nothing, worked))
+                b.input(s[kind], None, fmt=fmt(x[kind]))
+                labels.setdefault(rows[kind], []).append("%s · %s" % (name, dict(FX_CALC_KINDS)[kind]))
+    for col, store, hub, other, basis, days, names, daily, _ in FX_CALC_CONVERTERS:
+        x = {k: "%s%d" % (col, r) for k, r in (("hub", hub), ("other", other), ("basis", basis), ("days", days))}
+        sh, so = "%s%d" % (store, hub), "%s%d" % (store, other)
+        none = ["ISBLANK(%s)" % sh, "ISBLANK(%s)" % so]
+        # the driver from the other rate typed: the daily compounded rate of a simple one, or the simple rate of a daily one
+        back = (on_equivalent if daily else on_simple)(so, x["days"], x["basis"])
+        default, mine = _driver_value(model, x["hub"]), formula_of(model, "Forward", x["other"])
+        b.patch(x["hub"], two_way_member(none, sh, default, back))
+        b.patch(x["other"], two_way_member(none, so, mine, mine))
+        b.input(sh, None, fmt=fmt(x["hub"]))
+        b.input(so, None, fmt=fmt(x["other"]))
+        title = "Repo çevirici" if col == "AK" else ("Basit → bileşik" if daily else "Bileşik → basit")
+        labels.setdefault(hub, []).append("%s · %s" % (title, names[0]))
+        labels.setdefault(other, []).append("%s · %s" % (title, names[1]))
+    for r, said in labels.items():
+        b.set("AN%d" % r, " | ".join(dict.fromkeys(said)), color=NOTE_COLOR)
+    # Forward DV01: Tutar from a DV01 typed (its size: the absolute value), a DV01 typed shown with the B/S row's sign
+    (amount, q_amount, _, _), (usd, q_usd, _, _), (tl, q_tl, _, _), (cross, q_cross, _, _) = FWD_DV01_TW
+    per_usd, per_tl = "(O43*O42)", "(O46*O43*O37)"                 # a DV01 per 1 of Tutar ·10000: USD leg, TRY leg
+    sign_usd, sign_tl = 'IF(O44="S",1,-1)', 'IF(O44="S",-1,1)'
+    none = ["ISBLANK(%s)" % q for _, q, _, _ in FWD_DV01_TW]
+    default = _driver_value(model, amount)
+    b.patch(amount, two_way_member(none, q_amount, default, _pick({"u": q_usd, "t": q_tl, "c": q_cross}, [
+        ("u", "ABS(%s)*10000/%s" % (q_usd, per_usd)), ("t", "ABS(%s)*10000/%s" % (q_tl, per_tl)),
+        ("c", "ABS(%s*O32)*10000/%s" % (q_cross, per_tl))], default)))
+    for addr, q, sign in ((usd, q_usd, sign_usd), (tl, q_tl, sign_tl), (cross, q_cross, sign_tl)):
+        mine = formula_of(model, "Forward", addr)
+        # (DV01_TRY straight from a TRY_USD_DV01 typed; the others from Tutar, the block's own formulas)
+        worked = _pick({"c": q_cross}, [("c", "%s*ABS(%s*O32)" % (sign_tl, q_cross))], mine) if addr == tl else mine
+        # a DV01 typed: its size, with the sign of the B/S row
+        b.patch(addr, two_way_member(none, q, mine, worked, shown="%s*ABS(%s)" % (sign, q)))
+    for addr, store, name, _ in FWD_DV01_TW:
+        b.input(store, None, fmt=fmt(addr))
+        b.set("R%s" % addr[1:], name, color=NOTE_COLOR)
+    # TRY OIS w/Spread: a tenor's rate typed -> the Spread (rate − OIS, %-points; in place), the other tenors from it
+    spread, tenors = OIS_W_SPREAD
+    stores = {r: "Q%d" % r for r, _ in tenors}
+    none = ["ISBLANK(%s)" % q for q in stores.values()]
+    b.patch(spread, "=IF(AND(%s),%s,%s)" % (",".join(none), formula_of(model, "Forward", spread),
+                                           _pick(stores, [(r, "%s-P%d" % (stores[r], base)) for r, base in tenors], '""')))
+    for r, base in tenors:
+        mine = formula_of(model, "Forward", "P%d" % r)
+        b.patch("P%d" % r, two_way_member(none, stores[r], mine, mine))
+        b.input(stores[r], None, fmt=fmt("P%d" % r))
+        b.set("R%d" % r, "TRY OIS w/Spread · %s" % b.sheet.consts.get(parse_a1("O%d" % r)), color=NOTE_COLOR)
+    # the OIS mid at the value date, shifted: the rate typed -> the shift (in place)
+    shift, mid, q = OIS_SHIFT
+    b.patch(shift, "=IF(ISBLANK(%s),%s,%s-P24)" % (q, formula_of(model, "Forward", shift), q))
+    mine = formula_of(model, "Forward", mid)
+    b.patch(mid, two_way_member(["ISBLANK(%s)" % q], q, mine, mine))
+    b.input(q, None, fmt=fmt(mid))
+    b.set("R" + q[1:], "TRY OIS mid + spread (valör)", color=NOTE_COLOR)
+    for addr, text in FX_CALC_STORE_HEAD:
+        b.set(addr, text, bold=True)
 
 
 # ---------------------------------------------------------------------------------------------- Calculators: implied move -> vol
@@ -4859,6 +5227,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # (the calculators' ways back of 24.11: the bond carry's price -> repo, the implied move's move -> vol)
             (BOND_BACK_NAME, _bond_back_check, _tto_bond_back), (MOVE_BACK_NAME, _move_back_check, _tto_move_back),
             (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread),
+            # (the Forward page's calculators two-way: their drivers' values as the workbook holds them)
+            (FWD_CALC_TW_NAME, _fwd_calc_tw_check, _tto_fwd_calc_tw),
             # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
             (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),

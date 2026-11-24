@@ -540,8 +540,8 @@ def test_forward_calculators_take_dates_spot_and_the_foreign_rate_by_hand(servic
     for ref in ("AH5", "AH6", "AH8", "AH9", "AK5", "AK6", "AK8", "AK9"):
         c = _cell_of(page, "B7", ref)
         assert c["i"] == "u" and c["fx"] == 1 and "m" not in c, ref          # an input the sheet fills by itself
-    assert _cell_of(page, "B7", "AH10")["i"] == "u" and "fx" not in _cell_of(page, "B7", "AH10")      # the TRY rate: typed
-    assert "i" not in _cell_of(page, "B7", "AH11")                                                      # the result
+    # the TRY rate and the results: typeable too, two-way (test_fwdcalc_twoway.py) - nothing typed, none marked
+    assert all(_cell_of(page, "B7", ref)["i"] == "u" and "an" not in _cell_of(page, "B7", ref) for ref in ("AH10", "AH11"))
     sp0, fwd0 = cell(service, "Forward!AH11"), cell(service, "Forward!AH12")
     days = cell(service, "Forward!AH7")
     res = service.set_inputs(u, "tto", [{"ref": "Forward!AH8", "value": "50,50"}, {"ref": "Forward!AH9", "value": "4,5"},
