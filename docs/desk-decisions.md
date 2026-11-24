@@ -941,6 +941,44 @@ Code: `tto/extras.py` (`_tto_tarih`, `_tarih_formulas`; `_tto_viop_price`, `viop
 `tto/views/10_masa.json` (TAF, TAFH). Tests: `tests/test_toplufaiz.py`, `tests/test_viopfra.py` (the Fiyat section), the
 browser test's checks after "VİOP target: the FRA's curve".
 
+### Fiyatlama'nın tersi ve FX opsiyonun prim vol'ü (24.11.2026)
+
+The integrator listed 14 pricing tools that work one way only; the desk answered:
+
+> "1-2-3-4-5-6-7-8-11-11-13"
+
+Two of them were built here, as they were offered (relayed, in English):
+
+> 4. "Fiyatlama: NPV → rate. Type an NPV (TL or $) or an upfront in bp and get the fixed rate. It would also get a box that
+> prices a list of tenors at once."
+
+- **Fiyat tipi** for every instrument (`pricing.RATE_KINDS`, `FX_KINDS`): Faiz / NPV TL / NPV $ / Peşin bp; an FX forward
+  Outright / Puan / NPV TL / NPV $. An NPV or upfront typed gives the level that prices to it, the exact inverse of the
+  page's own value (`pricing.level_for`); every number shown (NPV, DV01 buckets, Fiyat − mid) is at that level.
+- **Toplu fiyatlama**: a box of lines priced as the page's instrument, off the page's curves (`pricing.bulk`).
+
+**Choices made while building it** (said on the page and in README; ask the desk before changing):
+- **The curve the rate is solved on** is the viewer's own setting (Bootstrap by default, Murex's); the other curve's
+  rate for the same NPV is shown beside it. A PPK user's rate is the PPK curve's.
+- **Signs and units.** The NPV typed is + in the trader's favour, as the page's NPV ("Mid'e göre"). **Peşin bp** is that
+  NPV over the nominal in bp (NPV = N · bp / 10 000): a + upfront is a swap worth that much to the trader, which the
+  trader pays for it (a payer's rate under the mid, a receiver's over it). `%0,5` is 0,5 % of the nominal, 50 bp. NPV $
+  is TL at `OIS_MAIN!D2`, the rate the page shows its NPV in $ at. An FX forward has no upfront kind.
+- **Stored inputs keep their meaning.** A price kept before 24.11.2026 has no kind: a swap's reads as a rate, an FX
+  forward's in its kept kind (outright / points), and a request without `price_kind` is answered as before (compared
+  with the previous `price()` on 13 kinds of input on both curves: the same numbers to the bit).
+- **Toplu lines**: a maturity (`2Y3M`, `15`, a date), a start × end with an `x` (`12x15`, `1Yx18M`) or two dates; the
+  price, one word, at the end of the line, in the page's price kind. The whole line is read as the instrument first, so
+  `2Y 3M` is 2Y3M and `1Y 18M` one tenor (2Y6M) - a forward start needs the `x`; a bare number after a maturity is its
+  price, not months. The page's side and size apply to every line (a DV01 sizes each line's nominal). A line's DV01 is
+  its size's (N · annuity · 1 bp / USDTRY, OIS_MAIN's rule), not the buckets': nothing is built for a line (no bootstrap
+  or bump), so a list costs no more than reading its curves; the buckets of one line are the page's above. At most 100
+  lines; a line that cannot be priced says why on its own row; kept per user and asset.
+
+Code: `tto/pricing.py` (`read_price`, `level_for`, `npv_of`, `leveled`, `npv_block`, `parse_line`, `bulk`),
+`Service._pricing`, `tto/static/js/pages/pricing.js`. Tests: `tests/test_pricing.py` (the "ways back" and Toplu tests),
+the browser test's Fiyatlama checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

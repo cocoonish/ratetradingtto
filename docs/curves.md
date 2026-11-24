@@ -223,6 +223,16 @@ bump and NPV at a typed price.
 | XCCY | FX spot `Forward!I2`, TRY holidays | annual ACT/360 | counted back from maturity: 18M = 6M + 12M, 2Y3M = 3M + 12M + 12M |
 | FX forward | - | - | `F = S · DF_TRY(spot) / DF_TRY(value) / (1 + r·d/360)`, on the **offshore** curve and the **USD / EUR** OIS (`Forward!U:X`, `AA:AD`) - not TRY OIS |
 
+**The ways back** (24.11.2026, [desk-decisions.md](desk-decisions.md#fiyatlamanın-tersi-ve-fx-opsiyonun-prim-volü-24112026)):
+- **An NPV or an upfront typed gives the level** that prices to it - `pricing.level_for`, `value`'s exact inverse: a
+  swap K = ((DF(start) − DF(end)) − NPV / (side · N)) / Σ τ·DF, an FX forward K = F − NPV / (side · A · DF(value date)).
+  It is solved **on the viewer's own curve** (Bootstrap or PPK basamak, the setting's), the other curve's level for the
+  same NPV beside it. The NPV, the DV01 buckets and price − mid are then at that level, on both curves, as with that
+  level typed. NPV $ is TL at `OIS_MAIN!D2`; an upfront is NPV / nominal in bp, + in the trader's favour.
+- **Toplu fiyatlama** reads every line off the page's own curves (`Curves`): no bootstrap, no bump and no calibration
+  for a line. Each instrument stays on its own curve - TRY OIS and FRA lines on OIS, XCCY and FX forward lines on
+  offshore - and a line's DV01 is its size's (annuity rule), not the buckets'.
+
 ## Trades (`tto/tradevalue.py`, `tto/tradebook.py`)
 
 **TRY OIS:**
