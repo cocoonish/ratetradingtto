@@ -26,7 +26,9 @@
   ``{"type": "custom", "component": "..."}``; a table may show its columns in an order of its own (``"cols": ["K", "O",
   "Z", "P"]``: by letter, one not named is not shown) and take tooltips from the workbook (``"tips": {"W": "AA"}``: the
   text in column AA of a row is the tooltip of the row's cell in column W); ``"ranked": true`` a ranking (the best k trades, the cheapest bonds): a
-  launchpad keeps a choice of its rows by their number - the row is a place, whatever fills it today
+  launchpad keeps a choice of its rows by their number - the row is a place, whatever fills it today; ``"lift": false``
+  keeps the table's first row in it even when it looks like the sheet's caption (one bold text cell: a label whose input
+  beside it is empty - the bond carry's "ISIN" - would otherwise become the panel's title, its input gone with it)
 * ``{"type": "chart", "ppk": "interp"}``  a chart of the dashboard's own: OIS · PPK's interpolation chart, Bootstrap and
   PPK basamak (``tto/interpchart.py``: every horizon and curve sent at once, the page's selectors pick one);
   ``"full": true`` (any panel): it takes the page's whole width

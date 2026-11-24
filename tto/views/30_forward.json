@@ -517,6 +517,13 @@
    }
   },
   {
+   "range": "V71",
+   "scope": "user",
+   "group": "bond-back",
+   "kind": "number",
+   "label": "bond carry (B24) 'Fwd temiz fiyat (elle)': a buy / sell-back (forward) clean price typed, to read the repo it implies (boş başlar)"
+  },
+  {
    "range": "V73",
    "scope": "user",
    "group": "forward-35",
@@ -2059,8 +2066,10 @@
    "id": "B24",
    "type": "table",
    "title": "Tahvil carry / başabaş",
-   "range": "U56:W70",
-   "hidden": false
+   "range": "U56:W72",
+   "hidden": false,
+   "lift": false,
+   "note": "Fwd temiz fiyat (elle): bir buy / sell-back (geri satım) temiz fiyatı yazın - İma repo, B/E formülünün tersi: (fiyat − Temiz Fiyat + Kupon)·365/(Dirty Price·N). O repo Carry'ye yazılınca B/E yazdığınız fiyat olur."
   },
   {
    "id": "B25",

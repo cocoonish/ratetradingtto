@@ -740,6 +740,27 @@
    "label": "B23 'Volatilite'"
   },
   {
+   "range": "O44",
+   "scope": "user",
+   "group": "move-back",
+   "kind": "pct",
+   "label": "B23 'Hareket % (elle)': a move typed (a straddle's breakeven distance, % of the spot), to read the vol it implies (boş başlar)"
+  },
+  {
+   "range": "O46",
+   "scope": "user",
+   "group": "move-back",
+   "kind": "number",
+   "label": "B23 'Başabaş seviyesi (elle)': a breakeven level typed (above the spot the upper bound, below it the lower), to read the vol it implies (boş başlar)"
+  },
+  {
+   "range": "O48",
+   "scope": "user",
+   "group": "move-back",
+   "kind": "number",
+   "label": "B23 'Hareket pip (elle)': a move typed in pips, to read the vol it implies (boş başlar)"
+  },
+  {
    "range": "R36",
    "scope": "user",
    "group": "calc-69",
@@ -1187,8 +1208,9 @@
    "copyable": true,
    "type": "table",
    "title": "Implied Move",
-   "range": "N35:O43",
-   "hidden": false
+   "range": "N35:O49",
+   "hidden": false,
+   "note": "Tersi (hareketten vol): hareketi % olarak, bir başabaş seviyesi (straddle'ın üst ya da alt başabaşı) ya da pip olarak yazın - altında ima ettiği vol, bloğun formülünün tersiyle: vol = hareket / √(Gün / Gün Basis); seviyeden hareket = |seviye / Spot − 1|, pipten hareket = pip / (Spot·10000). O vol Volatilite'ye yazılınca aynı hareket, sınır ve pip çıkar."
   },
   {
    "id": "B24",

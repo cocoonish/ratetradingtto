@@ -967,9 +967,20 @@ Bloomberg request; new inputs per user, blank to start with, on cells no input e
   priced on) and Bootstrap (Murex's curve); the seven at once are in the box above for one date pair. With ACT/360 the
   chosen curve's spread, typed as the row's spread, makes "+ spread (360)" the quote; with ACT/365 or O/N the difference
   is in that basis (quote − the rate shown), not the row's ACT/360 spread.
+- **Tahvil carry: fiyattan repo** (Forward → Hesaplayıcılar, *Tahvil carry / başabaş*, `Forward!V71` → `V72`): the price
+  typed is a **clean** forward price, as B/E is; repo = (price − Temiz Fiyat + Kupon) · 365 / (Dirty Price · N), B/E's
+  formula solved for the repo. The yield at the typed price (`YAS_BOND_YLD` with that price, as "B/E Yield" asks) would
+  be a new Bloomberg request on every price typed: not added. Also fixed: with its inputs blank by default, the block's
+  "ISIN" row was taken for the table's caption and hidden (the panel's `"lift": false`).
+- **Implied Move: hareketten vol** (Hesaplayıcılar → Faiz çevirici, `Calculators!O44:O49`): three ways to type the move,
+  each the inverse of one output of the block - in % (Implied Move), as a breakeven level (Upper / Lower Bound: above the
+  spot the upper, below it the lower, move = |level / Spot − 1|) and in pips (Move By Pips) - each giving vol = move /
+  √(Gün / Gün Basis). Nothing, zero or below zero: no vol.
 
-Code: `tto/extras.py` (`_tto_tarih`, `_tarih_back`, `TARIH_QUOTE`, `TARIH_VS`, `TARIH_BACK`), `tto/views/10_masa.json`
-(TAFS, TAF). Tests: `tests/test_toplufaiz.py` (the quote's spreads), the browser test's "ways back" checks.
+Code: `tto/extras.py` (`_tto_tarih`, `_tarih_back`, `TARIH_QUOTE`, `TARIH_VS`, `TARIH_BACK`; `_tto_bond_back`,
+`_bond_back_check`; `_tto_move_back`, `_move_back_check`, `MOVE_BACK`), `tto/views/10_masa.json` (TAFS, TAF),
+`30_forward.json` (B24), `90_calc.json` (B23). Tests: `tests/test_toplufaiz.py` (the quote's spreads), `tests/test_hesap_ters.py`,
+the browser test's "ways back" checks.
 
 ## Process
 

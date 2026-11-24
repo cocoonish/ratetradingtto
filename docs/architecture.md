@@ -184,8 +184,10 @@ priority:
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
 | EK_FX | asw | the offshore rates ASW FX is built on |
 
-Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01 and others. The module
-docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
+Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01, the calculators' ways back
+written beside their blocks (the Forward sheet's points → rate, bond carry's price → repo `Forward!U71:V72`, Implied
+Move's move → vol `Calculators!N44:O49`) and others. The module docstring's list of sheets is incomplete; `_BUILDERS` is
+the full list.
 
 ## Module map
 

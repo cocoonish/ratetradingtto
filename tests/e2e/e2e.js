@@ -2363,6 +2363,45 @@ async function clipAfter(page, action) {
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_TARIH!B5', 'EK_TARIH!C5', 'EK_TARIH!D5', 'EK_TARIH!N5',
       'EK_TARIH!B6', 'EK_TARIH!C6', 'EK_TARIH!N6'] });
     await waitCell(page, 'EK_TARIH!M5', 't.trim() === ""');
+    console.log('ways back (24.11): a buy / sell-back price -> its repo, a move -> its vol');
+    // Forward → Hesaplayıcılar, Tahvil carry / başabaş: its ISIN row stays in the table (blank, it was taken for the title); its
+    // own B/E typed as the forward price reads its repo back
+    await open(page, 'forward');
+    await tab(page, 'calc');
+    const carryIsin = await page.evaluate(() => !!window.tto.findCell('Forward!V56'));
+    await typeInto(page, 'Forward!V57', '91,713');
+    await typeInto(page, 'Forward!V58', '05.11.2026');
+    await typeInto(page, 'Forward!V61', '36');
+    await typeInto(page, 'Forward!V62', '03.02.2027');
+    await waitCell(page, 'Forward!V63', 't.trim() === "90"');
+    await waitCell(page, 'Forward!V61', 't.trim() === "36,00%"');
+    const carryBE = (await cellText(page, 'Forward!V67')).trim();
+    await typeInto(page, 'Forward!V71', carryBE);
+    await waitCell(page, 'Forward!V72', 't.trim() !== ""');
+    const carryRepo = (await cellText(page, 'Forward!V72')).trim();
+    check('Forward → Hesaplayıcılar: Tahvil carry\'s ISIN row is in its table; its own B/E typed as "Fwd temiz fiyat (elle)" reads the repo it '
+      + 'was priced with ("İma repo")', carryIsin && Math.abs(trNumber(carryRepo) - 36) < 0.01 && /%$/.test(carryRepo),
+      { carryIsin, carryBE, carryRepo });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!V57', 'Forward!V58', 'Forward!V61', 'Forward!V62',
+      'Forward!V71'] });
+    await waitCell(page, 'Forward!V71', 't.trim() === ""');
+    // Hesaplayıcılar → Implied Move: the block's own move, upper bound and pips typed back read its vol
+    await open(page, 'calc');
+    await tab(page, 'conv');
+    await waitCell(page, 'Calculators!O43', 't.trim() !== ""');
+    const moveTyped = { O44: (await cellText(page, 'Calculators!O40')).trim(), O46: (await cellText(page, 'Calculators!O41')).trim(),
+      O48: (await cellText(page, 'Calculators!O43')).trim() };
+    const moveVol = {};
+    for (const [typed, out] of [['O44', 'O45'], ['O46', 'O47'], ['O48', 'O49']]) {
+      await typeInto(page, 'Calculators!' + typed, moveTyped[typed]);
+      await waitCell(page, 'Calculators!' + out, 't.trim() !== ""');
+      moveVol[out] = (await cellText(page, 'Calculators!' + out)).trim();
+    }
+    const vol0 = (await cellText(page, 'Calculators!O39')).trim();
+    check('Hesaplayıcılar → Implied Move: its own move (%), upper bound and pips typed back ("… (elle)") read its Volatilite ("İma vol")',
+      Object.values(moveVol).every((t) => t === vol0) && vol0 === '19,00%', { moveTyped, moveVol, vol0 });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Calculators!O44', 'Calculators!O46', 'Calculators!O48'] });
+    await waitCell(page, 'Calculators!O44', 't.trim() === ""');
 
     await open(page, 'borsa');
     const borsa = await page.evaluate(() => {

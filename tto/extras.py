@@ -3479,6 +3479,82 @@ def _tarih_back(b: "SheetBuilder") -> None:
                             "(360)'ı koteye eşit çıkar.")
 
 
+# ---------------------------------------------------------------------------------------------- Forward: bond carry, price -> repo
+#: The Forward sheet's bond carry calculator ("Tahvil carry / başabaş", Forward!U56:W70) goes from a repo rate to the
+#: breakeven clean price: B/E (V67) = Temiz Fiyat (V57) − Kupon (V66 = Coupon · N / 364 · 100, the coupon earned) + Carry
+#: Maliyet (V65 = Dirty Price (V60) · Carry (V61, the repo) / 365 · N), N (V63) = End Date − Settlement.  The way back (the
+#: desk, 24.11.2026, item 8 of "1-2-3-4-5-6-7-8-11-11-13": a buy / sell-back price typed -> the repo it implies): "Fwd temiz
+#: fiyat (elle)" (V71, a clean price as B/E is) -> "İma repo" (V72) = (price − V57 + V66) · 365 / (V60 · N), B/E's formula
+#: solved for the repo - typed into Carry it makes B/E the price typed.  The dirty price and the coupon are the calculator's
+#: own cells (V60, V64): no Bloomberg request of its own.
+BOND_BACK_NAME = "Tahvil carry fiyattan repo"
+BOND_BACK_PRICE, BOND_BACK_REPO = "V71", "V72"
+BOND_BACK_CELLS = ("U71", "V71", "W71", "U72", "V72", "W72")          # empty in the workbook; no input ever stood there
+
+
+def _bond_back_check(model: Model) -> None:
+    """B/E and the parts the way back solves it with, as the calculator has them; the cells it takes are empty."""
+    _need_sheets(model, "Forward")
+    _need_captions(model, (("Forward", "U57", "Temiz Fiyat"), ("Forward", "U60", "Dirty Price"), ("Forward", "U61", "Carry"),
+                           ("Forward", "U63", "N"), ("Forward", "U66", "Kupon"), ("Forward", "U67", "B/E")))
+    for addr, text in (("V67", "V57-V66+V65"), ("V65", "V60*V61/365*V63"), ("V66", "V64*V63/364*100"), ("V63", "V62-V58")):
+        _need_formula(model, "Forward", addr, text)
+    sh = model.sheet("Forward")
+    for addr in BOND_BACK_CELLS:
+        if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+            raise ValueError("Forward!%s boş değil" % addr)
+
+
+def _tto_bond_back(model: Model) -> None:
+    b = SheetBuilder(model, "Forward")
+    price, repo = BOND_BACK_PRICE, BOND_BACK_REPO
+    b.set("U%s" % price[1:], "Fwd temiz fiyat (elle)", like="U67")
+    b.input(price, None, like="V57")                                           # the calculator's own look of a price typed
+    b.set("U%s" % repo[1:], "İma repo", like="U67")
+    b.set(repo, '=IFERROR(IF(ISNUMBER($V$71),($V$71-$V$57+$V$66)*365/($V$60*$V$63),""),"")', fmt="0.00%", bold=True,
+          align="center")
+
+
+# ---------------------------------------------------------------------------------------------- Calculators: implied move -> vol
+#: The Calculators sheet's Implied Move (Calculators!N35:O43) goes from a vol to the move: Implied Move (O40) = √(Gün /
+#: Gün Basis) · Volatilite (O37, O38, O39), Upper / Lower Bound (O41 / O42) = (1 ± move) · Spot (O36), Move By Pips (O43)
+#: = Spot · move · 10000.  The way back (the desk, 24.11.2026, item 12: "move → vol", to turn a straddle breakeven into a
+#: vol): a move typed - in % (O44), as a breakeven level (O46: above the spot the upper bound, below it the lower, so the
+#: move is |level / Spot − 1|) or in pips (O48) - -> the vol it implies (O45, O47, O49), each the block's formula solved
+#: for the vol: typed into Volatilite it gives back the move, the bound or the pips typed.  None, zero or below: no vol.
+MOVE_BACK_NAME = "Implied move hareketten vol"
+#: (typed, its vol, label of the typed, label of the vol, the move the typed value is - a fraction of the spot)
+MOVE_BACK = (("O44", "O45", "Hareket % (elle)", "İma vol (hareket)", "$O$44"),
+             ("O46", "O47", "Başabaş seviyesi (elle)", "İma vol (başabaş)", "ABS($O$46/$O$36-1)"),
+             ("O48", "O49", "Hareket pip (elle)", "İma vol (pip)", "$O$48/($O$36*10000)"))
+
+
+def _move_back_check(model: Model) -> None:
+    """The block's formulas the way back solves for the vol; the cells it takes are empty."""
+    _need_sheets(model, "Calculators")
+    _need_captions(model, tuple(("Calculators", "N%d" % r, text) for r, text in
+                                ((36, "Spot"), (37, "Gün"), (38, "Gün Basis"), (39, "Volatilite"), (40, "Implied Move"),
+                                 (41, "Upper Bound"), (42, "Lower Bound"), (43, "Move By Pips"))))
+    for addr, text in (("O40", "SQRT(O37/O38)*O39"), ("O41", "(1+O40)*O36"), ("O42", "(1-O40)*O36"), ("O43", "O36*O40*10000")):
+        _need_formula(model, "Calculators", addr, text)
+    sh = model.sheet("Calculators")
+    for typed, out, _, _, _ in MOVE_BACK:
+        for addr in ("N" + typed[1:], typed, "N" + out[1:], out):
+            if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+                raise ValueError("Calculators!%s boş değil" % addr)
+
+
+def _tto_move_back(model: Model) -> None:
+    b = SheetBuilder(model, "Calculators")
+    looks = {"O44": {"like": "O39"}, "O46": {"like": "O36"},                   # the block's own inputs: a %, a price
+             "O48": {"fmt": "#,##0.00", "fill": "FFCC99", "color": "3F3F76"}}  # (its input look, a number of pips)
+    for typed, out, label, vlabel, move in MOVE_BACK:
+        b.set("N" + typed[1:], label, like="N40")
+        b.input(typed, None, **looks[typed])
+        b.set("N" + out[1:], vlabel, like="N40")
+        b.set(out, '=IFERROR(IF(N(%s)>0,%s/SQRT($O$37/$O$38),""),"")' % ("$%s$%s" % (typed[0], typed[1:]), move), fmt="0.00%", bold=True)
+
+
 # ---------------------------------------------------------------------------------------------- VİOP target: a far price
 #: The target table of the VİOP sheet (VIOP!K330:Y338) goes from a target rate to the far contract's limit price: "Hedef
 #: tipi" FRA+bp (OIS FRA + bp), FXswap+bp (the FX swap implied rate + bp) or Faiz % (a rate typed), "Hedef değer" its
@@ -4169,6 +4245,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
+            # (the calculators' ways back of 24.11: the bond carry's price -> repo, the implied move's move -> vol)
+            (BOND_BACK_NAME, _bond_back_check, _tto_bond_back), (MOVE_BACK_NAME, _move_back_check, _tto_move_back),
             (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread),
             # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
             (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
