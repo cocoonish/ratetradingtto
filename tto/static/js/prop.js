@@ -69,7 +69,7 @@ function build() {
   const entry = inp('prop-entry', 'canlı orta kur', 'Boş: panodaki canlı orta kur; yazılırsa o');
   const stop = inp('prop-stop', 'stop kuru', 'Stop seviyesi: girişin altında long, üstünde short');
   const loss = inp('prop-loss', '500k, 1mn', 'Göze aldığınız kayıp: 500k, 1mn, 2,5mn - büyüklük ondan (1M\'e aşağı yuvarlanır)');
-  const size = inp('prop-size', '2m, 5m', 'Büyüklük (baz döviz): 2m, 2,5m - yazarsanız stoptaki kayıp ondan hesaplanır. Kayıp ve büyüklükten '
+  const size = inp('prop-size-in', '2m, 5m', 'Büyüklük (baz döviz): 2m, 2,5m - yazarsanız stoptaki kayıp ondan hesaplanır. Kayıp ve büyüklükten '
     + 'son yazdığınız kalır, öbürü ondan hesaplanır');
   const ccy = seg('prop-ccy', [['TRY', 'TRY', 'Kayıp TL; risk de TL gösterilir'], ['USD', 'USD', 'Kayıp USD; risk de USD gösterilir']], pp.ccy, (v) => {
     pp.ccy = v;
@@ -191,8 +191,8 @@ const askCalc = debounce(() => calcNow(), 300);
 /** The loss or the size typed into (two-way): it is the one that stands; the other's own value goes - it shows what the
  *  typed one gives.  Emptied: nothing typed (or the other, if it still holds a value of its own). */
 function typed(which) {
-  const box = $(which === 'loss' ? 'prop-loss' : 'prop-size');
-  const other = $(which === 'loss' ? 'prop-size' : 'prop-loss');
+  const box = $(which === 'loss' ? 'prop-loss' : 'prop-size-in');
+  const other = $(which === 'loss' ? 'prop-size-in' : 'prop-loss');
   if (box.value.trim()) {
     pp.anchor = which;
     other.value = '';
@@ -205,14 +205,14 @@ function typed(which) {
 /** The typed one bold with ✎; the other's placeholder what the typed one gives (or its hint). */
 function markAnchor() {
   if (!pp.el) return;
-  for (const [id, which] of [['prop-loss', 'loss'], ['prop-size', 'size']]) {
+  for (const [id, which] of [['prop-loss', 'loss'], ['prop-size-in', 'size']]) {
     const box = $(id);
     const on = pp.anchor === which;
     box.classList.toggle('tw-anchor', on);
     box.closest('.pp-field').classList.toggle('tw-anchored', on);
   }
   const c = pp.calc;
-  const loss = $('prop-loss'), size = $('prop-size');
+  const loss = $('prop-loss'), size = $('prop-size-in');
   loss.placeholder = c && pp.anchor === 'size' && typeof c.loss === 'number' ? num(c.loss, 0) : '500k, 1mn';
   size.placeholder = c && pp.anchor === 'loss' ? (c.lots ? c.lots + 'm' : '0') : '2m, 5m';
   $('prop-size-base').textContent = c ? c.base : '';
@@ -221,7 +221,7 @@ function markAnchor() {
 async function calcNow() {
   if (!pp.el) return;
   const q = { pair: $('prop-pair').value.trim(), entry: $('prop-entry').value.trim(), stop: $('prop-stop').value.trim(), ccy: pp.ccy };
-  if (pp.anchor === 'size') q.size = $('prop-size').value.trim();
+  if (pp.anchor === 'size') q.size = $('prop-size-in').value.trim();
   else q.loss = $('prop-loss').value.trim();
   const ticket = ++pp.ticket;
   if (!q.pair || !q.stop || !(q.loss || q.size)) {
@@ -278,7 +278,7 @@ function paintCalc(hint) {
   const alt = (m) => (typeof m[other] === 'number' ? ' · ' + money(m[other]) + ' ' + other.toUpperCase() : '');
   if (c.anchor === 'size') {
     // the size typed (as it is): the loss it makes at the stop
-    box.appendChild(h('div', { class: 'pp-size', id: 'prop-size-out' }, 'Büyüklük ', h('b', null, num(c.lots, 2).replace(/,?0+$/, '') + 'M ' + c.base),
+    box.appendChild(h('div', { class: 'pp-size', id: 'prop-size' }, 'Büyüklük ', h('b', null, num(c.lots, 2).replace(/,?0+$/, '') + 'M ' + c.base),
       h('span', { class: 'muted' }, ' (yazılan)')));
     box.appendChild(h('div', { class: 'pp-real', id: 'prop-real' }, 'Stopta kayıp ', h('b', null, money(c.real_loss.ccy) + ' ' + ccy),
       h('span', { class: 'muted' }, alt(c.real_loss))));
