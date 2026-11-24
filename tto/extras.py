@@ -2670,6 +2670,71 @@ def _rv_back(model: Model) -> None:
                                   'ona bağlı değil",$BE{r}))))))').format(**f), color=NOTE_COLOR)
 
 
+SW_BACK_NAME = "DİBS RV switch seviyesinden fiyat"
+SW_ROWS = (64, 75)                       # SWITCH / PAIR's pairs (A Sat, B Al, C Sat nominal)
+#: the yield level typed (bp), the Al leg's clean price at it, the ASW / DM level typed (bp), the Al leg's clean price at
+#: it, the Al leg's clean price now, why a level gives none
+SW_BACK = ("U", "V", "W", "X", "Y", "Z")
+SW_NOTE = 78                             # the table's note on the ways back (its own note is row 77)
+
+
+def _sw_parts(r: int) -> Dict[str, str]:
+    """The texts of the switch row ``r``'s pieces, as its own formulas write them: the pair found, each leg's place,
+    yield (S) and ASW / DM (Z)."""
+    sat, al = "MATCH($A{r},$A$5:$A$54,0)".format(r=r), "MATCH($B{r},$A$5:$A$54,0)".format(r=r)
+    return {"ok": "AND($A{r}<>\"\",$B{r}<>\"\",ISNUMBER({s}),ISNUMBER({a}))".format(r=r, s=sat, a=al), "sat": sat, "al": al,
+            "s_sat": "INDEX($S$5:$S$54,%s)" % sat, "s_al": "INDEX($S$5:$S$54,%s)" % al,
+            "z_sat": "INDEX($Z$5:$Z$54,%s)" % sat, "z_al": "INDEX($Z$5:$Z$54,%s)" % al}
+
+
+def _rv_switch_back_check(model: Model) -> None:
+    _rv_pricing_check(model)
+    _need_captions(model, (("DİBS RV", "A63", "Sat (ISIN)"), ("DİBS RV", "B63", "Al (ISIN)"),
+                           ("DİBS RV", "G63", "Getiri farkı (basit, bp)"), ("DİBS RV", "I63", "ASW/DM farkı (bp)")))
+    for r in range(SW_ROWS[0], SW_ROWS[1] + 1):
+        p = {"a": "MATCH($A%d,$A$5:$A$54,0)" % r, "b": "MATCH($B%d,$A$5:$A$54,0)" % r}
+        _need_formula(model, "DİBS RV", "G%d" % r, "(INDEX($S$5:$S$54,%(b)s)-INDEX($S$5:$S$54,%(a)s))*10000" % p)
+        _need_formula(model, "DİBS RV", "I%d" % r, "(INDEX($Z$5:$Z$54,%(b)s)-INDEX($Z$5:$Z$54,%(a)s))*1" % p)
+    _need_empty(model, "DİBS RV", "%s%d:%s%d" % (SW_BACK[0], SW_ROWS[0] - 2, SW_BACK[-1], SW_NOTE))
+    _need_empty(model, "DİBS RV", "A%d:T%d" % (SW_NOTE, SW_NOTE))
+
+
+def _rv_switch_back(model: Model) -> None:
+    """DİBS RV's SWITCH / PAIR: a switch level typed per pair (each user's own) -> the Al leg's clean price, the Sat leg
+    at the market - the table's own differences solved for the Al leg's price: a yield level is Al − Sat BIST simple
+    yield (G: the Al leg's yield is the Sat leg's + the level, ``rv_clean_from_yield``), an ASW / DM level Al − Sat ASW /
+    DM as the page shows them (I: the Sat leg's ASW / DM - a fixed coupon bond's or a bill's ASW, a TLREF floater's DM -
+    + the level is the Al leg's, ``rv_clean_from_asw`` / ``rv_clean_from_dm``).  The pair's rows are typed (its ISINs
+    in the row): what is typed for a pair stays with it when the bond list moves the bonds."""
+    b = SheetBuilder(model, "DİBS RV")
+    y_lvl, y_px, a_lvl, a_px, now, why = SW_BACK
+    b.row("%s63" % y_lvl, ["Getiri seviyesi (bp)", "Al temiz (getiri seviyesinden)", "ASW/DM seviyesi (bp)",
+                           "Al temiz (ASW/DM seviyesinden)", "Al temiz (şimdi)", "Seviye notu"], like="T63")
+    for r in range(SW_ROWS[0], SW_ROWS[1] + 1):
+        p = _sw_parts(r)
+        at = rv_at(p["al"])
+        yl, al_ = "$%s%d" % (y_lvl, r), "$%s%d" % (a_lvl, r)
+        f = dict(p, r=r, yl=yl, al_=al_, yp="$%s%d" % (y_px, r), ap="$%s%d" % (a_px, r))
+        b.input("%s%d" % (y_lvl, r), None, fmt="0.0")
+        b.input("%s%d" % (a_lvl, r), None, fmt="0.0")
+        b.set("%s%d" % (y_px, r), '=IFERROR(IF(AND({ok},ISNUMBER({yl}),ISNUMBER({s_sat}),ISNUMBER({s_al})),{px},""),"")'.format(
+            px=rv_clean_from_yield(at, "%s+%s/10000" % (p["s_sat"], yl)), **f), like="O5")
+        lvl = "%s+%s" % (p["z_sat"], al_)
+        b.set("%s%d" % (a_px, r), ('=IFERROR(IF(AND({ok},ISNUMBER({al_}),ISNUMBER({z_sat}),ISNUMBER({z_al})),IF({kind}="T",{dm},{asw}),'
+                                   '""),"")').format(kind=at("D"), dm=rv_clean_from_dm(at, lvl), asw=rv_clean_from_asw(at, lvl), **f),
+              like="O5")
+        b.set("%s%d" % (now, r), '=IF(AND({ok},OR(ISNUMBER({yl}),ISNUMBER({al_}))),INDEX($O$5:$O$54,{al}),"")'.format(**f), like="O5")
+        b.set("%s%d" % (why, r), ('=IF(NOT({ok}),"",TRIM(IF(AND(ISNUMBER({yl}),NOT(ISNUMBER({yp}))),"Getiri: "&IF(ISNUMBER({s_sat}),'
+                                  '"Al","Sat")&" bacağının getirisi yok (TLREF / FRN ya da fiyatı yok). ","")&IF(AND(ISNUMBER({al_}),'
+                                  'NOT(ISNUMBER({ap}))),"ASW/DM: "&IF(ISNUMBER({z_sat}),"Al","Sat")&" bacağının ASW / DM\'i yok '
+                                  '(FRN / TÜFE ya da fiyatı yok).","")))').format(**f), color=NOTE_COLOR)
+    b.set("A%d" % SW_NOTE, "Seviye → Al fiyatı: Sat bacağı piyasada kalır (kullanılan temiz fiyatının basit getirisi / ASW-DM'i: G ve I "
+                           "sütunlarındaki), Al bacağı yazılan seviyeden çözülür. Getiri seviyesi = Al − Sat BIST basit getirisi (bp); "
+                           "ASW/DM seviyesi = Al − Sat ASW / DM (bp; DİBS RV'nin TRY OIS eğrisine göre - sabit kuponlu ve bono ASW, "
+                           "TLREF'li DM; FRN ve TÜFE'de yok). Al temiz, Al bacağının Manuel temiz'ine yazılınca G / I tam o seviyeyi "
+                           "gösterir.", like="A77")
+
+
 # ---------------------------------------------------------------------------------------------- carry path
 CARRY_SHEET = "EK_CARRY"
 #: the TLREF path the carry engine compounds over the horizon: the value of the choice, and what it is
@@ -4279,7 +4344,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
             ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),
             # (the ways back of the bonds: after the FRN, whose kind "F" they refuse a DM; Manuel Tahvil reads Tüm Kâğıtlar)
-            (RV_BACK_NAME, _rv_back_check, _rv_back),
+            (RV_BACK_NAME, _rv_back_check, _rv_back), (SW_BACK_NAME, _rv_switch_back_check, _rv_switch_back),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),

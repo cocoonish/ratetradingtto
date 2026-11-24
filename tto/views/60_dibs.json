@@ -117,6 +117,20 @@
    "group": "dibs-15",
    "kind": "number",
    "label": "'Hedef ASW / DM (bp)' → temiz fiyat (DİBS RV'nin TRY OIS eğrisine göre)"
+  },
+  {
+   "range": "U64:U75",
+   "scope": "user",
+   "group": "dibs-16",
+   "kind": "number",
+   "label": "'Getiri seviyesi (bp)' – switch: Al − Sat basit getiri → Al temiz"
+  },
+  {
+   "range": "W64:W75",
+   "scope": "user",
+   "group": "dibs-17",
+   "kind": "number",
+   "label": "'ASW/DM seviyesi (bp)' – switch: Al − Sat ASW / DM → Al temiz"
   }
  ],
  "panels": [
@@ -239,7 +253,7 @@
    "id": "B4",
    "type": "table",
    "title": "SWITCH / PAIR",
-   "range": "A62:T77",
+   "range": "A62:Z78",
    "hidden": false
   },
   {
