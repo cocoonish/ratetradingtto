@@ -979,6 +979,35 @@ Code: `tto/pricing.py` (`read_price`, `level_for`, `npv_of`, `leveled`, `npv_blo
 `Service._pricing`, `tto/static/js/pages/pricing.js`. Tests: `tests/test_pricing.py` (the "ways back" and Toplu tests),
 the browser test's Fiyatlama checks.
 
+> 11. "FX option: premium → vol, in Trades, to check a dealer's premium against the screen smile."
+
+(The desk's second "11" was item 12, Implied Move - another builder's.)
+
+- **The premium's vol**: the Garman-Kohlhagen vol at which the option is worth its premium on today's market, with
+  exactly the inputs its valuation takes (spot, the forward to delivery, the discount factors, days to expiry / 365; the
+  premium in its currency at today's spot) - the vol its MTM is 0 at. Solved on `tradevalue.gk` by Brent
+  (`fxvol.brent`), as the Swaption page solves its Black vol: valued at it, the option is worth the premium to 1e-9.
+- **In the form**: typed with its premium, an FX option's preview says the premium's vol, the vol the valuation uses
+  beside it (the smile's at the strike - SVI for USDTRY / EURUSD, Vanna-Volga for G10 - or a vol typed by hand) with
+  the difference, and the premium that vol gives. On the form's market (Bootstrap, at most 30 s old).
+- **On the row**: after "MTM yenile", under the "Güncel" vol, "prim vol" and its difference to the vol used, on each
+  curve's market as the MTM. The daily closes do not keep it (a "now" number, as the greeks).
+
+**Choices made while building it** (ask the desk before changing):
+- **No vol reaches a premium** at or under the discounted intrinsic value (vol 0 already gives that) or at or over
+  S · DF_base (a call) / K · DF_quote (a put) - what an infinite vol gives -, a premium of 0, an expired option, or a vol
+  over 100 000 %: the line says which. Without a smile ("vol kotası yok") the premium's vol is still given.
+- **Deep in the money** a premium can be all intrinsic value in double precision: then no vol is said rather than an
+  arbitrary one.
+- **On a trade dated before today** the row's premium vol is the vol the MTM is 0 at now - the dealer's vol only on the
+  trade date; the tip says so.
+
+Code: `tto/tradevalue.py` (`implied_vol`, `gk_bounds`, `premium_vol`, `_fxopt_market`; `vols` of `_value_fxopt`),
+`tto/tradebook.py` (`TradeBook.check` → `premium_vol`, `_keep`), `tto/static/js/pages/trades.js` (`premiumVolLine`,
+`nowCell`). Tests: `tests/test_tradevalue.py` (the premium → vol tests), `tests/test_trades.py`
+(`test_the_form_says_an_option_s_premium_as_a_vol_beside_the_smile_and_the_row_keeps_it`), the browser test's Trades
+checks.
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

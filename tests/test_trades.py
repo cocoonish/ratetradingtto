@@ -1002,6 +1002,43 @@ def test_a_trade_the_valuation_cannot_take_says_why(monkeypatch):
     store.close()
 
 
+def test_the_form_says_an_option_s_premium_as_a_vol_beside_the_smile_and_the_row_keeps_it(monkeypatch):
+    """The desk's item 11 (24.11.2026: "FX option: premium → vol", a dealer's premium against the screen smile): the
+    form's check of an FX option says the vol its premium implies on today's market (tradevalue.premium_vol, the form's
+    market) beside the smile's vol at the strike and the premium that gives - or why no vol reaches the premium; nothing
+    of it for another product, and a form that does not read yet has none.  "MTM yenile" keeps it on the row (``vols``:
+    the vol used, the premium's); the daily close does not (a "now" number, as the greeks)."""
+    from test_tradevalue import hand_market
+    book, store, clock = _book()
+    mkt = hand_market(today=dt.date(2026, 11, 17))
+    for name in ("check", "value"):
+        monkeypatch.setattr(tv, name, _REAL[name])
+    monkeypatch.setattr(tv, "market", lambda svc, curve="boot": mkt)
+    ali = _user(store, "Prim Vol")
+    res = book.check(ali, _fxopt())
+    v = res["vol"]
+    want = tv.premium_vol(res["trade"], mkt)
+    assert res["ok"] and v["ok"] and v["model"] == "svi" and v["vol"] < v["used"] and v["premium_ccy"] == "TRY"
+    assert (v["vol"], v["used"], v["used_premium"]) == (want["vol"], want["used"], want["used_premium"])
+    assert v["expiry"] == "2026-12-17" and v["delivery"] == "2026-12-21"            # (the tenor "1A" as the trade reads it)
+    # at the vol the form says, the option is worth the premium typed (150k TRY)
+    back = tv.value(dict(res["trade"], manual_price=v["vol"]), mkt, "2026-11-17")
+    assert abs(back["mtm"]) <= 1e-9 * 150000.0
+    high = book.check(ali, _fxopt(price="1.000m"))["vol"]
+    assert high["ok"] and high["vol"] is None and "hiçbir vol bu primi vermez" in high["vol_why"]
+    assert "vol" not in book.check(ali, _fxspot()) and "vol" not in book.check(ali, _fxopt(strike=""))
+    # the row after "MTM yenile": the vol used and the premium's, on the same market
+    tid = book.add(ali, _fxopt())["id"]
+    row = book.mtm(ali, "desk")["values"][str(tid)]
+    assert row["ok"] and row["vols"]["premium"] == pytest.approx(v["vol"], abs=1e-12)
+    assert row["vols"]["used"] == pytest.approx(v["used"], abs=1e-12) and row["vols"]["model"] == "svi"
+    # the daily close keeps none
+    clock.set("2026-11-17 17:30")
+    assert book.take_close("2026-11-17")["valued"] == 1
+    assert "vols" not in store.tb_closes([tid])[tid]["2026-11-17"] and "greeks" not in store.tb_closes([tid])[tid]["2026-11-17"]
+    store.close()
+
+
 def test_the_live_counter_is_the_desk_s_and_one_s_own(monkeypatch):
     book, store, clock = _book()
     ali, veli = _user(store, "Ali Veli"), _user(store, "Veli Can")

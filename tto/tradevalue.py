@@ -15,7 +15,8 @@ The interface - the page calls nothing else:
   now, the greeks of an option, a package's legs;
 * :func:`coupons` - a rate trade's coupons: each swap's schedule, every period's fixed and floating payment, net,
   payment day and state;
-* :func:`notional_for_dv01` - the nominal of a DV01, on the desk's 5 mn lot.
+* :func:`notional_for_dv01` - the nominal of a DV01, on the desk's 5 mn lot;
+* :func:`premium_vol` - an FX option's premium as a vol, beside the smile's (the form's check of a dealer's premium).
 
 **Instruments are named by what they are** - a swap by its dates, a meeting period by the meeting's date, a bond by its
 ISIN, FX by its pair - never by a row: a calendar edit, a roll or a new bond in a list moves nothing.
@@ -101,7 +102,9 @@ Per product (each one's market, conventions and the numbers that went in are in 
   premium in its currency at today's spot).  *Carry* = theta over the day(s): the same spot, vol and rates, the
   expiry and the forward's days that much shorter.  Greeks: delta (base currency amount, spot delta), gamma (the
   delta's change for a 1 % rise of the spot), vega (a vol point, quote currency), theta (one calendar day, quote
-  currency).
+  currency).  **The premium's vol** (the desk's item 11 of 24.11.2026, offered as "premium → vol, to check a dealer's
+  premium against the screen smile"): the vol at which the option is worth its premium on the same market - the MTM is
+  0 at it (:func:`implied_vol`, ``vols`` of a valuation, :func:`premium_vol` for the form) -, beside the vol used.
 """
 from __future__ import annotations
 
@@ -1957,13 +1960,7 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
                  "price_text": "%s %s %s kapandı" % (pair, _plain(K), "call" if call else "put"), "funding": 0.0}
         return _finish(mkt, t, quote, total, {"premium": t["price"], "close_premium": t["close_price"], "premium_ccy": pccy})
     notes: List[str] = []
-    expired = expiry <= asof
-    days = float((expiry - asof).days)
-    F, f_how = mkt.forward(pair, delivery)
-    df_q, q_how = mkt.df_quote(pair, delivery)
-    if F is None or df_q is None:
-        raise TradeError("%s forward / iskonto yok (%s)" % (pair, f_how if F is None else q_how))
-    df_b = df_q * F / S
+    expired, days, F, f_how, df_q, q_how, df_b, T = _fxopt_market(mkt, pair, S, expiry, delivery, asof)
     vinfo: Dict[str, Any] = {}
     if expired:
         sigma = 0.0
@@ -1974,7 +1971,6 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
         sigma, vinfo = smile_vol(mkt, pair, K, days, F, df_b)
         if sigma is None:
             raise TradeError("%s - elle vol (manual_price, vol puanı) yazın" % vinfo.get("why"))
-    T = days / 365.0
     if expired:
         unit = max(0.0, (S - K) if call else (K - S)) * df_q
         g = {"price": unit, "delta": 0.0, "gamma": 0.0, "vega": 0.0}
@@ -2013,13 +2009,137 @@ def _value_fxopt(t: Dict[str, Any], mkt: Market, asof: _dt.date) -> Dict[str, An
     text = "%s %s %s %s vol %s" % (pair, when, _plain(K), "call" if call else "put", _tr(vol_pts, 1))
     total = {"mtm": mtm, "accrued": None, "carry": carry, "price_now": vol_pts, "price_text": text, "funding": 0.0,
              "carry_parts": [["theta", carry]]}
+    # ---- the vol the premium implies on this very market (the same S, F, DFs and T): the vol the MTM is 0 at
+    p_vol, p_why = (None, EXPIRED_WHY) if expired else implied_vol(S, K, T, df_q, df_b, call, prem_q / N)
     inputs = {"spot": S, "forward": F, "forward_how": f_how, "df_quote": df_q, "df_base": df_b, "discount_how": q_how,
               "vol": vol_pts, "vol_how": vinfo, "T": T, "expiry": _iso(expiry), "delivery": _iso(delivery), "base_amount": N,
               "value": value_q, "premium": prem, "premium_ccy": pccy, "premium_quote": prem_q, "unit_price": g["price"],
               # (what the option is worth now in the premium's currency - the premium it would fetch: Trades' levels)
               "premium_now": abs(value_q) * prem / prem_q if prem_q else None,
+              "premium_vol": p_vol * 100.0 if p_vol is not None else None, "premium_vol_why": p_why,
               "carry_days": cdays, "notes": notes}
-    return _finish(mkt, t, quote, total, inputs, greeks=greeks)
+    out = _finish(mkt, t, quote, total, inputs, greeks=greeks)
+    # (the row's: the vol used - the smile's at the strike, or the one typed - and the one the premium implies)
+    out["vols"] = {"used": None if expired else vol_pts, "model": vinfo.get("model"), "premium": inputs["premium_vol"],
+                   "why": p_why}
+    return out
+
+
+# ---------------------------------------------------------------------------------------------- FX options: premium → vol
+#: the vol (a decimal a year) a premium is looked for up to: 100 000 % - past it, "no vol reaches the premium"
+VOL_CAP = 1000.0
+#: why an expired option has no vol
+EXPIRED_WHY = "vadesi geçti: zaman değeri yok"
+
+
+def _fxopt_market(mkt: Market, pair: str, S: float, expiry: _dt.date, delivery: _dt.date,
+                  asof: _dt.date) -> Tuple[bool, float, float, str, float, str, float, float]:
+    """What an option meets on ``mkt`` - the one place :func:`_value_fxopt` and :func:`premium_vol` both read it:
+    ``(expired, days to expiry, forward to delivery, how, the quote currency's DF from the spot date to delivery, how,
+    the base currency's (DF_q · F / S), vol time T = days / 365)``."""
+    expired = expiry <= asof
+    days = float((expiry - asof).days)
+    F, f_how = mkt.forward(pair, delivery)
+    df_q, q_how = mkt.df_quote(pair, delivery)
+    if F is None or df_q is None:
+        raise TradeError("%s forward / iskonto yok (%s)" % (pair, f_how if F is None else q_how))
+    df_b = df_q * F / S
+    return expired, days, F, f_how, df_q, q_how, df_b, days / 365.0
+
+
+def gk_bounds(S: float, K: float, df_q: float, df_b: float, call: bool) -> Tuple[float, float]:
+    """What :func:`gk` stays between, per unit of the base currency: the forward's intrinsic value discounted (vol → 0)
+    and S·DF_b for a call, K·DF_q for a put (vol → ∞)."""
+    F = S * df_b / df_q
+    return df_q * (max(F - K, 0.0) if call else max(K - F, 0.0)), (S * df_b if call else K * df_q)
+
+
+def implied_vol(S: float, K: float, T: float, df_q: float, df_b: float, call: bool,
+                unit: float) -> Tuple[Optional[float], Optional[str]]:
+    """:func:`gk`'s inverse in the vol: the vol (a decimal a year) at which one unit of the base currency of the option is
+    worth ``unit`` (quote currency) - solved on :func:`gk` itself by Brent (``fxvol.brent``, as the Swaption page solves
+    its Black vol), so ``gk(implied_vol(x)) = x`` to the last digits.  ``(None, why)`` when no vol reaches it: no time
+    left, a premium at or under the discounted intrinsic value (:func:`gk_bounds`: vol 0 gives that), at or over S·DF_b
+    (a call) / K·DF_q (a put) - what an infinite vol gives - or a vol over :data:`VOL_CAP`."""
+    if not T > 0.0:
+        return None, EXPIRED_WHY
+    low, high = gk_bounds(S, K, df_q, df_b, call)
+    if not unit > low:
+        if not unit > 0.0:
+            return None, "prim sıfır: vol yok"
+        return None, ("prim, içsel değerin bugünkü karşılığının (birim başına %s) altında ya da ona eşit: hiçbir vol bu primi "
+                      "vermez (vol 0'da bile opsiyon daha değerli)" % _tr(low, 6))
+    if not unit < high:
+        return None, ("prim, opsiyonun alabileceği en yüksek değerin (birim başına %s: %s) üstünde ya da ona eşit: hiçbir vol "
+                      "bu primi vermez" % (_tr(high, 6), "spot · DF_baz" if call else "strike · DF_kote"))
+
+    def miss(sigma: float) -> float:
+        return gk(S, K, T, sigma, df_q, df_b, call) - unit
+
+    hi = 1.0
+    f_hi = miss(hi)
+    while f_hi < 0.0:
+        hi *= 2.0
+        if hi > VOL_CAP:
+            return None, "vol %%%s'in üstünde: bu prim pratikte hiçbir vol'le verilmez" % _tr(VOL_CAP * 100.0, 0)
+        f_hi = miss(hi)
+    try:
+        return fv.brent(miss, 0.0, hi, fb=f_hi, xtol=1e-15), None       # (vol 0: the intrinsic value, under the premium)
+    except fv.MATH_ERRORS as exc:
+        return None, "vol bulunamadı: %s" % exc
+
+
+def premium_vol(trade: Dict[str, Any], mkt: Optional[Market], asof: Any = None) -> Dict[str, Any]:
+    """An FX option's premium as a vol - to check a dealer's premium against the screen's smile (Trades' form): the vol
+    at which the option is worth its premium on ``mkt``, with exactly the spot, forward, discount factors and vol time
+    :func:`value` values it with (at that vol its MTM is 0; :func:`implied_vol`), and beside it the vol :func:`value`
+    uses - the smile's at the strike, or the one typed by hand (``manual_price``) - and the premium that vol gives, in the
+    premium's currency.  Never raises: ``{ok, why, vol, vol_why, used, used_why, model, used_premium, premium,
+    premium_ccy, premium_quote, unit, bounds, forward, spot, df_quote, df_base, T, days, expiry, delivery}`` (vols in
+    points)."""
+    day = _day(asof) or (mkt.today if mkt is not None else None) or _dt.date.today()
+    try:
+        if mkt is None:
+            raise TradeError("piyasa yok")
+        t = check(trade, mkt, strict=False)
+        if t.get("product") != "fxopt":
+            raise TradeError("primin vol'ü yalnız FX opsiyonunda")
+        pair = t["pair"]
+        base, quote = pair[:3], pair[3:]
+        call = t.get("call_put") == "call"
+        K = float(t["strike"])
+        expiry, delivery = _day(t.get("expiry")), _day(t.get("delivery"))
+        N = float(t["notional"]) if (t.get("notional_ccy") or base) == base else float(t["notional"]) / K
+        S = mkt.spot(pair)
+        if not S:
+            raise TradeError("%s spot'u yok" % pair)
+        expired, days, F, f_how, df_q, q_how, df_b, T = _fxopt_market(mkt, pair, S, expiry, delivery, day)
+        prem = float(t["price"])
+        pccy = (t.get("premium_ccy") or quote).upper()
+        prem_q = _in_quote(mkt, prem, pccy, pair, S)
+        per = _in_quote(mkt, 1.0, pccy, pair, S)            # (the quote currency a unit of the premium's is)
+        vol, why = (None, EXPIRED_WHY) if expired else implied_vol(S, K, T, df_q, df_b, call, prem_q / N)
+        # the vol value() would take: the one typed by hand, else the smile's at the strike
+        used, used_why, model = None, None, None
+        if expired:
+            used_why = EXPIRED_WHY
+        elif _num(t.get("manual_price")) is not None:
+            used, model = float(t["manual_price"]) / 100.0, "elle vol"
+        else:
+            used, info = smile_vol(mkt, pair, K, days, F, df_b)
+            model, used_why = info.get("model"), info.get("why")
+        low, high = gk_bounds(S, K, df_q, df_b, call)
+        return {"ok": True, "why": None, "vol": vol * 100.0 if vol is not None else None, "vol_why": why,
+                "used": used * 100.0 if used is not None else None, "used_why": used_why, "model": model,
+                "used_premium": N * gk(S, K, T, used, df_q, df_b, call) / per if used is not None and per else None,
+                "premium": prem, "premium_ccy": pccy, "premium_quote": prem_q, "unit": prem_q / N,
+                "bounds": {"low": N * low / per if per else None, "high": N * high / per if per else None},
+                "forward": F, "forward_how": f_how, "spot": S, "df_quote": df_q, "discount_how": q_how, "df_base": df_b,
+                "T": T, "days": days, "expiry": _iso(expiry), "delivery": _iso(delivery), "base_amount": N, "call": call}
+    except ValueError as exc:                       # (TradeError: the reason as it is)
+        return {"ok": False, "why": str(exc) or type(exc).__name__}
+    except Exception as exc:  # noqa: BLE001 - the form says it, the rest of it works
+        return {"ok": False, "why": "hesaplanamadı: %s: %s" % (type(exc).__name__, str(exc)[:160])}
 
 
 # ---------------------------------------------------------------------------------------------- value

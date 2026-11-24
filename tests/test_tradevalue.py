@@ -723,6 +723,77 @@ def test_smile_vol_at_the_money_is_the_atm_vol():
     assert v is None and "vol kotası yok" in info["why"]
 
 
+# ---------------------------------------------------------------------------------------------- FX options: premium → vol
+def test_the_vol_a_premium_implies_prices_the_premium_back():
+    """The desk's item 11 (24.11.2026: "FX option: premium → vol", to check a dealer's premium against the screen smile):
+    ``implied_vol`` is ``gk``'s inverse in the vol on exactly the inputs ``value`` takes - valued at the premium's vol the
+    option is worth its premium (MTM 0 to 1e-9 of it), and a premium priced at a vol gives that vol back wherever the
+    premium moves with the vol; calls and puts, in and out of the money, a fortnight to a year, the premium in either
+    currency; ``value``'s row carries it (``vols``) beside the vol used."""
+    m = hand_market()
+    checked = 0
+    for cp in ("call", "put"):
+        for K in (38.0, 42.0, 45.0, 50.0):
+            for exp in ("2026-11-20", "2027-02-03", "2027-11-03"):
+                for pccy in ("TRY", "USD"):
+                    for vol in (5.0, 15.0, 40.0):
+                        t = {"product": "fxopt", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 1.0,
+                             "trade_date": TODAY.isoformat(), "call_put": cp, "strike": K, "expiry": exp, "manual_price": vol,
+                             "premium_ccy": pccy}
+                        i = tv.value(t, m)["inputs"]
+                        t2 = dict(t, price=i["value"] if pccy == "TRY" else i["value"] / 42.0)      # (USD: at today's spot)
+                        pv = tv.premium_vol(t2, m)
+                        assert pv["ok"] and pv["used"] == vol and pv["model"] == "elle vol"
+                        low, _ = tv.gk_bounds(i["spot"], K, i["df_quote"], i["df_base"], cp == "call")
+                        if not pv["unit"] > low:            # (no time value left in double precision: no vol gives it)
+                            assert pv["vol"] is None and "içsel" in pv["vol_why"]
+                            continue
+                        back = tv.value(dict(t2, manual_price=pv["vol"]), m)
+                        assert abs(back["mtm"]) <= 1e-9 * i["value"], (cp, K, exp, pccy, vol, back["mtm"])
+                        assert tv.value(t2, m)["vols"] == {"used": vol, "model": "elle vol", "premium": pv["vol"], "why": None}
+                        vega = tv.gk_greeks(i["spot"], K, i["T"], vol / 100.0, i["df_quote"], i["df_base"], cp == "call")["vega"]
+                        if vega > 1e-6 * i["unit_price"]:
+                            assert abs(pv["vol"] - vol) < 1e-7, (cp, K, exp, pccy, vol, pv["vol"])
+                        checked += 1
+    assert checked > 100
+
+
+def test_the_premium_s_vol_beside_the_smile_and_why_no_vol_reaches_a_premium():
+    m = hand_market()
+    t = {"product": "fxopt", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 150000.0, "trade_date": TODAY.isoformat(),
+         "call_put": "call", "strike": 45.0, "expiry": "2027-02-03", "premium_ccy": "TRY"}
+    pv = tv.premium_vol(t, m)
+    r = tv.value(t, m)
+    # beside it the smile's vol at the strike - the one value() uses - and the premium that vol gives
+    assert pv["ok"] and pv["model"] == "svi" and pv["used"] == r["price_now"] == r["vols"]["used"]
+    assert pv["used_premium"] == pytest.approx(r["inputs"]["value"], rel=1e-12) and pv["vol"] < pv["used"]
+    assert r["vols"]["premium"] == pv["vol"] and r["inputs"]["premium_vol"] == pv["vol"]
+    # a premium in USD: at today's spot, the same vol
+    usd = tv.premium_vol(dict(t, price=150000.0 / 42.0, premium_ccy="USD"), m)
+    assert usd["vol"] == pytest.approx(pv["vol"], abs=1e-9) and usd["used_premium"] == pytest.approx(pv["used_premium"] / 42.0, rel=1e-12)
+    # at or over S·DF_b (a call; a put: K·DF_q) no vol reaches it; at or under the discounted intrinsic value neither
+    over = tv.premium_vol(dict(t, price=pv["bounds"]["high"] * 1.0001), m)
+    assert over["vol"] is None and "en yüksek" in over["vol_why"] and over["used"] == pv["used"]
+    put = tv.premium_vol(dict(t, call_put="put"), m)
+    assert put["bounds"]["high"] == pytest.approx(1e6 * 45.0 * put["df_quote"], rel=1e-12)
+    itm = dict(t, strike=30.0)
+    low = tv.premium_vol(itm, m)["bounds"]["low"]
+    assert low > 0 and "içsel" in tv.premium_vol(dict(itm, price=low * 0.999), m)["vol_why"]
+    just = tv.premium_vol(dict(itm, price=low * 1.01), m)
+    assert abs(tv.value(dict(itm, price=low * 1.01, manual_price=just["vol"]), m)["mtm"]) <= 1e-9 * low
+    assert tv.premium_vol(dict(t, price=0.0), m)["vol_why"] == "prim sıfır: vol yok"
+    # expired: none (value() says the same); no smile for a pair (EURTRY here): the premium's vol all the same
+    gone = dict(t, trade_date="2026-10-01", expiry="2026-11-02")
+    assert tv.premium_vol(gone, m)["vol_why"] == tv.EXPIRED_WHY and tv.premium_vol(gone, m)["used"] is None
+    assert tv.value(gone, m)["vols"] == {"used": None, "model": None, "premium": None, "why": tv.EXPIRED_WHY}
+    eur = tv.premium_vol(dict(t, pair="EURTRY", strike=55.0), m)
+    assert eur["ok"] and eur["vol"] > 0 and eur["used"] is None and "vol kotası yok" in eur["used_why"]
+    # not an option, no market: said, never raised
+    assert tv.premium_vol({"product": "fxspot", "pair": "USDTRY", "side": "B", "notional": 1e6, "price": 42.0,
+                           "trade_date": TODAY.isoformat()}, m)["ok"] is False
+    assert tv.premium_vol(t, None) == {"ok": False, "why": "piyasa yok"}
+
+
 def test_greeks_by_finite_difference():
     S, K, T, s, dq, db = 42.0, 44.0, 0.5, 0.16, 0.86, 0.98
     g = tv.gk_greeks(S, K, T, s, dq, db, True)
