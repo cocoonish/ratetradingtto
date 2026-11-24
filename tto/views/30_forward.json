@@ -1738,6 +1738,28 @@
     "first": 5,
     "extra": 1,
     "last": 104
+   },
+   "trade": {
+    "pair": "USDTRY",
+    "first": 5,
+    "last": 104,
+    "date_col": "B",
+    "cells": {
+     "N": "fwd",
+     "O": "sp",
+     "P": "fwd",
+     "Q": "sp",
+     "R": "fwd",
+     "S": "try",
+     "T": "fwd",
+     "U": "try"
+    },
+    "pairs": {
+     "P": "EURTRY",
+     "Q": "EURTRY",
+     "T": "EURTRY",
+     "U": "EURTRY"
+    }
    }
   },
   {
