@@ -2076,8 +2076,10 @@ def _ppk_back_check(model: Model) -> None:
                            ("OIS_MAIN", "D83", "Piyasa (bootstrap)"), ("OIS_MAIN", "A101", "MPC SPREAD – MPCk vs MPCk+1"),
                            ("OIS_MAIN", "B102", "Piyasa (bp)")))
     for k, r in enumerate(range(PPK_WINDOWS[0], PPK_WINDOWS[1] + 1)):
-        _need_formula(model, "OIS_MAIN", "B%d" % r, "$B$2+Motor!$C$%d" % (5 + k))
-        _need_formula(model, "OIS_MAIN", "C%d" % r, "$B$2+Motor!$C$%d" % (6 + k))
+        for col, slot in (("B", 5 + k), ("C", 6 + k)):              # meeting slot k's effective day, and slot k + 1's
+            want = "$B$2+Motor!$C$%d" % slot
+            if _need_formula(model, "OIS_MAIN", "%s%d" % (col, r)) != want:
+                raise ValueError("OIS_MAIN!%s%d beklenen formül değil (%s değil)" % (col, r, want))
         _need_formula(model, "OIS_MAIN", "D%d" % r, "(EXP(BK%d-BL%d)-1)*365/(C%d-B%d)" % (r, r, r, r))
     _need_formula(model, "OIS_MAIN", "BK%d" % PPK_WINDOWS[0], "B%d-SPOTDATE" % PPK_WINDOWS[0])
     for k, r in enumerate(range(PPK_PAIRS[0], PPK_PAIRS[1] + 1)):
