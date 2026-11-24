@@ -1,9 +1,10 @@
 // Günlük İşlemler: what fills the entry form from elsewhere - the templates ("Şablonlar") and rows pasted from Excel
-// ("Excel'den yapıştır").  The form itself, and ``fillForm`` / ``formSpec`` (the one way into it and out of it), are
-// blotter.js's: a template is a spec of ``fillForm``.
+// ("Excel'den yapıştır"; the Forward page's TOPLU FORWARD rows too: "İşleme al").  The form itself, and ``fillForm`` /
+// ``formSpec`` (the one way into it and out of it), are blotter.js's: a template is a spec of ``fillForm``.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast, confirmDialog, promptDialog, modal, debounce } from '../ui.js';
 import { num, pct, serialDate } from '../format.js';
+import { pendingWrites, trackWrite } from '../grid.js';
 
 export const KIND_SHORT = { fwd: 'FX', ois: 'OIS', bond: 'Tahvil' };
 const KIND_LONG = { fwd: 'FX Forward', ois: 'OIS', bond: 'Tahvil' };
@@ -241,11 +242,15 @@ function rowText(kind, t) {
 
 /** "Excel'den yapıştır": trades copied from Excel - read, mapped to the form's fields, each checked as the form checks it
  * (the preview), then the valid ones kept together, in one go.  A row with an error is never kept: after the save it stays
- * in the box (with the header) to be fixed. */
-export function openBulk(page) {
-  const st = page.bulk || (page.bulk = { kind: 'fwd', text: '', mapping: null, header: null, preview: null, previewed: null, seq: 0 });
-  try { const k = localStorage.getItem('tto.blotter.bulk'); if (KIND_LONG[k] && !st.text) st.kind = k; } catch (e) { /* ignore */ }
-  const m = modal({ title: 'Excel\'den toplu işlem girişi', width: 1100, onClose: () => { run.cancel(); } });
+ * in the box (with the header) to be fixed.
+ * ``from``: another table's rows as such a paste (TOPLU FORWARD's "İşleme al", ``bookBulkForward``) - {kind, text, said,
+ * saved(rows, preview) → {text, warn}}: its product fixed, the box filled with its rows (the page's own paste left as it
+ * was), ``said`` over the box, and ``saved`` told the rows the save kept (its answer goes into the toast). */
+export function openBulk(page, from) {
+  const st = from ? { kind: from.kind, text: from.text, mapping: null, header: null, preview: null, previewed: null, seq: 0 }
+    : (page.bulk || (page.bulk = { kind: 'fwd', text: '', mapping: null, header: null, preview: null, previewed: null, seq: 0 }));
+  if (!from) try { const k = localStorage.getItem('tto.blotter.bulk'); if (KIND_LONG[k] && !st.text) st.kind = k; } catch (e) { /* ignore */ }
+  const m = modal({ title: from ? 'TOPLU FORWARD → işlem girişi' : 'Excel\'den toplu işlem girişi', width: 1100, onClose: () => { run.cancel(); } });
   m.box.id = 'bulk-dialog';
   const text = h('textarea', { id: 'bulk-text', class: 'inp chatbox', rows: '8', spellcheck: 'false', autocomplete: 'off' });
   text.value = st.text;
@@ -253,11 +258,12 @@ export function openBulk(page) {
   for (const [v, label] of [['fwd', 'FX Forward'], ['ois', 'OIS'], ['bond', 'Tahvil']]) {
     const b = h('button', { type: 'button' }, label);
     b.dataset.v = v;
+    if (from && v !== from.kind) { b.disabled = true; b.title = 'Tablonun satırları ' + KIND_LONG[from.kind] + ' olarak okunur'; }
     b.addEventListener('click', () => {
       st.kind = v;
       st.mapping = null;
       st.header = null;
-      try { localStorage.setItem('tto.blotter.bulk', v); } catch (e) { /* ignore */ }
+      if (!from) try { localStorage.setItem('tto.blotter.bulk', v); } catch (e) { /* ignore */ }
       showKind();
       run();
     });
@@ -356,7 +362,13 @@ export function openBulk(page) {
       const left = p.rows.filter((r) => res.left.includes(r.n));
       text.value = left.length ? (p.head ? [tsvLine(p.head)] : []).concat(left.map((r) => tsvLine(r.cells))).join('\n') : '';
       st.text = text.value;
-      toast(res.saved + ' işlem kaydedildi' + (left.length ? ' · ' + left.length + ' hatalı satır kaydedilmedi: kutuda bırakıldı' : ''), left.length ? 'warn' : 'ok', 5000);
+      // the table the rows came from is told which were kept (TOPLU FORWARD: their Tutar emptied) - the save stands either way
+      let after = null;
+      if (from && from.saved) {
+        try { after = await from.saved(p.rows.filter((r) => res.rows.includes(r.n)), p); } catch (e) { after = { text: ' · ' + e.message, warn: true }; }
+      }
+      toast(res.saved + ' işlem kaydedildi' + (after ? after.text : '') + (left.length ? ' · ' + left.length + ' hatalı satır kaydedilmedi: kutuda bırakıldı' : ''),
+        left.length || (after && after.warn) ? 'warn' : 'ok', 5000);
       page.ctx.refreshNow();
       if (!left.length) { st.preview = null; st.previewed = null; m.close(); return; }
       run();
@@ -370,6 +382,7 @@ export function openBulk(page) {
   m.body.appendChild(h('div', { class: 'bulkhead' }, h('div', { class: 'field' }, h('label', null, 'Ürün'), kindSeg),
     h('label', { class: 'check', title: 'İlk satır sütun başlıklarıysa (otomatik tanınır)' }, headBox, ' İlk satır başlık'), auto,
     h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Sayılar sizin biçiminizde okunur (Türkçe: 1.000.000,50 · İngilizce: 1,000,000.50); tarih gg.aa.yyyy ya da vade (3M)')));
+  if (from && from.said) m.body.appendChild(h('div', { class: 'muted', id: 'bulk-source' }, from.said));
   m.body.appendChild(text);
   m.body.appendChild(problems);
   m.body.appendChild(box);
@@ -389,4 +402,30 @@ export function openBulk(page) {
   if (st.preview && st.previewed === text.value) render(); else run();
   text.focus();
   return m;
+}
+
+// ---------------------------------------------------------------------------------------------- TOPLU FORWARD → trades
+/** TOPLU FORWARD FİYATLAMA's "İşleme al" (the Forward page; the desk, 24.11.2026: "3 ekle"): every row of the table with a
+ * Tutar into "Excel'den yapıştır" on FX Forward - the server writes them as such a paste, each at the price its row shows
+ * (``/api/blotter/bulk/toplu-forward``); the preview and "N satırı kaydet" are the dialog's own.  The rows the save kept
+ * have their Tutar emptied in the table (found by the paste's "Satır" column), so that a second press cannot book them
+ * again; their valör, rates, Parite, Yön and Karşı taraf stay. */
+export async function bookBulkForward(ctx) {
+  await pendingWrites();                                     // (a Tutar typed just now counts)
+  let src;
+  try { src = await api.get('/api/blotter/bulk/toplu-forward'); } catch (err) { errorToast(err); return null; }
+  if (!src.taken) { toast(src.said, 'warn', 6000); return null; }
+  const saved = async (rows, p) => {
+    const k = p.head ? p.head.indexOf(src.row_title) : -1;
+    if (k < 0) return { text: ' · "' + src.row_title + '" sütunu kalmadı: tablodaki Tutar\'ları elle silin', warn: true };
+    const refs = [...new Set(rows.map((r) => src.amounts[r.cells[k]]).filter(Boolean))];
+    if (!refs.length) return null;                           // (lines typed into the box by hand: no row of the table)
+    try {
+      await trackWrite(api.post('/api/reset', { book: 'tto', refs }));
+      return { text: '; tutarları temizlendi', warn: false };
+    } catch (err) {
+      return { text: '; tutarlar temizlenemedi (' + err.message + '): tablodaki Tutar\'ları elle silin', warn: true };
+    }
+  };
+  return openBulk({ ctx }, { kind: src.kind, text: src.text, said: src.said, saved });
 }

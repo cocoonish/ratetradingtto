@@ -1030,6 +1030,61 @@
    "label": "toplu forward 'EURTRY fwd (elle)' — an outright typed or pasted, to read the TRY rate it implies (boş başlar)"
   },
   {
+   "range": "EK_BULK!V5:V104",
+   "scope": "user",
+   "group": "bulk100-pair",
+   "kind": "list",
+   "label": "toplu forward 'Parite' of a row to book ('İşleme al'; boş = USDTRY)",
+   "options": [
+    "USDTRY",
+    "EURTRY"
+   ],
+   "aliases": {
+    "USD": "USDTRY",
+    "USD/TRY": "USDTRY",
+    "EUR": "EURTRY",
+    "EUR/TRY": "EURTRY"
+   }
+  },
+  {
+   "range": "EK_BULK!W5:W104",
+   "scope": "user",
+   "group": "bulk100-dir",
+   "kind": "list",
+   "label": "toplu forward 'Yön' of a row to book ('İşleme al': AL = the pair's first currency bought; B / S, Alış / Satış, Buy / Sell da yazılır)",
+   "options": [
+    "AL",
+    "SAT"
+   ],
+   "aliases": {
+    "B": "AL",
+    "Alış": "AL",
+    "Alis": "AL",
+    "Alım": "AL",
+    "Buy": "AL",
+    "Bought": "AL",
+    "S": "SAT",
+    "Satış": "SAT",
+    "Satis": "SAT",
+    "Sell": "SAT",
+    "Sold": "SAT"
+   }
+  },
+  {
+   "range": "EK_BULK!X5:X104",
+   "scope": "user",
+   "group": "bulk100-amount",
+   "kind": "amount",
+   "label": "toplu forward 'Tutar' of a row to book ('İşleme al'; in the pair's first currency: 10m, 2,5mn; emptied once the row is booked)"
+  },
+  {
+   "range": "EK_BULK!Y5:Y104",
+   "scope": "user",
+   "group": "bulk100-cpt",
+   "kind": "text",
+   "label": "toplu forward 'Karşı taraf' of a row to book ('İşleme al')"
+  },
+  {
    "range": "EK_FWD!B2",
    "scope": "user",
    "group": "ekfwd-curve",
@@ -1729,10 +1784,11 @@
    "id": "BK1",
    "type": "table",
    "sheet": "EK_BULK",
-   "range": "B1:U106",
+   "range": "B1:Y106",
    "hidden": false,
    "wide": true,
    "title": "TOPLU FORWARD FİYATLAMA · 100 valöre kadar",
+   "action": "toplu-islem",
    "grow": {
     "key": "B",
     "first": 5,

@@ -1,5 +1,5 @@
 """Günlük İşlemler's entry form, filled from elsewhere: saved templates ("Şablonlar") and rows pasted from Excel
-("Excel'den yapıştır").
+("Excel'den yapıştır") - TOPLU FORWARD FİYATLAMA's rows too ("İşleme al": :func:`bulk_forward_paste`).
 
 Nothing here prices or keeps a trade.  A template is the form's own spec - the shape ``ctx.openTrade`` fills the form
 with (``blotter.js``: ``fillForm``) - checked so that it only ever holds what the form takes.  A pasted row becomes the
@@ -350,8 +350,10 @@ def _fwd_row(vals: Dict[str, str], ccys: Dict[str, str]) -> Dict[str, Any]:
         raise EntryError(str(exc))
     if not vals.get("dir"):
         raise EntryError("yön yok (B / S, Alış / Satış)")
+    if not vals.get("value_date"):
+        raise EntryError("valör yok (gg.aa.yyyy ya da vade: 3M)")
     pl: Dict[str, Any] = {"pair": pair, "dir": _word(vals["dir"], FWD_DIRS, "yön anlaşılamadı: %r (B / S, Alış / Satış)"),
-                          "value_date": vals.get("value_date", "")}
+                          "value_date": vals["value_date"]}
     # the amounts: a column whose header names a currency is that currency's, whichever side of the pair it is
     for field in ("amount", "quote_amount"):
         if field not in vals:
@@ -408,3 +410,102 @@ def _ois_row(vals: Dict[str, str]) -> Dict[str, Any]:
     elif "dv01" in vals:
         pl["dv01"] = vals["dv01"]
     return pl
+
+
+# ---------------------------------------------------------------------------------------------- TOPLU FORWARD's rows
+#: TOPLU FORWARD FİYATLAMA's rows as a paste ("İşleme al"; the desk, 24.11.2026: "3 ekle"): the columns the dialog reads
+#: by their headers, and "Satır" - the table's row (1..100), which it does not read: after the save the browser empties
+#: the Tutar of the rows kept by it, so that a second press cannot book them again
+BULK_FWD_HEAD = ("Satır", "Parite", "Yön", "Tutar", "Valör", "TRY faizi", "Forward kur", "Karşı taraf", "Not")
+BULK_FWD_NOTE = "TOPLU FORWARD"
+
+
+def _plain(x: float, lang: str) -> str:
+    """A rate or an outright to its last digit, in the user's format, ungrouped: read back, the same number."""
+    s = repr(float(x))
+    if "e" in s or "E" in s:
+        s = ("%.15f" % x).rstrip("0").rstrip(".")
+    return s if lang == "en" else s.replace(".", ",")
+
+
+def _grouped(x: float, lang: str) -> str:
+    """An amount in the user's format, grouped by thousands: 10.000.000 (Turkish) / 10,000,000 (English)."""
+    s = "{:,.6f}".format(x).rstrip("0").rstrip(".")
+    return s if lang == "en" else s.replace(",", "\0").replace(".", ",").replace("\0", ".")
+
+
+def _number(v: Any) -> Optional[float]:
+    return v if type(v) is float else None              # (a cell's number; "", an error or a text: none)
+
+
+def _row_pair(row: Dict[str, Any]) -> str:
+    return str(row.get("pair") or "").strip().upper() or "USDTRY"          # (Parite left blank: USDTRY)
+
+
+def bulk_forward_price(row: Dict[str, Any]) -> Tuple[str, Optional[float], str]:
+    """The price TOPLU FORWARD books a row at - what the row shows: ``(field, value, source)``.
+
+    * a forward typed in the row's pair's own column (USDTRY fwd (elle) / EURTRY fwd (elle)): *Forward kur* = it;
+    * else USDTRY: *TRY faizi* = the rate the row priced with - its Manuel TRY % if typed, else RET mid % (the blotter's
+      TRY-rate pricing is this very row's formula, the workbook's own bulk row ``Forward!N163``: the same forward);
+    * else EURTRY: *Forward kur* = the row's EURTRY fwd.  (The blotter's EURTRY TRY-rate pricing takes the EUR rate as the
+      middle of the interpolated EUR bid and ask, ``Forward!AD27``; the row takes Bloomberg's interpolated EUR MID: the
+      same forward only while every MID is the exact middle of its bid and ask - the row's outright is booked instead.)
+
+    ``value`` None: the row has no such price (no valör, no curve): the dialog says why.  ``row``: the table's cells -
+    ``pair`` (V), ``manual`` (L), ``ret_mid`` (G), ``eur_fwd`` (P), ``usd_typed`` (R), ``eur_typed`` (T)."""
+    pair = _row_pair(row)
+    typed = _number(row.get({"USDTRY": "usd_typed", "EURTRY": "eur_typed"}.get(pair, "")))
+    if typed is not None:
+        return "forward", typed, "elle forward"
+    manual = _number(row.get("manual"))
+    source = "Manuel TRY %" if manual is not None else "RET mid %"
+    if pair == "USDTRY":
+        return "try_rate", manual if manual is not None else _number(row.get("ret_mid")), source
+    return "forward", _number(row.get("eur_fwd")) if pair == "EURTRY" else None, source
+
+
+def bulk_forward_paste(rows: List[Dict[str, Any]], lang: str = "tr") -> Dict[str, Any]:
+    """TOPLU FORWARD FİYATLAMA's rows as Excel'den yapıştır reads them ("İşleme al"): an FX forward of every row with a
+    Tutar - its Parite (blank: USDTRY), Yön, Tutar (the pair's first currency), Valör, the price it shows
+    (:func:`bulk_forward_price`, to its last digit), Karşı taraf, and a note saying where it came from ("TOPLU FORWARD ·
+    RET mid %").  A row without a Yön or a valör goes as it is: the preview says what is missing, it is never saved.  A
+    row with a valör and no Tutar is left out and counted.
+
+    ``rows``: the table's rows as the user sees them - ``n`` (1..100), ``date`` (B), ``dir``, ``amount``, ``cpt``,
+    ``ref`` (its Tutar cell) and the price cells :func:`bulk_forward_price` reads.  Returns the text (``text``, in the
+    user's number format ``lang``), ``taken`` / ``skipped``, what the dialog says of them (``said``), the column that
+    names each line's row (``row_title``) and the Tutar cell of each row taken, by that name (``amounts``)."""
+    from .xl.values import serial_to_date
+    lines: List[List[str]] = []
+    amounts: Dict[str, str] = {}
+    skipped = 0
+    for row in rows:
+        day = _number(row.get("date"))
+        day = day if day is not None and day > 0 else None
+        amount = row.get("amount")
+        if amount is None or (isinstance(amount, str) and not amount.strip()):
+            if day is not None:
+                skipped += 1                             # (a row priced and not to be booked; an empty one is no row)
+            continue
+        field, value, source = bulk_forward_price(row)
+        price = "" if value is None else _plain(value, lang) + ("%" if field == "try_rate" else "")
+        lines.append([str(row["n"]), _row_pair(row), str(row.get("dir") or "").strip(),
+                      _grouped(amount, lang) if type(amount) is float else str(amount).strip(),
+                      serial_to_date(day).strftime("%d.%m.%Y") if day is not None else "",
+                      price if field == "try_rate" else "", price if field == "forward" else "",
+                      str(row.get("cpt") or "").strip(), "%s · %s" % (BULK_FWD_NOTE, source)])
+        amounts[str(row["n"])] = row["ref"]
+    buf = io.StringIO()
+    out = csv.writer(buf, delimiter="\t", quotechar='"', lineterminator="\n")
+    for line in [list(BULK_FWD_HEAD)] + lines:
+        out.writerow(line)
+    if lines:
+        said = ("TOPLU FORWARD FİYATLAMA'dan Tutar'ı yazılı %d satır%s. Fiyat satırın gösterdiği: USDTRY'de TRY faizi (Manuel "
+                "TRY %%, boşsa RET mid %%), EURTRY'de EURTRY fwd, elle forward yazılmışsa o. Kaydedilen satırların Tutar'ı "
+                "tabloda silinir." % (len(lines), " · Tutar'ı boş %d satır alınmadı" % skipped if skipped else ""))
+    else:
+        said = ("TOPLU FORWARD FİYATLAMA'da Tutar'ı yazılı satır yok%s: işleme almak için satıra Yön ve Tutar yazın"
+                % (" (valörü olan %d satırın Tutar'ı boş)" % skipped if skipped else ""))
+    return {"kind": "fwd", "text": buf.getvalue().rstrip("\n") if lines else "", "taken": len(lines), "skipped": skipped,
+            "said": said, "row_title": BULK_FWD_HEAD[0], "amounts": amounts}

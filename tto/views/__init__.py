@@ -89,6 +89,11 @@ saves nothing.  The amount and the counterparty are the user's to type.
   ``"isin_col"``.
 * ``"label"`` / ``"alt"`` / ``"alt_when"`` / ``"bid"`` / ``"ask"`` (a forward table): the "İşlem gir" button in the table's
   header as well - a row and a side picked in a dialog, its swap points filled.
+
+A button of the dashboard's own in a table's header (``"action"``): ``"ret"`` the RET editor, ``"add-isin"`` a bond
+list's "+ ISIN ekle" (with ``"add"``), ``"toplu-islem"`` TOPLU FORWARD's "İşleme al" - every row with a Tutar into
+Günlük İşlemler's "Excel'den yapıştır" (FX Forward), its preview and save as they are, the booked rows' Tutar emptied
+(``/api/blotter/bulk/toplu-forward``: :func:`tto.entry.bulk_forward_paste`).
 """
 from __future__ import annotations
 
