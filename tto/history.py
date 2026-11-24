@@ -568,6 +568,10 @@ class History(object):
         self._empty_day = ""                           # the day _empty was read for (from the store's records)
         self._tailed: Dict[str, str] = {}              # a once-a-day series -> the day its new days were asked (after its hour)
         self._tails_read = False                       # ... read once from the store's records (a restart the same day)
+        # live: any other series -> (the day, the time by the workbook's clock in seconds) its new days were last asked:
+        # once a day, then its today's point from its live quote or at most hourly (``TAIL_EVERY``; kept in its record)
+        self._tail_at: Dict[str, Tuple[str, float]] = {}
+        self._manual = False                           # the next pass was asked for by hand ("Şimdi güncelle")
         self._force = False                            # the next pass recomputes every day
         self.state: Dict[str, Any] = {"phase": "idle", "done": 0, "total": 0, "error": "", "last_sync": None,
                                       "fetched": 0, "computed": 0}
@@ -1004,7 +1008,9 @@ class History(object):
             self._force = True
         self._empty.clear()                            # series that had no history are asked again
         self._tailed.clear()                           # ... and the once-a-day ones their new days (after their hour)
+        self._tail_at.clear()                          # ... and every other its new days, even within the hour
         self._tails_read = True
+        self._manual = True                            # (by hand: also outside Bloomberg's hours)
         self.kick()
         self.start(force=True)
         return self.status()
@@ -1097,8 +1103,21 @@ class History(object):
     #: asked again only this many days later (its other ticker form meanwhile)
     FINAL_RETRY_DAYS = 7
     #: the store's record of the full-range requests: series id -> {"day" of the last one, "from" the day it asked
-    #: from, "first" the earliest day Bloomberg gave (None: nothing)}
+    #: from, "first" the earliest day Bloomberg gave (None: nothing); "tail" / "tail_at" the day and time (the
+    #: workbook's clock, seconds) its new days were last asked}
     FETCH_KEY = "hist.fetch"
+    #: live: a series' new days once a day (yesterday's final close); after that its today's point comes from its live
+    #: quote when a page has one (no request), else it is asked at most this often (seconds) - cache first, the desk
+    #: 24.11.2026 ("Zaten çektiklerini cache atıp daha fazla çekmemesi gerekliydi"; it was every sync, 15 minutes)
+    TAIL_EVERY = 3600.0
+
+    def _clock_seconds(self) -> float:
+        """Now by the workbook's clock (a test's simulated one), in seconds."""
+        book = self.svc.books.get(BOOK)
+        try:
+            return float(book.engine.clock.now()) * 86400.0
+        except Exception:  # noqa: BLE001 - no workbook: the machine's
+            return time.time()
 
     def fetch_records(self) -> Dict[str, Dict[str, Any]]:
         v = self.store.get(self.FETCH_KEY)
@@ -1119,8 +1138,12 @@ class History(object):
         * a series marked ``tail: "daily"`` asks its new days in one request a day - after 07:00 (or its own hour,
           ``info["after"]``), when yesterday's close is final; not at a start before it, and not again after a restart
           the same day (the day is kept with its record, ``"tail"``; "update now" asks again).  Only the SOFR fixings
-          are marked so (``SOFR_TICKER``: one value a day, out at 08:00 New York - ``SOFR_AFTER``); the desk keeps the
-          15-minute sync for every other series, the quant package's too;
+          are marked so (``SOFR_TICKER``: one value a day, out at 08:00 New York - ``SOFR_AFTER``);
+        * live, every other series asks its new days once a day; after that (cache first, 24.11.2026) its today's point
+          comes from its live quote when a page has one (``Provider.quote``: no request), else its new days are asked at
+          most every ``TAIL_EVERY`` (an hour) - kept with its record, so a restart within the hour asks nothing;
+        * live, nothing is asked outside Bloomberg's hours (``Service.bbg_open_now``: the desk's hours on the desk's
+          days) but by hand ("Şimdi güncelle");
         * a series marked ``tail: "none"`` (an expired VİOP contract: its history is complete) is asked once in full and
           never for new days; its other tickers (the two-digit year) only after the first came back empty, and an
           empty one again only ``FINAL_RETRY_DAYS`` later;
@@ -1138,25 +1161,51 @@ class History(object):
             self._empty_day = today_iso
             self._empty = {sid: today_iso for sid, r in records.items() if r.get("day") == today_iso and sid not in bounds}
         rationed = self.svc.mode == "live"
+        manual, self._manual = self._manual, False
         hour = self._hour()
+        now_s = self._clock_seconds()
+        if rationed and not manual:
+            open_now = getattr(self.svc, "bbg_open_now", None)
+            quiet = open_now is not None and not open_now()
+            self.state["quiet"] = quiet
+            if quiet:
+                return 0                               # outside Bloomberg's hours: nothing is asked (by hand it is)
+        prov = self.svc.provider
+        quote = getattr(prov, "quote", None) if rationed else None
         backfill: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], Optional[float]]] = []
         viop: List[Tuple[int, int, str, str, _dt.date, Optional[Tuple[str, str, int]], Optional[float]]] = []
         full: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
         tail: Dict[Tuple[str, _dt.date, _dt.date], List[str]] = {}
+        points: Dict[str, float] = {}                  # series -> today's point from its live quote (no request)
 
         if not self._tails_read:
-            # a start: what a once-a-day series asked today before it (kept with its record) is not asked again
+            # a start: what a once-a-day series asked today before it (kept with its record) is not asked again; nor, within
+            # the hour, the new days of any other
             self._tails_read = True
             self._tailed.update({sid: str(r["tail"]) for sid, r in records.items() if r.get("tail")})
+            self._tail_at.update({sid: (str(r["tail"]), float(r["tail_at"])) for sid, r in records.items()
+                                  if r.get("tail") == today_iso and isinstance(r.get("tail_at"), (int, float))})
         tailed: set = set()
 
         def recent(field: str, t: str, b: Tuple[str, str, int], daily: Optional[float]) -> None:
             # ``daily``: a once-a-day series' hour (its close of yesterday final after it), None for the others
+            sid = "%s|%s" % (t, field)
             if daily is not None:
-                sid = "%s|%s" % (t, field)
                 if hour < daily or self._tailed.get(sid) == today_iso:
                     return                                     # not its hour yet, or asked today already: once a day
                 self._tailed[sid] = today_iso
+                tailed.add(sid)
+            elif rationed:
+                done = self._tail_at.get(sid)
+                if not manual and done is not None and done[0] == today_iso:
+                    # its new days were asked today: its today's point from its live quote, else hourly
+                    live = quote(t, field) if quote is not None else None
+                    if type(live) is float:
+                        points[sid] = live
+                        return
+                    if 0.0 <= now_s - done[1] < self.TAIL_EVERY - 1.0:
+                        return                                 # (a second's slack: the sync four 15-minute turns later)
+                self._tail_at[sid] = (today_iso, now_s)
                 tailed.add(sid)
             start = min(today, _day(b[1])) - _dt.timedelta(days=self.OVERLAP_DAYS)
             tail.setdefault((field, start, today), []).append(t)
@@ -1223,8 +1272,9 @@ class History(object):
         self.state["backfill"] = {"waiting": ["%s|%s" % (t, f) for _, _, f, t, _, _, _ in backfill[self.BACKFILL_PER_SYNC:] + viop[self.VIOP_PER_SYNC:]],
                                   "per_sync": self.BACKFILL_PER_SYNC if rationed else None,
                                   "viop_per_sync": self.VIOP_PER_SYNC if rationed else None}
-        prov = self.svc.provider
         changed = 0
+        for sid, v in points.items():                  # today's points from the live quotes: no request
+            changed += self.store.hist_upsert(sid, [(today_iso, v)])
         job = self._job("fetch", sum(len(set(t)) for group in (full, tail) for t in group.values()))
         for group in (full, tail):
             for (field, start, stop), tickers in group.items():
@@ -1242,7 +1292,9 @@ class History(object):
                         records[sid] = dict(old, day=today_iso, **{"from": _iso(start) if rows else old.get("from"),
                                                                    "first": min(d for d, _ in rows) if rows else old.get("first")})
                     elif sid in tailed:
-                        records[sid] = dict(records.get(sid) or {}, tail=today_iso)   # (a restart the same day: not again)
+                        # (a restart the same day: a once-a-day series not again; any other not within the hour)
+                        records[sid] = dict(records.get(sid) or {}, tail=today_iso, **({"tail_at": self._tail_at[sid][1]}
+                                                                                       if sid in self._tail_at else {}))
                     if rows:
                         self._empty.pop(sid, None)
                         changed += self.store.hist_upsert(sid, [(d, v) for d, v in rows if d <= _iso(today)])

@@ -1190,7 +1190,7 @@ def test_a_package_is_sized_in_dollars_and_an_old_try_size_is_not_read_as_dollar
 
 # ================================================================================================ Bloomberg's daily budget
 def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
-    """The fake terminal through a first sync and a whole day of 15-minute syncs, then the next days:
+    """The fake terminal through the desk's day of 15-minute syncs (08:00 - 19:00, Bloomberg's hours), then the next days:
 
     * no series' full range twice in a day; Bloomberg's own start of the short ones is kept and never asked again;
     * the quant series (every pair of the desk's list) get their first two years forty a sync, those never asked first;
@@ -1199,10 +1199,12 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
       never its new days;
     * the history's own series the analyses read (OIS, offshore, TLREF, DİBS) get their own window at once, and the year
       before it from the next day on - only the part they miss, a week into what they have - forty a sync too;
-    * afterwards only the new days: the history's own every sync from their last close, the quant series and the listed
-      contracts too - the day's hits and data points stay bounded (printed: the whole day's, VİOP's part of it);
+    * afterwards only the new days: each series with closes from its last close, once a day and then at most hourly (cache
+      first, 24.11.2026 - it was every sync: "Zaten çektiklerini cache atıp daha fazla çekmemesi gerekliydi"), the quant
+      series and the listed contracts too - the day's hits and data points stay bounded (printed: the whole day's, VİOP's
+      part of it); nothing at 19:00 (outside Bloomberg's hours);
     * the next day: the series without any history once more (an expired contract not: only a week later), the quant
-      series their new days;
+      series their new days - in the day's first sync, then an hour later;
     * a longer window whose answers do not come in time: asked once that day, once more the day after, then never (an
       expired contract never: its history is complete)."""
     import fake_blpapi
@@ -1218,7 +1220,7 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
     provider = BloombergProvider(blpapi_module=fake_blpapi.module(server))
     provider.start()
     today = float(date_to_serial(D(TODAY)))
-    clock = Clock(today + 0.5)                               # 12:00: past the 07:00 of the once-a-day series
+    clock = Clock(today + 8 / 24.0)                          # 08:00: past the 07:00 of the once-a-day series
     clock.today = lambda: today
     svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=provider, clock=clock)
     q = History.BACKFILL_PER_SYNC
@@ -1279,14 +1281,31 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
             return "full" if start < (day - dt.timedelta(days=30)).strftime("%Y%m%d") else "tail"
 
         def run(n):
+            """``n`` syncs, 15 minutes apart (the live loop's ``--history-refresh``)."""
             out = []
             for _ in range(n):
                 m = len(requests())
                 h._fetch()
                 out.append(requests()[m:])
+                clock.fixed += 0.25 / 24.0
             return out
 
-        syncs = run(1 + 4 * 24)                              # the first sync, then a day of 15-minute syncs
+        def hourly(syncs, keys):
+            """The series of ``keys`` asked for their new days (tails): each an hour apart - every 4th sync - and again
+            within every hour after its first: ``{series: [the syncs that asked it]}``."""
+            at = {}
+            for i, s in enumerate(syncs):
+                for r in s:
+                    if kind(r) == "tail":
+                        for x in r["securities"]:
+                            if (x, r["fields"][0]) in keys:
+                                at.setdefault((x, r["fields"][0]), []).append(i)
+            for key, got in at.items():
+                assert all(b - a == 4 for a, b in zip(got, got[1:])), (key, got)
+                assert got[-1] >= len(syncs) - 4, (key, got)
+            return at
+
+        syncs = run(4 * 11)                                  # the first sync at 08:00, then the day's to 18:45
         reqs = [r for s in syncs for r in s]
         full = {}                                            # (security, field) -> its full ranges today
         when = {}                                            # ... the sync of the first
@@ -1318,13 +1337,15 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         assert per_v[:kv] == [v] * (kv - 1) + [nv - v * (kv - 1)] and not any(per_v[kv:]) and k < kv
         assert all(when[(d.alts[0], d.field)] > when[(d.ticker, d.field)] for d in expired)
         listed = {(d.ticker, d.field) for d in viop if d not in expired}
-        assert all({(x, r["fields"][0]) for r in s if kind(r) == "tail" for x in r["securities"] if x in vt} == listed for s in syncs[kv:])
+        assert set(hourly(syncs, listed)) == listed                                     # their new days hourly
         assert not [x for r in reqs if kind(r) == "tail" for x in r["securities"] if x in gone]
+        clock.fixed = today + 19.5 / 24.0
+        assert run(1) == [[]] and h.state["quiet"]                                     # 19:30: Bloomberg's hours are over
         news = {(D(b[1]) - dt.timedelta(days=History.OVERLAP_DAYS)).strftime("%Y%m%d") for s, b in stored.items() if s.split("|")[0] not in qt | gone}
         # (once both first fills are done - VİOP's is the longer now - the history's own series ask only their new days)
         assert {r["options"]["startDate"] for s in syncs[max(k, kv):] for r in s if set(r["securities"]) - qt} == news == {"20261030", "20261031"}
         with_data = {s.split("|")[0] for s in stored} & qt
-        assert all({x for r in s if kind(r) == "tail" for x in r["securities"] if x in qt} == with_data for s in syncs[k:])
+        assert {x for x, _ in hourly(syncs, {(d.ticker, d.field) for d in quant})} == with_data
         records = h.fetch_records()
         for t, back in short.items():                        # Bloomberg's own start of the short ones is kept
             rec = records[t + "|PX_LAST"]
@@ -1335,11 +1356,11 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         points = sum(rows(r) for r in reqs)
         own_data = [s for s in stored if s.split("|")[0] not in qt | vt]
         tailed = [s for s in stored if s.split("|")[0] not in gone]                     # every series with data but the expired
-        # bounded: one full range a series, then one request of the new days per series with data a sync
-        assert hits <= everything + len(syncs) * len(tailed)
+        # bounded: one full range a series, then one request of the new days per series with data an hour
+        assert hits <= everything + 11 * len(tailed)
         new_rows = len(list(_weekdays(D(TODAY) - dt.timedelta(days=History.OVERLAP_DAYS + 1), D(TODAY))))     # (3: the TLREF's)
         full_rows = sum(len(x) for x in hist.values())
-        assert points <= full_rows + len(syncs) * len(tailed) * new_rows
+        assert points <= full_rows + 11 * len(tailed) * new_rows
         print("live day: %d syncs, %d requests, %d hits, %d data points (%d series asked, %d with history, %d quant series, %d of VİOP's)"
               % (len(syncs), len(reqs), hits, points, everything, len(stored), nq, len(vkeys)))
         vfull = cost([r for r in reqs if kind(r) == "full"], vkeys)
@@ -1352,26 +1373,30 @@ def test_a_live_day_of_history_syncs_stays_within_bloomberg_s_budget(tmp_path):
         uni = {s["key"] for s in series_specs() if s.get("universe")}
         gkeys = {(d.ticker, d.field) for d in quant if d.info["key"] in uni}
         gfull = cost([r for r in reqs if kind(r) == "full"], gkeys)
-        gsync = cost(syncs[-1], gkeys)
+        ghour = cost([r for s in syncs[k + 4:k + 8] for r in s], gkeys)        # an hour after their fill
         gday = cost(reqs, gkeys)
-        assert len(gkeys) == 22 and gfull[0] == len(gkeys) and {when[g] for g in gkeys} == {k - 1} and gsync[0] == len(gkeys)
-        assert gday[0] == len(gkeys) * (len(syncs) - k + 1) and gfull[1] > 500 * len(gkeys)
-        print("G10 universe: %d series - the two-year fill %d hits, %d data points (sync %d), then %d hits, %d points a sync: the first day "
-              "%d hits, %d points; a day of 96 syncs %d hits, %d points" % ((len(gkeys),) + gfull + (k,) + gsync + gday + (96 * gsync[0], 96 * gsync[1])))
+        gtails = hourly(syncs, gkeys)
+        assert len(gkeys) == 22 and gfull[0] == len(gkeys) and {when[g] for g in gkeys} == {k - 1} and ghour[0] == len(gkeys)
+        assert gday[0] == len(gkeys) + sum(len(x) for x in gtails.values()) and gfull[1] > 500 * len(gkeys)
+        print("G10 universe: %d series - the two-year fill %d hits, %d data points (sync %d), then %d hits, %d points an hour: the "
+              "first day %d hits, %d points" % ((len(gkeys),) + gfull + (k,) + ghour + gday))
         # the next day: the series without any history once more (an expired contract a week later), every series with data
         # its new days every sync - and the history's own series their older year, forty a sync
         clock.today = lambda: today + 1
+        clock.fixed = today + 1 + 8 / 24.0                                              # 08:00 the next day
         svc.bump()
         day1 = D(TODAY) + dt.timedelta(days=1)
         ng = len(own_data)
-        nxt = run(-(-ng // q) + 2)
+        nxt = run(max(-(-ng // q) + 2, 5))                                              # 08:00 - 09:00
         full_next = [s for x in nxt for r in x if kind(r, day1) == "full" for s in r["securities"]]
         missing = {s for r in reqs for s in r["securities"] if not known(s, r["fields"][0])}
         assert set(full_next) == missing - gone and len(full_next) == len(missing - gone) and none <= set(full_next)    # once each
         assert missing & gone == {d.ticker for d in expired}                                # (asked today, nothing: a week later)
+        # the new days: in the day's first sync, then an hour later (09:00) - not in between
         tails_q = [{x for r in s if kind(r, day1) == "tail" for x in r["securities"] if x in qt} for s in nxt]
-        assert all(t == qt - none for t in tails_q)
-        assert all({(x, r["fields"][0]) for r in s if kind(r, day1) == "tail" for x in r["securities"] if x in vt} == listed for s in nxt)
+        assert len(nxt) == 5 and tails_q[0] == tails_q[4] == qt - none and not any(tails_q[1:4])
+        tails_v = [{(x, r["fields"][0]) for r in s if kind(r, day1) == "tail" for x in r["securities"] if x in vt} for s in nxt]
+        assert tails_v[0] == tails_v[4] == listed and not any(tails_v[1:4])
         gaps = [[x for r in s if kind(r, day1) == "gap" for x in r["securities"]] for s in nxt]
         flat = [x for g in gaps for x in g]
         assert len(flat) == len(set(flat)) == ng and all(len(g) <= q for g in gaps) and not gaps[-1]
