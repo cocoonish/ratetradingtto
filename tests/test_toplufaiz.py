@@ -287,7 +287,7 @@ def test_the_table_sits_right_after_the_blocks_on_the_desk_page(svc):
     panels = {p["id"]: p for p in masa["panels"]}
     assert panels["TAF"]["sheet"] == ex.TARIH_SHEET and panels["TAF"]["range"] == "B1:P108" and not panels["TAF"]["hidden"]
     assert panels["TAF"]["grow"] == {"key": "B", "first": 5, "extra": 1, "last": 104}
-    assert panels["TAFH"]["hidden"] and panels["TAFH"]["range"] == "R1:AS104"
+    assert panels["TAFH"]["hidden"] and panels["TAFH"]["range"] == "R1:%s104" % ex.TARIH_TW       # (+ the two-way store)
     assert panels["TAFS"]["sheet"] == ex.TARIH_SHEET and panels["TAFS"]["range"] == "B%d:I%d" % (ex.TARIH_BACK, ex.TARIH_BACK + 5)
     assert not panels["TAFS"]["hidden"]
     inputs = {i["range"]: (i["scope"], i["kind"]) for i in masa["inputs"] if i["range"].startswith("EK_TARIH!")}
@@ -327,14 +327,18 @@ def test_left_out_when_the_block_is_not_what_it_reads():
     path = os.path.join(ROOT, "models", "tto.json.gz")
     tto = Model.load(path)
     ex.SheetBuilder(tto, "MASA").patch("D64", '=IFERROR((H64/I63-1)*360/$G$60,"")')         # S2's rate off S1's DF
-    assert ex.apply("tto", tto) == ["EK_TARIH: MASA!D64 beklenen formül değil (H64/I64 yok)"]
+    # (the block's two-way cells - an addition of their own - invert the block's formulas: left out too)
+    assert ex.apply("tto", tto) == ["EK_TARIH: MASA!D64 beklenen formül değil (H64/I64 yok)",
+                                    'TARİH ARASI iki yönlü: MASA!D64 beklenen formül değil (IFERROR((H64/I64-1)*360/$G$60,"") değil)']
     assert ex.TARIH_SHEET not in tto.sheet_index and "EK_VFRA" in tto.sheet_index
     tto = Model.load(path)                                                                  # a DF that reads another cell
     ex.SheetBuilder(tto, "MASA").patch("H62", "=" + ex.formula_of(tto, "MASA", "H62") + "*$I$60/$I$60")
-    assert ex.apply("tto", tto) == ["EK_TARIH: unqualified references left in a transplanted formula: $I$60"]
+    assert ex.apply("tto", tto) == ["EK_TARIH: unqualified references left in a transplanted formula: $I$60",
+                                    "TARİH ARASI iki yönlü: MASA!H62 bloğun spread'ini okuyor ($I$60)"]
     tto = Model.load(path)
     ex.SheetBuilder(tto, "MASA").patch("F65", '=IFERROR(D65+$I$61/10000,"")')               # another spread
-    assert ex.apply("tto", tto) == ["EK_TARIH: MASA!F65 beklenen formül değil (D65+$I$60/10000 yok)"]
+    assert ex.apply("tto", tto) == ["EK_TARIH: MASA!F65 beklenen formül değil (D65+$I$60/10000 yok)",
+                                    'TARİH ARASI iki yönlü: MASA!F65 beklenen formül değil (IFERROR(D65+$I$60/10000,"") değil)']
     tto = Model.load(path)
     tto.sheet("MASA").consts[parse_a1("D61")] = "ACT/360"
     assert ex.apply("tto", tto) == ["EK_TARIH: MASA!D61 beklenen başlık değil (Dönem ACT/360 yok)"]

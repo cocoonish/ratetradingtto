@@ -116,7 +116,7 @@
    "scope": "user",
    "group": "usd-scn",
    "kind": "number",
-   "label": "WIRP (manuel)"
+   "label": "WIRP (manuel) (two-way: formula default - the WIRP a 'Fark WIRP (bp)' typed in its row gives, K − Q/100)"
   },
   {
    "range": "R74:T83",
@@ -137,7 +137,7 @@
    "scope": "user",
    "group": "usd-fomc-back",
    "kind": "number",
-   "label": "Pencere OIS (elle) %: a meeting window's OIS rate typed (%, ACT/360), to read the FOMC step it prices (goes with its meeting)"
+   "label": "Pencere OIS (elle) %: a meeting window's OIS rate typed (%, ACT/360), to read the FOMC step it prices (goes with its meeting; two-way: formula default - the rate an O/N or a step typed in its row gives)"
   },
   {
    "range": "BO4:BO70",
@@ -145,6 +145,32 @@
    "group": "usd-holidays",
    "kind": "date",
    "label": "ABD tatilleri (SIFMA)"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "fomc-window",
+   "label": "PENCERE OIS → FOMC ADIMI",
+   "note": "İki yönlü: pencere OIS (elle), elle O/N, elle adım (bp) ya da elle toplantı adımı - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır boşalır). Yazdığınız değer toplantısıyla gider.",
+   "members": [
+    {"name": "Pencere OIS (elle)", "range": "AB74:AB83"},
+    {"name": "Elle O/N", "range": "AC74:AC83", "store": "AG74:AG83", "kind": "number",
+     "label": "'Elle O/N %' typed in the FOMC table (two-way: the window's rate and the step follow; goes with its meeting)"},
+    {"name": "Elle adım (bp)", "range": "AD74:AD83", "store": "AH74:AH83", "kind": "number",
+     "label": "'Elle adım (bp)' typed in the FOMC table (two-way: the window's rate and O/N follow; goes with its meeting)"},
+    {"name": "Elle toplantı adımı", "range": "AE74:AE83", "store": "AI74:AI83", "kind": "number",
+     "label": "'Elle toplantı adımı %' typed in the FOMC table, in steps of Adım (two-way: the window's rate and O/N follow; goes with its meeting)"}
+   ]
+  },
+  {
+   "id": "fomc-wirp",
+   "label": "WIRP",
+   "note": "İki yönlü: WIRP (manuel) ya da Fark WIRP (bp) - hangisini yazarsanız o kalır, öbürü ondan hesaplanır (fark = (İma O/N − WIRP)·100).",
+   "members": [
+    {"name": "WIRP (manuel)", "range": "P74:P83"},
+    {"name": "Fark WIRP (bp)", "range": "Q74:Q83", "store": "AJ74:AJ83", "kind": "number",
+     "label": "'Fark WIRP (bp)' typed in the FOMC table (two-way: WIRP = İma O/N − fark/100 follows; goes with its meeting)"}
+   ]
   }
  ],
  "panels": [
@@ -318,6 +344,14 @@
    "title": "Yardımcı hesaplar",
    "range": "AU15:BM284",
    "hidden": true
+  },
+  {
+   "id": "fomcy",
+   "type": "table",
+   "range": "AG72:AJ83",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · FOMC ima patikası: iki yönlü hücrelerin yazılan değerleri"
   }
  ],
  "sections": [

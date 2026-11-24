@@ -521,9 +521,10 @@ REFERENCE = {
     ],
     "sofr": [
         # SIFMA holidays, the FOMC meetings and their decision flags, the scenario view (FOMC tab), the quotes typed by
-        # hand and those the curve includes (Eğri tab), WIRP typed by hand
+        # hand and those the curve includes (Eğri tab), WIRP typed by hand (or its difference to the implied O/N: the two-way
+        # WIRP pair's store)
         "SOFR_FOMC!BO4:BO70", "SOFR_FOMC!B74:C83", "SOFR_FOMC!R72:T83", "SOFR_FOMC!D49:D68", "SOFR_FOMC!F49:F68",
-        "SOFR_FOMC!P74:P83",
+        "SOFR_FOMC!P74:P83", "SOFR_FOMC!AJ74:AJ83",
     ],
     "asw": ["ASW!LR2:LR200"],                                   # holidays
     # the first tenor of the BIST swap quote lists (the tickers asked of Bloomberg are built from it), USD OIS tickers,

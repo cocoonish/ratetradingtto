@@ -1192,6 +1192,67 @@ Code: `tto/extras.py` (`PPK_SHEET` / `_tto_ppk_back`, `FRA_LEG_NAME` / `_tto_fra
 `_usd_fomc_back`), `tto/meetings.py` (the bands), `tto/views/20_ois.json` (PPK1, PPK2, B21), `tto/views/80_usd.json` (fomc).
 Tests: `tests/test_ppkters.py`, the browser test's checks after "Forward starting swap".
 
+### Tarih arası ve OIS tabloları iki yönlü (24.11.2026)
+
+The desk, on every table (FORWARD KOTASYON first, below):
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+>
+> "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için."
+
+**What became two-way** (the mechanism `tto/twoway.py`: the one typed last stands exactly - also when the market moves -,
+the others are worked out from it with the table's own formulas and their exact inverses; Delete on any of them goes back
+to the default; the separate tables of 23-24.11 stay as they were):
+- **Masa → TARİH ARASI FAİZ / TARİH ARASI FORWARD** (`MASA!B59:AB70`): the block's one spread (Spread (bp), `I60`) or any
+  of the 77 values that carry it - per curve (MPC ima, S1–S3, Ağırlıklı, Bootstrap, TLREF sabit) Dönem + spread (360),
+  Spot→bitiş + spread, TRY % spot→başl. / bitiş, Fwd başlangıç / bitiş, their points, Fwd-fwd puan, Dönem TRY %, Bitiş fwd −
+  RET mid fwd. **One value typed for the whole block**: the spread is one cell for all seven curves, so the value typed
+  stands and gives the spread, and every other curve's values are those at that spread.
+- **Masa → TOPLU TARİH ARASI FAİZ** (`EK_TARIH`): a row's Spread (bp) or its "+ spread (360)".
+- **OIS · PPK → MPC OIS → PPK ADIMI** (`EK_PPK!A1:M18`): a window's MPC OIS (elle), its O/N eşdeğeri or its İma PPK adımı;
+  **MPC SPREAD → PPK ADIMI** (`P1:W17`): a pair's Elle spread, the later window's rate, its O/N or its step.
+- **OIS · Nakit Akışı** (`TM_OIS`): the İşlem oranı or one of the five PVs (piyasa, S1–S3, beklenen).
+- **USD · FOMC** (`SOFR_FOMC`): a window's Pencere OIS (elle), Elle O/N, Elle adım (bp) or Elle toplantı adımı; and WIRP
+  (manuel) or Fark WIRP (bp).
+
+**Left out:** **TÜM FORWARD / FRA** (`OIS_MAIN!A334:W438`). A row has two degrees of freedom - two fills and the FRA they
+make. Typing the FRA must keep one fill typed and solve the other (the fill typed last held, else the end leg solved): the
+row must hold two typed values at once and know which was typed last. The mechanism keeps one typed value per row; that
+table stays as it was, with its "Hedef FRA" columns (U:W: a target -> each leg it needs).
+
+**Choices made while building it** (said in README; ask the desk before changing):
+- **Masa's spread follows what is typed in the block, and its readers with it.** `MASA!I60` stays a plain bp value - the
+  default of FORWARD KOTASYON's general spread (`EK_FWD!D4:E4`), TOPLU TARİH ARASI FAİZ's general spread (`EK_TARIH!G2`),
+  the Forward sheet's spreads (`P58`, `O27`) and OIS_MAIN's date-to-date spread (`F122`); with a rate or a forward typed in
+  the block it is the spread that value gives, and it moves with the curve as the typed value stands - so do they. Typing
+  in the block replaces a spread typed in `I60` (the last typed wins).
+- **A start leg at the OIS spot** (Başlangıç = the OIS spot, the block's default) does not depend on the spread (its
+  forward is the spot): a start leg's TRY %, forward or points typed there gives no spread - the block shows nothing until
+  it is deleted or a later start is typed.
+- **Nakit Akışı's PVs:** a PV typed stays exact; the rate is its exact inverse on its own curve (piyasa: the sheet's market
+  leg, Motor's MPC path; S1–S3: the scenarios'; beklenen: the probabilities'); the other PVs are rounded to 1 TL as the
+  sheet shows them. A period with a rate of its own (Sabit oran) is held.
+- **What is typed in a meeting's row goes with its meeting** (`meetings.TCMB` / `FED`), as the rate, the spread and the
+  window OIS did: the O/N, step or later rate typed (their stores) too.
+- **Steps typed in % of a step** (Elle toplantı adımı, a % cell as Toplantı adımı %): −100 is one step cut.
+
+**How the separate boxes of 24.11 relate** (they stay; each reads the same quantity another way):
+- TARİH ARASI FAİZ → SPREAD (`EK_TARIH!B109:I114`): its "Kote − eğri" for a curve is the spread that the same quote typed
+  into that curve's Dönem + spread (360) gives the block.
+- TOPLU TARİH ARASI FAİZ's Kote % (`N`): with ACT/360 shown it is the row's "+ spread (360)" and its "Kote − seçilen eğri"
+  the spread that "+ spread (360)" typed would give the row - but Kote % stays a reading: it does not set the row's spread.
+- MPC OIS (elle), Elle spread, Pencere OIS (elle) are the two-way tables' own inputs (in place): what was typed there keeps
+  its meaning. Hedef FRA is unchanged (its table is the one left out).
+
+Code: `tto/extras.py` (`_tarih_tw_check` / `_tarih_tw`, `TARIH_TW_*`; `TARIH_TW` in `_tto_tarih`; `PPK_TW_WINDOW`,
+`PPK_TW_PAIR` in `_tto_ppk_back`; `TMOIS_*`, `_tmois_check` / `_tto_tmois`; `FOMC_TW`, `FOMC_TW_WIRP` in
+`_usd_fomc_back`; `overnight_back`), `tto/meetings.py` (the stores' bands), `tto/views/10_masa.json`, `20_ois.json`,
+`55_tmois.json`, `80_usd.json` (`"twoway"`, the hidden helper tables TAFY, PPKY, B7, fomcy). Tests:
+`tests/test_ois_twoway.py`, `tests/test_ppkters.py`, `tests/test_toplufaiz.py`, the browser test's checks after
+"two-way: the date-to-date block".
+
 ### Forward kotasyon iki yönlü (24.11.2026)
 
 On 23.11 the desk asked: "Spread ile forward kotasyonlarını bulduğumuz yere faizi girdiğimde de spreadi ve rate'leri

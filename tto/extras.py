@@ -265,6 +265,12 @@ def overnight(rate: str, days: str, basis: int = 360) -> str:
             % {"r": rate, "d": days, "b": basis})
 
 
+def overnight_back(on: str, days: str, basis: int = 360) -> str:
+    """:func:`overnight`'s exact inverse (no guard: the caller's): the simple rate over ``days`` whose O/N equivalent is
+    ``on`` - ((1 + on/basis)^g − 1)·basis/g (``basis`` 36000: rates in %, as USD · FOMC's)."""
+    return "((1+%(o)s/%(b)d)^%(d)s-1)*%(b)d/%(d)s" % {"o": on, "d": days, "b": basis}
+
+
 # ---------------------------------------------------------------------------------------------- Borsa swap
 def _borsa_check(model: Model) -> None:
     _need_sheets(model, "bu")
@@ -2110,6 +2116,14 @@ def _tto_fwd_back(model: Model) -> None:
 #: ``PPK_FIRST + k`` is window k (OIS_MAIN row 84 + k: from meeting slot k's effective day) and pair k (row 103 + k:
 #: windows k and k + 1); what is typed there goes with meeting slot k when the calendar changes or a meeting passes
 #: (``meetings.TCMB``'s bands on this sheet).
+#:
+#: Both tables are two-way (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık
+#: olmaması için"): a window's rate (G), its O/N equivalent (K) or its step (L) - and a pair's spread (S), its later window's
+#: rate (T), that rate's O/N (U) or its step (V) - can be typed; the one typed last stands, the others are worked out from it
+#: with the same conversion and its exact inverse (:func:`overnight_back`): L → K = J + L/10000 → G = ((1 + K/365)^E −
+#: 1)·365/E; V → U = J' + V/10000 → T = ((1 + U/365)^E' − 1)·365/E' → S = (T − F)·10000 (' : the later window's row).  The
+#: rate and the spread are kept where they always were (G, S: their old values keep their meaning); K / L typed are kept
+#: in ``PPK_TW_WINDOW``, T / U / V in ``PPK_TW_PAIR`` of the same row - with the meeting, as G and S (``meetings.TCMB``).
 PPK_SHEET = "EK_PPK"
 PPK_FIRST = 3
 PPK_WINDOWS = (84, 99)             # OIS_MAIN's 'MPC OIS' rows (16 windows) ...
@@ -2117,6 +2131,8 @@ PPK_PAIRS = (103, 117)             # ... and its 'MPC SPREAD' rows (15 pairs)
 PPK_RATE, PPK_SPREAD = "G", "S"    # what is typed: a window's rate (%), a pair's spread (bp)
 #: the columns of a row that are formulas (meetings.TCMB: an "Elle değer" typed over one goes with the meeting too)
 PPK_COMPUTED = tuple("ABCDEFHIJKLM") + tuple("PQRTUVW")
+PPK_TW_WINDOW = ("Y", "Z")         # a window's O/N equivalent (K) / step (L) typed (two-way: kept here)
+PPK_TW_PAIR = ("AA", "AB", "AC")   # a pair's later window's rate (T) / its O/N (U) / its step (V) typed
 PCT3 = "0.000%"
 
 
@@ -2143,22 +2159,35 @@ def _ppk_back_check(model: Model) -> None:
 
 def _tto_ppk_back(model: Model) -> None:
     """``EK_PPK``: the windows of 'MPC OIS' with a rate typed -> its PPK step (A:M), the pairs of 'MPC SPREAD' with a spread
-    typed -> the later window's rate and its step (P:W)."""
+    typed -> the later window's rate and its step (P:W) - two-way: a window's O/N or step, a pair's later rate, its O/N or
+    its step typed gives the rate / the spread (the typed ones kept in ``PPK_TW_WINDOW`` / ``PPK_TW_PAIR``)."""
     b = SheetBuilder(model, PPK_SHEET)
     w0, p0 = PPK_WINDOWS[0], PPK_PAIRS[0]
+    kon, kstep = PPK_TW_WINDOW
+    tlater, ton, tstep = PPK_TW_PAIR
     b.title("A1", "MPC OIS → PPK ADIMI")
     b.head("A2", ["Dönem", "Toplantı", "Başlangıç", "Bitiş", "Gün", "Piyasa (bootstrap)", "MPC OIS (elle)", "Önceki dönem",
                   "Önceki gün", "Önceki O/N", "O/N eşdeğeri", "İma PPK adımı (bp)", "Piyasanın adımı (bp)"])
+    # where the two-way cells' typed values are kept (a hidden helper table of the page shows them)
+    b.set("%s1" % kon, "İki yönlü: yazılan değerler (boş: yazılan yok; faiz ve spread kendi sütunlarında)", color=NOTE_COLOR)
+    b.head("%s2" % kon, ["Yazılan O/N eşdeğeri", "Yazılan PPK adımı (bp)", "Yazılan MPCk+1 faizi", "Yazılan O/N eşdeğeri (k+1)",
+                         "Yazılan PPK adımı k+1 (bp)"])
     for k in range(PPK_WINDOWS[1] - w0 + 1):
         r = PPK_FIRST + k
-        f = {"r": r, "w": w0 + k, "p": w0 + k - 1, "m": 10 + k, "x": PPK_RATE}       # m: meeting slot k's row of OIS_MAIN
+        f = {"r": r, "w": w0 + k, "p": w0 + k - 1, "m": 10 + k, "x": PPK_RATE, "kon": kon, "kstep": kstep}   # m: meeting slot k's row of OIS_MAIN
         b.set("A%d" % r, "=OIS_MAIN!$A%(w)d" % f)
         b.set("B%d" % r, '=IF(ISNUMBER(OIS_MAIN!$P%(m)d),OIS_MAIN!$P%(m)d,"")' % f, fmt=DATE)
         b.set("C%d" % r, "=OIS_MAIN!$B%(w)d" % f, fmt=DATE)
         b.set("D%d" % r, "=OIS_MAIN!$C%(w)d" % f, fmt=DATE)
         b.set("E%d" % r, '=IFERROR($D%(r)d-$C%(r)d,"")' % f, fmt=INT0)
         b.set("F%d" % r, "=OIS_MAIN!$D%(w)d" % f, fmt=PCT3)
-        b.input("%(x)s%(r)d" % f, None, fmt=PCT3)
+        # the rate typed (where it always was); with an O/N or a step typed instead, the rate that gives it: the step on
+        # the period before's O/N, back to the window's simple ACT/365 rate (overnight's inverse)
+        on = "IF(ISBLANK($%(kon)s%(r)d),$J%(r)d+$%(kstep)s%(r)d/10000,$%(kon)s%(r)d)" % f
+        b.input("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(kon)s%(r)d),ISBLANK($%(kstep)s%(r)d)),"",IFERROR(IF(N($E%(r)d)>0,'
+                                   % f) + overnight_back(on, "$E%d" % r, 365) + ',""),""))', fmt=PCT3)
+        b.input("%(kon)s%(r)d" % f, None, fmt=PCT3)
+        b.input("%(kstep)s%(r)d" % f, None, fmt="0.0")
         if k == 0:
             # the period before the first meeting: the bootstrap's stub from the OIS spot (ln DF 0 there)
             b.set("H%d" % r, '=IFERROR((EXP(-OIS_MAIN!$BK$%(w)d)-1)*365/(OIS_MAIN!$B$%(w)d-OIS_MAIN!$B$2),"")' % f, fmt=PCT3)
@@ -2168,8 +2197,9 @@ def _tto_ppk_back(model: Model) -> None:
             b.set("H%d" % r, "=OIS_MAIN!$D%(p)d" % f, fmt=PCT3)
             b.set("I%d" % r, '=IFERROR(OIS_MAIN!$C%(p)d-OIS_MAIN!$B%(p)d,"")' % f, fmt=INT0)
         b.set("J%d" % r, "=" + overnight("$H%d" % r, "$I%d" % r, 365), fmt=PCT3)
-        b.set("K%d" % r, "=" + overnight("$%(x)s%(r)d" % f, "$E%d" % r, 365), fmt=PCT3)
-        b.set("L%d" % r, '=IFERROR(($K%(r)d-$J%(r)d)*10000,"")' % f, fmt="0.0", bold=True)
+        # (two-way: what is typed in a column stands, else it is worked out from the rate - typed or given by the others)
+        b.set("K%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (kon, r, overnight("$%(x)s%(r)d" % f, "$E%d" % r, 365), kon, r), fmt=PCT3)
+        b.set("L%d" % r, '=IF(ISBLANK($%(kstep)s%(r)d),IFERROR(($K%(r)d-$J%(r)d)*10000,""),$%(kstep)s%(r)d)' % f, fmt="0.0", bold=True)
         b.set("M%d" % r, '=IFERROR((%s-$J%d)*10000,"")' % (overnight("$F%d" % r, "$E%d" % r, 365), r), fmt="0.0")
     b.title("P1", "MPC SPREAD → PPK ADIMI")
     b.head("P2", ["Spread", "Adımın toplantısı", "Piyasa (bp)", "Elle spread (bp)", "MPCk+1 dönemi (ima)", "O/N eşdeğeri",
@@ -2177,14 +2207,23 @@ def _tto_ppk_back(model: Model) -> None:
     for k in range(PPK_PAIRS[1] - p0 + 1):
         # pair k: windows k (this row of A:M) and k + 1 (the next row) - the step at the later window's meeting
         r = PPK_FIRST + k
-        f = {"r": r, "n": r + 1, "s": p0 + k, "x": PPK_SPREAD}
+        f = {"r": r, "n": r + 1, "s": p0 + k, "x": PPK_SPREAD, "tl": tlater, "to": ton, "ts": tstep}
         b.set("P%d" % r, "=OIS_MAIN!$A%(s)d" % f)
         b.set("Q%d" % r, "=$B%(n)d" % f, fmt=DATE)
         b.set("R%d" % r, "=OIS_MAIN!$B%(s)d" % f, fmt="0.0")
-        b.input("%(x)s%(r)d" % f, None, fmt="0.0")
-        b.set("T%d" % r, '=IFERROR(IF(ISNUMBER($%(x)s%(r)d),$F%(r)d+$%(x)s%(r)d/10000,""),"")' % f, fmt=PCT3)
-        b.set("U%d" % r, "=" + overnight("$T%d" % r, "$E%d" % (r + 1), 365), fmt=PCT3)
-        b.set("V%d" % r, '=IFERROR(($U%(r)d-$J%(n)d)*10000,"")' % f, fmt="0.0", bold=True)
+        # the spread typed (where it always was); with the later window's rate, its O/N or its step typed instead, the
+        # spread that gives it: the step on the later window's period before (J'), back to its simple rate, less the
+        # earlier window's market rate
+        on = "IF(ISBLANK($%(to)s%(r)d),$J%(n)d+$%(ts)s%(r)d/10000,$%(to)s%(r)d)" % f
+        later = "IF(ISBLANK($%s%d),%s,$%s%d)" % (tlater, r, overnight_back(on, "$E%d" % (r + 1), 365), tlater, r)
+        b.input("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(tl)s%(r)d),ISBLANK($%(to)s%(r)d),ISBLANK($%(ts)s%(r)d)),"",IFERROR(('
+                                   % f) + later + '-$F%d)*10000,""))' % r, fmt="0.0")
+        for col, fmt in ((tlater, PCT3), (ton, PCT3), (tstep, "0.0")):
+            b.input("%s%d" % (col, r), None, fmt=fmt)
+        b.set("T%d" % r, '=IF(ISBLANK($%(tl)s%(r)d),IFERROR(IF(ISNUMBER($%(x)s%(r)d),$F%(r)d+$%(x)s%(r)d/10000,""),""),$%(tl)s%(r)d)' % f,
+              fmt=PCT3)
+        b.set("U%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (ton, r, overnight("$T%d" % r, "$E%d" % (r + 1), 365), ton, r), fmt=PCT3)
+        b.set("V%d" % r, '=IF(ISBLANK($%(ts)s%(r)d),IFERROR(($U%(r)d-$J%(n)d)*10000,""),$%(ts)s%(r)d)' % f, fmt="0.0", bold=True)
         b.set("W%d" % r, "=$M%(n)d" % f, fmt="0.0")
 
 
@@ -2239,6 +2278,88 @@ def _tto_fra_leg(model: Model) -> None:
                                             '(%(e)s*$P%(r)d-$%(u)s%(r)d*($P%(r)d-$O%(r)d))/$O%(r)d,""),"")') % f, fmt=PCT3, bold=True)
 
 
+# ---------------------------------------------------------------------------------------------- OIS · Nakit Akışı: rate <-> PV
+#: TM_OIS prices a TRY OIS from its cash flows (rows 10-34): each period's fixed leg pays the trade rate (D3; blank: the
+#: market's par B4 - "Kullanılan oran" B6) or the period's own fixed rate typed (D), AC = IF(D <> "", D, B6); the PV at
+#: the rate less the market's, B5 = ROUND(B3·(Σ fixed − Σ float), 0), fixed = N·τ·AC·DF (J), float H; the same on the
+#: OIS page's three scenarios (D5, F5, H5: R / P, W / U, AB / Z) and their probability-weighted PV (J5).  Two-way
+#: (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık olmaması için"): the rate or
+#: any of the five PVs can be typed - the one typed last stands, the others follow.  Each PV is linear in the rate:
+#: PV = B3·(rate·Σ_blank N·τ·DF + Σ_typed D·N·τ·DF − Σ float), so a PV typed gives the rate (D3's default, where the rate
+#: always was) = (PV/B3 + Σ float − Σ_typed D·N·τ·DF) / Σ_blank N·τ·DF on its own curve (piyasa: the market's - Motor's MPC
+#: path, not Bootstrap -, S1-S3: the scenarios'); the expected PV through the probabilities.  A PV typed stays exact; the
+#: others are rounded to 1 TL as the sheet shows them.  The PVs typed are kept in ``TMOIS_TW`` (row 4), the rate each gives
+#: under it (row 5).
+TMOIS_NAME = "OIS · Nakit Akışı iki yönlü"
+TMOIS_RATE = "D3"
+TMOIS_ROWS = (10, 34)
+#: the PVs: (cell, fixed column, float column, N·τ·DF column) - the market's and the three scenarios'
+TMOIS_PVS = (("B5", "J", "H", "I"), ("D5", "R", "P", "Q"), ("F5", "W", "U", "V"), ("H5", "AB", "Z", "AA"))
+TMOIS_EXPECTED = "J5"
+TMOIS_TW = ("L", "M", "N", "O", "P")      # where B5, D5, F5, H5, J5 typed are kept (row 4; the rate each gives in row 5)
+_TMOIS_PV = "ROUND($B$3*(SUM($%(x)s$10:$%(x)s$34)-SUM($%(f)s$10:$%(f)s$34)),0)"
+_TMOIS_EXP = ("ROUND(((OIS_MAIN!$Q$3*(D5)+OIS_MAIN!$Q$4*(F5)+OIS_MAIN!$Q$5*(H5))/(OIS_MAIN!$Q$3+OIS_MAIN!$Q$4+OIS_MAIN!$Q$5)),0)")
+
+
+def _tmois_check(model: Model) -> None:
+    """TM_OIS as the two-way cells invert it: the PVs, the rate in use, each period's rate and its legs; the rate typed
+    where nothing else stands; the cells the stores take empty."""
+    _need_sheets(model, "TM_OIS", "OIS_MAIN")
+    _need_captions(model, (("TM_OIS", "C3", "İşlem oranı (boş = par)"), ("TM_OIS", "A5", "PV @ oran – piyasa (TL)"),
+                           ("TM_OIS", "A6", "Kullanılan oran")))
+    for cell, x, fl, _ in TMOIS_PVS:
+        if _need_formula(model, "TM_OIS", cell) != _TMOIS_PV % {"x": x, "f": fl}:
+            raise ValueError("TM_OIS!%s beklenen formül değil (%s değil)" % (cell, _TMOIS_PV % {"x": x, "f": fl}))
+    if _need_formula(model, "TM_OIS", TMOIS_EXPECTED) != _TMOIS_EXP:
+        raise ValueError("TM_OIS!%s beklenen formül değil (%s değil)" % (TMOIS_EXPECTED, _TMOIS_EXP))
+    if _need_formula(model, "TM_OIS", "B6") != 'IF(D3="",B4,D3)':
+        raise ValueError('TM_OIS!B6 beklenen formül değil (IF(D3="",B4,D3) değil)')
+    for r in range(TMOIS_ROWS[0], TMOIS_ROWS[1] + 1):
+        if _need_formula(model, "TM_OIS", "AC%d" % r) != 'IF(D%d<>"",D%d,$B$6)' % (r, r):
+            raise ValueError("TM_OIS!AC%d beklenen formül değil" % r)
+        for _, x, _, a in TMOIS_PVS:                   # fixed = N·τ·rate·DF, the N·τ·DF beside it
+            dfc = _need_formula(model, "TM_OIS", "%s%d" % (a, r)).rpartition("*")[2]
+            if _need_formula(model, "TM_OIS", "%s%d" % (a, r)) != "C%d*F%d*%s" % (r, r, dfc) or \
+                    _need_formula(model, "TM_OIS", "%s%d" % (x, r)) != "C%d*F%d*AC%d*%s" % (r, r, r, dfc):
+                raise ValueError("TM_OIS!%s%d / %s%d beklenen formül değil" % (x, r, a, r))
+    _need_empty(model, "TM_OIS", TMOIS_RATE)
+    _need_empty(model, "TM_OIS", "%s3:%s5" % (TMOIS_TW[0], TMOIS_TW[-1]))
+
+
+def _tto_tmois(model: Model) -> None:
+    """TM_OIS's rate and PVs two-way: the stores, the rate each PV typed gives, the PVs wrapped, the rate's default."""
+    b = SheetBuilder(model, "TM_OIS")
+    rows = "$%s$%d:$%s$%d"
+    d = rows % ("D", TMOIS_ROWS[0], "D", TMOIS_ROWS[1])
+
+    def legs(x: str, fl: str, a: str) -> Tuple[str, str]:
+        # (Σ float − Σ over the periods with a rate of their own of D·N·τ·DF, Σ N·τ·DF over the periods at the trade rate)
+        ann = rows % (a, TMOIS_ROWS[0], a, TMOIS_ROWS[1])
+        return ("(SUM(%s)-SUMPRODUCT((%s<>\"\")*%s*%s))" % (rows % (fl, TMOIS_ROWS[0], fl, TMOIS_ROWS[1]), d, d, ann),
+                "SUMPRODUCT((%s=\"\")*%s)" % (d, ann))
+
+    s0, s1 = TMOIS_TW[0], TMOIS_TW[-1]
+    b.set("%s2" % s0, "İki yönlü: yazılan PV'ler (boş: yazılan yok; işlem oranı D3'te) ve verdikleri oran", color=NOTE_COLOR)
+    b.head("%s3" % s0, ["Yazılan PV piyasa", "Yazılan PV S1", "Yazılan PV S2", "Yazılan PV S3", "Yazılan beklenen PV"])
+    for (cell, x, fl, a), st in zip(TMOIS_PVS + ((TMOIS_EXPECTED, None, None, None),), TMOIS_TW):
+        store = "$%s$4" % st
+        if x is None:
+            # the expected PV: the scenarios' PVs weighted with the OIS page's probabilities - each linear in the rate
+            parts = [legs(*p[1:]) for p in TMOIS_PVS[1:]]
+            q = ("OIS_MAIN!$Q$3", "OIS_MAIN!$Q$4", "OIS_MAIN!$Q$5")
+            num = "%s*(%s)/$B$3+%s" % (store, "+".join(q), "+".join("%s*%s" % (w, p[0]) for w, p in zip(q, parts)))
+            rate = "(%s)/(%s)" % (num, "+".join("%s*%s" % (w, p[1]) for w, p in zip(q, parts)))
+        else:
+            known, ann = legs(x, fl, a)
+            rate = "(%s/$B$3+%s)/%s" % (store, known, ann)
+        b.input("%s4" % st, None, like=cell)
+        b.set("%s5" % st, '=IF(ISBLANK(%s),"",IFERROR(%s,""))' % (store, rate), fmt="0.0000%")
+        b.patch(cell, "=IF(ISBLANK(%s),%s,%s)" % (store, formula_of(model, "TM_OIS", cell), store))
+    # the trade rate: typed (where it always was), else the one the PV typed gives, else blank (the par)
+    b.input(TMOIS_RATE, '=IF(COUNTA($%s$4:$%s$4)=0,"",IF(COUNT($%s$5:$%s$5)=0,"",SUM($%s$5:$%s$5)))' % (s0, s1, s0, s1, s0, s1),
+            like=TMOIS_RATE)
+
+
 # ---------------------------------------------------------------------------------------------- USD · FOMC: window OIS -> step
 #: The FOMC table of the USD sheet (SOFR_FOMC!A71:Z83, a meeting a row) gives each meeting's implied O/N, K: (exp((ln DF
 #: start − ln DF end) / days) − 1)·36000 between its effective day and the next meeting's - ACT/360, compounded daily -
@@ -2248,50 +2369,85 @@ def _tto_fra_leg(model: Model) -> None:
 #: the rate's own DF ratio, ((1 + r·days/36000)^(1/days) − 1)·36000 (AC) - and the step it prices against the same L, in
 #: bp (AD) and as N does, in steps of B9 (AE); beside them the market's window rate (AA: İŞLEM 1's E).  The market's own
 #: window rate typed gives K and N back.  A rate typed goes with its meeting (``meetings.FED``).
+#:
+#: Two-way (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık olmaması için"): the
+#: window's rate (AB), its O/N (AC), its step in bp (AD) or in steps of B9 (AE) can be typed - the one typed last stands, the
+#: others are worked out from it: AD → AC = L + AD/100, AE → AC = L + AE·B9/100, AC → AB = ((1 + AC/36000)^H − 1)·36000/H
+#: (:func:`overnight_back`).  The rate is kept where it always was (AB); AC / AD / AE typed in ``FOMC_TW`` of the same row.
+#: The WIRP pair too: WIRP (manuel, P) or its difference to the implied O/N (Q, "Fark WIRP (bp)" = (K − P)·100): Q typed ->
+#: P = K − Q/100, kept in ``FOMC_TW_WIRP``.  All of them go with their meeting (``meetings.FED``).
 FOMC_BACK_NAME = "FOMC pencere OIS'ten adım"
 FOMC_BACK_ROWS = (74, 83)
 FOMC_BACK_RATE = "AB"
 FOMC_BACK_COLS = ("AA", "AB", "AC", "AD", "AE")
 FOMC_TRADE_OFFSET = 14             # İŞLEM 1's row of a meeting: its FOMC row + 14 (E88 for row 74)
+FOMC_TW = ("AG", "AH", "AI")       # the window's O/N (AC), step bp (AD), step in B9s (AE) typed (two-way: kept here)
+FOMC_TW_WIRP = "AJ"                # the WIRP difference (Q) typed
+#: WIRP's difference to the implied O/N, as the workbook writes it (row ``r``) - the formula the WIRP pair inverts
+FOMC_WIRP_Q = 'IF(AND(D%(r)d=1,ISNUMBER(P%(r)d)),(K%(r)d-P%(r)d)*100,"")'
 
 
 def _fomc_back_check(model: Model) -> None:
-    """K, N and L of the FOMC table and İŞLEM 1's window rate, as the way back inverts them; its columns are empty."""
+    """K, N and L of the FOMC table and İŞLEM 1's window rate, as the way back inverts them; WIRP's difference (Q); its
+    columns and the two-way cells' are empty."""
     _need_sheets(model, "SOFR_FOMC")
     _need_captions(model, (("SOFR_FOMC", "H73", "Gün"), ("SOFR_FOMC", "K73", "İma O/N %"), ("SOFR_FOMC", "L73", "Önceki ima %"),
-                           ("SOFR_FOMC", "N73", "Toplantı adımı %"), ("SOFR_FOMC", "E87", "Piyasa fwd %")))
+                           ("SOFR_FOMC", "N73", "Toplantı adımı %"), ("SOFR_FOMC", "E87", "Piyasa fwd %"),
+                           ("SOFR_FOMC", "P73", "WIRP (manuel)"), ("SOFR_FOMC", "Q73", "Fark WIRP (bp)")))
     r0, r1 = FOMC_BACK_ROWS
     _need_formula(model, "SOFR_FOMC", "L%d" % r0, "($B$7+$B$16/100)")
+    sh = model.sheet("SOFR_FOMC")
     for r in range(r0, r1 + 1):
         _need_formula(model, "SOFR_FOMC", "K%d" % r, "(EXP((I%d-J%d)/H%d)-1)*360*100" % (r, r, r))
         _need_formula(model, "SOFR_FOMC", "N%d" % r, "(K%d-L%d)*100/$B$9" % (r, r))
         _need_formula(model, "SOFR_FOMC", "E%d" % (r + FOMC_TRADE_OFFSET), "(EXP($I%d-$J%d)-1)*36000/$H%d" % (r, r, r))
         if r > r0:
             _need_formula(model, "SOFR_FOMC", "L%d" % r, "LOOKUP(2,1/($D$%d:D%d=1),$K$%d:K%d)" % (r0, r - 1, r0, r - 1))
-    sh = model.sheet("SOFR_FOMC")
+        if _need_formula(model, "SOFR_FOMC", "Q%d" % r) != FOMC_WIRP_Q % {"r": r}:
+            raise ValueError("SOFR_FOMC!Q%d beklenen formül değil (%s değil)" % (r, FOMC_WIRP_Q % {"r": r}))
+        rc = parse_a1("P%d" % r)
+        if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
+            raise ValueError("SOFR_FOMC!P%d boş değil" % r)                 # (WIRP: typed, none in the file)
     for r in range(r0 - 2, r1 + 1):
-        for col in FOMC_BACK_COLS:
+        for col in FOMC_BACK_COLS + FOMC_TW + (FOMC_TW_WIRP,):
             rc = parse_a1("%s%d" % (col, r))
             if rc in sh.fml or sh.consts.get(rc) not in (None, ""):
                 raise ValueError("SOFR_FOMC!%s%d boş değil" % (col, r))
 
 
 def _usd_fomc_back(model: Model) -> None:
-    """The FOMC table's AA:AE: a window's OIS rate typed -> its O/N and the step it prices."""
+    """The FOMC table's AA:AE: a window's OIS rate typed -> its O/N and the step it prices - two-way: its O/N or step
+    typed gives the rate (``FOMC_TW``); and the WIRP pair (P, Q: ``FOMC_TW_WIRP``)."""
     b = SheetBuilder(model, "SOFR_FOMC")
     r0, r1 = FOMC_BACK_ROWS
+    ton, tbp, tsteps = FOMC_TW
     b.set("AA%d" % (r0 - 2), "PENCERE OIS → FOMC ADIMI", bold=True)
     for col, text in zip(FOMC_BACK_COLS, ("Piyasa pencere OIS %", "Pencere OIS (elle) %", "Elle O/N %", "Elle adım (bp)",
                                           "Elle toplantı adımı %")):
         b.set("%s%d" % (col, r0 - 1), text, like="K%d" % (r0 - 1))
+    # where the two-way cells' typed values are kept (a hidden helper table of the page shows them)
+    b.set("%s%d" % (ton, r0 - 2), "İki yönlü: yazılan değerler (boş: yazılan yok; faiz ve WIRP kendi sütunlarında)", color=NOTE_COLOR)
+    for col, text in zip(FOMC_TW + (FOMC_TW_WIRP,), ("Yazılan O/N %", "Yazılan adım (bp)", "Yazılan toplantı adımı", "Yazılan fark WIRP (bp)")):
+        b.set("%s%d" % (col, r0 - 1), text, like="K%d" % (r0 - 1))
     for r in range(r0, r1 + 1):
-        f = {"r": r, "e": r + FOMC_TRADE_OFFSET, "x": FOMC_BACK_RATE}
+        f = {"r": r, "e": r + FOMC_TRADE_OFFSET, "x": FOMC_BACK_RATE, "on": ton, "bp": tbp, "st": tsteps, "w": FOMC_TW_WIRP}
         b.set("AA%d" % r, "=$E%(e)d" % f, like="K%d" % r)
-        b.set("%(x)s%(r)d" % f, None, like="P%d" % r)                     # typed, with the sheet's input look
-        b.set("AC%d" % r, ('=IFERROR(IF(AND($D%(r)d=1,ISNUMBER($%(x)s%(r)d),N($H%(r)d)>0),'
-                           '((1+$%(x)s%(r)d*$H%(r)d/36000)^(1/$H%(r)d)-1)*36000,""),"")') % f, like="K%d" % r)
-        b.set("AD%d" % r, '=IFERROR(IF(ISNUMBER($AC%(r)d),($AC%(r)d-$L%(r)d)*100,""),"")' % f, fmt="0.0", bold=True)
-        b.set("AE%d" % r, '=IFERROR(IF(ISNUMBER($AC%(r)d),($AC%(r)d-$L%(r)d)*100/$B$9,""),"")' % f, like="N%d" % r)
+        # the window's rate typed (where it always was; the sheet's input look); with its O/N or step typed instead, the
+        # rate that gives it: the step on Önceki ima (L), back to the window's simple ACT/360 rate
+        on = "IF(ISBLANK($%(on)s%(r)d),$L%(r)d+IF(ISBLANK($%(bp)s%(r)d),$%(st)s%(r)d*$B$9,$%(bp)s%(r)d)/100,$%(on)s%(r)d)" % f
+        b.set("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(on)s%(r)d),ISBLANK($%(bp)s%(r)d),ISBLANK($%(st)s%(r)d)),"",IFERROR(IF(AND('
+                                 '$D%(r)d=1,N($H%(r)d)>0),' % f) + overnight_back(on, "$H%d" % r, 36000) + ',""),""))', like="P%d" % r)
+        b.set("AC%d" % r, ('=IF(ISBLANK($%(on)s%(r)d),IFERROR(IF(AND($D%(r)d=1,ISNUMBER($%(x)s%(r)d),N($H%(r)d)>0),'
+                           '((1+$%(x)s%(r)d*$H%(r)d/36000)^(1/$H%(r)d)-1)*36000,""),""),$%(on)s%(r)d)') % f, like="K%d" % r)
+        b.set("AD%d" % r, '=IF(ISBLANK($%(bp)s%(r)d),IFERROR(IF(ISNUMBER($AC%(r)d),($AC%(r)d-$L%(r)d)*100,""),""),$%(bp)s%(r)d)' % f,
+              fmt="0.0", bold=True)
+        b.set("AE%d" % r, '=IF(ISBLANK($%(st)s%(r)d),IFERROR(IF(ISNUMBER($AC%(r)d),($AC%(r)d-$L%(r)d)*100/$B$9,""),""),$%(st)s%(r)d)' % f,
+              like="N%d" % r)
+        # WIRP typed (where it always was), or the one its difference typed gives: K − Q/100
+        b.set("P%d" % r, '=IF(ISBLANK($%(w)s%(r)d),"",IFERROR(IF($D%(r)d=1,$K%(r)d-$%(w)s%(r)d/100,""),""))' % f, like="P%d" % r)
+        b.set("Q%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (FOMC_TW_WIRP, r, FOMC_WIRP_Q % f, FOMC_TW_WIRP, r), like="Q%d" % r)
+        for col, like in ((ton, "K"), (tbp, "AD"), (tsteps, "N"), (FOMC_TW_WIRP, "Q")):
+            b.set("%s%d" % (col, r), None, like="%s%d" % (like, r))
 
 
 # ---------------------------------------------------------------------------------------------- live quotes
@@ -3934,6 +4090,9 @@ TARIH_PICKED = "R2"                                             # the chosen cur
 #: the block's own box under the table (rows TARIH_BACK … + 5): its quote's cell, then the curves across C:I
 TARIH_BACK = TARIH_LAST + 5
 TARIH_BACK_QUOTE = "C%d" % (TARIH_BACK + 1)
+#: a row's spread (D) and its "+ spread (360)" (M) are two-way (tto/twoway.py; the desk, 24.11.2026): an M typed is kept
+#: here, right after the helpers, and the row's spread is the one it gives - M − the chosen curve's ACT/360 rate
+TARIH_TW = "AT"
 
 
 def _tarih_layout() -> Dict[Any, str]:
@@ -4016,6 +4175,8 @@ def _tarih_check(model: Model) -> None:
         if code.startswith("S"):                                   # the scenarios' rows: "S1 – " & their name
             _need_formula(model, "MASA", "B%d" % k, '"%s – "' % code)
     _tarih_formulas(model, TARIH_FIRST)
+    if _col(_tarih_layout()[("f", TARIH_CURVES[-1][0])]) >= _col(TARIH_TW):        # (the two-way store after the helpers)
+        raise ValueError("%s!%s yardımcı sütunların içinde" % (TARIH_SHEET, TARIH_TW))
 
 
 def _tto_tarih(model: Model) -> None:
@@ -4060,7 +4221,12 @@ def _tto_tarih(model: Model) -> None:
     blank = 'IF($E%d="","",' % r                                            # a row without its two dates shows nothing
     b.input("B%d" % r, '=IF(ISNUMBER($C%d),OIS_MAIN!$B$2,"")' % r, fmt=DATE)
     b.input("C%d" % r, None, fmt=DATE)
-    b.input("D%d" % r, '=IF(ISNUMBER($C%d),$%s$%s,"")' % (r, TARIH_SPREAD[0], TARIH_SPREAD[1:]), fmt="0")
+    # the row's spread: typed, else the general one - or, two-way, the one a "+ spread (360)" typed in the row gives (the
+    # chosen curve's ACT/360 rate is what the spread is added to, whatever basis the table shows)
+    tw = "$%s%d" % (TARIH_TW, r)
+    b.input("D%d" % r, '=IF(ISBLANK(%s),IF(ISNUMBER($C%d),$%s$%s,""),IFERROR((%s-INDEX($%s%d:$%s%d,%s))*10000,""))'
+            % (tw, r, TARIH_SPREAD[0], TARIH_SPREAD[1:], tw, d0, r, d1, r, picked), fmt="0")
+    b.input("%s%d" % (TARIH_TW, r), None, fmt="0.00%")
     b.set("E%d" % r, '=IF(AND(ISNUMBER($B%d),ISNUMBER($C%d)),%s,"")' % (r, r, fml["E"]), fmt=INT0)
     b.set("%s%d" % (lay["ks"], r), '=IF(ISNUMBER($B%d),%s,"")' % (r, fml[lay["ks"]]), fmt=INT0)
     b.set("%s%d" % (lay["ke"], r), '=IF(ISNUMBER($C%d),%s,"")' % (r, fml[lay["ke"]]), fmt=INT0)
@@ -4078,7 +4244,8 @@ def _tto_tarih(model: Model) -> None:
                   fmt="0.00%")
         b.set("%s%d" % (lay[("d", code)], r), "=" + blank + fml[("d", code)] + ")", fmt="0.0000%")
         b.set("%s%d" % (lay[("f", code)], r), "=" + blank + fml[("f", code)] + ")", fmt="0.0000%")
-    b.set("%s%d" % (TARIH_PLUS, r), "=%sINDEX($%s%d:$%s%d,%s))" % (blank, f0, r, f1, r, picked), fmt="0.00%")
+    # (two-way: a "+ spread (360)" typed stands, the row's spread is the one it gives)
+    b.set("%s%d" % (TARIH_PLUS, r), "=IF(ISBLANK(%s),%sINDEX($%s%d:$%s%d,%s)),%s)" % (tw, blank, f0, r, f1, r, picked, tw), fmt="0.00%")
     # the other way round: the row's quote, read in the basis chosen, less the chosen curve's rate and Bootstrap's as the
     # row shows them (bp) - so that rate + spread / 10000 = the quote; with ACT/360 the chosen one's spread, typed as the
     # row's spread, makes the "+ spread (360)" column the quote
@@ -4088,8 +4255,10 @@ def _tto_tarih(model: Model) -> None:
     b.set("%s%d" % (TARIH_VS[0], r), "=%s%s)" % (blank, vs % ("INDEX($%s%d:$%s%d,%s)" % (TARIH_RATES[0], r, TARIH_RATES[-1], r, picked))),
           fmt="0.0", bold=True)
     b.set("%s%d" % (TARIH_VS[1], r), "=%s%s)" % (blank, vs % ("$%s%d" % (boot, r))), fmt="0.0", bold=True)
-    for c in list(range(_col("B"), _col(TARIH_VS[-1]) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)):
+    for c in list(range(_col("B"), _col(TARIH_VS[-1]) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)) + [_col(TARIH_TW)]:
         b.fill_down("%s%d" % (index_to_col(c), r), TARIH_LAST)
+    b.note("%s3" % TARIH_TW, "İki yönlü: yazılan '+ spread (360)' (boş: yazılan yok; satırın spread'i D'de)")
+    b.head("%s4" % TARIH_TW, ["Yazılan + spread (360)"])
     b.note("B%d" % (TARIH_LAST + 2), "Masa'daki TARİH ARASI FAİZ bloğunun formülleri, satır satır: eğrilerin OIS spot'tan başlangıç ve "
                                      "bitişe iskonto faktörleri (MASA!H62:I68), dönem faizi (DF başl. / DF bitiş − 1)·360/gün - ACT/365'te "
                                      "·365, O/N'de 360·((DF başl. / DF bitiş)^(1/gün) − 1) -, Ağırlıklı = S1–S3, OIS · PPK olasılıklarıyla. "
@@ -4129,6 +4298,135 @@ def _tarih_back(b: "SheetBuilder") -> None:
     b.note("B%d" % (t + 5), "Kırık tarih için verilen faizi (ACT/360 basit, %) yazın: her TRY OIS eğrisine spread = kote − eğrinin dönem ACT/360 "
                             "faizi (bp), bloğun tarihleriyle. Bulunan spread bloğun Spread (bp)'sine yazılınca o eğrinin 'Dönem + spread "
                             "(360)'ı koteye eşit çıkar.")
+
+
+# ---------------------------------------------------------------------------------------------- Masa: the date-to-date block two-way
+#: MASA's TARİH ARASI FAİZ (B59:N70) and TARİH ARASI FORWARD (P59:AB70) price one start / end pair on the seven TRY OIS curves
+#: (rows 62-68) with ONE spread, MASA!I60 (bp): F = D + I60/10000 (the period's ACT/360 rate + spread), N = L + I60/10000
+#: (spot → end), Q / R the TRY % spot → start / end (ACT/360 + spread, in %), S / T the forwards at the start and the end
+#: (spot·(1 + TRY·g/360)/(1 + USD·g/360)), U / V their points, W the forward-forward points, X = F·100, Y the end forward
+#: less the RET mid's.  Two-way (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık
+#: olmaması için"): any of these 77 cells - or the spread itself - can be typed; the one typed last stands and gives the
+#: block's one spread, every other cell follows from it with the block's own formulas.  The spread is kept where it always
+#: was (I60: what users typed there keeps its meaning) and stays a plain bp value - the default of the forward quote
+#: matrix's general spread (EK_FWD!D4:E4), Forward!P58 / O27, OIS_MAIN!F122 and EK_TARIH!G2, which follow it; a value
+#: typed in the block is kept in ``TARIH_TW_STORE`` (a column a kind, the block's rows), the spread it gives beside it
+#: (``TARIH_TW_FROM``: each formula's exact inverse - linear in the spread, so closed form; the forwards' through the TRY
+#: rate of the leg, Q's base without the spread in ``TARIH_TW_BASE``).  A start leg (Q, S, U) at the OIS spot (K60 ≤ 0)
+#: does not depend on the spread: typed there it gives no spread (the block and the spread show nothing until it goes).
+TARIH_TW_NAME = "TARİH ARASI iki yönlü"
+TARIH_SPREAD_CELL = "I60"                 # the block's one spread (bp): OIS_SPREAD's cell
+TARIH_TW_ROWS = (62, 68)
+TARIH_TW_KINDS = "FNQRSTUVWXY"            # the block's cells that carry the spread, in the order of their stores
+TARIH_TW_LABEL, TARIH_TW_STORE, TARIH_TW_FROM, TARIH_TW_BASE = "CS", "CT", "DF", "DR"
+TARIH_TW_CAPTIONS = ("Dönem + spread (360)", "Spot→bitiş + spread", "TRY % spot→başl.", "TRY % spot→bitiş", "Fwd başlangıç",
+                     "Fwd bitiş", "Puan başl.", "Puan bitiş", "Fwd-fwd puan", "Dönem TRY %", "Bitiş fwd − RET mid fwd")
+#: the block's formulas the two-way cells wrap and invert (row ``r``; the weighted row's own in ``_TARIH_TW_WEIGHTED``)
+_TARIH_TW_PLAIN = {
+    "D": 'IFERROR((H%(r)d/I%(r)d-1)*360/$G$60,"")', "L": 'IFERROR((1/I%(r)d-1)*360/$M$60,"")',
+    "F": 'IFERROR(D%(r)d+$I$60/10000,"")', "N": 'IFERROR(L%(r)d+$I$60/10000,"")',
+    "Q": 'IFERROR(IF($K$60<=0,"",((1/H%(r)d-1)*360/$K$60)*100+$I$60/100),"")',
+    "R": 'IFERROR(((1/I%(r)d-1)*360/$M$60)*100+$I$60/100,"")',
+    "S": 'IFERROR(IF($K$60<=0,$Q$60,$Q$60*(1+Q%(r)d/100*$K$60/360)/(1+$U$60/100*$K$60/360)),"")',
+    "T": 'IFERROR($Q$60*(1+R%(r)d/100*$M$60/360)/(1+$W$60/100*$M$60/360),"")',
+    "U": 'IFERROR((S%(r)d-$Q$60)*10000,"")', "V": 'IFERROR((T%(r)d-$Q$60)*10000,"")', "W": 'IFERROR((T%(r)d-S%(r)d)*10000,"")',
+    "X": 'IFERROR(F%(r)d*100,"")',
+    "Y": 'IFERROR((T%(r)d-$Q$60*(1+$Z$60/100*$M$60/360)/(1+$W$60/100*$M$60/360))*10000,"")',
+}
+_TARIH_TW_AVG = 'IFERROR((SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,%(c)s63:%(c)s65)/SUM(OIS_MAIN!$Q$3:$Q$5)),"")'
+_TARIH_TW_WEIGHTED = dict(_TARIH_TW_PLAIN, Q='IFERROR(IF($K$60<=0,"",SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,Q63:Q65)/SUM(OIS_MAIN!$Q$3:$Q$5)),"")',
+                          **{c: _TARIH_TW_AVG % {"c": c} for c in "DLFNRX"})
+
+
+def _tarih_tw_cols() -> Dict[str, Tuple[str, str]]:
+    """Each two-way kind's store and the column of the spread it gives: {"F": ("CT", "DF"), …}."""
+    return {k: (index_to_col(_col(TARIH_TW_STORE) + i), index_to_col(_col(TARIH_TW_FROM) + i)) for i, k in enumerate(TARIH_TW_KINDS)}
+
+
+def _tarih_tw_check(model: Model) -> None:
+    """The block as the two-way cells invert it: its one spread a number in I60, each curve row's formulas as written above
+    (the weighted row's the S1-S3 average), the columns the stores and their spreads take empty."""
+    _need_sheets(model, "MASA", "OIS_MAIN")
+    _need_captions(model, (("MASA", "H60", "Spread (bp)"), ("MASA", "F61", "Dönem + spread (360)"), ("MASA", "N61", "Spot→bitiş + spread"),
+                           ("MASA", "Q61", "TRY % spot→başl. (360+spr)"), ("MASA", "W61", "Fwd-fwd puan"), ("MASA", "X61", "Dönem TRY % (360+spr)")))
+    if type(model.sheet("MASA").consts.get(parse_a1(TARIH_SPREAD_CELL))) is not float:
+        raise ValueError("MASA!%s bir sayı değil" % TARIH_SPREAD_CELL)
+    for r in range(TARIH_TW_ROWS[0], TARIH_TW_ROWS[1] + 1):
+        want = _TARIH_TW_WEIGHTED if r == TARIH_WEIGHTED else _TARIH_TW_PLAIN
+        for col, text in want.items():
+            if _need_formula(model, "MASA", "%s%d" % (col, r)) != text % {"r": r}:
+                raise ValueError("MASA!%s%d beklenen formül değil (%s değil)" % (col, r, text % {"r": r}))
+    # what the inverses read must not read the spread (the spread's default reads them): the discount factors, the
+    # dates' days, the spot, the USD rates, the RET mid
+    spread = re.compile(r"(?<![A-Za-z0-9_$!])\$?I\$?60(?![0-9])")
+    for addr in ["%s%d" % (c, r) for r in range(TARIH_TW_ROWS[0], TARIH_TW_ROWS[1] + 1) if r != TARIH_WEIGHTED for c in "HI"] + \
+            ["G60", "K60", "M60", "Q60", "U60", "W60", "Z60"]:
+        if spread.search(_need_formula(model, "MASA", addr)):
+            raise ValueError("MASA!%s bloğun spread'ini okuyor ($I$60)" % addr)
+    _need_empty(model, "MASA", "%s%d:%s%d" % (TARIH_TW_LABEL, TARIH_TW_ROWS[0] - 3, TARIH_TW_BASE, TARIH_TW_ROWS[1]))
+
+
+def _tarih_tw(model: Model) -> None:
+    """MASA's date-to-date block two-way: the stores, the spread each gives, the block's cells wrapped, the spread's default."""
+    b = SheetBuilder(model, "MASA")
+    r0, r1 = TARIH_TW_ROWS
+    cols = _tarih_tw_cols()
+    default = model.sheet("MASA").consts.get(parse_a1(TARIH_SPREAD_CELL))
+    base = TARIH_TW_BASE
+    b.set("%s%d" % (TARIH_TW_LABEL, r0 - 3), "İKİ YÖNLÜ · TARİH ARASI FAİZ / FORWARD: yazılan değerler ve verdikleri spread", bold=True)
+    b.note("%s%d" % (TARIH_TW_LABEL, r0 - 2), "Boş: yazılan yok. Bloğun tek spread'i (MASA!I60) yazılan değerin verdiğidir; spread kendi "
+                                             "hücresinde yazılırsa burası boşalır.")
+    b.head("%s%d" % (TARIH_TW_LABEL, r0 - 1), ["Eğri"] + ["Yazılan " + c for c in TARIH_TW_CAPTIONS] + [None]
+           + ["Spread (bp) ← " + c for c in TARIH_TW_CAPTIONS] + [None, "TRY % başl. (spread'siz)"])
+    # one formula of the forward legs: the TRY rate (%, ACT/360 + spread) a forward at the start / the end implies
+    # (spot·(1 + TRY·g/360)/(1 + USD·g/360) solved for TRY)
+    start_try = "((%s/$Q$60)*(1+$U$60/100*$K$60/360)-1)*360/$K$60*100"
+    end_try = "((%s/$Q$60)*(1+$W$60/100*$M$60/360)-1)*360/$M$60*100"
+    for r in range(r0, r1 + 1):
+        f = {"r": r, "base": base}
+        st = {k: "$%s%d" % (s, r) for k, (s, _) in cols.items()}
+        b.set("%s%d" % (TARIH_TW_LABEL, r), "=$B%d" % r)
+        if r == TARIH_WEIGHTED:
+            b.set("%s%d" % (base, r), '=IFERROR(IF($K$60<=0,"",SUMPRODUCT(OIS_MAIN!$Q$3:$Q$5,%s63:%s65)/SUM(OIS_MAIN!$Q$3:$Q$5)),"")'
+                  % (base, base), fmt="0.0000")
+        else:
+            b.set("%s%d" % (base, r), '=IFERROR(IF($K$60<=0,"",((1/H%(r)d-1)*360/$K$60)*100),"")' % f, fmt="0.0000")
+        # the spread (bp) a value typed in each kind gives: its formula solved for the spread
+        start = 'IF($K$60<=0,"",(%s-$%s%d)*100)'                  # a start leg's TRY % -> the spread (none at the spot)
+        end = "(%s-100*$L%d)*100" % ("%s", r)                     # an end leg's TRY % -> the spread
+        a = "$Q$60/(1+$W$60/100*$M$60/360)"                        # dT / d(TRY % · M60/36000)
+        t0 = "$Q$60*(1+$L%d*$M$60/360)/(1+$W$60/100*$M$60/360)" % r                    # the end forward without the spread
+        s0 = "IF($K$60<=0,$Q$60,$Q$60*(1+$%s%d/100*$K$60/360)/(1+$U$60/100*$K$60/360))" % (base, r)
+        ck = "IF($K$60<=0,0,$Q$60/(1+$U$60/100*$K$60/360)*$K$60)"
+        inverse = {
+            "F": "(%s-$D%d)*10000" % (st["F"], r),
+            "N": "(%s-$L%d)*10000" % (st["N"], r),
+            "Q": start % (st["Q"], base, r),
+            "R": end % st["R"],
+            "S": start % (start_try % st["S"], base, r),
+            "T": end % (end_try % st["T"]),
+            "U": start % (start_try % ("($Q$60+%s/10000)" % st["U"]), base, r),
+            "V": end % (end_try % ("($Q$60+%s/10000)" % st["V"])),
+            "W": "(%s-(%s-%s)*10000)*360/(%s*$M$60-%s)" % (st["W"], t0, s0, a, ck),
+            "X": "(%s/100-$D%d)*10000" % (st["X"], r),
+            "Y": end % (end_try % ("(%s/10000+$Q$60*(1+$Z$60/100*$M$60/360)/(1+$W$60/100*$M$60/360))" % st["Y"])),
+        }
+        for k, (s, sp) in cols.items():
+            addr = "%s%d" % (k, r)
+            b.input("%s%d" % (s, r), None, like=addr)
+            b.set("%s%d" % (sp, r), '=IF(ISBLANK(%s),"",IFERROR(%s,""))' % (st[k], inverse[k]), fmt="0.00")
+            if k == "X" and r != TARIH_WEIGHTED:
+                # X = F·100 read from F's parts (D + the spread): the same number, without reading what is typed into F
+                # (the forward table would read the rates table's typed value)
+                old = 'IFERROR(($D%(r)d+$I$60/10000)*100,"")' % f
+            else:
+                old = formula_of(model, "MASA", addr)
+            b.patch(addr, "=IF(ISBLANK(%s),%s,%s)" % (st[k], old, st[k]))
+    # the spread: typed (where it always was), else the one the value typed in the block gives, else the workbook's
+    s0, s1 = cols[TARIH_TW_KINDS[0]][0], cols[TARIH_TW_KINDS[-1]][0]
+    g0, g1 = cols[TARIH_TW_KINDS[0]][1], cols[TARIH_TW_KINDS[-1]][1]
+    b.patch(TARIH_SPREAD_CELL, '=IF(COUNTA($%s$%d:$%s$%d)=0,%s,IF(COUNT($%s$%d:$%s$%d)=0,"",SUM($%s$%d:$%s$%d)))'
+            % (s0, r0, s1, r1, _literal(default), g0, r0, g1, r1, g0, r0, g1, r1))
 
 
 # ---------------------------------------------------------------------------------------------- Forward: bond carry, price -> repo
@@ -4890,6 +5188,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
             ("Forward puandan faize", _fwd_back_check, _tto_fwd_back),
             (PPK_SHEET, _ppk_back_check, _tto_ppk_back), (FRA_LEG_NAME, _fra_leg_check, _tto_fra_leg),
+            (TMOIS_NAME, _tmois_check, _tto_tmois),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
             ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),
@@ -4905,7 +5204,10 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BOND_BACK_NAME, _bond_back_check, _tto_bond_back), (MOVE_BACK_NAME, _move_back_check, _tto_move_back),
             (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread),
             # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
-            (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
+            (TARIH_SHEET, _tarih_check, _tto_tarih),
+            # (the date-to-date block two-way: after the bulk table and the one OIS spread, which read the block as the file has it)
+            (TARIH_TW_NAME, _tarih_tw_check, _tarih_tw),
+            (VPRICE_NAME, _viop_price_check, _tto_viop_price),
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),

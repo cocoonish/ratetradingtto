@@ -122,6 +122,13 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   (the table's inverse formulas: one implementation, as `extras.fwd_outright` / `fwd_rate`); the view declares the group;
   the tests cover each member typed -> the others, exact round trips, the last typed wins, Delete, a paste, a scenario,
   the values typed before - and rows that move (`meetings.py`, `rowkeys.py`) must move the stores too.
+  - **One value for a whole block** (Masa's date-to-date block: one spread, `MASA!I60`, for seven curves): members of
+    shape 1×1 - the block is one row-side. The in-place member's default sums the spread each store gives (one store holds
+    a value at a time), a helper per store beside it (`extras._tarih_tw`).
+  - **Stores in a meeting's row** (EK_PPK, SOFR_FOMC's FOMC table): declared as `typed` bands of `meetings.TCMB` / `FED`, so
+    a value typed goes with its meeting and takes no formula, as the table's own typed columns.
+  - **Stores inside a table of the page**: every member and store sits in a panel's range (a hidden helper table for the
+    stores: `test_views`); a member a table shows counts as showing its store.
 
 ## Books and the formula engine
 
@@ -219,10 +226,10 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | EK_EVREN | tto | Tüm Kâğıtlar (the service writes its rows) |
 | EK_CARRY | tto | carry along a chosen TLREF path |
 | EK_IHALE | tto | Treasury auction bid pricing |
-| EK_TARIH | tto | TOPLU TARİH ARASI FAİZ: MASA's date-to-date block (`MASA!B59:N70`) for 100 start / end pairs, the block's formulas carried to each row (`_tarih_formulas`), a row's quote (Kote %, N) → its spread over the chosen curve and Bootstrap (O:P), the helpers from R; under it the block's own box, a quote → its spread over each curve (`_tarih_back`, B109:I114, shown between the block and the table) |
+| EK_TARIH | tto | TOPLU TARİH ARASI FAİZ: MASA's date-to-date block (`MASA!B59:N70`) for 100 start / end pairs, the block's formulas carried to each row (`_tarih_formulas`), a row's quote (Kote %, N) → its spread over the chosen curve and Bootstrap (O:P), the helpers from R; under it the block's own box, a quote → its spread over each curve (`_tarih_back`, B109:I114, shown between the block and the table). Two-way: a row's spread (D) or its "+ spread (360)" (M, kept in `AT`); the block itself too (`MASA!I60` or any of its 77 values, kept in `MASA!CT62:DD68`: `_tarih_tw`) |
 | EK_VFRA | tto | VİOP target FRA. The target type "Fiyat" (a far price → its implied rate, the inverse of `VIOP!S331`) is an addition of its own, "VİOP hedef fiyatı" (`_tto_viop_price`), applied just before: it patches the target rate `VIOP!Q331:Q338` and the type list |
 | EK_RET | tto | RET tenors on the OIS scenario curves |
-| EK_PPK | tto | OIS · PPK's ways back: a meeting window's rate / an MPC spread typed -> the PPK step it prices (Broker Chat's implied step, cell for cell). Its typed and computed columns are bands of `meetings.TCMB` (row 3 + k: meeting slot k). Formula-only beside it: "FRA ikinci bacak" (`OIS_MAIN!U335:W438`) and, in book `sofr`, "FOMC pencere OIS'ten adım" (`SOFR_FOMC!AA72:AE83`, bands of `meetings.FED`) |
+| EK_PPK | tto | OIS · PPK's ways back: a meeting window's rate / an MPC spread typed -> the PPK step it prices (Broker Chat's implied step, cell for cell). Its typed and computed columns are bands of `meetings.TCMB` (row 3 + k: meeting slot k). Two-way: a window's O/N or step, a pair's later rate, O/N or step typed instead (stores `Y:Z`, `AA:AC`, typed bands too). Formula-only beside it: "FRA ikinci bacak" (`OIS_MAIN!U335:W438`) and, in book `sofr`, "FOMC pencere OIS'ten adım" (`SOFR_FOMC!AA72:AE83`, bands of `meetings.FED`; two-way: its O/N or step and WIRP's difference typed instead, stores `AG:AJ`) |
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
 | EK_FX | asw | the offshore rates ASW FX is built on |
 
@@ -475,7 +482,8 @@ new feature that stores anything by cell, row or position must use one of them *
    - A row is a slot. `change()` moves every value of a meeting across users, scenarios, formulas and watch items in
      one transaction.
    - A band may sit on another sheet of the book, its k-th row the k-th slot: Motor's per-meeting inputs, `EK_PPK`'s
-     rate / spread typed per window (from row 3). The watch anchors alarms to a meeting only on the list's own sheet.
+     rate / spread typed per window (from row 3) and the two-way stores beside them. The watch anchors alarms to a
+     meeting only on the list's own sheet.
    - Meetings that leave are parked in `calendar.parked`.
    - Typed meeting dates reach it through `_set_inputs`.
 2. **`tto/rowkeys.py`: bond lists and VİOP gold contracts.**

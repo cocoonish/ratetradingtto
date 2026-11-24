@@ -227,6 +227,13 @@ The desk's list of points each curve is built from, one list for OIS and one for
   `extras.fwd_outright`) - no curve is read for it.
 - **EK_TARIH's Kote % is read in the basis the table shows** (ACT/360, ACT/365 or O/N (360)); its difference to a curve is
   in that basis too. Only with ACT/360 is it the row's spread (desk decision 24.11.2026).
+- **Two-way** (24.11.2026, [desk-decisions.md](desk-decisions.md#tarih-arası-ve-ois-tabloları-iki-yönlü-24112026)): a
+  value typed in MASA's block (a curve's rate + spread, TRY % of a leg, a forward, points, forward-forward points …) gives
+  the block's one spread `I60` - each formula is linear in the spread, so its exact inverse is closed form (a forward
+  through its leg's TRY rate: ((F/spot)·(1 + USD·g/360) − 1)·360/g; the start leg at the OIS spot does not depend on the
+  spread and gives none) - and every reader of `I60` follows. An EK_TARIH row's "+ spread (360)" typed gives its spread over
+  the chosen curve's ACT/360 rate, whatever basis the table shows. The TRY side stays the block's TRY OIS curves + spread
+  (never offshore); the forwards' USD side the Forward sheet's USD OIS, as before.
 
 ## Fiyatlama (`tto/pricing.py`)
 
@@ -327,6 +334,12 @@ days); O/N compounded daily, ((1 + r·d/36000)^(1/d) − 1)·36000 - the page's 
 **FRA from two spot swaps** (`OIS_MAIN!S336:S438`, TRY OIS): FRA = (R·P − Q·O) / (P − O), O / P the annuities to the start
 / end month on Motor's quarterly calendar (ACT/365), a blank fill the market's par (`I` / `J`). Its inverse (`U:W`): end
 leg = (F·(P − O) + Q·O) / P, start leg = (R·P − F·(P − O)) / O.
+
+**Two-way** (24.11.2026): the PPK tables and the FOMC table invert their own conversions in place - a step typed: O/N =
+the period before's O/N + the step, then the window's simple rate = ((1 + O/N/basis)^days − 1)·basis/days
+(`extras.overnight_back`, the exact inverse of `overnight`: ACT/365 for TRY OIS, ACT/360 in % for USD); a pair's later
+rate or its O/N or step gives the spread (later − the earlier window's market rate). Same curves and bases as above; the
+FRA list is not two-way (two fills and the FRA: the mechanism keeps one typed value a row).
 
 ## Spot and value dates
 

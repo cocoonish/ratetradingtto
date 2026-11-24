@@ -2398,6 +2398,42 @@ async function clipAfter(page, action) {
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_TARIH!B5', 'EK_TARIH!C5', 'EK_TARIH!D5', 'EK_TARIH!N5',
       'EK_TARIH!B6', 'EK_TARIH!C6', 'EK_TARIH!N6'] });
     await waitCell(page, 'EK_TARIH!M5', 't.trim() === ""');
+    // two-way (the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık olmaması için"): a rate typed in the
+    // date-to-date block stays and gives the block's one spread; the bulk table's "+ spread (360)" gives the row's spread
+    console.log('two-way: the date-to-date block');
+    const twCell = (ref) => page.evaluate((r) => {
+      const td = window.tto.findCell(r);
+      return td ? { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' } : null;
+    }, ref);
+    const twNum = (t) => Number(String(t).replace(/\./g, '').replace(',', '.').replace('−', '-'));
+    await waitCell(page, 'MASA!F67', 't.trim() !== ""');
+    const d67 = await cellV('MASA!D67');
+    await typeInto(page, 'MASA!F67', '38,5');
+    await waitCell(page, 'MASA!F67', 't.trim() === "38,50%"');
+    await page.waitForFunction(() => window.tto.findCell('MASA!F67').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const blockTw = { f67: await twCell('MASA!F67'), f62: await twCell('MASA!F62'), i60: await twCell('MASA!I60'), i60v: await cellV('MASA!I60'),
+      d62: await cellV('MASA!D62'), f62v: await cellV('MASA!F62'), d67 };
+    check('Masa → TARİH ARASI FAİZ is two-way: Bootstrap\'s period rate + spread typed (38,50 %) stays and gives the block\'s one spread '
+      + '(the quote − its ACT/360 rate), MPC ima\'s rate + spread follows; the typed one marked (✎), the others and the spread say where they come from',
+      blockTw.f67.anchor && /Yazdığınız değer/.test(blockTw.f67.tip) && Math.abs(blockTw.i60v - (0.385 - d67) * 1e4) < 1e-6
+      && Math.abs(twNum(blockTw.i60.t) - blockTw.i60v) <= 0.5 && Math.abs(blockTw.f62v - (blockTw.d62 + blockTw.i60v / 1e4)) < 1e-12
+      && /Hesaplanan: bu satırda yazılan değer Bootstrap · Dönem \+ spread · F67/.test(blockTw.f62.tip) && /Hesaplanan/.test(blockTw.i60.tip), blockTw);
+    await (await cellHandle(page, 'MASA!F62')).click();                    // Delete on another cell of the block
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'MASA!I60', 't.trim() === "-150"');
+    const blockDel = { f67: await twCell('MASA!F67'), stored: await cellV('MASA!CT67') };
+    check('... Delete on any cell of the block: back to the workbook\'s spread (−150), nothing marked', !blockDel.f67.anchor
+      && blockDel.f67.t !== '38,50%' && (blockDel.stored === null || blockDel.stored === undefined || blockDel.stored === ''), blockDel);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'EK_TARIH!C5', value: '15.03.2027' }] });
+    await waitCell(page, 'EK_TARIH!M5', 't.trim() !== ""');
+    await typeInto(page, 'EK_TARIH!M5', '37');
+    await waitCell(page, 'EK_TARIH!M5', 't.trim() === "37,00%"');
+    const bulkTw = { m5: await twCell('EK_TARIH!M5'), d5: await twCell('EK_TARIH!D5'), d5v: await cellV('EK_TARIH!D5'), af5: await cellV('EK_TARIH!AF5') };
+    check('... TOPLU TARİH ARASI FAİZ: a row\'s + spread (360) typed (37 %) gives the row\'s spread (37 % − MPC ima\'s ACT/360 rate), the + spread marked',
+      bulkTw.m5.anchor && Math.abs(bulkTw.d5v - (0.37 - bulkTw.af5) * 1e4) < 1e-6 && Math.abs(twNum(bulkTw.d5.t) - bulkTw.d5v) <= 0.5
+      && /Hesaplanan: bu satırda yazılan değer \+ spread \(360\) · M5/.test(bulkTw.d5.tip), bulkTw);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_TARIH!C5', 'EK_TARIH!M5'] });
+    await waitCell(page, 'EK_TARIH!M5', 't.trim() === ""');
     console.log('ways back (24.11): a buy / sell-back price -> its repo, a move -> its vol');
     // Forward → Hesaplayıcılar, Tahvil carry / başabaş: its ISIN row stays in the table (blank, it was taken for the title); its
     // own B/E typed as the forward price reads its repo back
@@ -3478,6 +3514,18 @@ async function clipAfter(page, action) {
       && Math.abs(trNumber(sprBack.later) - (trNumber(mpcMkt) - 0.30)) < 0.0015 && /^[+−-]?\d/.test(sprBack.step), { ppkBack, sprBack });
     await ppkClear('EK_PPK!G3');
     await ppkClear('EK_PPK!S3');
+    // two-way: a step typed reads the O/N (the period before's + the step) and the window's rate that prices it
+    await typeInto(page, 'EK_PPK!L4', '-25');
+    await waitCell(page, 'EK_PPK!G4', 't.trim() !== ""');
+    await page.waitForFunction(() => window.tto.findCell('EK_PPK!L4').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const ppkTw = { l: await twCell('EK_PPK!L4'), g: await twCell('EK_PPK!G4'), k: await cellV('EK_PPK!K4'), j: await cellV('EK_PPK!J4'),
+      note: await page.evaluate(() => { const n = document.querySelector('#content .panel[data-panel="PPK1"] .note'); return n ? n.textContent : ''; }) };
+    check('OIS · PPK is two-way: MPC OIS → PPK ADIMI - a step typed (−25 bp) reads the O/N (the period before\'s − 0,25 %) and the window\'s '
+      + 'rate; the step marked (✎), the rate worked out from it; the note under the table says so',
+      ppkTw.l.anchor && /Yazdığınız değer/.test(ppkTw.l.tip) && Math.abs(ppkTw.k - (ppkTw.j - 0.0025)) < 1e-12 && /%$/.test(ppkTw.g.t)
+      && /Hesaplanan: bu satırda yazılan değer İma PPK adımı · L4/.test(ppkTw.g.tip) && /hangisini yazarsanız o kalır/.test(ppkTw.note), ppkTw);
+    await ppkClear('EK_PPK!G4');
+    await waitCell(page, 'EK_PPK!L4', 't.trim() === ""');
     await tab(page, 'all');
     await page.evaluate(() => window.tto.state.page.items.get('B21').toggle(false));          // (it starts folded: open it)
     await waitCell(page, 'OIS_MAIN!S337', 't.trim() !== ""');
@@ -3508,6 +3556,17 @@ async function clipAfter(page, action) {
       Math.abs(ppkSigned(fomcBack.on) - ppkSigned(fomcBack.k)) <= 0.0015 && Math.abs(ppkSigned(fomcBack.steps) - ppkSigned(fomcBack.n)) <= 0.3
       && /^[+−-]?\d+,\d$/.test(fomcBack.bp), fomcBack);
     await ppkClear('SOFR_FOMC!AB74');
+    // two-way: a step typed (bp) reads the window's O/N (Önceki ima − 0,25) and its OIS rate
+    const usdV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=sofr&ref=' + encodeURIComponent(ref))).json.cell.v;
+    await typeInto(page, 'SOFR_FOMC!AD75', '-25');
+    await waitCell(page, 'SOFR_FOMC!AB75', 't.trim() !== ""');
+    await page.waitForFunction(() => window.tto.findCell('SOFR_FOMC!AD75').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const fomcTw = { ad: await twCell('SOFR_FOMC!AD75'), ab: await twCell('SOFR_FOMC!AB75'), ac: await usdV('SOFR_FOMC!AC75'), l: await usdV('SOFR_FOMC!L75') };
+    check('USD · FOMC is two-way: a step typed (Elle adım −25 bp) reads the window\'s O/N (Önceki ima − 0,25) and its OIS rate; the step marked (✎)',
+      fomcTw.ad.anchor && /Yazdığınız değer/.test(fomcTw.ad.tip) && Math.abs(fomcTw.ac - (fomcTw.l - 0.25)) < 1e-9 && fomcTw.ab.t !== ''
+      && /Hesaplanan: bu satırda yazılan değer Elle adım \(bp\) · AD75/.test(fomcTw.ab.tip), fomcTw);
+    await ppkClear('SOFR_FOMC!AB75');
+    await waitCell(page, 'SOFR_FOMC!AD75', 't.trim() === ""');
     // DİBS Canlı: the value dates side by side, the day's tape, the bond's card
     await open(page, 'dibslive');
     await page.waitForSelector('.panel[data-panel="L1"] table.grid');
