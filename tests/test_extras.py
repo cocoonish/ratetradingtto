@@ -112,7 +112,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
-                                                   "VİOP kontratları", "Tek OIS spread'i", "EK_TARIH", "VİOP hedef fiyatı", "EK_VFRA",
+                                                   "VİOP kontratları", "Tahvil carry fiyattan repo", "Implied move hareketten vol",
+                                                   "Tek OIS spread'i", "EK_TARIH", "VİOP hedef fiyatı", "EK_VFRA",
                                                    "EK_RET", "Eğri interpolasyonu"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET"} & set(sofr.sheet_index)

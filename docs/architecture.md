@@ -178,14 +178,16 @@ priority:
 | EK_EVREN | tto | Tüm Kâğıtlar (the service writes its rows) |
 | EK_CARRY | tto | carry along a chosen TLREF path |
 | EK_IHALE | tto | Treasury auction bid pricing |
-| EK_TARIH | tto | TOPLU TARİH ARASI FAİZ: MASA's date-to-date block (`MASA!B59:N70`) for 100 start / end pairs, the block's formulas carried to each row (`_tarih_formulas`); on the Masa page right after the block |
+| EK_TARIH | tto | TOPLU TARİH ARASI FAİZ: MASA's date-to-date block (`MASA!B59:N70`) for 100 start / end pairs, the block's formulas carried to each row (`_tarih_formulas`), a row's quote (Kote %, N) → its spread over the chosen curve and Bootstrap (O:P), the helpers from R; under it the block's own box, a quote → its spread over each curve (`_tarih_back`, B109:I114, shown between the block and the table) |
 | EK_VFRA | tto | VİOP target FRA. The target type "Fiyat" (a far price → its implied rate, the inverse of `VIOP!S331`) is an addition of its own, "VİOP hedef fiyatı" (`_tto_viop_price`), applied just before: it patches the target rate `VIOP!Q331:Q338` and the type list |
 | EK_RET | tto | RET tenors on the OIS scenario curves |
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
 | EK_FX | asw | the offshore rates ASW FX is built on |
 
-Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01 and others. The module
-docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
+Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01, the calculators' ways back
+written beside their blocks (the Forward sheet's points → rate, bond carry's price → repo `Forward!U71:V72`, Implied
+Move's move → vol `Calculators!N44:O49`) and others. The module docstring's list of sheets is incomplete; `_BUILDERS` is
+the full list.
 
 ## Module map
 

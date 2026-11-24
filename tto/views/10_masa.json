@@ -74,6 +74,20 @@
    "label": "Spread (bp) per row of the bulk date-to-date table (formula default: the general spread)"
   },
   {
+   "range": "EK_TARIH!N5:N104",
+   "scope": "user",
+   "group": "tarih-quote",
+   "kind": "pct",
+   "label": "Kote % per row of the bulk date-to-date table — a rate quoted for the row's dates, read in the table's basis (Gün esası), to read its spread over the chosen TRY OIS curve and Bootstrap (boş başlar)"
+  },
+  {
+   "range": "EK_TARIH!C110",
+   "scope": "user",
+   "group": "tarih-back",
+   "kind": "pct",
+   "label": "Kote % (ACT/360) — a rate quoted for the date-to-date block's dates (MASA!C60 / E60), to read its spread over each TRY OIS curve of the block (boş başlar)"
+  },
+  {
    "range": "P94:P99",
    "scope": "user",
    "group": "masa-3",
@@ -295,10 +309,18 @@
    "hidden": false
   },
   {
+   "id": "TAFS",
+   "type": "table",
+   "sheet": "EK_TARIH",
+   "range": "B109:I114",
+   "hidden": false,
+   "title": "TARİH ARASI FAİZ → SPREAD · kote faizden her OIS eğrisine spread"
+  },
+  {
    "id": "TAF",
    "type": "table",
    "sheet": "EK_TARIH",
-   "range": "B1:M107",
+   "range": "B1:P108",
    "hidden": false,
    "wide": true,
    "title": "TOPLU TARİH ARASI FAİZ · 100 tarih çiftine kadar",
@@ -308,7 +330,7 @@
    "id": "TAFH",
    "type": "table",
    "sheet": "EK_TARIH",
-   "range": "O1:AP104",
+   "range": "R1:AS104",
    "hidden": true,
    "title": "Yardımcı · TOPLU TARİH ARASI FAİZ (gün, iskonto faktörleri, ACT/360 faiz ve + spread, satır satır)"
   },
@@ -614,6 +636,7 @@
    "title": "Faiz · PPK",
    "panels": [
     "B9",
+    "TAFS",
     "TAF",
     "B13",
     "B21",

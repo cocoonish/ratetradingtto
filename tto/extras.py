@@ -3267,6 +3267,13 @@ def _tto_viop_roll(model: Model) -> None:
 #: (ACT/360 - the desk's quote - by default, ACT/365 or O/N) and the chosen curve's ACT/360 rate + spread (the block's
 #: "Dönem + spread (360)").  The rows start empty, the page shows the filled ones and one more, and a block pasted from
 #: Excel (start | end | spread) lands row by row, as on EK_BULK.
+#:
+#: The other way round (the desk, 24.11.2026: item 1 of "1-2-3-4-5-6-7-8-11-11-13" - a rate someone quotes for a broken
+#: date -> its spread over each TRY OIS curve, the date-to-date FAİZ → SPREAD): a row's "Kote %" (N, typed or pasted, read in the
+#: basis chosen at the top) -> quote − the chosen curve's rate and quote − Bootstrap's (bp, in that basis: with ACT/360 the
+#: spread that, typed as the row's spread, makes the "+ spread (360)" column the quote); and under the table the block's
+#: own box (``TARIH_BACK``): one quote, ACT/360 simple as the block adds its spread, -> its spread over each of the
+#: block's curves for the block's dates (quote − MASA!D62:D68: typed into MASA!I60 it makes F62:F68 the quote).
 TARIH_SHEET = "EK_TARIH"
 TARIH_FIRST, TARIH_ROWS = 5, 100
 TARIH_LAST = TARIH_FIRST + TARIH_ROWS - 1
@@ -3277,8 +3284,13 @@ TARIH_BASES = ("ACT/360", "ACT/365", "O/N (360)")             # the block's D, C
 TARIH_CURVE, TARIH_BASIS, TARIH_SPREAD = "C2", "E2", "G2"      # the choices at the top (personal inputs)
 TARIH_RATES = "FGHIJKL"                                         # each curve's period rate, in TARIH_CURVES' order
 TARIH_PLUS = "M"                                                # the chosen curve's ACT/360 rate + spread
-TARIH_HELP = "O"                                                # the helpers from here on (a table the page keeps hidden)
-TARIH_PICKED = "O2"                                             # the chosen curve's number (1 = MPC ima … 7)
+TARIH_QUOTE = "N"                                               # a row's quote typed (%, in the basis chosen)
+TARIH_VS = ("O", "P")                                           # quote − the chosen curve, quote − Bootstrap (bp)
+TARIH_HELP = "R"                                                # the helpers from here on (a table the page keeps hidden)
+TARIH_PICKED = "R2"                                             # the chosen curve's number (1 = MPC ima … 7)
+#: the block's own box under the table (rows TARIH_BACK … + 5): its quote's cell, then the curves across C:I
+TARIH_BACK = TARIH_LAST + 5
+TARIH_BACK_QUOTE = "C%d" % (TARIH_BACK + 1)
 
 
 def _tarih_layout() -> Dict[Any, str]:
@@ -3364,10 +3376,12 @@ def _tarih_check(model: Model) -> None:
 
 
 def _tto_tarih(model: Model) -> None:
-    """The bulk date-to-date rates (``EK_TARIH``): the choices at the top, 100 rows of the desk sheet's block, the helpers."""
+    """The bulk date-to-date rates (``EK_TARIH``): the choices at the top, 100 rows of the desk sheet's block with a quote's
+    spreads beside them, the helpers; under them the block's own box, a quote -> its spread over each curve."""
     b = SheetBuilder(model, TARIH_SHEET)
     lay = _tarih_layout()
     codes = [code for code, _ in TARIH_CURVES]
+    boot = TARIH_RATES[codes.index("Bootstrap")]
     b.title("B1", "TOPLU TARİH ARASI FAİZ  ·  100 tarih çiftine kadar (başlangıç boşsa OIS spot, spread boşsa genel spread; "
                   "Excel'den başlangıç | bitiş | spread yapıştırılabilir)")
     b.set("B2", "Eğri (+ spread)", bold=True, align="right")
@@ -3382,8 +3396,13 @@ def _tto_tarih(model: Model) -> None:
     b.set("I2", "=OIS_MAIN!$B$2", fmt=DATE)
     # the curves' columns are named as the block names its rows (S1 – Baz …: the scenario's name from SENARYOLAR)
     picked = "$%s$%s" % (TARIH_PICKED[0], TARIH_PICKED[1:])
+    basis = "$%s$%s" % (TARIH_BASIS[0], TARIH_BASIS[1:])
     b.head("B4", ["Başlangıç", "Bitiş", "Spread (bp)", "Gün"] + ["=MASA!$B$%d" % k for _, k in TARIH_CURVES]
-           + ['=INDEX($%s$4:$%s$4,%s)&" + spread (360)"' % (TARIH_RATES[0], TARIH_RATES[-1], picked)])
+           + ['=INDEX($%s$4:$%s$4,%s)&" + spread (360)"' % (TARIH_RATES[0], TARIH_RATES[-1], picked),
+              # the quote and its spreads, named with the basis they are read in and the curves they are over
+              '="Kote %% ("&IF(%s="","%s",%s)&")"' % (basis, TARIH_BASES[0], basis),
+              '="Kote − "&INDEX($%s$4:$%s$4,%s)&" (bp)"' % (TARIH_RATES[0], TARIH_RATES[-1], picked),
+              '="Kote − "&$%s$4&" (bp)"' % boot])
     d0, d1 = lay[("d", codes[0])], lay[("d", codes[-1])]
     f0, f1 = lay[("f", codes[0])], lay[("f", codes[-1])]
     b.note("%s3" % TARIH_HELP, "Yardımcı: OIS spot'tan başlangıç / bitiş günü, eğrilerin iskonto faktörleri (MASA H / I), ACT/360 faiz "
@@ -3392,7 +3411,6 @@ def _tto_tarih(model: Model) -> None:
     b.head("%s4" % TARIH_HELP, ["Gün spot→başl.", "Gün spot→bitiş"]
            + ["DF %s %s" % (end, code) for code, k in TARIH_CURVES if k != TARIH_WEIGHTED for end in ("başl.", "bitiş")]
            + codes + ["%s + spread" % code for code in codes])
-    basis = "$%s$%s" % (TARIH_BASIS[0], TARIH_BASIS[1:])
     # the first row, then filled down: every row's formulas are the first's with the row's own cells
     r = TARIH_FIRST
     fml = _tarih_formulas(model, r)
@@ -3418,15 +3436,132 @@ def _tto_tarih(model: Model) -> None:
         b.set("%s%d" % (lay[("d", code)], r), "=" + blank + fml[("d", code)] + ")", fmt="0.0000%")
         b.set("%s%d" % (lay[("f", code)], r), "=" + blank + fml[("f", code)] + ")", fmt="0.0000%")
     b.set("%s%d" % (TARIH_PLUS, r), "=%sINDEX($%s%d:$%s%d,%s))" % (blank, f0, r, f1, r, picked), fmt="0.00%")
-    for c in list(range(_col("B"), _col(TARIH_PLUS) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)):
+    # the other way round: the row's quote, read in the basis chosen, less the chosen curve's rate and Bootstrap's as the
+    # row shows them (bp) - so that rate + spread / 10000 = the quote; with ACT/360 the chosen one's spread, typed as the
+    # row's spread, makes the "+ spread (360)" column the quote
+    q = "$%s%d" % (TARIH_QUOTE, r)
+    b.input(q[1:], None, fmt="0.00%")
+    vs = 'IFERROR(IF(ISNUMBER(%s),(%s-%%s)*10000,""),"")' % (q, q)
+    b.set("%s%d" % (TARIH_VS[0], r), "=%s%s)" % (blank, vs % ("INDEX($%s%d:$%s%d,%s)" % (TARIH_RATES[0], r, TARIH_RATES[-1], r, picked))),
+          fmt="0.0", bold=True)
+    b.set("%s%d" % (TARIH_VS[1], r), "=%s%s)" % (blank, vs % ("$%s%d" % (boot, r))), fmt="0.0", bold=True)
+    for c in list(range(_col("B"), _col(TARIH_VS[-1]) + 1)) + list(range(_col(TARIH_HELP), _col(f1) + 1)):
         b.fill_down("%s%d" % (index_to_col(c), r), TARIH_LAST)
     b.note("B%d" % (TARIH_LAST + 2), "Masa'daki TARİH ARASI FAİZ bloğunun formülleri, satır satır: eğrilerin OIS spot'tan başlangıç ve "
                                      "bitişe iskonto faktörleri (MASA!H62:I68), dönem faizi (DF başl. / DF bitiş − 1)·360/gün - ACT/365'te "
                                      "·365, O/N'de 360·((DF başl. / DF bitiş)^(1/gün) − 1) -, Ağırlıklı = S1–S3, OIS · PPK olasılıklarıyla. "
                                      "Aynı tarih ve spread'le blokla aynı sayıyı verir.")
     b.note("B%d" % (TARIH_LAST + 3), "Başlangıç boşsa OIS spot valörü; spread boşsa genel spread (Masa'daki tek OIS spread'inden, MASA!I60; "
-                                     "üzerine yazılabilir). Son sütun seçilen eğrinin ACT/360 basit faizi + spread (bloğun 'Dönem + spread "
-                                     "(360)'ı), gün esası ne olursa olsun. Yazdıklarınız sizin kalır; satırlar boş başlar.")
+                                     "üzerine yazılabilir). '+ spread (360)' sütunu seçilen eğrinin ACT/360 basit faizi + spread (bloğun "
+                                     "'Dönem + spread (360)'ı), gün esası ne olursa olsun. Yazdıklarınız sizin kalır; satırlar boş başlar.")
+    b.note("B%d" % (TARIH_LAST + 4), "Kote %: bir kırık tarih için verilen faizi yazın ya da Excel'den bir sütun yapıştırın - tablonun gün "
+                                     "esasında okunur. Yanında kote − seçilen OIS eğrisi ve kote − Bootstrap (bp, aynı gün esasında): eğrinin faizi "
+                                     "+ bu fark = kote. ACT/360'ta seçilen eğrinin farkı satırın spread'ine yazılınca '+ spread (360)' kote "
+                                     "olur. Yedi eğrinin hepsine göre spread: üstteki TARİH ARASI FAİZ → SPREAD kutusu (tek tarih).")
+    _tarih_back(b)
+
+
+def _tarih_back(b: "SheetBuilder") -> None:
+    """The date-to-date block the other way round, one quote for the block's own dates (the desk, 24.11.2026): the quote
+    typed (ACT/360 simple, as the block adds its spread to the ACT/360 rate) less each curve's period rate (MASA!D62:D68)
+    is its spread over that curve (bp) - typed into the block's spread (MASA!I60) it makes the curve's "Dönem + spread
+    (360)" (F62:F68) the quote.  The curves across, as the bulk table has them."""
+    t = TARIH_BACK
+    q = "$%s$%s" % (TARIH_BACK_QUOTE[0], TARIH_BACK_QUOTE[1:])
+    b.title("B%d" % t, "TARİH ARASI FAİZ → SPREAD  ·  bir kırık tarih kotasından her OIS eğrisine spread (tarihler TARİH ARASI "
+                       "FAİZ bloğundan; ACT/360 basit)")
+    b.set("B%d" % (t + 1), "Kote % (ACT/360)", bold=True, align="right")
+    b.input(TARIH_BACK_QUOTE, None, fmt="0.00%", align="center")
+    for col, label, src, fmt in (("D", "Başlangıç", "C60", DATE), ("F", "Bitiş", "E60", DATE), ("H", "Gün", "G60", INT0)):
+        b.set("%s%d" % (col, t + 1), label, bold=True, align="right")
+        b.set("%s%d" % (index_to_col(_col(col) + 1), t + 1), "=MASA!$%s$%s" % (src[0], src[1:]), fmt=fmt, align="center")
+    b.head("B%d" % (t + 2), ["Eğri"] + ["=MASA!$B$%d" % k for _, k in TARIH_CURVES])
+    b.set("B%d" % (t + 3), "Dönem ACT/360", bold=True)
+    b.set("B%d" % (t + 4), "Kote − eğri (bp)", bold=True)
+    for i, (_, k) in enumerate(TARIH_CURVES):
+        col = index_to_col(_col("C") + i)
+        b.set("%s%d" % (col, t + 3), "=MASA!$D$%d" % k, fmt="0.00%", align="center")
+        b.set("%s%d" % (col, t + 4), '=IFERROR(IF(ISNUMBER(%s),(%s-%s$%d)*10000,""),"")' % (q, q, col, t + 3), fmt="0.0", bold=True,
+              align="center")
+    b.note("B%d" % (t + 5), "Kırık tarih için verilen faizi (ACT/360 basit, %) yazın: her TRY OIS eğrisine spread = kote − eğrinin dönem ACT/360 "
+                            "faizi (bp), bloğun tarihleriyle. Bulunan spread bloğun Spread (bp)'sine yazılınca o eğrinin 'Dönem + spread "
+                            "(360)'ı koteye eşit çıkar.")
+
+
+# ---------------------------------------------------------------------------------------------- Forward: bond carry, price -> repo
+#: The Forward sheet's bond carry calculator ("Tahvil carry / başabaş", Forward!U56:W70) goes from a repo rate to the
+#: breakeven clean price: B/E (V67) = Temiz Fiyat (V57) − Kupon (V66 = Coupon · N / 364 · 100, the coupon earned) + Carry
+#: Maliyet (V65 = Dirty Price (V60) · Carry (V61, the repo) / 365 · N), N (V63) = End Date − Settlement.  The way back (the
+#: desk, 24.11.2026, item 8 of "1-2-3-4-5-6-7-8-11-11-13": a buy / sell-back price typed -> the repo it implies): "Fwd temiz
+#: fiyat (elle)" (V71, a clean price as B/E is) -> "İma repo" (V72) = (price − V57 + V66) · 365 / (V60 · N), B/E's formula
+#: solved for the repo - typed into Carry it makes B/E the price typed.  The dirty price and the coupon are the calculator's
+#: own cells (V60, V64): no Bloomberg request of its own.
+BOND_BACK_NAME = "Tahvil carry fiyattan repo"
+BOND_BACK_PRICE, BOND_BACK_REPO = "V71", "V72"
+BOND_BACK_CELLS = ("U71", "V71", "W71", "U72", "V72", "W72")          # empty in the workbook; no input ever stood there
+
+
+def _bond_back_check(model: Model) -> None:
+    """B/E and the parts the way back solves it with, as the calculator has them; the cells it takes are empty."""
+    _need_sheets(model, "Forward")
+    _need_captions(model, (("Forward", "U57", "Temiz Fiyat"), ("Forward", "U60", "Dirty Price"), ("Forward", "U61", "Carry"),
+                           ("Forward", "U63", "N"), ("Forward", "U66", "Kupon"), ("Forward", "U67", "B/E")))
+    for addr, text in (("V67", "V57-V66+V65"), ("V65", "V60*V61/365*V63"), ("V66", "V64*V63/364*100"), ("V63", "V62-V58")):
+        _need_formula(model, "Forward", addr, text)
+    sh = model.sheet("Forward")
+    for addr in BOND_BACK_CELLS:
+        if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+            raise ValueError("Forward!%s boş değil" % addr)
+
+
+def _tto_bond_back(model: Model) -> None:
+    b = SheetBuilder(model, "Forward")
+    price, repo = BOND_BACK_PRICE, BOND_BACK_REPO
+    b.set("U%s" % price[1:], "Fwd temiz fiyat (elle)", like="U67")
+    b.input(price, None, like="V57")                                           # the calculator's own look of a price typed
+    b.set("U%s" % repo[1:], "İma repo", like="U67")
+    b.set(repo, '=IFERROR(IF(ISNUMBER($V$71),($V$71-$V$57+$V$66)*365/($V$60*$V$63),""),"")', fmt="0.00%", bold=True,
+          align="center")
+
+
+# ---------------------------------------------------------------------------------------------- Calculators: implied move -> vol
+#: The Calculators sheet's Implied Move (Calculators!N35:O43) goes from a vol to the move: Implied Move (O40) = √(Gün /
+#: Gün Basis) · Volatilite (O37, O38, O39), Upper / Lower Bound (O41 / O42) = (1 ± move) · Spot (O36), Move By Pips (O43)
+#: = Spot · move · 10000.  The way back (the desk, 24.11.2026, item 12: "move → vol", to turn a straddle breakeven into a
+#: vol): a move typed - in % (O44), as a breakeven level (O46: above the spot the upper bound, below it the lower, so the
+#: move is |level / Spot − 1|) or in pips (O48) - -> the vol it implies (O45, O47, O49), each the block's formula solved
+#: for the vol: typed into Volatilite it gives back the move, the bound or the pips typed.  None, zero or below: no vol.
+MOVE_BACK_NAME = "Implied move hareketten vol"
+#: (typed, its vol, label of the typed, label of the vol, the move the typed value is - a fraction of the spot)
+MOVE_BACK = (("O44", "O45", "Hareket % (elle)", "İma vol (hareket)", "$O$44"),
+             ("O46", "O47", "Başabaş seviyesi (elle)", "İma vol (başabaş)", "ABS($O$46/$O$36-1)"),
+             ("O48", "O49", "Hareket pip (elle)", "İma vol (pip)", "$O$48/($O$36*10000)"))
+
+
+def _move_back_check(model: Model) -> None:
+    """The block's formulas the way back solves for the vol; the cells it takes are empty."""
+    _need_sheets(model, "Calculators")
+    _need_captions(model, tuple(("Calculators", "N%d" % r, text) for r, text in
+                                ((36, "Spot"), (37, "Gün"), (38, "Gün Basis"), (39, "Volatilite"), (40, "Implied Move"),
+                                 (41, "Upper Bound"), (42, "Lower Bound"), (43, "Move By Pips"))))
+    for addr, text in (("O40", "SQRT(O37/O38)*O39"), ("O41", "(1+O40)*O36"), ("O42", "(1-O40)*O36"), ("O43", "O36*O40*10000")):
+        _need_formula(model, "Calculators", addr, text)
+    sh = model.sheet("Calculators")
+    for typed, out, _, _, _ in MOVE_BACK:
+        for addr in ("N" + typed[1:], typed, "N" + out[1:], out):
+            if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+                raise ValueError("Calculators!%s boş değil" % addr)
+
+
+def _tto_move_back(model: Model) -> None:
+    b = SheetBuilder(model, "Calculators")
+    looks = {"O44": {"like": "O39"}, "O46": {"like": "O36"},                   # the block's own inputs: a %, a price
+             "O48": {"fmt": "#,##0.00", "fill": "FFCC99", "color": "3F3F76"}}  # (its input look, a number of pips)
+    for typed, out, label, vlabel, move in MOVE_BACK:
+        b.set("N" + typed[1:], label, like="N40")
+        b.input(typed, None, **looks[typed])
+        b.set("N" + out[1:], vlabel, like="N40")
+        b.set(out, '=IFERROR(IF(N(%s)>0,%s/SQRT($O$37/$O$38),""),"")' % ("$%s$%s" % (typed[0], typed[1:]), move), fmt="0.00%", bold=True)
 
 
 # ---------------------------------------------------------------------------------------------- VİOP target: a far price
@@ -4119,6 +4254,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
+            # (the calculators' ways back of 24.11: the bond carry's price -> repo, the implied move's move -> vol)
+            (BOND_BACK_NAME, _bond_back_check, _tto_bond_back), (MOVE_BACK_NAME, _move_back_check, _tto_move_back),
             (OIS_SPREAD_NAME, _ois_spread_check, _tto_ois_spread),
             # (the bulk date-to-date rates; the target type "Fiyat" before the FRA's curve, which wraps its target rate)
             (TARIH_SHEET, _tarih_check, _tto_tarih), (VPRICE_NAME, _viop_price_check, _tto_viop_price),
