@@ -454,6 +454,7 @@ export class WatchPage {
       box.appendChild(h('div', { class: 'note' }, 'Piyasa saatleri ' + (cfg.market_open || '') + '–' + (cfg.market_close || '') + ' (masanın iş günleri) · '
         + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı')
         + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + (cfg.trades_close ? ' · Trades kapanış kaydı ' + cfg.trades_close : '')
+        + (cfg.bbg_open ? ' · Bloomberg sorgu saatleri ' + cfg.bbg_open + '–' + cfg.bbg_close : '')
         + ' · ayarları yöneticiler değiştirir.'));
     }
     // ---- the day's log
@@ -477,6 +478,8 @@ export class WatchPage {
     const form = h('div', { class: 'desk-settings', id: 'desk-settings' },
       f('Piyasa açılış', time('market_open')), f('Kapanış', time('market_close')),
       f('Trades kapanış kaydı', time('trades_close')), f('Tick gelmezse bayat', n('tick_stale', 'sn')),
+      // when Bloomberg may be asked again (cache first): outside these hours, at weekends and on holidays no refresh
+      f('Bloomberg sorgu başlangıcı', time('bbg_open')), f('bitişi', time('bbg_close')),
       h('label', { class: 'check' }, on('feed_alarm'), 'Veri akışı alarmı'), f('akmazsa', n('feed_minutes', 'dk')),
       h('label', { class: 'check' }, on('tlref_alarm'), 'TLREF alarmı'), f('fixing gelmediyse', time('tlref_due')),
       h('label', { class: 'check' }, on('db_alarm'), 'Veritabanı alarmı'));

@@ -5,8 +5,8 @@ import { h, clear, modal, toast, errorToast, copyText } from './ui.js';
 import { Grid, plainData, copyGrid } from './grid.js';
 import { num } from './format.js';
 
-function line(label, value, cls) {
-  return h('div', { class: 'stline' + (cls ? ' ' + cls : '') }, h('span', { class: 'l' }, label), h('span', { class: 'v' }, value));
+function line(label, value, cls, id) {
+  return h('div', { class: 'stline' + (cls ? ' ' + cls : ''), id: id || null }, h('span', { class: 'l' }, label), h('span', { class: 'v' }, value));
 }
 
 function clock(t) {
@@ -27,6 +27,39 @@ function cellLink(c, close) {
     close();
   });
   return a;
+}
+
+/** Where today's Bloomberg hits went (``/api/market/usage``): by kind, the top sheets (a link to the page that shows
+ * one), the top fields - the desk sees the cost of each part of the dashboard. */
+function fillUsage(box, u, close) {
+  clear(box);
+  box.appendChild(h('h3', null, 'Bugünkü veri istekleri nereye gitti · ' + num(u.hits || 0, 0)
+    + (u.budget ? ' / ' + num(u.budget, 0) + ' bütçe (%' + num(u.used || 0, 1) + ')' : '')));
+  if (!u.hits) {
+    box.appendChild(h('div', { class: 'muted' }, 'Bugün Bloomberg\'e henüz istek gitmedi.'));
+    return;
+  }
+  const pct = (n) => '%' + num(100 * n / u.hits, 1);
+  const table = (id, head, rows) => h('table', { class: 'plain', id }, h('tr', null, ...head.map((x, i) => h('th', { class: i ? '' : 'l' }, x))), ...rows);
+  const kinds = table('usage-kinds', ['Ne için', 'İstek', 'Pay'], (u.kinds || []).map((k) => h('tr', null,
+    h('td', { class: 'l' }, k.label), h('td', null, num(k.hits, 0)), h('td', null, pct(k.hits)))));
+  const sheets = table('usage-sheets', ['Sayfa (ilk 10)', 'İstek'], (u.sheets || []).map((s) => {
+    const name = s.book_title + (s.sheet ? ' › ' + s.sheet : '');
+    let cell = name;
+    if (s.page) {
+      cell = h('a', { href: '#/' + s.page }, name);
+      cell.addEventListener('click', close);
+    }
+    return h('tr', null, h('td', { class: 'l' }, cell), h('td', null, num(s.hits, 0)));
+  }));
+  const fields = table('usage-fields', ['Alan (ilk 10)', 'İstek'], (u.fields || []).map((f) => h('tr', null,
+    h('td', { class: 'l mono' }, f.field), h('td', null, num(f.hits, 0)))));
+  box.appendChild(h('div', { class: 'usage-grid' }, kinds, sheets, fields));
+  box.appendChild(h('div', { class: 'muted note' }, 'Önce önbellek (masa, 24.11.2026): bugün cevabı gelen bir değer bugün bir daha '
+    + 'istenmez - yeniden başlatmada da. Fiyatlar abonelikle akar (ücretsiz); akmayan bir kota en çok 15 dakikada bir, değeri olmayan '
+    + '3 saatte bir sorulur. 5G / 1A değişim, son işlem tarihi, aralık en düşük / en yüksek ve bugünü içeren BDH akıştan güncellenir. '
+    + 'Sorgu saatleri dışında, hafta sonu ve tatilde hiçbir şey yeniden sorulmaz. Günlük bütçenin %70\'inden sonra yalnızca sayfaların '
+    + 'hiç almadığı ilk değerler, %100\'de hiçbir yeni istek gitmez.'));
 }
 
 const FEED = { ok: 'akıyor', stale: 'BAYAT', silent: 'BAYAT (yardımcı süreç sessiz)', down: 'bağlantı yok', replay: 'kayıtlı veri' };
@@ -50,7 +83,29 @@ export async function openStatus(status) {
     head.appendChild(line('Abonelik', num(p.subscriptions || 0, 0) + (p.subscriptions_failed ? ' · ' + p.subscriptions_failed + ' başarısız' : '')));
     head.appendChild(line('Bloomberg\'in tanımadığı', num(p.subscriptions_invalid || 0, 0) + ' ticker (abone olunmadı)', p.subscriptions_invalid ? 'warn' : ''));
     head.appendChild(line('Bekleyen veri', num(p.pending || 0, 0)));
-    head.appendChild(line('Bugünkü veri isteği', num(p.hits_today || 0, 0) + (p.limit_reached ? ' · GÜNLÜK LİMİT KORUMASI' : ''), p.limit_reached ? 'bad' : ''));
+    // cache first (24.11.2026): the day's budget in %, Bloomberg's own daily limit, the hours Bloomberg is asked in
+    const used = p.budget ? 100 * (p.hits_today || 0) / p.budget : null;
+    head.appendChild(line('Bugünkü veri isteği', num(p.hits_today || 0, 0)
+      + (used !== null ? ' · günlük bütçenin %' + num(used, 1) + '\'i (bütçe ' + num(p.budget, 0) + ')' : '')
+      + (p.tier >= 2 && !p.bbg_limit ? ' · BÜTÇE DOLDU: yeni istek gönderilmiyor' : p.tier === 1 ? ' · %70 geçildi: yalnızca sayfaların hiç almadığı ilk değerler isteniyor' : '')
+      + (p.limit_reached && !p.budget ? ' · GÜNLÜK LİMİT KORUMASI' : ''),
+    p.tier >= 2 || p.limit_reached ? 'bad' : (p.tier === 1 ? 'warn' : ''), 'status-hits'));
+    if (p.bbg_limit) {
+      head.appendChild(line('Bloomberg limiti', 'Bloomberg günlük limiti doldu – yarın yeniden (' + p.bbg_limit + (p.bbg_limit_text ? ': ' + p.bbg_limit_text : '')
+        + '). Yeni istek gönderilmiyor, son değerler gösteriliyor; abonelikler akmaya devam ediyor.', 'bad', 'status-bbg-limit'));
+    }
+    if (p.desk) {
+      head.appendChild(line('Bloomberg sorgu saatleri', p.desk.open + '–' + p.desk.close + ' (hafta içi, TR tatilleri hariç)'
+        + (p.quiet ? ' · ŞİMDİ SESSİZ SAAT: yenileme ve sorgu yok, abonelikler akıyor' : ''), p.quiet ? 'warn' : '', 'status-desk'));
+    }
+    const polled = p.polled || {};
+    if (polled.value || polled.empty || polled.stopped || p.fed) {
+      head.appendChild(line('Akmayan kotalar', (polled.value || 0) + ' alan en çok ' + Math.round((p.poll_every || 900) / 60) + ' dk\'da bir, '
+        + (polled.empty || 0) + ' boş alan ' + Math.round((p.poll_empty || 10800) / 3600) + ' saatte bir sorgulanıyor'
+        + (polled.stopped ? ', akışı kesilen ' + polled.stopped + ' alan saatte bir' : '')
+        + (p.fed ? ' · ' + p.fed + ' alan (5G / 1A değişim, son işlem tarihi, aralık en düşük / en yüksek, bugünkü BDH noktası) akıştan güncelleniyor' : ''),
+      '', 'status-polled'));
+    }
     head.appendChild(line('Tick', num(p.ticks || 0, 0) + ' · son ' + clock(p.last_tick)));
     head.appendChild(line('Oturum', p.isolated ? 'ayrı süreçte' + (p.restarts ? ' (' + p.restarts + ' kez yeniden başladı)' : '') : 'dashboard sürecinde'));
     if (p.events_dropped || p.messages_lost) head.appendChild(line('Kuyruk', (p.events_dropped || p.messages_lost) + ' olay düştü, ' + (p.resyncs || 0) + ' değer yeniden istendi', 'warn'));
@@ -106,6 +161,15 @@ export async function openStatus(status) {
     head.appendChild(line('Yedek ayarları', go));
   }
   m.body.appendChild(head);
+  if (st.mode === 'live') {
+    // where today's hits went: by kind, the top sheets and fields (asked when the window opens)
+    const usage = h('div', { class: 'unknown', id: 'status-usage' }, h('div', { class: 'loading' }, 'Bugünkü isteklerin dağılımı yükleniyor…'));
+    m.body.appendChild(usage);
+    api.get('/api/market/usage').then((u) => fillUsage(usage, u, () => m.close())).catch((err) => {
+      clear(usage);
+      usage.appendChild(h('div', { class: 'errtxt' }, err.message));
+    });
+  }
 
   const box = h('div', { class: 'unknown' }, h('div', { class: 'loading' }, 'Bloomberg\'in tanımadıkları yükleniyor…'));
   m.body.appendChild(box);
