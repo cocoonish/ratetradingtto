@@ -70,6 +70,7 @@ CREATE INDEX IF NOT EXISTS mpc_values_meeting ON mpc_values (meeting, day);
 CREATE TABLE IF NOT EXISTS watch_closes (
     subject TEXT NOT NULL, day TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (subject, day)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS bbg_answers (key BLOB PRIMARY KEY, day TEXT NOT NULL, fetched REAL NOT NULL, value BLOB);
+CREATE TABLE IF NOT EXISTS bbg_usage (key BLOB PRIMARY KEY, day TEXT NOT NULL, hits INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (
     token TEXT PRIMARY KEY, user TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, ip TEXT);
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user);
@@ -1671,6 +1672,30 @@ class Store(object):
             try:
                 self._db.execute("DELETE FROM bbg_answers WHERE day<>?", (day,))
                 self._db.executemany("INSERT OR REPLACE INTO bbg_answers (key, day, fetched, value) VALUES (?,?,?,?)", rows)
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
+        return len(rows)
+
+    def bbg_usage(self, day: str) -> Dict[Tuple, int]:
+        """The day's Bloomberg hits by key (the status page's sheets and fields; kept for a restart): ``{key: hits}``."""
+        out: Dict[Tuple, int] = {}
+        for r in self._q("SELECT key, hits FROM bbg_usage WHERE day=?", (day,)):
+            try:
+                out[pickle.loads(r["key"])] = int(r["hits"])
+            except Exception:  # noqa: BLE001 - a count that cannot be read starts again
+                continue
+        return out
+
+    def bbg_usage_keep(self, day: str, counts) -> int:
+        """Keep these counts of ``day`` - ``[(key, hits), ...]``, the keys whose count changed (another day's go)."""
+        rows = [(sqlite3.Binary(pickle.dumps(k, protocol=4)), day, int(n)) for k, n in counts]
+        with self._lock:
+            self._db.execute("BEGIN")
+            try:
+                self._db.execute("DELETE FROM bbg_usage WHERE day<>?", (day,))
+                self._db.executemany("INSERT OR REPLACE INTO bbg_usage (key, day, hits) VALUES (?,?,?)", rows)
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")

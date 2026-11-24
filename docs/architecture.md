@@ -43,7 +43,7 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
 | Host / port | Default `0.0.0.0:1057` (env `TTO_HOST`, `TTO_PORT`). Ports 5000 and 5001 are refused in code. | `config.py:8-9,108-115` |
 | Data | `--data-dir`, else env `TTO_DATA_DIR`, else `<install>/data`. The DB is `tto.db`; logs and backups sit beside it. | `config.py:31,51,57` |
 | Bloomberg | A helper process by default (`--bbg-inprocess` turns that off) | `service.py:562-593` |
-| Other flags | `--max-hits` (400 000/day), `--no-history`, `--history-refresh` (900 s), `--backup-time` (17:30), `--idle-minutes` … | `__main__.py:38-75` |
+| Other flags | `--daily-budget` (100 000/day), `--max-hits` (400 000/day, the absolute stop), `--price-poll` (900 s), `--no-history`, `--history-refresh` (900 s), `--backup-time` (17:30), `--idle-minutes` … | `__main__.py:38-75` |
 
 ## Request path
 
@@ -314,7 +314,8 @@ The module docstring's list of sheets is incomplete; `_BUILDERS` is the full lis
 | `trades`, `blotter_snapshots`, `trade_templates` | **Günlük İşlemler** (the blotter), despite the name |
 | `tradebook*` | the **Trades** page |
 | `hist_values`, `mpc_days`, `mpc_values` | `history.py`; `fx.py` also writes `hist_values` |
-| `bbg_answers` | today's slow Bloomberg answers, kept across a restart (`Service._keep_bloomberg`) |
+| `bbg_answers` | today's Bloomberg answers - every one, quotes too -, kept across a restart (`Service._keep_bloomberg`) |
+| `bbg_usage` | today's Bloomberg hits by key (the status window's sheets and fields), kept across a restart |
 | `ret_history`, `ret_fair_log` | RET editor, `retfair` |
 | `broker_quotes` | `brokerchat` |
 | `watch_closes` | `watch` |
@@ -329,7 +330,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `bonds.rows`, `bonds.desk` | service / `bonds` |
 | `calendar.parked` | `meetings` |
 | `hist.settings`, `hist.fetch`, `mpc.archive`, `mpc.autoroll` | `history` |
-| `bbg.hits` | service (the day's Bloomberg hit count) |
+| `bbg.hits` | service (the day's Bloomberg hit count: `day`, `hits`, `kinds` by what they were for, `limit` the day Bloomberg's own daily limit was reached) |
 | `quant.*` | quant modules |
 | `watch.items`, `watch.alarms`, `watch.open:<day>`, `watch.fired:<day>` | `watch` (`meetings` also moves them) |
 | `migrated.*` | one-time migrations |

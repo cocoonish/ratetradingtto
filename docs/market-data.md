@@ -54,27 +54,93 @@ anything itself with `--mode replay`. Agents work in replay and on the fake term
 
 ## What costs hits (`tto/marketdata/bloomberg.py`)
 
-| Request | Cost and refresh |
+**Cache first** (the desk, 24.11.2026). That day at 14:27 Bloomberg answered `responseError = { category = "LIMIT"
+message = "Daily capacity reached." subcategory = "DAILY_CAPACITY_REACHED" }` with 195 148 hits counted by the dashboard;
+the desk: "Bloomberg limiti doldu. Bunu nasıl halledebiliriz bir daha yaşanmaması için" and "Zaten çektiklerini cache
+atıp daha fazla çekmemesi gerekliydi" ([desk-decisions.md](desk-decisions.md#bloomberg-and-data)). Now:
+
+- **Every answer is kept for the day**, in memory and in the database (`bbg_answers`, every 30 s), and **a key answered
+  today is not asked again today** - whatever its field -, unless the table below gives the reason.
+- **Only what is used is asked again.** A key is "used" on a day when the engine reads it (a page's cell is worked out).
+  At the day's change the service has every Bloomberg cell read again (`Service._reread_market`): what a page still
+  reads is asked once on the new day; yesterday's dated keys (a range up to yesterday, an override of yesterday's date)
+  and a bond gone from a list are never asked again. (Before, every key ever asked was refreshed for as long as the
+  dashboard ran - each day added another set of dated keys.)
+- **Why a key is asked again** is its policy (`policy_of`), counted under a kind on the status page:
+
+| Request | Cost and when it is asked again |
 |---|---|
-| Quote fields (BID, ASK, MID, PX_LAST …) | One reference request for the first value, then a subscription. Streaming is free. A field the stream does not deliver (a failed subscription, or nothing 30 s after it started: `SILENT_AFTER`) is polled by request instead: after `--price-poll` (120 s), then at twice the interval while the answer stays the same, up to 30 min (60 min for an empty field). With `--no-stream` every quote field is polled so. A quote field with overrides is an ordinary BDP (next row). |
-| Other BDP | securities × fields. Refreshed every 6 h (static fields), 60 s (derived) or 30 min (the rest). |
-| BDH | One hit per security, whatever the date span. Refreshed every 15 min if it ends today, else every 6 h. |
-| Intraday bars | 1 per request |
-| Batching | BDP 100 securities per request, BDS / BDH 50, at most 12 requests in flight |
-| Unknown security | Asked once, then once on each new day |
+| Quote fields (BID, ASK, MID, PX_LAST …, no overrides) | One reference request for the first value, then a subscription. Streaming is free. A field the stream does not deliver - a failed subscription (the office had 48 of 822), a field the subscription refuses, nothing 30 s after it started (`SILENT_AFTER`) - is polled: **with a value at most every 15 minutes** (`--price-poll`, `POLL_EVERY`) whatever its answer does (it was every 120 s while the answer kept changing), at twice the interval while it stays the same, up to 3 hours (`POLL_MAX`: an idle quote that answers its old price all day costs as little as an empty one); **without any value every 3 hours** (`POLL_EMPTY`); one that streamed and whose subscription failed since, hourly (`POLL_STOPPED`). The size of an order (`BID_SIZE` / `ASK_SIZE`) of a flowing stream never (a new order arrives as a tick). With `--no-stream` every quote field is polled so. A quote field with overrides is an ordinary BDP. |
+| `CHG_NET_<n>` (DİBS RV's CK / CL) | Once a day, then **answer + (last price now − last price at the answer)**: Bloomberg's change is the last price less the close n days ago, and that close does not move in the day. Checked on the replay values: for every bond of DİBS RV `CH − CK` and `CH − CL` (`LAST_PRICE` less the change) is a clean three-decimal close - the change is measured from the price the stream carries; on the fake terminal the value worked out equals a fresh answer after every trade (`tests/test_bloomberg_cache.py`). Hourly when nothing streams the bond's last price. These and `LAST_TRADE_DATE` were asked every 60 s (~216 000 hits a day for 50 bonds). |
+| `LAST_TRADE_DATE` (DİBS RV's CG, DİBS Trading's AH / AN / AT, Tüm Kâğıtlar' Y) | Once a day, then **today as soon as the stream shows a trade** - the last price changes or the day's volume grows, not the first value seen (the rule of `Service._note_trades`). Hourly when nothing streams. |
+| `INTERVAL_LOW` / `INTERVAL_HIGH` up to today (DİBS RV's CM:CP) | Once a day, then the lower / higher of the answer and **the day's streamed low / high** (the field `MARKET_DATA_OVERRIDE` names: `PX_LOW` → `LOW`, `PX_HIGH` → `HIGH`, `PX_LAST` → `LAST_PRICE`). Bloomberg gives some in single precision (100.0999984741211 for 100.1): its own answer stands while the day's is within that. A range that ended is fixed (once a day). Hourly when nothing streams. |
+| BDH ending today (a range up to `TODAY()`; the workbooks' own all end yesterday or earlier) | Once a day; **its today's point from the security's live quote** (when the answer has a point for today: the block keeps its shape, so the blocks beside it stay aligned). Otherwise hourly in the desk's hours. It was every 15 minutes. |
+| BDH ending before today (EK_VIOP, VIOP, MASA, ASW, DV01_RISK blocks: up to `TODAY()-1` / `WORKDAY(TODAY(),-1)`) | Once a day (was every 6 hours, and each day's range a new key beside yesterday's). One hit per security, whatever the date span. |
+| What moves in the day and nothing streams: `LAST_UPDATE`, other `CHG_` fields, `YAS_` fields without the price / yield they start from, BFXFORWARD's forward curve (`--bfx approx`) | At most hourly in the desk's hours (`HOURLY_EVERY`). |
+| Every other BDP / BDS: static fields, `DAYS_TO_MTY`, `SETTLE_DT`, `INT_ACC`, `YAS_` with its price as an override … | **Once a day** (were 30 minutes and 6 hours). |
+| Unknown security / field | Once a day (a maturity that did not exist yesterday may exist today). |
+| Intraday bars | 1 per request; none past 70 % of the budget. |
+| Batching | BDP 100 securities per request, BDS / BDH 50, at most 12 requests in flight. |
 
-**Restarts:**
-- After a restart every quote key is asked once more, one reference request each.
-- Today's slow answers are preloaded from the `bbg_answers` table. These are the non-quote answers with a refresh of
-  15 minutes or more.
-- A new helper process asks for everything again.
-- This is why restarts are rationed and why the desk wants **one update a day**.
+**The desk's hours (quiet hours).** Refreshes, polls and repairs only on the desk's days - week days that are not on the
+TRY holiday list (Motor!A361:A523, `Watch.holidays`) - between `bbg_open` and `bbg_close` (08:00 - 19:00 by default; the
+administrators change them in İzleme · Alarmlar → Masa alarmları → Ayarlar, `ops.settings`), in the computer's local time
+(Istanbul on the desk's). Outside them **nothing is asked again** - a dashboard left on overnight or over a weekend
+costs nothing then; subscriptions keep streaming; a key a page has never had is still asked (a first answer goes in any
+hour). The service tells the provider (`set_desk_hours`) at the start, every 10 minutes and when the settings change; a
+holiday added to the list counts from the next day. The history's syncs follow the same hours.
 
-**The hit cap:**
-- `--max-hits` defaults to 400 000 a day, far above normal use. It is a runaway guard, not the desk's limit.
-- When it is reached, refreshes and resyncs stop. **New keys are still sent** (`_send_queued` does not check
-  `limit_reached`); only intraday bars refuse.
-- The day's count is kept in kv `bbg.hits`, written every 30 s.
+**Restarts.** Every answer of the day - quotes, what follows the stream and what Bloomberg did not know included - is
+preloaded from `bbg_answers`: a restart the same day asks nothing it has (a quote's subscription brings it up to date for
+free). A new helper process is given every answer the dashboard holds (`IsolatedBloombergProvider._spawn`); it used to
+ask for everything again. The day's hits by kind (kv `bbg.hits` `kinds`), by key (table `bbg_usage`) and Bloomberg's
+own limit (`limit`) are carried too.
+
+**The day's budget and the caps:**
+- **`--daily-budget`** (100 000 a day; env `TTO_BBG_BUDGET`; 0: none). Past **70 %** (`BUDGET_WARN`) only the first answers
+  of keys a page needs and a user's one-off request (Hesapla) go out - no refresh, no poll, no repair, no history sync, no
+  bars. At **100 %** nothing new: a first answer waits in the queue (`_send_queued` holds it) until the next day.
+- **`--max-hits`** (400 000) stays the absolute stop: reaching it is as 100 % of the budget. (Before, it was the only cap,
+  above Bloomberg's real limit, and `_send_queued` sent new keys past it.)
+- **Bloomberg's own daily limit**: an answer of category `LIMIT` (or `DAILY_CAPACITY…`) on any request - a response, a
+  security's or a field's error, a request failure, a bar request - stops every request until the next day. The values
+  keep what they showed (no "#N/A"), a first answer waits, subscriptions keep streaming, the status says "Bloomberg günlük
+  limiti doldu – yarın yeniden". One probe (one security × one field) an hour after the day changed, then hourly while
+  Bloomberg still says so; kept for a restart. (Before, only a bar request understood it; every other request went on.)
+- The day's count is kept in kv `bbg.hits` (`day`, `hits`, `kinds`, `limit`) and the count by key in `bbg_usage`, written
+  every 30 s.
+
+**Where the hits go** (the status window - the badge of the top bar -, `/api/market/usage`): today's hits in % of the
+budget (warned at 70 %; administrators get a toast once a day), by kind - first answer, poll, static, daily, hourly,
+history, Hesapla / user, resync, bars, probe -, the top 10 sheets (which workbook sheet asks for the key, from its cells;
+the history's series, Hesapla and bars by name) and the top 10 fields; the quotes polled (with a value / empty / stopped)
+and the keys the stream keeps current.
+
+**Measured** (24.11.2026, a fake-terminal day of the four workbooks' keys as the engine forms them - the replay day -,
+a simulated clock, the old code of beadeea against the new; the terminal like the office's: 448 of the 800 BIST swap
+tenors unknown and the rest without a quote, 6 % of the other securities' subscriptions failing and 10 % of the other
+quote fields silent, both with answers that move on every request, two event-queue overflows, ~730 subscriptions):
+
+| Day | Before | After |
+|---|---|---|
+| Office: 08:00 - 19:00, started at 08:00 | 163 787 (first answers 5 194, the 60-second class 101 486, quote polls 48 794, 30-minute class 4 830, resyncs 3 160, static 210, BDH 113) | 15 292 (first answers 5 194, quote polls 9 120, resyncs 978) |
+| ... with a restart at 13:00 | 174 751 | 15 246 |
+| Left on round the clock (a whole day, 00:00 - 24:00) | 338 223 (~14 000 every hour, night included) | 14 494 (nothing from 19:00 to 08:00; at 08:00 the day's once: 2 261) |
+| + the history's syncs (the fake terminal's ~217 series with closes; `tests/test_quant.py`'s live day) | + ~9 500 (08:00 - 19:00) / ~20 800 (round the clock) | + ~2 400 |
+
+After, the hours of a working day: 08:00 ~5 400 (the first answers), then ~250 an hour (the moving quotes that do not
+stream, every 15 minutes) and ~2 100 at 11:00, 14:00 and 17:00 (the quotes without a value: the largest share left -
+`POLL_EMPTY` sets it), ~500 at an overflow. The office's own lists are longer than the replay's (DİBS RV 50 bonds
+against 19, Tüm Kâğıtlar ~160 against ~96): their 60-second class alone was ~2.5 times the measured one, which is why
+the desk saw ~195 000 by 14:27 - and their first answers will be a few thousand more than here. The whole day stays
+under 20 000 (`tests/test_bloomberg_cache.py` keeps it so); every workbook BDH range ends yesterday or earlier
+(`TODAY()-1`, `WORKDAY(TODAY(),-1)`, `WORKDAY(SPOTDATE,-2)`): they were refreshed every 6 hours (each day's new set
+beside the older ones), now once a day.
+
+**The event queue's repair** (`_resync_lost`): after an overflow, the values of the subscriptions Bloomberg named
+(DataLoss) or, when it named none, of those that ticked in the 10 minutes before the queue filled and not since it cleared
+(a quiet subscription lost nothing; one that ticked since is current) - at most 2 000 values a day (`RESYNC_BUDGET`, was
+20 000; it re-asked every quote, ~4 500, at each overflow); not outside the desk's hours, not past 70 % of the budget.
 
 **Guards:**
 - Users' formulas (personal calc sheets, input formulas) cannot call Bloomberg (`calc.py`, `inputformula.py`).
@@ -161,7 +227,12 @@ curve in `B4:E6`, tried left to right. The workbook's own ticker (BGN) always co
 - A series id is `"<ticker>|<FIELD>"`, for example `"TRYSAQ6 ICPL Curncy|PX_LAST"`. One series per ticker and source.
 - The groups are `ref | ois | off | xccy | dibs`, plus `sofr` and the quant groups.
 
-**The sync loop runs every 900 s live.** The desk decided it stays at 15 minutes ("Böyle kalsın").
+**The sync loop runs every 900 s live** (the desk, 15.11: "Böyle kalsın") - but since 24.11.2026 (cache first) a series'
+new days are asked **once a day** (yesterday's final close), then its **today's point comes from its live quote** when a page
+has one (`Provider.quote`: the value the subscription keeps, no request), else its new days are asked **at most hourly**
+(`TAIL_EVERY`; the time is kept with the series' record in `hist.fetch` - `tail`, `tail_at` -, so a restart within the
+hour asks nothing). **Outside Bloomberg's hours** (`Service.bbg_open_now`: the desk's hours on the desk's days) a sync
+asks nothing (`state["quiet"]`); "Şimdi güncelle" asks at any hour.
 
 **Pacing** (kv `hist.fetch`):
 - **Full range:** each series at most once a day.
@@ -180,8 +251,11 @@ curve in `B4:E6`, tried left to right. The workbook's own ticker (BGN) always co
   `quant.extend_for_quant` - gets its first window (`lookback_days`, the history setting) in full in one sync. The older
   part, up to two years (`quant.HISTORY_DAYS`), then comes in the 40-a-sync turn.
 
-**The cost of tails:** every sync asks the new days of every series that has closes, except `SOFRRATE Index` (once a
-day) and expired VİOP contracts (never). That is about (series with closes) × 96 BDH hits a day.
+**The cost of tails:** the new days of every series that has closes (except `SOFRRATE Index`: once a day after 16:30, and
+expired VİOP contracts: never) once a day, then at most hourly for those without a live quote - in Bloomberg's hours
+(08:00 - 19:00) at most 11 times a day: (series without a live quote) × 11 BDH hits. It was (series with closes) × 96 a
+day (every 15 minutes, round the clock): on the fake terminal's history (~217 series with closes) ~20 800 hits a day
+left on, ~9 500 for 08:00 - 19:00; now ~2 400 (`tests/test_quant.py`'s live day).
 
 **`SOFRRATE Index`:** its new days are asked once a day, after 16:30 (`SOFR_AFTER`): a start before 16:30 does not ask,
 and a restart the same day does not ask again ("1 kalsın"). A manual update (`History.request_sync`) asks again, still

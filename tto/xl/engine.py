@@ -427,6 +427,10 @@ class Engine(object):
         self.invalidate(mask)
         return mask
 
+    def market_keys(self) -> List[Any]:
+        """Every market-data key a formula has depended on (to have the cells that read them worked out again)."""
+        return [k[1] for k in list(self._bits) if type(k) is tuple and len(k) == 2 and k[0] == "md"]
+
     def clock_tick(self) -> None:
         mask = self._bits.get(("clock", "now"), 0)
         today = self.clock.today()

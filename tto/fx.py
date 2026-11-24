@@ -1154,7 +1154,7 @@ def check_fx(pair: str = "USDTRY", source: str = DEFAULT_SOURCE, host: str = "lo
     quotes of every tenor, the forward points and their scale, the spot (one reference request, about seventy items)
     - and print which of them Bloomberg knows.  0: every ATM vol and the spot came back, 2: some did not, 1: no
     connection."""
-    from .marketdata.bloomberg import BloombergProvider
+    from .marketdata.bloomberg import P_ONCE, BloombergProvider
     code = str(pair or "").replace("/", "").upper()
     if not re.match(r"^[A-Z]{6}$", code):
         out("Parite anlaşılamadı: %r (örn. USDTRY, EURUSD)" % pair)
@@ -1178,7 +1178,7 @@ def check_fx(pair: str = "USDTRY", source: str = DEFAULT_SOURCE, host: str = "lo
             keys[(t, "SCALE")] = bdp_key(points_ticker(p, t), "FWD_SCALE")
         keys[("", "SPOT")] = bdp_key(spot_ticker(p), FIELD)
         for k in keys.values():
-            prov._lookup(k, 0.0)
+            prov._lookup(k, P_ONCE)                  # (a check: asked once, never again)
         t0 = time.time()
         while time.time() - t0 < wait and prov.busy():
             time.sleep(0.2)

@@ -11,7 +11,8 @@
   expected in market hours (the desk's days - week days that are not its holidays - between the hours of the
   settings).
 * **Settings the desk may tune** (``ops.settings`` in the store; the administrators change them on the alarms
-  page): the market hours and how long without a tick counts as stale.
+  page): the market hours, how long without a tick counts as stale, and Bloomberg's hours (``bbg_open`` /
+  ``bbg_close``: when it may be asked again - the provider's quiet hours, ``marketdata/bloomberg.py``).
 * **The database.**  ``PRAGMA quick_check`` at every start (a failure is said on the console, in the log, in the
   status); every day at ``--backup-time`` (17:30) an online copy to ``--backup-dir`` (``data/backups``) as
   ``tto-YYYY-MM-DD.db``, the newest 30 kept - and a second copy of it in ``--backup-copy-dir`` (another drive:
@@ -99,13 +100,18 @@ DEFAULTS: Dict[str, Any] = {
     # the Trades page's close (tradebook.py): every open trade's value kept each business day at this time - a day
     # missed while the dashboard was off at its next start (the daily backup's time by default)
     "trades_close": "17:30",
+    # when Bloomberg may be asked again on the desk's days (cache first, docs/market-data.md): outside these hours, at
+    # weekends and on TR holidays no refresh and no poll at all - subscriptions keep streaming (the desk, 24.11.2026)
+    "bbg_open": "08:00",
+    "bbg_close": "19:00",
 }
 #: the bounds of the numbers among them
 RANGES = {"tick_stale": (10, 3600), "feed_minutes": (1, 240)}
 #: their names in the desk's log of changes
 NAMES = {"market_open": "piyasa açılışı", "market_close": "piyasa kapanışı", "tick_stale": "bayat sayılma (sn)",
          "feed_alarm": "veri akışı alarmı", "feed_minutes": "veri akışı alarmı (dk)", "tlref_alarm": "TLREF alarmı",
-         "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı", "trades_close": "Trades kapanış saati"}
+         "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı", "trades_close": "Trades kapanış saati",
+         "bbg_open": "Bloomberg sorgu başlangıcı", "bbg_close": "Bloomberg sorgu bitişi"}
 #: the system alarms, in the order the page lists them
 SYSTEM_KINDS = tuple(SYSTEM)
 _HHMM = re.compile(r"^([01]?\d|2[0-3])[:.]([0-5]\d)$")
@@ -449,6 +455,8 @@ class Ops(object):
                 cur[k] = t.strftime("%H:%M")
         if hhmm(cur["market_open"]) >= hhmm(cur["market_close"]):
             raise ValueError("piyasa açılışı kapanıştan önce olmalı")
+        if hhmm(cur["bbg_open"]) >= hhmm(cur["bbg_close"]):
+            raise ValueError("Bloomberg sorgu başlangıcı bitişten önce olmalı")
         return cur
 
     def set_settings(self, values: Dict[str, Any]) -> Dict[str, Any]:

@@ -607,16 +607,17 @@ class Service(object):
         s = self.settings
         from .marketdata.bloomberg import BloombergProvider, favour_reader
         common = dict(stream=s.bbg_stream, price_poll=s.bbg_price_poll, max_hits_per_day=s.bbg_max_hits, bfx=s.bbg_bfx,
-                      queue_size=s.bbg_queue)
+                      queue_size=s.bbg_queue, budget=s.bbg_budget)
         stand_in = os.environ.get("TTO_BLPAPI_MODULE") or None      # tests: a module to use in place of blpapi
         if s.bbg_isolate:
             from .marketdata.bbg_process import IsolatedBloombergProvider, IsolationError
             try:
                 provider = IsolatedBloombergProvider(s.bbg_host, s.bbg_port, interval=s.bbg_interval or 0.0,
                                                      blpapi_name=stand_in, silent_restart=s.bbg_silent_restart, **common)
-                # a helper gone silent is started again in market hours only (each new one asks for everything)
+                # a helper gone silent is started again in market hours only (each new one gets the answers held here)
                 provider.restart_allowed = self.ops.in_market
                 self._kept_bloomberg(provider)
+                self._tell_desk_hours(provider)
                 provider.start()
                 return provider
             except IsolationError as exc:
@@ -629,19 +630,30 @@ class Service(object):
         provider = BloombergProvider(s.bbg_host, s.bbg_port, interval=1.0 if s.bbg_interval is None else s.bbg_interval,
                                      blpapi_module=module, **common)
         self._kept_bloomberg(provider)
+        self._tell_desk_hours(provider)
         provider.start()
         favour_reader()
         return provider
 
     def _kept_bloomberg(self, provider) -> None:
         """What an earlier run of today used and was answered (kept in the database by :meth:`_keep_bloomberg`): the
-        daily data limit counts it, and the reference answers are not asked again until they are due."""
+        daily data limit counts it - by kind and by key too -, Bloomberg's own daily limit still holds, and no answer
+        is asked again until it is due (quotes included: cache first, docs/market-data.md)."""
         today = _dt.date.today().isoformat()
         self._bbg_kept_at = 0.0
+        self._bbg_usage_kept = {}
+        self._bbg_kept_day = today
         try:
             used = self.store.get("bbg.hits") or {}
-            if isinstance(used, dict) and used.get("day") == today:
+            if not isinstance(used, dict):
+                used = {}
+            if used.get("day") == today:
                 provider.carry_hits(int(used.get("hits") or 0))
+            carry = getattr(provider, "carry_day", None)
+            if carry is not None:
+                usage = self.store.bbg_usage(today)
+                self._bbg_usage_kept = dict(usage)
+                carry(used.get("kinds") if used.get("day") == today else None, usage, used.get("limit") or None)
             provider.preload(self.store.bbg_answers(today))
         except Exception:  # noqa: BLE001 - a start from nothing, as before
             pass
@@ -650,23 +662,87 @@ class Service(object):
     BBG_KEEP_EVERY = 30.0
 
     def _keep_bloomberg(self) -> None:
-        """Keep the data points used today and the reference answers got since the last time (live: every
-        ``BBG_KEEP_EVERY`` seconds and when the dashboard stops) - a restart the same day does not spend the daily
-        data limit on them again."""
+        """Keep the data points used today (by kind, by key), Bloomberg's own daily limit and the answers got since the
+        last time (live: every ``BBG_KEEP_EVERY`` seconds and when the dashboard stops) - a restart the same day does
+        not spend the daily data limit on them again."""
         prov = self.provider
         answers = getattr(prov, "answers", None)
         if answers is None:
             return
         today = _dt.date.today().isoformat()
+        if getattr(self, "_bbg_kept_day", today) != today:
+            self._bbg_kept_day = today
+            self._bbg_usage_kept = {}
         try:
             st = prov.status() or {}
-            self.store.put("bbg.hits", {"day": today, "hits": int(st.get("hits_today") or 0)})
+            self.store.put("bbg.hits", {"day": today, "hits": int(st.get("hits_today") or 0),
+                                        "kinds": {k: int(v) for k, v in (st.get("kinds") or {}).items()},
+                                        "limit": str(st.get("bbg_limit") or "")})
             got = answers(self._bbg_kept_at)
             if got:
                 self.store.bbg_keep(today, got)
                 self._bbg_kept_at = max(t for _, _, t in got)
+            usage = getattr(prov, "usage", None)
+            if usage is not None:
+                kept = getattr(self, "_bbg_usage_kept", None)
+                if kept is None:
+                    kept = self._bbg_usage_kept = {}
+                changed = [(k, n) for k, n in usage().items() if kept.get(k) != n]
+                if changed:
+                    self.store.bbg_usage_keep(today, changed)
+                    kept.update(changed)
         except Exception:  # noqa: BLE001 - kept the next time
             pass
+
+    # ------------------------------------------------------------------ the desk's hours for Bloomberg
+    def _bbg_desk(self, holidays: bool = True) -> Tuple[str, str, Tuple[str, ...]]:
+        """(open, close, the TR holidays as ISO days): when Bloomberg may be asked again - the administrators' setting
+        (İzleme · Alarmlar → Masa alarmları → Ayarlar, ``ops.settings``), on the desk's days."""
+        st = self.ops.settings()
+        days: Tuple[str, ...] = ()
+        if holidays and getattr(self, "watch", None) is not None and getattr(self, "books", None):
+            try:
+                days = tuple(sorted(self.et.call(self.watch.holidays)))
+            except Exception:  # noqa: BLE001 - week days only meanwhile
+                days = ()
+        return str(st.get("bbg_open") or "08:00"), str(st.get("bbg_close") or "19:00"), days
+
+    def _tell_desk_hours(self, provider=None) -> None:
+        """Tell the Bloomberg provider the desk's hours when they changed (outside them: no refresh, no poll)."""
+        prov = provider if provider is not None else self.provider
+        setter = getattr(prov, "set_desk_hours", None)
+        if setter is None:
+            return
+        args = self._bbg_desk(holidays=provider is None)
+        if provider is None and args == getattr(self, "_bbg_desk_told", None):
+            return
+        self._bbg_desk_told = args
+        setter(*args)
+
+    def bbg_open_now(self) -> bool:
+        """Whether Bloomberg may be asked again now (the history's syncs): the desk's hours on the desk's days, by the
+        workbooks' clock (a test's simulated one).  Always in replay."""
+        if self.mode != "live":
+            return True
+        book = self.books.get("tto")
+        try:
+            now = _dt.datetime(1899, 12, 30) + _dt.timedelta(days=float(book.engine.clock.now()))
+        except Exception:  # noqa: BLE001 - no workbook clock: the machine's
+            now = _dt.datetime.now()
+        open_, close, _ = self._bbg_desk(holidays=False)
+        from .ops import hhmm
+        if not self.ops.market_day(now.date().isoformat()):
+            return False
+        lo, hi = hhmm(open_), hhmm(close)
+        return lo is not None and hi is not None and lo <= now.time() < hi
+
+    def _reread_market(self) -> None:
+        """A new day: every cell that reads Bloomberg is worked out again when next read - the provider sees which keys
+        are still used (a key is asked again only while it is read: yesterday's ranges and dates are left alone)."""
+        for b in self.books.values():
+            keys = b.engine.market_keys()
+            if keys:
+                b.engine.market_changed(keys)
 
     # ================================================================== lifecycle / events
     def start(self) -> None:
@@ -823,6 +899,10 @@ class Service(object):
                 day_changed = last_day is not None and day != last_day
                 last_day = day
                 if keys or day_changed or self.mode == "live":
+                    if day_changed and self.mode == "live":
+                        # a new day: the cells that read Bloomberg are read again, so the provider knows what is still
+                        # used - what is, is asked once today (in the desk's hours); yesterday's ranges are left alone
+                        self.et.call_at(EngineThread.WRITE, self._reread_market)
                     changed = self.et.call_at(EngineThread.WRITE, self._apply_market, keys)
                     if changed or day_changed:
                         if day_changed:
@@ -837,6 +917,8 @@ class Service(object):
                     # a meeting that passed leaves the list by itself: MPC1 is always the next meeting
                     last_roll = time.monotonic()
                     self.history.auto_roll()
+                    if self.mode == "live":
+                        self._tell_desk_hours()          # the desk's hours and holidays (Bloomberg's quiet hours)
             except Exception as exc:  # noqa: BLE001 - the loop must survive anything (and say so in the log)
                 self.ops.failure("piyasa döngüsü", exc)
                 continue
@@ -5886,6 +5968,8 @@ class Service(object):
         said = changes(before, cur)
         if said:
             self.desk_alarms.note("settings", "ayarlar", "Ayarlar", said, by=me)
+        if self.mode == "live":
+            self._tell_desk_hours()                      # Bloomberg's hours may have changed: at once
         self.bump()
         return cur
 
@@ -7546,6 +7630,71 @@ class Service(object):
                               first.get("book_title", ""), first.get("sheet", ""), ", ".join(c["ref"] for c in r["cells"]), r["ncells"]])
         ls.autosize()
         return wb.to_bytes(), "Bloomberg_tanimsiz_%s.xlsx" % _dt.date.today().strftime("%Y.%m.%d")
+
+    # ================================================================== where today's Bloomberg hits went
+    #: the status window's names of what a hit was for (``marketdata/bloomberg.py`` KINDS)
+    USAGE_KINDS = {"first": "İlk cevap (sayfanın hiç almadığı)", "poll": "Akmayan kota sorgusu",
+                   "static": "Sabit alanlar (günde bir)", "daily": "Günlük alanlar (günde bir; tanınmayanlar da)",
+                   "hourly": "Gün içinde değişen, akmayan (saatte bir)", "history": "Tarihçe / BDH",
+                   "user": "Hesapla / kullanıcı isteği", "resync": "Kuyruk taşması onarımı", "bars": "Gün içi barlar (quant)",
+                   "probe": "Bloomberg limiti denemesi"}
+    #: ... and of what is asked outside the workbooks' cells
+    USAGE_OUTSIDE = {"HIST": "Tarihçe (gün sonu, quant, FX)", "REF": "Kâğıt Fiyat Yükleme (Hesapla)",
+                     "BAR": "Gün içi barlar (quant)"}
+
+    def market_usage(self, top: int = 10) -> Dict[str, Any]:
+        """Where today's Bloomberg hits went - by kind, the ``top`` sheets and fields - with the day's budget, Bloomberg's
+        own limit, the desk's hours and what is polled or kept current by the stream (the status window; on demand: the
+        sheets come from which cell asks for which key, ``_market_callers``)."""
+        prov = self.provider
+        try:
+            st = prov.status() or {}
+        except Exception:  # noqa: BLE001
+            st = {}
+        usage_of = getattr(prov, "usage", None)
+        try:
+            usage = usage_of() if usage_of is not None and self.mode == "live" else {}
+        except Exception:  # noqa: BLE001
+            usage = {}
+        callers = self._market_callers() if usage else {}
+        places = self._cell_places() if usage else {}
+        sheets: Dict[Tuple[str, str, Optional[str]], int] = {}
+        fields: Dict[str, int] = {}
+        for key, n in usage.items():
+            kind = key[0]
+            if kind in self.USAGE_OUTSIDE:
+                where = (self.USAGE_OUTSIDE[kind], "", None)
+                field = "gün içi bar" if kind == "BAR" else ("BDH " if kind == "HIST" else "") + str(key[2])
+            else:
+                field = ("%s %s" % (kind, key[2])) if kind in ("BDH", "BDS") else str(key[2])
+                cells = sorted(callers.get(key, ()))
+                if cells:
+                    bid, si, rc = cells[0]
+                    book = self.books[bid]
+                    sheet = book.model.sheets[si].name
+                    r, c = divmod(rc, COLS)
+                    page = next((pg for r1, c1, r2, c2, pg, _pn in places.get((bid, sheet), ())
+                                 if r1 <= r <= r2 and c1 <= c <= c2), None)
+                    where = (book.title, sheet, page)
+                else:
+                    # (the FX pages' quotes, a bond's facts, a key of another day's cells no page reads any more)
+                    where = ("Diğer", "FX sayfaları, kâğıt bilgileri, eski günün anahtarları", None)
+            sheets[where] = sheets.get(where, 0) + int(n)
+            fields[field] = fields.get(field, 0) + int(n)
+        hits = int(st.get("hits_today") or 0)
+        budget = int(st.get("budget") or 0)
+        kinds = st.get("kinds") or {}
+        return {"mode": self.mode, "hits": hits, "budget": budget, "max_hits": int(st.get("max_hits") or 0),
+                "used": round(100.0 * hits / budget, 1) if budget else None, "tier": int(st.get("tier") or 0),
+                "kinds": [{"kind": k, "label": self.USAGE_KINDS.get(k, k), "hits": int(n)}
+                          for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]) if n],
+                "sheets": [{"book_title": b, "sheet": s, "page": pg, "hits": n}
+                           for (b, s, pg), n in sorted(sheets.items(), key=lambda kv: -kv[1])[:top]],
+                "fields": [{"field": f, "hits": n} for f, n in sorted(fields.items(), key=lambda kv: -kv[1])[:top]],
+                "bbg_limit": st.get("bbg_limit") or "", "bbg_limit_text": st.get("bbg_limit_text") or "",
+                "desk": st.get("desk"), "quiet": bool(st.get("quiet")), "polled": st.get("polled") or {},
+                "poll_every": st.get("poll_every"), "poll_empty": st.get("poll_empty"), "fed": int(st.get("fed") or 0),
+                "gen": self.gen}
 
     # ================================================================== realized volatility · carry against it
     def _vol_curves(self) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], Dict[str, Dict[str, float]], Dict[str, Any]]:

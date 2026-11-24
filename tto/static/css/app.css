@@ -467,6 +467,9 @@ button.badge:hover { filter: brightness(1.15); }
 .unknown .unknown-all > summary { cursor: pointer; color: var(--ink-2); font-weight: 600; font-size: 12px; }
 .unknown .unknown-all .body { max-height: 40vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; }
 .unknown .jumps { margin-top: 8px; font-size: 11.5px; line-height: 1.7; }
+/* where today's Bloomberg hits went (cache first, 24.11.2026): by kind, the top sheets, the top fields side by side */
+.usage-grid { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: flex-start; margin-bottom: 6px; }
+.usage-grid table.plain td:nth-child(n+2), .usage-grid table.plain th:nth-child(n+2) { text-align: right; white-space: nowrap; }
 table.grid td { -webkit-user-select: none; user-select: none; }
 table.grid td[colspan] { max-width: none; }
 table.grid td.ov { color: var(--ink-2); }

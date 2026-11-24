@@ -858,17 +858,35 @@ function applyStatus(status) {
         + ' · ayrıntı için tıklayın';
     } else {
       badge.classList.add('live');
-      // Bloomberg says its event queue is filling up: prices may arrive late (and are asked again if any were dropped)
-      if (p.slow) badge.classList.add('slow');
-      $('mode-text').textContent = p.slow ? 'CANLI · Bloomberg kuyruğu doluyor'
-        : p.pending ? 'CANLI · ' + p.pending + ' veri bekleniyor' : 'CANLI · Bloomberg';
+      // Bloomberg says its event queue is filling up: prices may arrive late (and are asked again if any were dropped);
+      // Bloomberg's own daily limit, or the dashboard's daily budget used up: nothing new is asked, the streams flow
+      const capped = !!p.bbg_limit || (p.tier || 0) >= 2;
+      if (p.slow || capped) badge.classList.add('slow');
+      $('mode-text').textContent = p.bbg_limit ? 'CANLI · Bloomberg limiti doldu' : capped ? 'CANLI · günlük bütçe doldu'
+        : p.slow ? 'CANLI · Bloomberg kuyruğu doluyor'
+          : p.pending ? 'CANLI · ' + p.pending + ' veri bekleniyor' : 'CANLI · Bloomberg';
+      const used = p.budget ? Math.round(100 * (p.hits_today || 0) / p.budget) : null;
       badge.title = 'Bloomberg (blpapi) canlı veri · ' + (p.subscriptions || 0) + ' abonelik'
         + (p.subscriptions_invalid ? ' (' + p.subscriptions_invalid + ' ticker Bloomberg\'de yok: abone olunmadı – hangileri olduğu için tıklayın)' : '')
-        + ' · bugün ' + (p.hits_today || 0) + ' veri isteği'
+        + ' · bugün ' + (p.hits_today || 0) + ' veri isteği' + (used !== null ? ' (günlük bütçenin %' + used + '\'i)' : '')
+        + (p.quiet ? ' · sorgu saatleri dışında: yenileme yok, abonelikler akıyor' : '')
         + (p.isolated ? ' · oturum ayrı süreçte' + (p.restarts ? ' (' + p.restarts + ' kez yeniden başladı)' : '') : ' · oturum dashboard sürecinde')
         + (p.events_dropped || p.messages_lost
           ? ' · KUYRUK TAŞTI: ' + (p.events_dropped || p.messages_lost) + ' olay düştü, ' + (p.resyncs || 0) + ' değer yeniden istendi' : '')
-        + (p.limit_reached ? ' · GÜNLÜK LİMİT KORUMASI DEVREDE' : '') + (p.error ? ' · ' + p.error : '');
+        + (p.bbg_limit ? ' · BLOOMBERG GÜNLÜK LİMİTİ DOLDU – yarın yeniden; son değerler gösteriliyor'
+          : p.limit_reached ? ' · GÜNLÜK LİMİT KORUMASI DEVREDE' : '') + (p.error ? ' · ' + p.error : '');
+      // past 70 % of the day's budget, or Bloomberg's own limit: the administrators hear it once a day (this browser)
+      if (session.role === 'admin' && (p.bbg_limit || (p.tier || 0) >= 1)) {
+        const mark = 'tto.bbg-warned.' + (status.server_date || '') + (p.bbg_limit ? '.limit' : (p.tier >= 2 ? '.full' : '.70'));
+        let told = false;
+        try { told = !!localStorage.getItem(mark); localStorage.setItem(mark, '1'); } catch (e) { told = !!state[mark]; state[mark] = true; }
+        if (!told) {
+          toast(p.bbg_limit ? 'Bloomberg günlük limiti doldu – yarın yeniden. Yeni istek gönderilmiyor, son değerler gösteriliyor (rozete tıklayın).'
+            : p.tier >= 2 ? 'Günlük Bloomberg bütçesi doldu (%' + used + '): yeni istek gönderilmiyor (rozete tıklayın: nereye gittiği).'
+              : 'Günlük Bloomberg bütçesinin %' + used + '\'i kullanıldı: artık yalnızca sayfaların hiç almadığı ilk değerler isteniyor (rozete tıklayın).',
+          'err', 15000);
+        }
+      }
     }
   } else {
     badge.classList.add('replay');

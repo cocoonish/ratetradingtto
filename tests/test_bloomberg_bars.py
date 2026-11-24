@@ -145,14 +145,18 @@ def test_an_unknown_security_has_no_bars_and_the_status_says_so(provider, server
 def test_a_limit_or_a_time_out_from_bloomberg_is_not_taken_for_no_bars(provider, server):
     """An empty answer would pass for days without any bars: when Bloomberg's answer says a limit or a time-out the
     call gets None ("ask again later"), as when the provider's own daily count is used up.  Any other error is
-    final: no bars."""
+    final: no bars.  Bloomberg's own daily limit stops every request after it (24.11.2026: one probe the next day)."""
     server.bar_errors["A1Z6 Curncy"] = {"source": "fake", "code": 9, "category": "LIMIT", "message": "Daily capacity reached"}
     server.bar_errors["A1F7 Curncy"] = {"source": "fake", "code": 10, "category": "UNCLASSIFIED", "subcategory": "TIMEOUT",
                                         "message": "Request timed out"}
     server.bar_errors["A1G7 Curncy"] = {"source": "fake", "code": 2, "category": "BAD_ARGS", "message": "Invalid start"}
-    assert provider.intraday_bars("A1Z6 Curncy", *SPAN) is None and "Daily capacity reached" in provider.status()["error"]
     assert provider.intraday_bars("A1F7 Curncy", *SPAN) is None and "timed out" in provider.status()["error"]
     assert provider.intraday_bars("A1G7 Curncy", *SPAN) == [] and "Invalid start" in provider.status()["error"]
+    assert provider.intraday_bars("A1Z6 Curncy", *SPAN) is None and "Daily capacity reached" in provider.status()["error"]
+    st = provider.status()
+    assert st["bbg_limit"] == dt.date.today().isoformat() and st["tier"] == 2 and "günlük limiti doldu" in st["error"]
+    hits = server.hits()
+    assert provider.intraday_bars("A1X6 Curncy", *SPAN) is None and server.hits() == hits      # nothing more today
 
 
 def test_an_answer_that_does_not_come_in_time(provider, server):

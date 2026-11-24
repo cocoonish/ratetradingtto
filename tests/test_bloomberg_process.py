@@ -235,7 +235,9 @@ def test_a_helper_that_does_not_answer_is_given_up(fake, isolated):
     assert wait_for(lambda: not helpers(), 10)                  # and it is not left running
 
 
-def test_a_helper_that_dies_is_started_again_and_asked_for_everything(fake, isolated, tmp_path):
+def test_a_helper_that_dies_is_started_again_and_given_every_answer(fake, isolated, tmp_path):
+    """A helper that dies is started again; it is told every key and given every answer the dashboard holds (cache
+    first, 24.11.2026: it used to ask Bloomberg for everything again) - only what had no answer is asked."""
     stats = fake(securities=5, crash_once=str(tmp_path / "crashed"))
     p = isolated()
     p.start()
@@ -260,8 +262,9 @@ def test_a_helper_that_dies_is_started_again_and_asked_for_everything(fake, isol
     p.get_bdp(new)
     settle(p)
     assert p.get_bdp(new) == 10.5
-    # the daily count of data points goes on where the first helper stopped: 5 before, then 5 + 1 + 1 again
-    assert p.status()["hits_today"] >= 12
+    # the daily count of data points goes on where the first helper stopped: 5 before (the request the first helper died
+    # on may not have reached the count), then only the one that had no answer and the new one - not the five again
+    assert p.status()["hits_today"] in (7, 8)
 
 
 def test_a_helper_that_keeps_dying_is_not_restarted_for_ever(fake, isolated, monkeypatch):
@@ -605,25 +608,34 @@ def test_python_m_tto_live_keeps_up_with_a_busy_market(tmp_path):
 
 
 def test_a_restart_the_same_day_gives_the_helper_the_days_answers_and_count(fake, isolated):
-    """The answers kept from earlier today (and the data points used) are given to the helper: it takes them as
-    answered - the engine has them at once, nothing is asked again - and counts on from there."""
+    """The answers kept from earlier today - the quotes' too (cache first, 24.11.2026) - and the data points used, by
+    kind and by key, are given to the helper: it takes them as answered - the engine has them at once, nothing is
+    asked again - and counts on from there."""
     fake(securities=3)
     first = isolated()
     first.start()
-    settle_dt = bdp_key("TRY Curncy", "SETTLE_DT")
+    settle_dt, bid = bdp_key("TRY Curncy", "SETTLE_DT"), bdp_key("USDTRY Curncy", "BID")
     first.get_bdp(settle_dt)
-    first.get_bdp(bdp_key("USDTRY Curncy", "BID"))
+    first.get_bdp(bid)
     settle(first)
     kept = first.answers()
     used = first.status()["hits_today"]
-    assert [k for k, _, _ in kept] == [settle_dt] and used == 2           # (the quote is not kept)
+    kinds = first.status()["kinds"]
+    assert wait_for(lambda: first.usage() == {settle_dt: 1, bid: 1}, 15)      # (the helper reports it every few seconds)
+    usage = first.usage()
+    first.stop()
+    assert sorted(k for k, _, _ in kept) == sorted([settle_dt, bid]) and used == 2 and kinds == {"first": 2}
     again = isolated()
     again.preload(kept)
     again.carry_hits(used)
+    again.carry_day(kinds, usage, None)
     again.start()
-    assert again.get_bdp(settle_dt) == "4.11.2026"                         # at once
+    assert again.get_bdp(settle_dt) == "4.11.2026" and again.get_bdp(bid) == 49.997          # at once
     settle(again)
-    assert again.status()["hits_today"] == used                            # not asked again
+    time.sleep(0.5)
+    st = again.status()
+    assert st["hits_today"] == used and st["kinds"] == {"first": 2}         # not asked again
+    assert again.usage() == usage
 
 
 # ====================================================================================== intraday bars
