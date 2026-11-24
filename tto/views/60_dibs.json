@@ -81,14 +81,14 @@
    "scope": "user",
    "group": "dibs-10",
    "kind": "auto",
-   "label": "'Manuel temiz' — manual clean price override"
+   "label": "'Manuel temiz' — manual clean price override (two-way: typed, its yields, ASW / DM and Z-spread follow; formula default: the clean price a yield / spread typed in the row gives, else none - the market's)"
   },
   {
    "range": "AL5:AL54",
    "scope": "user",
    "group": "dibs-11",
    "kind": "number",
-   "label": "'Repo (%, boş = OIS)' — per-bond repo"
+   "label": "'Repo (%, boş = OIS)' — per-bond repo (two-way: typed, the carry follows; formula default: the repo a carry typed in the row needs, else none - OIS / the default repo)"
   },
   {
    "range": "A64:A75",
@@ -131,6 +131,41 @@
    "group": "dibs-17",
    "kind": "number",
    "label": "'ASW/DM seviyesi (bp)' – switch: Al − Sat ASW / DM → Al temiz"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "dibs-rv",
+   "sheet": "DİBS RV",
+   "label": "DİBS göreli değer",
+   "note": "İki yönlü: Manuel temiz, BIST basit / bileşik getiri, getiri − OIS, ASW / DM ve Z-spread - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; DİBS RV'nin TRY OIS eğrisiyle: ASW sabit kuponlu ve bonoda, DM TLREF'lide; silince satır piyasaya döner). Yazılan getiri ya da spread kâğıda varsayımsal bir temiz fiyat verir: eğri oynadıkça o fiyat da oynar, yazılan değer aynen kalır - ve hesabınızda kâğıdın fiyatını okuyan her yer onu kullanır (eğri uyumu ve sinyaller, switch bacakları, DİBS Trading, Manuel Tahvil'in ISIN fiyatı, Kâğıt Fiyatlama, DİBS RV · Genel). Fiyatı olmayan kâğıtta da çalışır; kâğıdın olmayan bir değeri (TLREF'lide getiri, TÜFE'lide ASW, FRN'de spread) fiyat vermez - Fiyat durumu söyler. Repo ile carry de iki yönlüdür: carry yazılınca gereken repo hesaplanır. Kişiseldir; kâğıt listede yer değiştirince kâğıdıyla gider.",
+   "members": [
+    {"name": "Manuel temiz", "range": "N5:N54"},
+    {"name": "BIST basit getiri", "range": "S5:S54", "store": "YF5:YF54"},
+    {"name": "BIST bileşik getiri", "range": "T5:T54", "store": "YG5:YG54"},
+    {"name": "Getiri − OIS", "range": "Y5:Y54", "store": "YH5:YH54"},
+    {"name": "ASW / DM", "range": "Z5:Z54", "store": "YI5:YI54"},
+    {"name": "Z-spread", "range": "AF5:AF54", "store": "YJ5:YJ54"}
+   ]
+  },
+  {
+   "id": "dibs-carry",
+   "sheet": "DİBS RV",
+   "label": "DİBS göreli değer · carry",
+   "members": [
+    {"name": "Repo", "range": "AL5:AL54"},
+    {"name": "Carry", "range": "AM5:AM54", "store": "YL5:YL54"}
+   ]
+  },
+  {
+   "id": "dibs-switch",
+   "sheet": "DİBS RV",
+   "label": "SWITCH / PAIR",
+   "note": "İki yönlü: getiri farkı ya da ASW/DM farkı - hangisini yazarsanız o kalır (✎); Al bacağının o farktaki temiz fiyatı 'Al temiz (yazılan farktan)' sütununda, öteki fark o fiyattan hesaplanır. Sat bacağı piyasada (tablodaki fiyatıyla); Al kâğıdının kendi satırı ve Manuel temiz'i değişmez, satırın öteki sütunları kâğıtların tablodaki fiyatlarıyla kalır. Silince fark piyasaya döner; satırın farkları ISIN'leriyle yazılan çiftindir.",
+   "members": [
+    {"name": "Getiri farkı", "range": "G64:G75", "store": "AB64:AB75"},
+    {"name": "ASW/DM farkı", "range": "I64:I75", "store": "AC64:AC75"}
+   ]
   }
  ],
  "panels": [
@@ -253,8 +288,16 @@
    "id": "B4",
    "type": "table",
    "title": "SWITCH / PAIR",
-   "range": "A62:Z78",
+   "range": "A62:AA78",
    "hidden": false
+  },
+  {
+   "id": "B4t",
+   "type": "table",
+   "title": "Yardımcı · switch iki yönlü: yazılan farklar ve Al bacağının o fiyattaki basit getirisi",
+   "range": "AB62:AJ75",
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B5",
@@ -297,6 +340,14 @@
    "title": "Yardımcı · FRN mi (Tüm Kâğıtlar'daki türü; listede yoksa Bloomberg'in floater formülü ve reset endeksi)",
    "range": "YA4:YD54",
    "hidden": true
+  },
+  {
+   "id": "tw",
+   "type": "table",
+   "title": "Yardımcı · iki yönlü: satırda yazılan getiri, spread ve carry, satırın fiyatını veren, elle fiyattaki Z-spread ve getiri",
+   "range": "YF3:YP54",
+   "hidden": true,
+   "keep_title": true
   }
  ]
 }

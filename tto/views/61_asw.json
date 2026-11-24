@@ -82,7 +82,7 @@
    "scope": "user",
    "group": "asw-manual",
    "kind": "number",
-   "label": "Manuel temiz fiyat"
+   "label": "Manuel temiz fiyat (iki yönlü: yazılınca ASW ve kirli @spot ondan; formül varsayılanı: satırda yazılan ASW / kirli fiyatın verdiği temiz fiyat, yoksa boş - piyasa)"
   },
   {
    "range": "E7:E56",
@@ -139,6 +139,19 @@
    "group": "asw-fx-roots",
    "kind": "text",
    "label": "FX swap eğrisi ticker kökleri (2Y … 10Y: TRYSAQ…; 18A ticker'sız, XCCY eğrisinden hesaplanır)"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "asw-rv",
+   "sheet": "ASW",
+   "label": "DİBS ASW",
+   "note": "İki yönlü: Manuel temiz, ASW ya da kirli @spot - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; ASW bu sayfanın kendi OIS eğrisiyle; silince satır piyasaya döner). Yazılan ASW kâğıda varsayımsal bir temiz fiyat verir: eğri oynadıkça o fiyat da oynar, ASW aynen kalır; ASW FX ima sütunu ve geçmişin canlı noktası o fiyatla hesaplanır. Sabit kuponlu ve bonoda, fiyatı olmayan kâğıtta da çalışır. Kişiseldir; kâğıt listede yer değiştirince kâğıdıyla gider.",
+   "members": [
+    {"name": "Manuel temiz", "range": "D7:D56"},
+    {"name": "ASW", "range": "R7:R56", "store": "Z7:Z56"},
+    {"name": "Kirli @spot", "range": "O7:O56", "store": "AA7:AA56"}
+   ]
   }
  ],
  "panels": [
@@ -355,6 +368,14 @@
    "title": "Yardımcı · eğri uyumu (a + b·t + c·t²) toplamları",
    "range": "AN2:BA3",
    "hidden": true
+  },
+  {
+   "id": "tw",
+   "type": "table",
+   "title": "Yardımcı · iki yönlü: satırda yazılan ASW ve kirli fiyat, satırın fiyatını veren",
+   "range": "Z6:AB56",
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "cols",

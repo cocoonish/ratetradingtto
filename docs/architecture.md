@@ -129,6 +129,18 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
     a value typed goes with its meeting and takes no formula, as the table's own typed columns.
   - **Stores inside a table of the page**: every member and store sits in a panel's range (a hidden helper table for the
     stores: `test_views`); a member a table shows counts as showing its store.
+- **The bonds' tables** (DİBS RV's bond rows, its repo / carry and SWITCH / PAIR, DİBS ASW's bond rows, Manuel Tahvil;
+  [desk-decisions.md](desk-decisions.md#kâğıt-tabloları-iki-yönlü-24112026), `extras._rv_tw` / `_sw_tw` / `_asw_tw` /
+  `_man_tw`) show two patterns other tables may need:
+  - **A guard that reads the in-place member** (DİBS RV's `DG`, the ASW sheet's `BB`: "the row has a price") while the
+    inverse reads cells the guard opens (the cash flows): the guard reads a helper instead while a store prices the row
+    (`RV_TW_BY` / `ASW_TW_BY`: which member's store prices it, from the stores and the bond's kind alone) - no cycle,
+    and a row without a price is priced by a typed level.
+  - **A sheet also calculated on another curve** (DİBS ASW's ASW FX, the offshore history): a row priced by a stored
+    member is pinned there at the in-place member's value of the user's calculation, its stores left out
+    (`Service._twoway_pins`) - a typed OIS ASW is a clean price, not an FX ASW.
+  - Members whose sheet values are rounded or solved in a few steps (DİBS RV's 0.1 bp spreads, its yield and Z-spread
+    solvers) are exact on a row with anything typed, so that a value typed back gives the same row.
 
 ## Books and the formula engine
 
@@ -239,7 +251,9 @@ Move's move → vol `Calculators!N44:O49`), the bonds' ways back (24.11.2026: a 
 workbook sheets' own free cells: `ASW!V:Y`, `DİBS RV!BK:BN`, SWITCH / PAIR's `DİBS RV!U:Z`, Manuel Tahvil's ISIN `B17`
 with its helper block `AL17:AM36` and the inputs' defaults it gives; [desk-decisions.md](desk-decisions.md)), the
 Forward page's calculators two-way (`_tto_fwd_calc_tw`: Interest 2 SP … Repo, Forward DV01, TRY OIS w/Spread - their
-stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores in `X:Z`) and others.
+stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores in `X:Z`), the bonds' tables two-way
+(the same day: their stores in hidden columns of the rows - `DİBS RV!YF:YP`, `AB:AJ` of the switch rows, `ASW!Z:AB`,
+`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own) and others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 ## Module map
