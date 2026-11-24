@@ -211,9 +211,43 @@ Tests: `tests/test_tradevalue.py` - `test_schedules_of_a_tenor_and_of_a_broken_d
   - the quant package's new series and SOFR fill 40 per live sync (`History.BACKFILL_PER_SYNC`), as the user
     approved: "Önerini yap"; VİOP contracts 15 (`VIOP_PER_SYNC`). Which series are rationed:
     [market-data.md](market-data.md);
-  - the "new days" query stays every 15 minutes ("Böyle kalsın", 15.11);
+  - the sync still runs every 15 minutes ("Böyle kalsın", 15.11), but since 24.11 (cache first, below) a series' new
+    days are asked once a day, then its today's point comes from its live quote, else at most hourly - not every sync;
   - `SOFRRATE Index` is asked once a day after 16:30: not at a start before then, and not again after a restart the
     same day ("1 kalsın", 18.11).
+
+### Cache first: what was pulled is not pulled again (24.11.2026)
+
+> "Bloomberg limiti doldu. Bunu nasıl halledebiliriz bir daha yaşanmaması için"
+>
+> "Zaten çektiklerini cache atıp daha fazla çekmemesi gerekliydi"
+
+That day at 14:27 the office's terminal answered `category = "LIMIT" message = "Daily capacity reached." subcategory =
+"DAILY_CAPACITY_REACHED"`; the dashboard had counted 195 148 hits. (The desk also said: "Gece açık kalmıyor, kapatıyorum.
+Excel'i bugün bir kere açmak durumunda kaldım." and then "Eğer hesaplar hiç tutmuyorsa açık unutmuş da olabilirim": the
+rules hold for a dashboard left on round the clock and for one closed at night. The desk's own Excel counts against the
+same limit.) What the dashboard does since (details and costs: [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy)):
+
+- **A key answered today is not asked again today**, whatever its field; every answer - quotes too - is kept and
+  preloaded after a restart the same day. Only what a page still reads is asked again (once on a new day).
+- **What moves in the day comes from the stream**, not from asking again: DİBS RV's 5-day / 1-month change (`CK` / `CL`:
+  the answer + the move of the streamed last price since it), the last trade date (`CG`: today once the stream shows a
+  trade), the interval low / high (`CM:CP`: with the day's streamed low / high), today's point of a BDH ending today.
+  These were asked every 60 seconds (DİBS RV, DİBS Trading, Tüm Kâğıtlar); the history's new days every 15 minutes.
+- **A quote that does not stream** (a failed subscription, a silent field): at most every 15 minutes whatever its answer
+  does; one without any value every 3 hours.
+- **Quiet hours**: outside 08:00 - 19:00 (settable: Masa alarmları → Ayarlar), at weekends and on TR holidays nothing is
+  asked again; subscriptions keep streaming.
+- **Safety nets**: a daily budget of 100 000 hits (`--daily-budget`; past 70 % only first answers, at 100 % nothing new;
+  administrators warned once); Bloomberg's own LIMIT answer stops every request until the next day (one probe an hour
+  after the day changed) and keeps the last values on the pages; `--max-hits` stays the absolute stop.
+- **The cost is shown**: the status window (the top bar's badge) gives today's hits in % of the budget, by kind, and the
+  top 10 sheets and fields.
+- The history's new days: once a day, then the live quote or hourly (above, *History pacing*).
+- To decide: the desk's hours (08:00 - 19:00 by default) and the budget (100 000) are the dashboard's guesses; Bloomberg
+  did not say its limit. Code: `tto/marketdata/bloomberg.py` (`policy_of`, `DeskHours`, `_tier`, `_hit_limit`),
+  `bbg_process.py`, `Service._keep_bloomberg` / `_kept_bloomberg` / `market_usage`, `History._fetch`; tests
+  `tests/test_bloomberg_cache.py`.
 - **Where Bloomberg data may not go:** the repository, an external service, GitHub, or a cloud-synced folder. This
   covers Bloomberg data, screenshots of it and logs, and backups of the database (which also holds password hashes).
 
