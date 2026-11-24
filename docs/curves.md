@@ -40,7 +40,8 @@ Notes on the offshore curve:
 
 - **TRY OIS:**
   - pages: OIS · PPK (and its FRA lists - these are OIS only), Masa, Forward, DV01 Risk, Carry & Roll, VİOP,
-    DİBS RV / Tüm Kâğıtlar (and DİBS RV's ways back: a typed ASW / DM, a switch level -> the clean price), Manuel Tahvil;
+    DİBS RV / Tüm Kâğıtlar (and DİBS RV's ways back: a typed ASW / DM, a switch level -> the clean price; its two-way rows:
+    a yield − OIS, ASW / DM or Z-spread typed in the table -> the clean price), Manuel Tahvil (its two-way results too);
   - the OIS mid of Borsa Swap;
   - Trades' OIS MTM;
   - Fiyatlama's OIS and FRA;
@@ -58,8 +59,8 @@ Notes on the offshore curve:
   - ASW FX's 18M point;
   - the interpolation chart's "Offshore" view.
 - **ASW sheet's own curve:** DİBS ASW's "ASW" column, its fitted curve and history, and its "ASW → temiz fiyat" (a typed
-  ASW's clean price: on this curve, never on ASW FX's). With EK_FX's quotes in it, it is also the "ASW FX" column (next
-  section).
+  ASW's clean price: on this curve, never on ASW FX's) - as the ASW typed in the table itself (two-way). With EK_FX's
+  quotes in it, it is also the "ASW FX" column (next section).
 
 ---
 
@@ -90,6 +91,9 @@ Notes on the offshore curve:
    Up to 3M this is closed form; from 6M it is solved on a replica of the sheet's formulas.
 3. That quote replaces the OIS quote in `ASW!C65:R65`, as an overlay on the user's calculation.
 4. The sheet's own formulas then price every bond. The result is the "ASW FX" column.
+5. A row whose ASW (or dirty price) the user typed in the table (two-way) keeps, in that calculation, the clean price
+   the typed value gives on the sheet's own OIS curve - its ASW FX is worked out at that price, never held at the typed
+   OIS ASW (`Service._twoway_pins`; the offshore history's live row likewise).
 
 **The 18M point** (`Service._asw_fx_18m` → `aswfx.point_18m`):
 - It is the offshore curve's DF at the ASW sheet's 18M node day.

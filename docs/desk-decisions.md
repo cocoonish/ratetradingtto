@@ -1141,6 +1141,76 @@ Code: `tto/extras.py` ("bonds the other way round": `_asw_back`, `_rv_back`, `_r
 `asw_clean_from_asw`, `rv_clean_from_yield` / `_asw` / `_dm`), `tto/views/61_asw.json` (aswters), `60_dibs.json` (B3r, B4),
 `62_manuel.json` (B2, B10). Tests: `tests/test_kagitters.py`, the browser test's "bonds the other way round" checks.
 
+### Kâğıt tabloları iki yönlü (24.11.2026)
+
+After FORWARD KOTASYON the desk said what it had meant, of every table:
+
+> "Yeni açtığımız tablolar kalsın. Ancak ben hazırda olan forward kotasyon kısmında hem spread hem faizler girdi
+> olabilsin, hangisine ben girdiysem diğerini hesaplasın istemiştim. Genel olarak tablolar bu şekilde olmalı karışıklık
+> olmaması için."
+
+and: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için". The bonds' tables adopt the two-way
+mechanism ([architecture.md](architecture.md#two-way-tables-ttotwowaypy)); the 24.11 separate tables (ASW → temiz fiyat,
+ASW / DM → temiz fiyat, the switch's levels U:Z, Manuel Tahvil's targets and its ISIN box) stay as they were.
+
+**What became two-way** (in each, the one typed last stands exactly; the clean price is the one it gives - the 24.11
+inverses, one implementation -; the others are the sheet's own at that price):
+- **DİBS RV's bond rows**: Manuel temiz (in place: what was typed there keeps its meaning), BIST simple and compound yield,
+  yield − OIS, ASW / DM (an ASW for fixed coupon bonds and bills, a DM for TLREF floaters, as the column), Z-spread.
+- **DİBS RV's repo and carry**: the carry typed gives the repo it needs (the carry's own formulas inverted; a TLREF
+  floater's its own way).
+- **SWITCH / PAIR**: the yield difference and the ASW / DM difference. The Al leg's price they give is the pair's own
+  (a new column, "Al temiz (yazılan farktan)") - never the Al bond's manual clean price, which belongs to its row and to
+  every other pair; the Sat leg at the price the table shows. The other difference is the Al leg's at that price: its ASW
+  in closed form, its yield by DİBS RV's own yield steps. The pair's other columns stay at the bonds' prices.
+- **DİBS ASW's bond rows**: Manuel temiz (in place), ASW (the sheet's own OIS curve), the dirty price at the sheet's
+  spot.
+- **Manuel Tahvil**: the clean price (in place) and its results - the dirty price at the valör and at the OIS spot, the
+  BIST simple and compound yields, the ASW par-par, the Z-spread, the DM and yield − OIS. A result typed comes before
+  the price the ISIN box brings (and Delete brings it back).
+
+**Left out** (and why):
+- DİBS RV's **Pahalı / ucuz** (AB) and DİBS ASW's **Ucuz / pahalı** (T): circular - the curve they are measured against is
+  fitted to the bond's own ASW.
+- DİBS ASW's **ASW FX** column: worked out in a calculation of its own (the sheet on the FX swap curve), not a cell of the
+  table; it prices a row whose ASW is typed at the clean price that ASW gives (below).
+- The switch's **Al temiz** as a member: the Al bond's own row is where a price is typed (the pair's differences follow
+  it); typing it in the switch row would need a DM solve for floaters for little use.
+- DİBS RV's other columns (C+R, roll, DV01, the FX swap ASW BF:BJ ...) stay worked out, as before.
+
+**Choices made while building it** (ask the desk before changing):
+- **A level typed is a hypothetical price that moves with the curve**: the typed ASW (yield, spread ...) stays, its clean
+  price follows the curve. That price is the bond's for the user everywhere it is read - their fit and every bond's
+  cheap / rich and signal, Masa's signals, the switch legs, DİBS Trading, Tüm Kâğıtlar' yield and ASW of the bond,
+  Manuel Tahvil's ISIN price, Kâğıt Fiyatlama and DİBS RV · Genel - as a typed Manuel temiz always was. The desk's own
+  calculation (alarms, quant, Trades) does not move.
+- **A row without a price** is worked out from a typed level (the inverses need no price): the row's guard ("priced":
+  DİBS RV's `DG`, the ASW sheet's `BB`) opens for a typed level the bond has.
+- **A level the bond does not have** (a floater's yield, a CPI linker's ASW, an FRN's spreads) stays as typed but prices
+  nothing: the row stays at the market, "Fiyat durumu" says so ("Yazılan basit getiri bu kâğıtta yok: fiyat piyasadan").
+- **Exact values on a row priced by hand**: where N is typed or a level prices the row, yield − OIS, ASW / DM, Z-spread
+  and the carry are the exact values (not the sheet's 0.1 bp), and the yield and Z-spread solvers take two more steps
+  (the sheet's own leave ~1e-13 / ~1e-7 bp on long bonds far from their coupon / with spreads of −200 bp): a value typed
+  back gives the same row. Rows with nothing typed show exactly what they did (checked cell for cell against 916b006 for
+  the desk's calculation of DİBS RV, Manuel Tahvil, Tüm Kâğıtlar, Masa, DİBS Trading, ASW and EK_FX). Users who typed a
+  Manuel temiz before see that row's yield − OIS, ASW / DM, Z-spread unrounded now (the same to 0.05 bp).
+- **Yield − OIS** is the compound yield over the OIS par at maturity (compounded quarterly), as the column; typed, it gives
+  the compound yield, then the simple one on the coupon frequency.
+- **ASW FX for a row priced by a typed ASW**: the FX calculation prices the row at the clean price the typed OIS ASW gives
+  (its ASW on the FX curve worked out), not at the typed level; so do the offshore history's live point, DİBS Trading's
+  "FX swap'a göre" columns and DİBS RV · Genel (`Service._twoway_pins`).
+- **Rows move**: what is typed on a bond's row (DİBS RV `YF:YL`, DİBS ASW `Z:AA`) goes with its ISIN when the lists
+  change (`rowkeys`); the switch's differences belong to the pair typed by ISIN in their row; Manuel Tahvil finds its bond
+  by ISIN.
+- **What users typed before** reads as before: Manuel temiz, repo, DİBS ASW's Manuel temiz, Manuel Tahvil's clean price
+  are the in-place members; a value typed over a yield / ASW cell with "Elle değer" became that row's typed level.
+- No new Bloomberg request.
+
+Code: `tto/extras.py` ("the bonds' tables two-way": `_rv_tw`, `_sw_tw`, `_man_tw`, `_asw_tw`, `rv_clean_from_compound`,
+`rv_clean_from_z`, `rv_asw_at_clean`, `asw_clean_from_dirty`, `man_clean_from_*`), `tto/service.py` (`_twoway_pins`,
+`_asw_fx_calc`, `_asw_hist_fx`), `tto/views/60_dibs.json`, `61_asw.json`, `62_manuel.json` (`"twoway"`, the hidden helper
+tables tw, B4t, B11). Tests: `tests/test_kagit_twoway.py`, the browser test's "bonds' tables two-way" checks.
+
 ### Ways back: rate → PPK / FOMC step, an FRA's other leg (24.11.2026)
 
 Fourteen pricing tools that work one way only were listed to the desk; the desk answered:
