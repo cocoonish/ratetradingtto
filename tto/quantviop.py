@@ -1022,6 +1022,31 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
             o = curve_at(pts, g) if len(pts) >= 3 else None
             return (mid - o * 360.0 / 365.0) * 100.0 if mid is not None and o is not None else None
 
+        def quote(live: Dict[str, float], t: str = t, g: float = g, name: str = c.name) -> Optional[Dict[str, Any]]:
+            # the contract as the desk trades it against spot: its implied TRY rate (ACT/360, %); at a zero gap the OIS of
+            # its maturity on the same basis (held for the target and the stop: implied = OIS + gap exactly) - and the
+            # contract's price at each, at today's spot and USD rate (the VİOP sheet's formula turned round:
+            # price = spot · (1 + r · g/360) / (1 + USD · g/360), linear in r)
+            if live.get("VQM:" + t) is None:
+                return None
+            pts = live_curve(ctx, live, "ois")
+            o = curve_at(pts, g) if len(pts) >= 3 else None
+            if o is None:
+                return None
+            fair = o * 360.0 / 365.0
+            fo = "%%%s" % qf._th(fair, 2)
+            out: Dict[str, Any] = {"inst": "VİOP %s ima faizi" % name, "unit": "%", "digits": 2, "base": fair, "scale": 0.01,
+                                   "gap": {"name": "OIS farkı", "of": "OIS'in", "at": "OIS'te"},
+                                   "model": "vadesinin OIS'i (%s, ACT/360)" % fo, "note": "hedef / stop bugünkü OIS'le",
+                                   "held": "Hedef ve stop vadesinin bugünkü OIS'iyle (%s, ACT/360): OIS oynarsa onlar da değişir." % fo}
+            spot, usd = live.get("VQS:" + t), live.get("VQU:" + t)
+            if spot and usd is not None and g > 0:
+                a = spot / (1.0 + usd / 100.0 * g / 360.0)
+                k = a * g / 36000.0
+                out["alt"] = {"label": "fiyat", "unit": "", "digits": 4, "base": a + k * fair, "scale": k * 0.01}
+                out["note"] += "; fiyat bugünkü spot ve USD faiziyle"
+            return out
+
         spot, usd = live0.get("VQS:" + t), live0.get("VQU:" + t)
         size = _size(dv01_usd, spot, usd, g)
         info["size"] = size
@@ -1031,6 +1056,7 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
                 {"key": SPOT_KEY, "name": "USDTRY spot", "weight": -1.0, "dv01_usd": 0.0, "dv01": 0.0, "notional": size.get("try_mn")}]
         mon = qf.mr_monitor(ctx, "viop:" + t, FAMILY, "VİOP", "VİOP %s ima − OIS" % c.name, "bp", 1, days, [basis_hist[d] for d in days],
                             "bp", legs, calc, explicit=True, min_share=0.5, info={"inputs": ["VQM:" + t, "VIOPF:" + t], "contract": t},
+                            quote=quote, series_label="VİOP %s ima faizi − vadesinin OIS'i (bp)" % c.name,
                             note="Kontratın ima TRY faizinin aynı vadenin OIS'ine farkı (bp), sabit vadeli geçmişe göre: − ise ima faiz normalinin "
                                  "altında (vadeli almak için ucuz: Buy VİOP / Sell spot), + ise üstünde (Sell VİOP / Buy spot). Seviyeler sayfada.")
         if mon is not None:

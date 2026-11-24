@@ -29,7 +29,9 @@ Families (``FAMILIES``) and what they score:
     leadlag   who moves first: a follower that has not caught up with its leader's move yet (quantlead.py)
 
 Units: rates are kept in per cent and move in bp; spreads, flies, residuals and CDS are in bp; FX levels move in per
-cent (log); vols in vol points.
+cent (log); vols in vol points.  A line whose level is a model's own - a gap to the PPK path, a fit's residual, a
+premium over realized vol - is told in the traded instrument's own level, the gap beside it (``Monitor.quote``,
+:func:`inst_quote`; the desk, 24.11.2026: "6x9 net bir seviye değil mi"); an FX line in its forward's price (``px``).
 """
 from __future__ import annotations
 
@@ -970,7 +972,8 @@ def inst_quote(m: "Monitor", target: Optional[float], stop: Optional[float]) -> 
     path's forward, the fit's rate …) and ``scale`` (its units a unit of the gap: 0.01 for bp of a rate) - the map is
     exact with the model value held: instrument = base + scale × gap -, ``gap`` ({name, of, at}: "patika farkı",
     "patikanın", "patikada"), ``model`` (what the base is), ``note`` and ``held`` (what is held for the target and the
-    stop: a few words, a sentence), optional ``legs`` (the legs' own levels now: [{key, name, level, unit, digits}]),
+    stop: a few words, a sentence), optional ``legs`` (the legs' own levels now: [{key, name, level, unit, digits}] -
+    ``make_signal`` puts each on the signal's leg of its key, as ``level``),
     ``fra`` (Trades' FRA, "6x9") and ``alt`` (the same levels read another way, {label, unit, digits, base, scale}: a
     VİOP contract's price).  Recomputed with the level on every refresh: today's model value moves them, the card
     says so.  ``None``: no quote (the line is told in its own level)."""
@@ -1369,13 +1372,14 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
     # ---- a level of the model's own: entry, target and stop in the traded instrument's own level (the gap beside
     # them), the legs' levels now - an FX line is told in prices already (px)
     quote = inst_quote(m, target, stop) if not m.fx else None
-    if quote is not None:
-        by_key = {lg.get("key"): lg for lg in quote["legs"]}
-        for leg in legs:
-            ql = by_key.get(leg["key"])
-            if ql is not None and _num(ql.get("level")) is not None:
-                leg["level"] = {"level": ql["level"], "unit": ql.get("unit") or quote["unit"],
-                                "digits": int(ql.get("digits") if ql.get("digits") is not None else quote["digits"])}
+    leg_levels: Dict[str, Dict[str, Any]] = {}
+    for ql in (quote or {}).pop("legs", None) or ():                   # (the legs carry their own: not twice in the answer)
+        if ql.get("key") and _num(ql.get("level")) is not None:
+            leg_levels[ql["key"]] = {"level": ql["level"], "unit": ql.get("unit") or quote["unit"],
+                                     "digits": int(ql.get("digits") if ql.get("digits") is not None else quote["digits"])}
+    for leg in legs:
+        if leg["key"] in leg_levels:
+            leg["level"] = dict(leg_levels[leg["key"]])
 
     def amount(v: Optional[float], signed: bool = True, cash: Optional[float] = None) -> str:
         """A P&L of the holding (P&L units) as the gates say it: FX in money per 1 mn of the base (``cash`` when it is
@@ -1439,6 +1443,9 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
                          "trade": " · ".join("%s %s" % (l["action"], l["name"]) for l in legs)})
         for p in m.packages:
             pl = [signal_leg(leg, pkg_s) for leg in p["legs"]]
+            for leg in pl:
+                if leg["key"] in leg_levels:
+                    leg["level"] = dict(leg_levels[leg["key"]])         # (a leg's level now: the same in every package)
             cw = pkg_s * p["carry_up"] if p.get("carry_up") is not None else None
             e2 = s * move * factor + cw * (hold or 0.0) / 5.0 if move is not None and factor and cw is not None else None
             packages.append({"name": p["name"], "legs": pl, "carry_week": cw, "exp_pnl": e2, "note": p.get("note") or "",
@@ -1913,6 +1920,22 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
             {"key": keys[h], "name": _ois_name(ctx, keys[h]), "weight": w} for h, w in hedge]
         carry = _pkg_carry(ctx, legs)
 
+        def quote(live, j=j, weights=weights, legs=legs):
+            # the tenor as the desk trades it: its rate now; at a zero gap the rate where the package is at its window's
+            # mean, its hedge legs at their rates now (the main leg's weight is 1: a bp of the gap is a bp of its rate)
+            lv = levels_now(live)
+            if any(lv[i] is None for i in weights):
+                return None
+            gap = sum(w * (lv[i] - xbar[i]) for i, w in weights.items()) * 100.0
+            hedges = ", ".join(lg["name"] for lg in legs[1:])
+            return {"inst": legs[0]["name"], "unit": "%", "digits": 2, "base": lv[j] - gap / 100.0, "scale": 0.01,
+                    "gap": {"name": "paket farkı", "of": "paket ortalamasının", "at": "paket ortalamasında"},
+                    "model": "hedge'li paketin %d günlük ortalaması" % w_main,
+                    "note": "hedef / stop hedge bacakları (%s) bugünkü oranlarındayken" % hedges,
+                    "held": "Hedef ve stop: hedge bacakları (%s) bugünkü oranlarındayken paketin farkının hedefte / stopta olduğu %s faizi; "
+                            "bacaklar oynarsa onlar da değişir." % (hedges, legs[0]["name"]),
+                    "legs": [{"key": lg["key"], "name": lg["name"], "level": ctx.cur(lg["key"], live), "unit": "%", "digits": 2} for lg in legs]}
+
         def pthesis(sg, key=key, zs=zs):
             other = ", ".join("%d günde z %s" % (w, _sg(z, 1)) for w, z in sorted(zs.items()) if z is not None)
             return ("%s, iki komşusuyla eğrinin seviye-PCA'sının ilk iki bileşenine nötr pakette %s bp %s (%d günlük pencere, z %s%s); "
@@ -1922,7 +1945,8 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
 
         # (the series is the hedged package itself: "hedge'li" is its name)
         mon = mr_monitor(ctx, "pca:" + key, "pca", "TRY OIS", "%s (PC1–PC2 hedge'li)" % _ois_name(ctx, key), "bp", 1, fit["days"], series,
-                         "bp", legs, calc, carry_up=carry, pkg="rate", thesis=pthesis, info={"window": w_main, "z_windows": zs},
+                         "bp", legs, calc, carry_up=carry, pkg="rate", thesis=pthesis, info={"window": w_main, "z_windows": zs}, quote=quote,
+                         series_label="%s'li hedge'li paketin pencere ortalamasına farkı (bp)" % _ois_name(ctx, key),
                          explicit=True, pkg_name="Paket · iki komşu vadeyle hedge'li (PC1 ve PC2'ye nötr, DV01 ağırlıklı)",
                          note="%d günlük pencere: seviyelerin PCA'sı (bileşenler, eğrinin pencerede gerçekten kaydığı yönler) ile tenor ve iki "
                               "komşusundan PC1 ve PC2'ye nötr paket; seviyesi pencerenin ortalamasına göre (bp): + ise tenor ucuz (yüksek faiz → "
@@ -2388,6 +2412,45 @@ def _nearest_label(months: float) -> str:
     return best[0]
 
 
+def _pair_quote(ctx: Ctx, spec: Dict[str, Any], calc: Callable[[Dict[str, float]], Optional[float]], b: float,
+                k: float) -> Optional[Callable[[Dict[str, float]], Optional[Dict[str, Any]]]]:
+    """A pair's y leg as the desk trades it, the x leg held where it is now (``Monitor.quote``): at a zero residual y is
+    the pair's equilibrium α + β·x - a DİBS's yield, a VİOP contract's implied rate, a TLREF floater's price (its own
+    level: price = 100 − margin × years / 100).  The equilibrium is the y the residual now (``calc``, the monitor's) was
+    read from less it, so that the entry is y itself (a Kalman pair's residual before a new point is the day's
+    one-step-ahead one).  ``None`` for the offshore − OIS and the swap points pairs: their y is an offshore level, and an
+    offshore level is never worked out from OIS (docs/curves.md)."""
+    pid = spec["pid"]
+    if not pid.startswith(("dibs:", "frn:", "viop:")):
+        return None
+    y = spec["y"]
+    yname = ctx.label(y) if not y.startswith("DIBS:") else (ctx.meta[y].get("name") or y[5:])
+    oisat = spec["x"].startswith("OISAT:")
+    xname = "OIS (vadesine göre)" if oisat else ctx.label(spec["x"])
+
+    def quote(live: Dict[str, float]) -> Optional[Dict[str, Any]]:
+        yv, xv = _pair_now(ctx, spec, live)
+        gap = calc(live)
+        if yv is None or xv is None or gap is None:
+            return None
+        fair = yv - gap / k                                  # y at a zero residual, x held (y's units): α + β·x
+        on = "%s %%%s" % (xname, _th(xv, 2))
+        out = {"gap": {"name": "denge farkı", "of": "dengenin", "at": "dengede"},
+               "model": "çiftin dengesi α + β × %s (β %s)" % (on, _f2(b)), "note": "hedef / stop %s bugünkü seviyesindeyken" % xname,
+               "held": "Hedef ve stop %s bugünkü seviyesindeyken (denge α + β × OIS, β %s): OIS oynarsa onlar da değişir." % (on, _f2(b))}
+        x_leg = [] if oisat else [{"key": spec["x"], "name": xname, "level": xv, "unit": "%", "digits": 2}]
+        if spec.get("floater"):
+            years = _months_between(ctx.today, spec["maturity"]) / 12.0
+            price = ctx.last(y)
+            out.update({"inst": "%s fiyatı" % yname, "unit": "", "digits": 3, "base": 100.0 - fair * years / 100.0, "scale": -years / 100.0 / k,
+                        "legs": ([{"key": y, "name": yname, "level": price, "unit": "", "digits": 3}] if price is not None else []) + x_leg})
+        else:
+            out.update({"inst": yname, "unit": "%", "digits": 2, "base": fair, "scale": 1.0 / k,
+                        "legs": [{"key": y, "name": yname, "level": yv, "unit": "%", "digits": 2}] + x_leg})
+        return out
+    return quote
+
+
 def fam_pairs(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
     mons: List[Monitor] = []
     rows = []
@@ -2427,7 +2490,7 @@ def fam_pairs(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
 
         unit = "bp" if k == 100.0 or spec.get("floater") else ""
         mon = mr_monitor(ctx, "pairs:" + spec["pid"], "pairs", spec["asset"], spec["label"], unit, 1, days, spread, "bp", legs, calc,
-                         min_share=spec.get("min_share", 1.0), pkg="pair",
+                         min_share=spec.get("min_share", 1.0), pkg="pair", quote=_pair_quote(ctx, spec, calc, b, k),
                          note="Engle-Granger: %s = α + β × %s; β = %s. Spread + ise y pahalı tarafta (y'nin seviyesi yüksek)." %
                          ("y", "x", _f2(b)))
         if mon is not None:
@@ -2457,6 +2520,7 @@ def fam_pairs(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
 
             kmon = mr_monitor(ctx, "kalman:" + spec["pid"], "kalman", spec["asset"], spec["label"] + " (Kalman β)", unit, 1, kd, kv, "bp",
                               _pair_legs(ctx, spec, beta_t), kcalc, min_share=spec.get("min_share", 1.0) * 0.9, pkg="pair",
+                              quote=_pair_quote(ctx, spec, kcalc, beta_t, k),
                               note="Kalman filtresiyle günlük güncellenen hedge oranı β_t = %s (statik %s); kalıntı bir gün önceki β ile." % (
                                   _f2(beta_t), _f2(b)))
             if kmon is not None:
@@ -2485,30 +2549,52 @@ def fam_viopcal(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             near, far = contracts[i], contracts[j]
             days = sorted(set(near["imp"]) & set(far["imp"]) & set(near["ois360"]) & set(far["ois360"]) & set(near["days"]) & set(far["days"]))
             dev_days, dev = [], []
+            last_now: Optional[Tuple[float, float, float, float]] = None      # the last close's (implied fwd, fair fwd, imp near, imp far)
             for d in days:
                 fi = _fwd(near["imp"][d], near["days"][d], far["imp"][d], far["days"][d])
                 fo = _fwd(near["ois360"][d], near["days"][d], far["ois360"][d], far["days"][d])
                 if fi is not None and fo is not None:
                     dev_days.append(d)
                     dev.append((fi - fo) * 100.0)
+                    last_now = (fi, fo, near["imp"][d], far["imp"][d])
             label = "%s / %s" % (near["name"] or near["ticker"], far["name"] or far["ticker"])
             row = {"label": label, "near": near["ticker"], "far": far["ticker"], "n": len(dev)}
 
-            def calc(live, near=near, far=far, last=dev[-1] if dev else None):
-                # the VİOP sheet's live row; without it (no prices yet, replay), the last close's deviation
+            def fwds(live, near=near, far=far, last=last_now):
+                # the VİOP sheet's live row; without it (no prices yet, replay), the last close's: (implied forward, its
+                # fair one from OIS, the near and far implied rates)
                 ln, lf = near.get("live") or {}, far.get("live") or {}
                 vals = [ln.get("imp"), ln.get("days"), lf.get("imp"), lf.get("days"), ln.get("ois360"), lf.get("ois360")]
                 if any(v is None for v in vals):
                     return last
                 fi = _fwd(ln["imp"], ln["days"], lf["imp"], lf["days"])
                 fo = _fwd(ln["ois360"], ln["days"], lf["ois360"], lf["days"])
-                return (fi - fo) * 100.0 if fi is not None and fo is not None else last
+                return (fi, fo, ln["imp"], lf["imp"]) if fi is not None and fo is not None else last
+
+            def calc(live, fwds=fwds):
+                f = fwds(live)
+                return (f[0] - f[1]) * 100.0 if f is not None else None
+
+            def quote(live, fwds=fwds, near=near, far=far, label=label):
+                # the calendar as the desk trades it: the TRY forward rate the two contracts imply between their expiries
+                # (ACT/360, %); at a zero gap the fair one from OIS by covered interest parity (the same dates, held)
+                f = fwds(live)
+                if f is None:
+                    return None
+                fo = "%%%s" % _th(f[1], 2)
+                return {"inst": "VİOP %s ima forward'ı" % label, "unit": "%", "digits": 2, "base": f[1], "scale": 0.01,
+                        "gap": {"name": "adil forward farkı", "of": "adil forward'ın", "at": "adil forward'da"},
+                        "model": "OIS'ten faiz paritesiyle adil forward (%s, ACT/360)" % fo, "note": "hedef / stop bugünkü adil forward'la",
+                        "held": "Hedef ve stop bugünkü adil forward'la (OIS'ten faiz paritesiyle %s): OIS oynarsa onlar da değişir." % fo,
+                        "legs": [{"key": "VIOPI:" + c["ticker"], "name": "VİOP " + (c["name"] or c["ticker"]), "level": v, "unit": "%", "digits": 2}
+                                 for c, v in ((far, f[3]), (near, f[2]))]}
 
             legs = [{"key": "VIOPI:" + far["ticker"], "name": "VİOP " + (far["name"] or far["ticker"]), "weight": 1.0},
                     {"key": "VIOPI:" + near["ticker"], "name": "VİOP " + (near["name"] or near["ticker"]), "weight": -1.0}]
             mon = mr_monitor(ctx, "viopcal:%s|%s" % (near["ticker"], far["ticker"]), "viopcal", "VİOP", "VİOP takvim " + label, "bp", 1,
                              dev_days, dev, "bp", legs, calc, min_share=100.0 / max(100.0, ctx.min_obs()), pkg="spread",
-                             info={"inputs": ["VIOPI:" + near["ticker"], "VIOPI:" + far["ticker"]]},
+                             info={"inputs": ["VIOPI:" + near["ticker"], "VIOPI:" + far["ticker"]]}, quote=quote,
+                             series_label="VİOP %s ima forward'ı − OIS'ten adil forward (bp)" % label,
                              note="İki vade arasındaki ima TRY forward faizinin, OIS'ten (aynı tarihler, USD faiziyle faiz paritesi) "
                                   "hesaplanan adil forward'dan farkı (bp): + ise uzak vade yakına göre pahalı (uzak sat / yakın al).")
             if dev:
@@ -3163,8 +3249,25 @@ def fam_vol(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             return v - g_now if v is not None and g_now is not None else None
 
         legs = [{"key": vk, "name": "%s 3M ATM vol" % pair, "weight": 1.0}]
+
+        def vol_quote(base, gap, what, pair=pair):
+            # the option as the desk trades it: the ATM 3M implied vol (vol points); at a zero gap the benchmark it is
+            # measured against - the closes' own, fixed for the day -, held for the target and the stop (implied =
+            # benchmark + gap exactly)
+            if base is None:
+                return None
+
+            def quote(live):
+                return {"inst": "%s 3M ATM vol" % pair, "unit": "vol", "digits": 2, "base": base, "scale": 1.0, "gap": gap,
+                        "model": "%s %s" % (what, _g(base, 2)), "note": "hedef / stop %s sabitken" % what,
+                        "held": "Hedef ve stop %s (%s) sabitken: o değişince onlar da değişir." % (what, _g(base, 2))}
+            return quote
+
         m1 = mr_monitor(ctx, "volprem:" + pair, "volprem", "FX vol", "%s 3M ATM vol" % pair, "vol", 2, days, vrp, "vol", legs, calc_vrp,
-                        pkg="vol", note="ATM 3M ima vol − son 63 günün gerçekleşen vol'ü: + ise vol pahalı (sat), − ise ucuz (al).")
+                        pkg="vol", note="ATM 3M ima vol − son 63 günün gerçekleşen vol'ü: + ise vol pahalı (sat), − ise ucuz (al).",
+                        quote=vol_quote(rv63_now, {"name": "gerçekleşen vol farkı", "of": "gerçekleşen vol'ün", "at": "gerçekleşen vol'de"},
+                                        "son 63 günün gerçekleşen vol'ü"),
+                        series_label="%s ATM 3M ima vol − 63 günlük gerçekleşen (vol puanı)" % pair)
         if m1 is not None:
             mons.append(m1)
             row.update({"vrp": vrp[-1], "vrp_z": m1.zof(vrp[-1]), "vrp_hl": m1.half_life, "vrp_sid": m1.sid})
@@ -3172,7 +3275,10 @@ def fam_vol(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             m2 = mr_monitor(ctx, "volfc:" + pair, "volfc", "FX vol", "%s 3M ATM vol" % pair, "vol", 2, fdays, vf, "vol", legs, calc_vf, pkg="vol",
                             note="ATM 3M ima vol − GARCH(1,1)'in önümüzdeki 63 iş günü için ortalama vol tahmini (α = %s, β = %s): + ise ima "
                                  "tahminden yüksek (sat)." % (_f2(g["alpha"]) if g else "—", _f2(g["beta"]) if g else "—"),
-                            info={"garch": g, "ewma": fc_e.get(rdays[-1])})
+                            info={"garch": g, "ewma": fc_e.get(rdays[-1])},
+                            quote=vol_quote(g_now, {"name": "GARCH farkı", "of": "GARCH tahmininin", "at": "GARCH tahmininde"},
+                                            "GARCH'ın 63 günlük vol tahmini"),
+                            series_label="%s ATM 3M ima vol − GARCH tahmini (vol puanı)" % pair)
             if m2 is not None:
                 mons.append(m2)
                 row.update({"vf": vf[-1], "vf_z": m2.zof(vf[-1]), "vf_hl": m2.half_life, "vf_sid": m2.sid})
@@ -3782,9 +3888,14 @@ def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str,
     # ---- what undoes it
     inv = []
     px = (sg or {}).get("px")
+    qt = (sg or {}).get("quote")
     if sg and px and px.get("stop") is not None:
         inv.append("Stop: %s %s (giriş %s)%s" % (px["inst"], _th(px["stop"], px["digits"]), _th(px["entry"], px["digits"]),
                                                  _stop_why(sg, m, cfg)))
+    elif sg and qt and qt.get("stop") is not None:
+        # (a level of the model's own: the instrument's stop level, the gap there beside it - "Stop: 6x9 FRA %38,73 …")
+        inv.append("Stop: %s %s (giriş %s; %s)%s" % (qt["inst"], quote_text(qt, qt["stop"]), quote_text(qt, qt["entry"]),
+                                                     gap_text(qt, sg.get("stop")), _stop_why(sg, m, cfg)))
     elif sg and sg.get("stop") is not None:
         inv.append("Stop: seviye %s (giriş %s)%s" % (_level_text(sg["stop"], m.unit, m.digits) + sheet_text(sg, sg["stop"], True),
                                                      _level_text(sg["entry"], m.unit, m.digits) + sheet_text(sg, sg["entry"], True),

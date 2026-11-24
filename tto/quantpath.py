@@ -827,6 +827,21 @@ def cal_monitor(ctx: qf.Ctx, bank: str, now: Dict[str, Any], st: State) -> Optio
         rows = (st.now.get(bank) or {}).get("rows") or []
         return rows[0]["cum"] if rows else None
 
+    def quote(live: Dict[str, float], bank=bank, name=name) -> Optional[Dict[str, Any]]:
+        # the period as the desk trades it: its meeting-dated OIS's level, the policy rate the path prices for it (%); at
+        # a zero gap the path's base (TLREF / SOFR where it starts) - held for the target and the stop: level = base + the
+        # move priced, exactly (``decompose``)
+        cur = st.now.get(bank) or {}
+        if not cur.get("rows") or _num(cur.get("base")) is None:
+            return None
+        rate = BANKS[bank]["rate"]
+        fb = "%%%s" % qf._th(cur["base"], 2)
+        return {"inst": name, "unit": "%", "digits": 2, "base": cur["base"], "scale": 0.01,
+                "gap": {"name": "fiyatlanan hareket", "of": "patika tabanının", "at": "patika tabanında"},
+                "model": "patikanın tabanı (%s %s)" % (rate, fb), "note": "hedef / stop bugünkü patikanın tabanıyla",
+                "held": "Hedef ve stop bugünkü patikanın tabanıyla (%s %s): dönemin seviyesi = taban + fiyatlanan hareket; taban "
+                        "değişirse onlar da değişir." % (rate, fb)}
+
     pts = [(d, (p["meetings"][0][1] - p["base"]) * 100.0) for d, p in sorted(now.get("_hist", {}).items())
            if p["meetings"] and p["meetings"][0][0] == first["meeting"]]
     days = [d for d, _ in pts] or [now["day"]]
@@ -838,7 +853,8 @@ def cal_monitor(ctx: qf.Ctx, bank: str, now: Dict[str, Any], st: State) -> Optio
     mon = qf.Monitor(sid, FAMILY_CAL, BANKS[bank]["asset"], name + " (kalibrasyon)", "bp", 1, days, values,
                      [{"key": BANKS[bank]["leg"] + first["meeting"], "name": name, "weight": 1.0}], calc, zfn=lambda level, live, score=score: score,
                      follows=True, mode="drift", reward=abs(bias) * grid, risk=p_toward * grid, hold=float(max(1, _bdays(now["day"], first["meeting"]))),
-                     regime={"tag": None}, carry_up=0.0, pkg="rate", note=note,
+                     regime={"tag": None}, carry_up=0.0, pkg="rate", note=note, quote=quote,
+                     series_label="%s: fiyatlanan hareket (patika tabanına göre, bp)" % name,
                      info={"inputs": ["PATH:" + bank.upper()], "bank": bank, "n": cal["n"], "bias": bias, "cal_z": z,
                            "scenarios": [{"outcome": toward, "pnl": (1.0 - p_toward) * grid}, {"outcome": away, "pnl": -p_toward * grid}]})
     mon.zvalues = [None] * len(values)

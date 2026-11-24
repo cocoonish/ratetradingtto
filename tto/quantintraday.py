@@ -222,13 +222,26 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
         name = ctx.label(key)
         unit = "%" if kind == "fx" else "bp"
         fx = key[3:] if key.startswith("FX:") else None
+
+        def quote(live, tail=tail, name=name):
+            # a rate as the desk trades it: the tenor's rate now; the distance is from the 60-minute mean with the rate
+            # in it, d = (x − (S + x) / n) · 100 for the n − 1 bars before (sum S) - so x = S / (n − 1) + d / 100 · n / (n − 1)
+            # exactly, those bars held (an FX line is told in its prices already)
+            n = len(tail) + 1
+            if n < 2:
+                return None
+            base = sum(tail) / (n - 1)
+            return {"inst": name, "unit": "%", "digits": 2, "base": base, "scale": 0.01 * n / (n - 1),
+                    "gap": {"name": "60 dk farkı", "of": "60 dakikalık ortalamanın", "at": "60 dakikalık ortalamada"},
+                    "model": "son %d barın ortalaması (%%%s)" % (n - 1, qf._th(base, 2)), "note": "hedef / stop son 60 dakikanın barlarıyla",
+                    "held": "Hedef ve stop son 60 dakikanın barlarıyla (ortalama %%%s): yeni bar gelince onlar da değişir." % qf._th(base, 2)}
         mon = qf.Monitor("izscore:" + key, "izscore", "FX" if fx else ("Offshore" if key.startswith("OFF:") else "TRY OIS"),
                          "%s · 60 dk ortalamasına uzaklık" % name, unit, 2, hist_lbl[-400:], hist_d[-400:],
                          [{"key": key, "name": name, "weight": 1.0}], calc, mean=mean, sd=sd, half_life=ou["half_life"] if ou else None,
                          regime=qf.regime_of(hist_d[-1000:], "bp", cfg), pkg="fx" if fx else "rate", intraday=True, horizon_unit="bar",
                          horizon=float(left),
                          dsd=qm.stdev([b - a for a, b in zip(hist_d, hist_d[1:])]), pnl=(unit, 1.0), fx=fx,
-                         gate=_window_gate(now, meeting_day, True), gate_name="Seans",
+                         quote=None if fx else quote, gate=_window_gate(now, meeting_day, True), gate_name="Seans",
                          info={"window": "%d gün, 5 dk bar" % len([d for d in days if d < today]), "bars_left": left},
                          note="Seviyenin günün son 60 dakikasının ortalamasına uzaklığı (%s), son %d günün 5 dakikalık bar dağılımına göre z: + ise "
                               "ortalamanın üstünde (geri dönüş beklenir). Yarı ömür ve tutma bar (5 dk) cinsinden, yarı ömür seansın kalan "

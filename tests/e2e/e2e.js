@@ -5125,14 +5125,18 @@ async function clipAfter(page, action) {
           { key: 'OIS:6M', name: '6M OIS', action: 'Pay', side: 1, weight: 2.27, dv01_usd: 2270, text: 'Pay 6M OIS ×2,27' }],
         money: { ccy: 'TL', per_bp: 50500, dv01_usd: 1000, total: 257550, target: 343400, stop: -50500, bp: { total: 5.1, target: 6.8, stop: -1 } },
         quote, book: { ok: true, why: '', kind: 'fra' } };
+      // (a two-day history: the details - the "Model farkı" row, the status line - come with the charts; on the page so they draw)
       const host = document.createElement('div');
+      document.body.appendChild(host);
       const c = new q.SignalChart(host);
-      c.show({ monitor: { name: s.instrument }, signal: s, history: { days: ['2026-11-02'], values: [1] }, settings: {}, rationale: null });
+      c.show({ monitor: { name: s.instrument, level: 6.9, z: 3.05, unit: 'bp', digits: 1 }, signal: s,
+        history: { days: ['2026-11-02', '2026-11-03'], values: [5.2, 6.9], z: [2.3, 3.05], mean: 0.1, sd: 2.2 }, settings: {}, rationale: null });
       const text = (sel) => (host.querySelector(sel) || {}).textContent || '';
       const model = [...host.querySelectorAll('table.qkv tr')].find((tr) => (tr.querySelector('th') || {}).textContent === 'Model farkı');
       const out = { prices: text('#quant-sig-prices'), ends: text('#quant-sig-ends'), trade: text('#quant-sig-trade'), book: text('#quant-sig-book'),
-        model: model ? model.querySelector('td').textContent : '', now: q.quoteLevel(quote, 6.9), zero: q.gapText(quote, 0.02) };
+        model: model ? model.querySelector('td').textContent : '', stat: text('.svstat'), now: q.quoteLevel(quote, 6.9), zero: q.gapText(quote, 0.02) };
       c.destroy();
+      host.remove();
       const row = q.signalRows([s])[0];
       const col = (n) => q.SIGNAL_HEAD.indexOf(n);
       return Object.assign(out, { entry: row[col('Giriş')].t, target: row[col('Hedef')].t, stop: row[col('Stop')].t, unit: row[col('Birim')].t,
@@ -5143,6 +5147,7 @@ async function clipAfter(page, action) {
       && fraCard.ends === 'hedefte (%38,65) 6,8 bp ≈ +343 bin TL · stopta (%38,73) 1,0 bp ≈ -51 bin TL · ödül / risk 6,80'
       && fraCard.trade.startsWith('sabit faiz alınan (receive): 9M OIS (%39,50) ×3,27 · sabit faiz ödenen (pay): 6M OIS (%40,10) ×2,27')
       && fraCard.book === 'İşleme al' && fraCard.now === '%38,72 (+6,9 bp patikanın üstünde)' && fraCard.zero === '0,0 bp: patikada'
+      && fraCard.stat.startsWith('Şimdi 6x9 FRA %38,72 (+6,9 bp patikanın üstünde) · z +3,05')
       && fraCard.model.startsWith('+6,9 / +0,1 / +7,9 bp (giriş / hedef / stop) · patika farkı · 6x9 FRA = PPK patikasının 6x9 forward\'ı (%38,65) + fark'), fraCard);
     check('... and its list row: Giriş / Hedef / Stop the FRA\'s rates, Birim "6x9 FRA %", the gap in the tooltip',
       fraCard.entry === '38,72' && fraCard.target === '38,65' && fraCard.stop === '38,73' && fraCard.unit === '6x9 FRA %'

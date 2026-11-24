@@ -14,6 +14,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from conftest import ANON, auth, make_service
+from tto import quantfam as qf
 from tto import tradebook as tbm
 from tto import tradequant as tq
 from tto import tradevalue as tv
@@ -533,6 +534,25 @@ def test_an_fra_path_line_fills_its_fra_at_the_fra_rate(box, lines):
     src = res["source"]
     assert (src["entry"], src["target"], src["stop"], src["unit"], src["instrument"]) == (t["price"], t["target"], t["stop"], "%", "3x6 FRA")
     assert res["text"].startswith("RECEIVE 3x6 FRA") and tbm.level_spec(t)["unit"] == "bp"
+
+
+def test_the_fra_path_lines_fra_rate_is_the_rate_trades_values_the_fra_at(box):
+    """The FRA / PPK line's entry - the family's forward of the bucket, its own bootstrap of the OIS quotes in the desk's
+    convention - is the rate Trades values the same FRA at (its par now): booked at its entry, the FRA is at zero."""
+    svc = box["svc"]
+    mkt = _market(svc)
+    ctx, _, raw = svc.quant.snapshot()
+    quotes = {m: raw["OIS:%s" % lbl] for m, lbl in zip(qf.PATH_TENORS, ("1M", "2M", "3M", "6M", "9M", "1Y")) if raw.get("OIS:%s" % lbl) is not None}
+    spot = qf.business_on_or_after(mkt.today + dt.timedelta(days=1), ctx.holidays)
+    dfs = qf.curve_dfs(spot, quotes, ctx.holidays)
+    assert len(quotes) == 6
+    for m1, m2 in qf.FRA_BUCKETS:
+        a, b = qf.tenor_end(spot, m1, ctx.holidays), qf.tenor_end(spot, m2, ctx.holidays)
+        rate = (qf.curve_df(spot, [], a, dfs) / qf.curve_df(spot, [], b, dfs) - 1.0) * 365.0 / (b - a).days * 100.0
+        probe = {"product": "ois", "structure": "fra", "fra": "%dx%d" % (m1, m2), "trade_date": mkt.today.isoformat(),
+                 "settle_date": spot.isoformat(), "side": "S", "notional": 1e6, "price": 0.0}
+        v = svc.et.call(tv.value, probe, mkt)
+        assert v["ok"] and v["price_now"] == pytest.approx(rate, abs=1e-6), (m1, m2, v.get("why"))
 
 
 def test_a_dibs_line_fills_the_bond_by_its_yield(box, lines):

@@ -1076,10 +1076,27 @@ def fam_curve(ctx: qf.Ctx) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
             s = snap(live)
             return s["resid"].get(key) if s else None
 
+        def quote(live: Dict[str, float], key: str = key, legs: List[Dict[str, Any]] = legs) -> Optional[Dict[str, Any]]:
+            # the tenor as the desk trades it: its quote now; at a zero gap the fit's par rate of it (today's fit, the
+            # live refit - held for the target and the stop: quote = fit + gap exactly)
+            s = snap(live)
+            r, rate = (s["resid"].get(key) if s else None), ctx.cur(key, live)
+            if r is None or rate is None:
+                return None
+            fit = rate - r / 100.0
+            name = qf._ois_name(ctx, key)
+            return {"inst": name, "unit": "%", "digits": 2, "base": fit, "scale": 0.01,
+                    "gap": {"name": "NSS farkı", "of": "NSS uyumunun", "at": "NSS uyumunda"},
+                    "model": "NSS uyumunun %s par faizi (%%%s)" % (name, qf._th(fit, 2)), "note": "hedef / stop bugünkü NSS uyumuyla",
+                    "held": "Hedef ve stop bugünkü NSS uyumuyla (uyumun %s par faizi %%%s): eğri yeniden uyunca onlar da değişir." % (
+                        name, qf._th(fit, 2)),
+                    "legs": [{"key": lg["key"], "name": lg["name"], "level": ctx.cur(lg["key"], live), "unit": "%", "digits": 2} for lg in legs]}
+
         # the series is the tenor's own distance from the fit ("NSS farkı"); the trade is the tenor against its two
         # neighbours - the hedge is the package's, not the series'
         mon = qf.mr_monitor(ctx, "curve:" + key, "curve", "TRY OIS", "%s OIS · NSS farkı" % key.split(":", 1)[1], "bp", 1,
-                            [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=qf._pkg_carry(ctx, legs), pkg="rate",
+                            [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=qf._pkg_carry(ctx, legs), pkg="rate", quote=quote,
+                            series_label="%s OIS − NSS uyumunun par faizi (bp)" % key.split(":", 1)[1],
                             info={"hedge": [{"key": order[h], "weight": w} for h, w in hedge]}, explicit=True,
                             pkg_name="Paket · iki komşu vadeyle hedge'li (NSS seviye β0 ve eğim β1'e nötr, DV01 ağırlıklı)",
                             note="Seri: kotanın NSS (Nelson-Siegel-Svensson) uyumundan farkı (bp, Excel'in OIS kuralıyla: 3A'ya kadar tek ödeme, "
@@ -1270,9 +1287,29 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
                 s = snap(live)
                 return s["resid"].get(isin) if s else None
 
+            def quote(live: Dict[str, float], isin: str = isin, b: Bond = b, idx: List[int] = idx) -> Optional[Dict[str, Any]]:
+                # the bond as the desk trades it: its yield now (its own convention, the fit's); at a zero gap the yield of its
+                # model price on today's fit (held for the target and the stop: yield = model yield + gap - the gap is the
+                # yield difference to first order, its second order a hundredth of a bp)
+                s = snap(live)
+                r, y = (s["resid"].get(isin) if s else None), _yield_now(ctx, isin, conv[isin], live)
+                if r is None or y is None:
+                    return None
+                fit = y - r / 100.0
+                cv = "bileşik" if conv[isin] == "compound" else "basit"
+                return {"inst": _bond_label(b), "unit": "%", "digits": 2, "base": fit, "scale": 0.01,
+                        "gap": {"name": "%s farkı" % model, "of": "%s uyumunun" % model, "at": "%s uyumunda" % model},
+                        "model": "%s uyumunun model getirisi (%s, %%%s)" % (model, cv, qf._th(fit, 2)),
+                        "note": "%s getiri; hedef / stop bugünkü %s uyumuyla" % (cv, model),
+                        "held": "Hedef ve stop bugünkü %s uyumuyla (kâğıdın model getirisi %%%s, %s): eğri yeniden uyunca onlar da "
+                                "değişir." % (model, qf._th(fit, 2), cv),
+                        "legs": [{"key": "DIBS:" + keys[i], "name": _bond_label(bonds[keys[i]]), "level": _yield_now(ctx, keys[i], conv[keys[i]], live),
+                                  "unit": "%", "digits": 2} for i in idx]}
+
             # the series is the bond's own distance from the fit ("NS farkı"); the hedges are its packages'
             mon = qf.mr_monitor(ctx, "dibsfv:" + isin, "dibsfv", "DİBS", "%s · %s farkı" % (_bond_label(b), model), "bp", 1,
-                                [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=carry_up, pkg="bond",
+                                [d for d, _ in pts], [v for _, v in pts], "bp", legs, calc, carry_up=carry_up, pkg="bond", quote=quote,
+                                series_label="%s getirisi − %s model getirisi (bp)" % (_bond_label(b), model),
                                 pnl=("bp", scale), explicit=True, packages=[p2] if p2 else [],
                                 pkg_name="Paket 1 · DİBS komşularıyla hedge'li (%s seviye β0 ve eğim β1'e nötr)" % model,
                                 info={"inputs": ["DIBSS:" + isin, "DIBSC:" + isin], "conv": conv[isin],
