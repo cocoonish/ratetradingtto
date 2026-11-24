@@ -196,7 +196,7 @@ print("RELEASED", flush=True)
 
 def test_two_processes_on_one_data_folder(tmp_path):
     """Real processes: while one holds the folder, ``python -m tto`` is refused before it opens anything (exit 3, the
-    message on the console), and so is ``yedekten-don``; a holder killed leaves a
+    message on the console), and so are ``yedekten-don`` and ``kurtar`` (``--dene`` too); a holder killed leaves a
     stale lock the next one takes over at once; a clean exit removes it."""
     data = tmp_path / "data"
     script = tmp_path / "holder.py"
@@ -228,6 +228,9 @@ def test_two_processes_on_one_data_folder(tmp_path):
         assert not (data / "tto.db").exists()                             # (refused before the database was opened)
         res = tto("yedekten-don", str(backup), "--data-dir", str(data))
         assert res.returncode == 3 and "yedekten dönülmez" in res.stderr.decode("utf-8", "replace")
+        for extra in ([], ["--dene"]):
+            res = tto("kurtar", str(backup), "--data-dir", str(data), *extra)
+            assert res.returncode == 3 and "kurtarma yapılmaz" in res.stderr.decode("utf-8", "replace")
         assert not (data / "tto.db").exists()
     finally:
         if held_by != os.getpid():
