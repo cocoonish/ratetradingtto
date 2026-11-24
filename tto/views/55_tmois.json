@@ -18,7 +18,7 @@
    "scope": "user",
    "group": "tmois-1",
    "kind": "pct",
-   "label": "'İşlem oranı (boş = par)'"
+   "label": "'İşlem oranı (boş = par)' (two-way: formula default - the rate a PV typed beside it gives, else blank: the par)"
   },
   {
    "range": "A10:A34",
@@ -57,6 +57,26 @@
    "group": "tmois-6",
    "kind": "auto",
    "label": "'Gerç. endeks oranı (başlamış dönem)'"
+  }
+ ],
+ "twoway": [
+  {
+   "id": "tmois-rate",
+   "label": "OIS · Nakit Akışı",
+   "note": "İki yönlü: işlem oranı ya da PV'lerden biri (piyasa, S1–S3, beklenen) - hangisini yazarsanız o kalır, oran ondan, diğer PV'ler orandan hesaplanır (✎ yazılan değer; silince oran par'a döner). Yazılan PV aynen kalır, hesaplanan PV'ler sayfadaki gibi 1 TL'ye yuvarlıdır.",
+   "members": [
+    {"name": "İşlem oranı", "range": "D3"},
+    {"name": "PV piyasa", "range": "B5", "store": "L4", "kind": "amount",
+     "label": "'PV @ oran – piyasa (TL)' typed (two-way: the trade rate that gives it on the market's curve, and the scenarios' PVs, follow)"},
+    {"name": "PV S1", "range": "D5", "store": "M4", "kind": "amount",
+     "label": "PV of scenario S1 typed (two-way: the trade rate that gives it on S1's curve, and the other PVs, follow)"},
+    {"name": "PV S2", "range": "F5", "store": "N4", "kind": "amount",
+     "label": "PV of scenario S2 typed (two-way: the trade rate that gives it on S2's curve, and the other PVs, follow)"},
+    {"name": "PV S3", "range": "H5", "store": "O4", "kind": "amount",
+     "label": "PV of scenario S3 typed (two-way: the trade rate that gives it on S3's curve, and the other PVs, follow)"},
+    {"name": "Beklenen PV", "range": "J5", "store": "P4", "kind": "amount",
+     "label": "'Beklenen PV' typed (two-way: the trade rate that gives it, the scenarios weighted with their probabilities, and the other PVs follow)"}
+   ]
   }
  ],
  "panels": [
@@ -112,6 +132,14 @@
    "title": "Yardımcı · senaryo bacakları",
    "range": "M9:AC34",
    "hidden": true
+  },
+  {
+   "id": "B7",
+   "type": "table",
+   "range": "L2:P5",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · iki yönlü: yazılan PV'ler ve verdikleri işlem oranı"
   }
  ]
 }

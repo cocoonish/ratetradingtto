@@ -2233,6 +2233,88 @@ def _tto_fra_leg(model: Model) -> None:
                                             '(%(e)s*$P%(r)d-$%(u)s%(r)d*($P%(r)d-$O%(r)d))/$O%(r)d,""),"")') % f, fmt=PCT3, bold=True)
 
 
+# ---------------------------------------------------------------------------------------------- OIS · Nakit Akışı: rate <-> PV
+#: TM_OIS prices a TRY OIS from its cash flows (rows 10-34): each period's fixed leg pays the trade rate (D3; blank: the
+#: market's par B4 - "Kullanılan oran" B6) or the period's own fixed rate typed (D), AC = IF(D <> "", D, B6); the PV at
+#: the rate less the market's, B5 = ROUND(B3·(Σ fixed − Σ float), 0), fixed = N·τ·AC·DF (J), float H; the same on the
+#: OIS page's three scenarios (D5, F5, H5: R / P, W / U, AB / Z) and their probability-weighted PV (J5).  Two-way
+#: (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık olmaması için"): the rate or
+#: any of the five PVs can be typed - the one typed last stands, the others follow.  Each PV is linear in the rate:
+#: PV = B3·(rate·Σ_blank N·τ·DF + Σ_typed D·N·τ·DF − Σ float), so a PV typed gives the rate (D3's default, where the rate
+#: always was) = (PV/B3 + Σ float − Σ_typed D·N·τ·DF) / Σ_blank N·τ·DF on its own curve (piyasa: the market's - Motor's MPC
+#: path, not Bootstrap -, S1-S3: the scenarios'); the expected PV through the probabilities.  A PV typed stays exact; the
+#: others are rounded to 1 TL as the sheet shows them.  The PVs typed are kept in ``TMOIS_TW`` (row 4), the rate each gives
+#: under it (row 5).
+TMOIS_NAME = "OIS · Nakit Akışı iki yönlü"
+TMOIS_RATE = "D3"
+TMOIS_ROWS = (10, 34)
+#: the PVs: (cell, fixed column, float column, N·τ·DF column) - the market's and the three scenarios'
+TMOIS_PVS = (("B5", "J", "H", "I"), ("D5", "R", "P", "Q"), ("F5", "W", "U", "V"), ("H5", "AB", "Z", "AA"))
+TMOIS_EXPECTED = "J5"
+TMOIS_TW = ("L", "M", "N", "O", "P")      # where B5, D5, F5, H5, J5 typed are kept (row 4; the rate each gives in row 5)
+_TMOIS_PV = "ROUND($B$3*(SUM($%(x)s$10:$%(x)s$34)-SUM($%(f)s$10:$%(f)s$34)),0)"
+_TMOIS_EXP = ("ROUND(((OIS_MAIN!$Q$3*(D5)+OIS_MAIN!$Q$4*(F5)+OIS_MAIN!$Q$5*(H5))/(OIS_MAIN!$Q$3+OIS_MAIN!$Q$4+OIS_MAIN!$Q$5)),0)")
+
+
+def _tmois_check(model: Model) -> None:
+    """TM_OIS as the two-way cells invert it: the PVs, the rate in use, each period's rate and its legs; the rate typed
+    where nothing else stands; the cells the stores take empty."""
+    _need_sheets(model, "TM_OIS", "OIS_MAIN")
+    _need_captions(model, (("TM_OIS", "C3", "İşlem oranı (boş = par)"), ("TM_OIS", "A5", "PV @ oran – piyasa (TL)"),
+                           ("TM_OIS", "A6", "Kullanılan oran")))
+    for cell, x, fl, _ in TMOIS_PVS:
+        if _need_formula(model, "TM_OIS", cell) != _TMOIS_PV % {"x": x, "f": fl}:
+            raise ValueError("TM_OIS!%s beklenen formül değil (%s değil)" % (cell, _TMOIS_PV % {"x": x, "f": fl}))
+    if _need_formula(model, "TM_OIS", TMOIS_EXPECTED) != _TMOIS_EXP:
+        raise ValueError("TM_OIS!%s beklenen formül değil (%s değil)" % (TMOIS_EXPECTED, _TMOIS_EXP))
+    if _need_formula(model, "TM_OIS", "B6") != 'IF(D3="",B4,D3)':
+        raise ValueError('TM_OIS!B6 beklenen formül değil (IF(D3="",B4,D3) değil)')
+    for r in range(TMOIS_ROWS[0], TMOIS_ROWS[1] + 1):
+        if _need_formula(model, "TM_OIS", "AC%d" % r) != 'IF(D%d<>"",D%d,$B$6)' % (r, r):
+            raise ValueError("TM_OIS!AC%d beklenen formül değil" % r)
+        for _, x, _, a in TMOIS_PVS:                   # fixed = N·τ·rate·DF, the N·τ·DF beside it
+            dfc = _need_formula(model, "TM_OIS", "%s%d" % (a, r)).rpartition("*")[2]
+            if _need_formula(model, "TM_OIS", "%s%d" % (a, r)) != "C%d*F%d*%s" % (r, r, dfc) or \
+                    _need_formula(model, "TM_OIS", "%s%d" % (x, r)) != "C%d*F%d*AC%d*%s" % (r, r, r, dfc):
+                raise ValueError("TM_OIS!%s%d / %s%d beklenen formül değil" % (x, r, a, r))
+    _need_empty(model, "TM_OIS", TMOIS_RATE)
+    _need_empty(model, "TM_OIS", "%s3:%s5" % (TMOIS_TW[0], TMOIS_TW[-1]))
+
+
+def _tto_tmois(model: Model) -> None:
+    """TM_OIS's rate and PVs two-way: the stores, the rate each PV typed gives, the PVs wrapped, the rate's default."""
+    b = SheetBuilder(model, "TM_OIS")
+    rows = "$%s$%d:$%s$%d"
+    d = rows % ("D", TMOIS_ROWS[0], "D", TMOIS_ROWS[1])
+
+    def legs(x: str, fl: str, a: str) -> Tuple[str, str]:
+        # (Σ float − Σ over the periods with a rate of their own of D·N·τ·DF, Σ N·τ·DF over the periods at the trade rate)
+        ann = rows % (a, TMOIS_ROWS[0], a, TMOIS_ROWS[1])
+        return ("(SUM(%s)-SUMPRODUCT((%s<>\"\")*%s*%s))" % (rows % (fl, TMOIS_ROWS[0], fl, TMOIS_ROWS[1]), d, d, ann),
+                "SUMPRODUCT((%s=\"\")*%s)" % (d, ann))
+
+    s0, s1 = TMOIS_TW[0], TMOIS_TW[-1]
+    b.set("%s2" % s0, "İki yönlü: yazılan PV'ler (boş: yazılan yok; işlem oranı D3'te) ve verdikleri oran", color=NOTE_COLOR)
+    b.head("%s3" % s0, ["Yazılan PV piyasa", "Yazılan PV S1", "Yazılan PV S2", "Yazılan PV S3", "Yazılan beklenen PV"])
+    for (cell, x, fl, a), st in zip(TMOIS_PVS + ((TMOIS_EXPECTED, None, None, None),), TMOIS_TW):
+        store = "$%s$4" % st
+        if x is None:
+            # the expected PV: the scenarios' PVs weighted with the OIS page's probabilities - each linear in the rate
+            parts = [legs(*p[1:]) for p in TMOIS_PVS[1:]]
+            q = ("OIS_MAIN!$Q$3", "OIS_MAIN!$Q$4", "OIS_MAIN!$Q$5")
+            num = "%s*(%s)/$B$3+%s" % (store, "+".join(q), "+".join("%s*%s" % (w, p[0]) for w, p in zip(q, parts)))
+            rate = "(%s)/(%s)" % (num, "+".join("%s*%s" % (w, p[1]) for w, p in zip(q, parts)))
+        else:
+            known, ann = legs(x, fl, a)
+            rate = "(%s/$B$3+%s)/%s" % (store, known, ann)
+        b.input("%s4" % st, None, like=cell)
+        b.set("%s5" % st, '=IF(ISBLANK(%s),"",IFERROR(%s,""))' % (store, rate), fmt="0.0000%")
+        b.patch(cell, "=IF(ISBLANK(%s),%s,%s)" % (store, formula_of(model, "TM_OIS", cell), store))
+    # the trade rate: typed (where it always was), else the one the PV typed gives, else blank (the par)
+    b.input(TMOIS_RATE, '=IF(COUNTA($%s$4:$%s$4)=0,"",IF(COUNT($%s$5:$%s$5)=0,"",SUM($%s$5:$%s$5)))' % (s0, s1, s0, s1, s0, s1),
+            like=TMOIS_RATE)
+
+
 # ---------------------------------------------------------------------------------------------- USD · FOMC: window OIS -> step
 #: The FOMC table of the USD sheet (SOFR_FOMC!A71:Z83, a meeting a row) gives each meeting's implied O/N, K: (exp((ln DF
 #: start − ln DF end) / days) − 1)·36000 between its effective day and the next meeting's - ACT/360, compounded daily -
@@ -5061,6 +5143,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
             ("Forward puandan faize", _fwd_back_check, _tto_fwd_back),
             (PPK_SHEET, _ppk_back_check, _tto_ppk_back), (FRA_LEG_NAME, _fra_leg_check, _tto_fra_leg),
+            (TMOIS_NAME, _tmois_check, _tto_tmois),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),
             ("DİBS RV FRN", _rv_frn_check, _tto_rv_frn),
