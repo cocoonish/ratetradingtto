@@ -1207,24 +1207,30 @@ def test_the_header_and_every_page_are_made_ahead_at_the_lowest_priority(tmp_pat
 
 
 def test_the_days_bloomberg_count_and_answers_are_kept_for_a_restart(tmp_path):
-    """Live: every 30 s (and when the dashboard stops) the day's data points used and the reference answers got are
-    kept in the database; a provider started the same day is given both (a restart does not spend the daily limit
-    again).  Another day's are not given."""
+    """Live: every 30 s (and when the dashboard stops) the day's data points used - by kind and by key -, Bloomberg's
+    own daily limit and the answers got (quotes too: cache first, 24.11.2026) are kept in the database; a provider
+    started the same day is given all of it (a restart does not spend the daily limit again).  Another day's count is
+    not given; Bloomberg's limit is, until its probe answers."""
     import datetime as _d
     svc = make_service(tmp_path)
     try:
         today = _d.date.today().isoformat()
-        answers = [(("BDP", "TRY Curncy", "SETTLE_DT", ()), 46330.0, 1000.0)]
+        answers = [(("BDP", "TRY Curncy", "SETTLE_DT", ()), 46330.0, 1000.0), (("BDP", "USDTRY Curncy", "BID", ()), 42.1, 1001.0)]
+        usage = {("BDP", "TRY Curncy", "SETTLE_DT", ()): 1, ("BDP", "USDTRY Curncy", "BID", ()): 3}
 
         class Stub(object):
             def __init__(self):
-                self.got, self.carried = [], None
+                self.got, self.carried, self.day = [], None, None
+                self.used = dict(usage)
 
             def status(self):
-                return {"hits_today": 1234}
+                return {"hits_today": 1234, "kinds": {"first": 1000, "poll": 234}, "bbg_limit": "2026-11-24"}
 
             def answers(self, since=0.0):
                 return [a for a in answers if a[2] > since]
+
+            def usage(self):
+                return dict(self.used)
 
             def preload(self, kept):
                 self.got = list(kept)
@@ -1232,17 +1238,28 @@ def test_the_days_bloomberg_count_and_answers_are_kept_for_a_restart(tmp_path):
             def carry_hits(self, n):
                 self.carried = n
 
+            def carry_day(self, kinds, used, limit):
+                self.day = (kinds, used, limit)
+
         svc.provider = Stub()
         svc._keep_bloomberg()
-        assert svc.store.get("bbg.hits") == {"day": today, "hits": 1234}
-        assert [(k, v) for k, v, _ in svc.store.bbg_answers(today)] == [(answers[0][0], 46330.0)]
+        assert svc.store.get("bbg.hits") == {"day": today, "hits": 1234, "kinds": {"first": 1000, "poll": 234},
+                                             "limit": "2026-11-24"}
+        assert sorted((k, v) for k, v, _ in svc.store.bbg_answers(today)) == sorted((k, v) for k, v, _ in answers)
+        assert svc.store.bbg_usage(today) == usage
+        svc.provider.used[("BDP", "USDTRY Curncy", "BID", ())] = 4                 # (only what changed is written again)
+        svc._keep_bloomberg()
+        assert svc.store.bbg_usage(today)[("BDP", "USDTRY Curncy", "BID", ())] == 4
         fresh = Stub()
         svc._kept_bloomberg(fresh)
-        assert fresh.carried == 1234 and [(k, v) for k, v, _ in fresh.got] == [(answers[0][0], 46330.0)]
-        svc.store.put("bbg.hits", {"day": "2000-01-01", "hits": 99})
+        assert fresh.carried == 1234 and sorted((k, v) for k, v, _ in fresh.got) == sorted((k, v) for k, v, _ in answers)
+        assert fresh.day == ({"first": 1000, "poll": 234}, {("BDP", "TRY Curncy", "SETTLE_DT", ()): 1, ("BDP", "USDTRY Curncy", "BID", ()): 4},
+                             "2026-11-24")
+        svc.store.put("bbg.hits", {"day": "2000-01-01", "hits": 99, "kinds": {"first": 99}, "limit": "2000-01-01"})
         old = Stub()
         svc._kept_bloomberg(old)
-        assert old.carried is None                               # another day's count: not carried
+        assert old.carried is None and old.day[0] is None        # another day's count: not carried
+        assert old.day[2] == "2000-01-01"                         # Bloomberg's limit: until its probe answers
     finally:
         svc.stop()
 

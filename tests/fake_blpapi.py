@@ -387,8 +387,13 @@ class Server(object):
         self.strict_ids = True                                    # refuse spellings only Excel understands
         self.subscription_options: List[Tuple[str, List[str]]] = []   # (topic, options) of every subscribe
         self.refuse_options = False                               # subscriptions that carry options fail
+        self.refused: set = set()                                 # securities whose subscription fails (not entitled)
         self.queue_limit = 0                                      # undelivered events a session holds (0: no limit)
         self.dropped = 0                                          # events thrown away because the queue was full
+        # Bloomberg's own daily limit (what the desk's terminal said on 24.11.2026): from this many hits on, every
+        # request is answered with a ``responseError`` of category LIMIT (None: no limit)
+        self.daily_capacity: Optional[int] = None
+        self.capacity_said = 0                                    # requests answered with it
 
     @property
     def release_gil(self) -> bool:
@@ -440,14 +445,26 @@ class Server(object):
         for session, cid, operation, messages in held:
             session.respond(cid, operation, messages)
 
+    #: Bloomberg's answer once its daily capacity is used up (as the desk's terminal gave it on 24.11.2026)
+    CAPACITY_ERROR = {"source": "rsfrdsvc3", "code": -4001, "category": "LIMIT", "message": "Daily capacity reached.",
+                      "subcategory": "DAILY_CAPACITY_REACHED"}
+
+    def over_capacity(self) -> bool:
+        return self.daily_capacity is not None and self.hits() >= self.daily_capacity
+
     # ---- request handling
     def answer(self, request: Request) -> List[Message]:
         if request.operation == "IntradayBarRequest":
             return self.intraday_bars(request)
         d = request.data
         ov = tuple(sorted((str(o["fieldId"]), str(o["value"])) for o in d.get("overrides", [])))
+        over = self.over_capacity()
         self.requests.append({"op": request.operation, "securities": list(d["securities"]), "fields": list(d["fields"]),
                               "overrides": ov, "options": {k: v for k, v in d.items() if k not in ("securities", "fields", "overrides")}})
+        if over:
+            self.capacity_said += 1
+            kind = "ReferenceDataResponse" if request.operation == "ReferenceDataRequest" else "HistoricalDataResponse"
+            return [Message(kind, [], {"responseError": dict(self.CAPACITY_ERROR)})]
         if request.operation == "ReferenceDataRequest":
             out = []
             for sec in d["securities"]:
@@ -465,6 +482,8 @@ class Server(object):
                                                                 "subcategory": "NOT_APPLICABLE_TO_REF_DATA"}})
                         continue
                     v = self.stored(self.ref, sec, f, ov)
+                    if callable(v):
+                        v = v()                                  # an answer that changes from request to request
                     if v is not None:
                         fd[f] = v
                 out.append({"security": sec, "fieldData": fd, "fieldExceptions": exc})
@@ -639,7 +658,7 @@ class Session(object):
         self.server.subscriptions.append((topic, list(fields)))
         self.server.subscription_options.append((topic, list(options or [])))
         unknown = self.server.unknown(topic)
-        if unknown or (options and self.server.refuse_options):
+        if unknown or (options and self.server.refuse_options) or any(n in self.server.refused for n in spellings(topic)):
             self._put(Event(Event.SUBSCRIPTION_STATUS, [Message("SubscriptionFailure", [cid._value], {
                 "reason": {"category": "BAD_SEC" if unknown else "NOT_AUTHORIZED",
                            "description": "Invalid security" if unknown else "option refused"}})]))

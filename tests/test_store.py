@@ -690,3 +690,14 @@ def test_bloombergs_answers_of_the_day_are_kept_and_the_days_before_go(store):
     assert store.bbg_answers("2026-11-14") == []                        # another day's: gone
     store.bbg_keep("2026-11-15", [(key, rows, 2000.0)])                  # the same key again: replaced
     assert {k: t for k, _, t in store.bbg_answers("2026-11-15")}[key] == 2000.0
+
+
+def test_bloombergs_hits_of_the_day_by_key_are_kept_and_the_days_before_go(store):
+    """The status window's sheets and fields (cache first, 24.11.2026): the day's Bloomberg hits by key, kept for a
+    restart - only what changed is written again; another day's go."""
+    a, b = ("BDP", "TRY Curncy", "SETTLE_DT", ()), ("HIST", "TYSO1 Curncy", "PX_LAST")
+    store.bbg_usage_keep("2026-11-23", [(a, 7)])
+    assert store.bbg_usage_keep("2026-11-24", [(a, 1), (b, 4)]) == 2
+    assert store.bbg_usage("2026-11-24") == {a: 1, b: 4} and store.bbg_usage("2026-11-23") == {}
+    store.bbg_usage_keep("2026-11-24", [(b, 5)])                          # the same key again: replaced
+    assert store.bbg_usage("2026-11-24") == {a: 1, b: 5}

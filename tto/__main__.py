@@ -36,11 +36,16 @@ def _add_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--tick", type=float, default=2.0, help="canlı veride ekran yenileme aralığı (sn)")
     p.add_argument("--locale", choices=("tr", "en"), default="tr", help="varsayılan sayı biçimi")
     p.add_argument("--no-stream", action="store_true", help="fiyat alanlarını abonelik yerine sorguyla güncelle")
-    p.add_argument("--price-poll", type=float, default=120.0,
-                   help="abonelikle gelmeyen fiyat alanlarının sorgu aralığı (sn); küçültmek günlük veri limitini tüketir")
+    p.add_argument("--price-poll", type=float, default=900.0,
+                   help="abonelikle gelmeyen fiyat alanlarının en kısa sorgu aralığı (sn; varsayılan 900 = 15 dk, yalnızca "
+                        "Bloomberg sorgu saatlerinde); küçültmek günlük veri limitini tüketir")
     p.add_argument("--bfx", choices=("off", "approx"), default="off",
                    help="BFXFORWARD: off = #N/A (API karşılığı yok), approx = FWD_CURVE'den yaklaşık hesap")
-    p.add_argument("--max-hits", type=int, default=400000, help="günlük referans/geçmiş veri isteği üst sınırı (0 = sınırsız)")
+    p.add_argument("--max-hits", type=int, default=400000,
+                   help="günlük referans/geçmiş veri isteğinin mutlak üst sınırı (0 = sınırsız); günlük bütçe bunun altındadır")
+    p.add_argument("--daily-budget", type=int, default=int(os.environ.get("TTO_BBG_BUDGET", 100000)),
+                   help="günlük Bloomberg veri isteği bütçesi (varsayılan 100.000; TTO_BBG_BUDGET ile de verilir; 0 = yok): "
+                        "%%70'ten sonra yalnızca sayfaların hiç almadığı ilk değerler istenir, %%100'de hiçbir yeni istek gitmez")
     p.add_argument("--bbg-inprocess", action="store_true",
                    help="Bloomberg oturumunu ayrı bir yardımcı süreçte değil, dashboard'un kendi sürecinde çalıştır")
     p.add_argument("--bbg-interval", type=float, default=None,
@@ -113,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
 def settings_from(args) -> Settings:
     return Settings(host=args.host, port=args.port, data_dir=args.data_dir, mode=args.mode, bbg_host=args.bbg_host,
                     bbg_port=args.bbg_port, tick_seconds=args.tick, locale=args.locale, bbg_stream=not args.no_stream,
-                    bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll,
+                    bbg_bfx=args.bfx, bbg_max_hits=args.max_hits, bbg_price_poll=args.price_poll, bbg_budget=args.daily_budget,
                     history=not args.no_history, history_refresh=args.history_refresh,
                     bbg_isolate=not args.bbg_inprocess, bbg_interval=args.bbg_interval, bbg_queue=args.bbg_queue,
                     log_dir=args.log_dir, bbg_silent_restart=args.bbg_silent_restart, backup_dir=args.backup_dir,

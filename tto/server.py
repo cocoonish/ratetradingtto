@@ -591,6 +591,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().market_unknown))
 
     @handler
+    async def market_usage(request: Request):
+        """Where today's Bloomberg hits went (the status window): by kind, the top sheets and fields."""
+        return ok(await call(svc().market_usage))
+
+    @handler
     async def market_unknown_export(request: Request):
         raw, name = await call(svc().market_unknown_export)
         return Response(raw, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1390,6 +1395,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/ret/fair/view", ret_fair_view, methods=["POST"]),
         Route("/api/ret/position", ret_position),
         Route("/api/market/unknown", market_unknown),
+        Route("/api/market/usage", market_usage),
         Route("/api/market/unknown/export", market_unknown_export),
         Route("/api/vol", vol, methods=["POST"]),
         Route("/api/vol/carry", carry_vol, methods=["GET", "POST"]),

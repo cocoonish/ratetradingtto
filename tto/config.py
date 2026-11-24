@@ -21,11 +21,11 @@ class Settings(object):
                  mode: str = "auto", bbg_host: str = "localhost", bbg_port: int = 8194,
                  tick_seconds: float = 2.0, locale: str = "tr", models_dir: Optional[str] = None,
                  bbg_stream: bool = True, bbg_bfx: str = "off", bbg_max_hits: int = 400000,
-                 bbg_price_poll: float = 120.0, history: bool = True, history_refresh: float = 900.0,
+                 bbg_price_poll: float = 900.0, history: bool = True, history_refresh: float = 900.0,
                  bbg_isolate: bool = True, bbg_interval: Optional[float] = None, bbg_queue: int = 100000,
                  history_pace: float = 1.0, log_dir: Optional[str] = None, bbg_silent_restart: float = 60.0,
                  backup_dir: Optional[str] = None, backup_time: Optional[str] = None, backup_copy_dir: Optional[str] = None,
-                 private_refresh: float = 5.0, idle_minutes: float = 30.0):
+                 private_refresh: float = 5.0, idle_minutes: float = 30.0, bbg_budget: int = 100000):
         self.host = host
         self.port = check_port(port)
         self.data_dir = data_dir or os.environ.get("TTO_DATA_DIR") or os.path.join(ROOT, "data")
@@ -37,7 +37,11 @@ class Settings(object):
         self.models_dir = models_dir or os.path.join(ROOT, "models")
         self.bbg_stream = bool(bbg_stream)      # real-time fields by subscription (False: poll them)
         self.bbg_bfx = bbg_bfx                  # "off" | "approx"  (BFXFORWARD has no API equivalent)
-        self.bbg_max_hits = int(bbg_max_hits)   # daily cap on reference/historical data points (0 = no cap)
+        self.bbg_max_hits = int(bbg_max_hits)   # daily cap on reference/historical data points (0 = no cap): the absolute stop
+        # the dashboard's own daily budget of hits (0: none): past 70 % only the first answers of keys a page needs, at
+        # 100 % nothing new (cache first, docs/market-data.md)
+        self.bbg_budget = max(0, int(bbg_budget))
+        # a quote its subscription does not bring is asked at most this often (seconds; cache first: 15 minutes)
         self.bbg_price_poll = float(bbg_price_poll)
         self.history = bool(history)            # keep the daily history up to date in the background
         self.history_refresh = float(history_refresh)   # seconds between history updates in live mode (0: once)

@@ -163,12 +163,14 @@ def requests_for(server, security):
 
 
 def test_quotes_that_never_arrive_are_asked_less_and_less(server, monkeypatch):
-    """A real-time field whose subscription stays silent is asked by request instead.  The BIST swap sheet
-    watches hundreds of maturities without any quote: asked at a fixed interval they would use up the daily
-    data limit, so the interval doubles while the answer stays the same - and an unknown ticker is asked once."""
+    """A real-time field whose subscription stays silent is asked by request instead - cache first (24.11.2026): one
+    without any value only every ``POLL_EMPTY`` (3 hours), one with a value at most every ``price_poll`` (15 minutes) and
+    at twice the interval while the answer stays the same, up to ``POLL_MAX``; an unknown ticker once (once a day).  The
+    BIST swap sheet watches hundreds of maturities without any quote: asked every two minutes they alone would use up
+    the daily data limit.  (Times shortened here.)"""
     monkeypatch.setattr(bloomberg, "SILENT_AFTER", 0.2)
-    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX", 1.6)
-    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX_EMPTY", 1.6)
+    monkeypatch.setattr(bloomberg, "POLL_MAX", 1.6)
+    monkeypatch.setattr(bloomberg, "POLL_EMPTY", 1.0)
     p = BloombergProvider(blpapi_module=fake_blpapi.module(server), price_poll=0.2)
     p.start()
     try:
@@ -180,17 +182,23 @@ def test_quotes_that_never_arrive_are_asked_less_and_less(server, monkeypatch):
         settle(p)
         assert p.get_bdp(kq) == NA_NA and p.get_bdp(ku) == INVALID_SECURITY
         time.sleep(3.0)
-        # every 0.2 s would be some fourteen requests; 0.2, 0.4, 0.8, 1.6 ... leaves a handful
-        assert 2 <= requests_for(server, quiet) <= 7, requests_for(server, quiet)
+        # without a value: every POLL_EMPTY (1 s here) - not every 0.2 s (some fourteen requests)
+        assert 2 <= requests_for(server, quiet) <= 4, requests_for(server, quiet)
         assert requests_for(server, unknown) == 1
-        with p._lock:
-            assert p._items[kq].poll == 1.6 and p._items[ku].poll == 0.0
-        # the quote appears: the next request finds it and the short interval applies again
+        assert p.status()["polled"]["empty"] == 1
+        # the quote appears: the next request finds it; from then on the value's interval, doubling while it stays
         server.ref[(quiet, "BID", ())] = 3350.0
         deadline = time.time() + 6.0
         while p.get_bdp(kq) != 3350.0 and time.time() < deadline:
             time.sleep(0.05)
         assert p.get_bdp(kq) == 3350.0 and kq in p.drain_changes()
+        time.sleep(3.2)
+        with p._lock:
+            assert p._items[kq].poll == 1.6 and p._items[ku].poll == 0.0           # 0.2, 0.4, 0.8, 1.6 (POLL_MAX)
+        assert p.status()["polled"]["value"] == 1
+        # a moving quote goes back to the short interval
+        server.ref[(quiet, "BID", ())] = 3351.0
+        assert wait_for(lambda: p.get_bdp(kq) == 3351.0, timeout=4.0)
         n = requests_for(server, quiet)
         time.sleep(0.9)
         assert requests_for(server, quiet) > n                       # asked again within 0.2 + 0.4 s, not after 1.6 s
@@ -211,7 +219,7 @@ def test_a_size_the_stream_does_not_bring_is_not_asked_again(server, monkeypatch
     Borsa İstanbul would cost a request an hour, all day).  A size whose subscription never says anything is asked
     as before."""
     monkeypatch.setattr(bloomberg, "SILENT_AFTER", 0.2)
-    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX_EMPTY", 0.4)
+    monkeypatch.setattr(bloomberg, "POLL_EMPTY", 0.4)
     p = BloombergProvider(blpapi_module=fake_blpapi.module(server), price_poll=0.2)
     p.start()
     try:
@@ -243,7 +251,7 @@ def test_a_size_the_stream_does_not_bring_is_not_asked_again(server, monkeypatch
 
 
 def test_without_subscriptions_unchanged_quotes_back_off_too(server, monkeypatch):
-    monkeypatch.setattr(bloomberg, "PRICE_POLL_MAX", 1.6)
+    monkeypatch.setattr(bloomberg, "POLL_MAX", 1.6)
     p = BloombergProvider(blpapi_module=fake_blpapi.module(server), stream=False, price_poll=0.2)
     p.start()
     try:
@@ -313,17 +321,23 @@ def test_partial_responses_are_assembled(server):
 
 
 def test_daily_data_limit_guard(server):
-    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), max_hits_per_day=3)
+    """``max_hits_per_day`` is the absolute stop: once the day's count reaches it nothing new goes out - a new key waits
+    (it used to be sent all the same: ``_send_queued`` did not look; 24.11.2026) - and what was answered stays."""
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), max_hits_per_day=4)
     p.start()
     try:
         for fld in ("BID", "ASK", "PX_LAST"):
             p.get_bdp(bdp_key("USDTRY Curncy", fld))
         settle(p)
-        assert not p.limit_reached
+        assert not p.limit_reached and p.status()["tier"] == 0
         p.get_bdp(bdp_key("TYSO1 Curncy", "MID"))
         settle(p)
-        assert p.limit_reached and "limit" in p.status()["error"]
+        assert p.limit_reached and "bütçe" in p.status()["error"] and p.status()["tier"] == 2 and server.hits() == 4
         assert p.get_bdp(bdp_key("TYSO1 Curncy", "MID")) == 35.55          # what was asked is still answered
+        assert p.get_bdp(bdp_key("TYSO1 Curncy", "DAYS_TO_MTY")) == REQUESTING
+        time.sleep(0.6)
+        assert server.hits() == 4 and p.get_bdp(bdp_key("TYSO1 Curncy", "DAYS_TO_MTY")) == REQUESTING   # nothing new
+        assert p.status()["pending"] == 1                                   # ... it waits
     finally:
         p.stop()
 
@@ -448,11 +462,12 @@ def test_securities_bloomberg_does_not_know_are_not_subscribed_to(provider, serv
 
 
 def test_a_security_that_appears_on_a_new_day_is_found(server):
-    """A maturity that does not exist today may exist tomorrow: what Bloomberg did not know is asked once
-    more when the day changes, and subscribed to if it is there now."""
+    """A maturity that does not exist today may exist tomorrow: what Bloomberg did not know - and a page still reads -
+    is asked once more on the next day, and subscribed to if it is there now."""
     sec = "TYB30D BFX0 Curncy"
     server.invalid.add(sec)
-    p = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    now = [time.time()]
+    p = BloombergProvider(blpapi_module=fake_blpapi.module(server), clock=lambda: now[0])
     p.start()
     try:
         bid = bdp_key(sec, "BID")
@@ -463,7 +478,11 @@ def test_a_security_that_appears_on_a_new_day_is_found(server):
         server.invalid.discard(sec)
         server.ref[(sec, "BID", ())] = 3301.0
         server.rt[(sec, "BID")] = 3301.5
-        p.hits_day = dt.date.today() - dt.timedelta(days=1)                # midnight has passed
+        time.sleep(0.6)
+        assert requests_for(server, sec) == 1                              # not again today
+        now[0] += 86400.0                                                  # midnight has passed
+        assert wait_for(lambda: p.hits_day == dt.date.fromtimestamp(now[0]))
+        p.get_bdp(bid)                                                     # (a page reads it on the new day)
         assert wait_for(lambda: p.get_bdp(bid) != INVALID_SECURITY)
         assert wait_for(lambda: p.status()["subscriptions"] == 1)
         assert wait_for(lambda: p.get_bdp(bid) == 3301.5)                  # the first paint of the new subscription
@@ -746,8 +765,8 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
         assert live.mode == "live" and direct.mode == "live"
         warm = live.warmup()
         assert warm["items"] > 900 and warm["rounds"] <= 10
-        # what the first calculation asked for, counted now: YAS_ / CHG_ fields and LAST_TRADE_DATE are asked again a
-        # minute after their answer, and a slower machine is still comparing the two sides by then
+        # what the first calculation asked for, counted now (cache first: nothing is asked again the same day - CHG_NET_,
+        # LAST_TRADE_DATE and the ranges up to today follow the stream; a test machine's slow comparison asks nothing)
         asked = provider.status()
         expected = _all_formula_values(direct)
         got = _all_formula_values(live)
@@ -828,9 +847,10 @@ def test_live_pipeline_reproduces_a_direct_calculation(tmp_path_factory):
 
 
 def test_a_restart_the_same_day_does_not_ask_bloomberg_again_what_it_answered(server):
-    """The day's reference answers and the data points used are kept (the service keeps them in its database): a
-    provider started again the same day takes the answers as given - no request - and goes on counting from where the
-    earlier one stopped.  Quotes are not kept; an answer is asked again when it is due."""
+    """The day's answers - quotes too (cache first, 24.11.2026: they used to be asked again at every start) - and the data
+    points used are kept (the service keeps them in its database): a provider started again the same day takes the
+    answers as given - no request, the quote's subscription brings it up to date for free - and goes on counting from
+    where the earlier one stopped.  An answer is asked again when it is due: a once-a-day field the next day."""
     keys = [bdp_key("TRT150328T24 ISIN", "MATURITY"), bdp_key("TRY Curncy", "SETTLE_DT"), bdp_key("USDTRY Curncy", "BID")]
     first = BloombergProvider(blpapi_module=fake_blpapi.module(server))
     first.start()
@@ -843,27 +863,25 @@ def test_a_restart_the_same_day_does_not_ask_bloomberg_again_what_it_answered(se
         used = first.status()["hits_today"]
     finally:
         first.stop()
-    assert {k for k, _, _ in kept} == set(keys[:2]) and used >= 2           # (the quote is not kept)
+    assert {k for k, _, _ in kept} == set(keys) and used == 3               # (the quote too)
     asked = len(server.requests)
-    again = BloombergProvider(blpapi_module=fake_blpapi.module(server))
+    now = [time.time()]
+    again = BloombergProvider(blpapi_module=fake_blpapi.module(server), clock=lambda: now[0])
     again.preload(kept)
     again.carry_hits(used)
     again.start()
     try:
-        assert again.get_bdp(keys[0]) == values[keys[0]] and again.get_bdp(keys[1]) == values[keys[1]]
-        again.get_bdp(keys[2])
-        settle(again)
-        fields = [f for r in server.requests[asked:] for f in r["fields"]]
-        assert "MATURITY" not in fields and "SETTLE_DT" not in fields and "BID" in fields
-        assert again.status()["hits_today"] > used                          # counted on (the quote)
-        assert {k for k, _, _ in again.answers()} == set(keys[:2])          # kept again, for a next restart
-        # due again: asked again (a maturity is refreshed every few hours)
-        with again._lock:
-            again._items[keys[0]].fetched -= bloomberg.REFRESH_STATIC + 1
-        again._wake.set()
-        t0 = time.time()
-        while "MATURITY" not in [f for r in server.requests[asked:] for f in r["fields"]] and time.time() - t0 < 10:
-            time.sleep(0.05)
-        assert "MATURITY" in [f for r in server.requests[asked:] for f in r["fields"]]
+        assert [again.get_bdp(k) for k in keys] == [values[k] for k in keys]
+        time.sleep(0.6)
+        assert server.requests[asked:] == [] and again.status()["hits_today"] == used        # nothing asked again
+        assert wait_for(lambda: again.status()["subscriptions"] == 1)       # (the quote streams: free)
+        assert {k for k, _, _ in again.answers()} == set(keys)              # kept again, for a next restart
+        # the next day (a page reads them): asked once more - a maturity once a day like every field
+        now[0] += 86400.0
+        assert wait_for(lambda: again.hits_day == dt.date.fromtimestamp(now[0]))
+        for k in keys[:2]:
+            again.get_bdp(k)
+        assert wait_for(lambda: "MATURITY" in [f for r in server.requests[asked:] for f in r["fields"]])
+        assert again.status()["kinds"] == {"static": 1, "daily": 1}         # (the quote streams: not asked)
     finally:
         again.stop()

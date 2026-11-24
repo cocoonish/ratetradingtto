@@ -11,21 +11,23 @@ So the session, its subscriptions and its requests live in a helper process in w
 (:func:`_child_main` runs an ordinary :class:`~tto.marketdata.bloomberg.BloombergProvider` there), and the
 dashboard talks to it over two pipes:
 
-    dashboard  -- ("lookup", [(key, refresh, real-time field), ...]) ------>  helper
+    dashboard  -- ("lookup", [(key, policy, real-time field), ...]) ------>  helper   (a key again: used on a new day)
+               -- ("desk", open, close, holidays) -------------------------->           (the desk's hours)
                -- ("history", id, items, start, end, timeout) ------------->
                -- ("bars", id, security, start, end, interval, event, timeout) ->
                -- ("ref", id, securities, fields, timeout) ------------------>
                -- ("stop",) ------------------------------------------------>
                <-- ("values", [(key, value), ...], lookups seen, status) ---   every 0.1 s when something changed
+               <-- ("usage", {key: hits today}) ----------------------------   the keys whose count changed, every 5 s
                <-- ("history", id, result) ----------------------------------
                <-- ("bars", id, result) -------------------------------------
                <-- ("ref", id, result) --------------------------------------
 
 :class:`IsolatedBloombergProvider` is the dashboard's side.  It answers the engine from its own copy of the
 values (never blocking), so a burst of ticks reaches the engine as "the latest value of each item", however
-busy the engine is.  A helper that dies is started again and asked for everything once more; a helper that
-cannot be started at all raises :class:`IsolationError`, on which the dashboard falls back to a session
-inside its own process.
+busy the engine is.  A helper that dies is started again and given every answer the dashboard holds (nothing is
+asked again that was answered today); a helper that cannot be started at all raises :class:`IsolationError`, on
+which the dashboard falls back to a session inside its own process.
 
 The helper sends its values at least once a second (an empty batch when nothing changed): that is its
 heartbeat.  A helper that is alive but silent - hung in a call, deadlocked - would otherwise leave the last
@@ -48,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..xl.values import XlArray
 from .base import REQUESTING
-from .bloomberg import NA_NA, QUEUE_SIZE, BloombergProvider, bar_span
+from .bloomberg import BUDGET, NA_NA, P_ONCE, POLL_EVERY, QUEUE_SIZE, RT_FIELDS, BloombergProvider, bar_span
 
 log = logging.getLogger("tto.bloomberg")
 
@@ -63,10 +65,12 @@ QUICK = 300.0
 MAX_QUICK_DEATHS = 5
 #: a helper that says nothing for this many seconds (it reports every second) is taken as hung and started
 #: again - in market hours only, at most MAX_SILENT_RESTARTS times a day, and each time of the day only after
-#: twice as long a silence as the time before (60 s, 120 s, 240 s): a new helper asks Bloomberg for everything
-#: again, so this must never turn into a loop that eats the terminal's daily data limit
+#: twice as long a silence as the time before (60 s, 120 s, 240 s): a new helper gets the answers the dashboard holds,
+#: but this must still never turn into a loop
 SILENT_RESTART = 60.0
 MAX_SILENT_RESTARTS = 3
+#: seconds between two reports of the day's hits by key (the status page's sheets and fields)
+USAGE_EVERY = 5.0
 
 
 class IsolationError(RuntimeError):
@@ -141,9 +145,12 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
         prov = BloombergProvider(cfg["host"], cfg["port"], stream=cfg["stream"], price_poll=cfg["price_poll"],
                                  request_timeout=cfg["request_timeout"], max_hits_per_day=cfg["max_hits_per_day"],
                                  bfx="off", blpapi_module=module, reconnect_wait=cfg["reconnect_wait"],
-                                 queue_size=cfg["queue_size"], interval=cfg["interval"])
+                                 queue_size=cfg["queue_size"], interval=cfg["interval"], budget=cfg.get("budget", BUDGET))
         prov.hits = int(cfg.get("hits_start") or 0)        # what earlier helpers used today counts too
-        prov.preload(cfg.get("preload") or [])            # answers kept from earlier today
+        prov.carry_day(cfg.get("kinds_start"), cfg.get("usage_start"), cfg.get("limit"))
+        if cfg.get("desk"):
+            prov.set_desk_hours(*cfg["desk"])            # the desk's hours: no refresh, no poll outside them
+        prov.preload(cfg.get("preload") or [])            # every answer the dashboard holds from earlier today
         prov.start()
     except ImportError as exc:
         send(("failed", "import", str(exc)))
@@ -154,6 +161,8 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
     registered = set()
     seen = 0
     last = 0.0
+    told: Dict[Tuple, int] = dict(prov.usage())          # the day's hits by key as the dashboard has them
+    told_rev, told_at = prov.usage_rev, time.time()
     pump = float(cfg.get("pump") or PUMP)
     try:
         send(("started", prov.status()))
@@ -170,11 +179,13 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
                             return
                         if kind == "lookup":
                             asked = True
-                            for key, refresh, rt in msg[1]:
+                            for key, policy, rt in msg[1]:
                                 registered.add(key)
                                 seen += 1
-                                if prov._lookup(key, refresh, rt) != REQUESTING:
-                                    fresh.append(key)      # known already (asked a second time)
+                                if prov._lookup(key, policy, rt) != REQUESTING:
+                                    fresh.append(key)      # known already (asked a second time: used on a new day)
+                        elif kind == "desk":
+                            prov.set_desk_hours(*msg[1:])
                         elif kind == "history":
                             threading.Thread(target=_history, args=(prov, send) + tuple(msg[1:]),
                                              name="tto-bbg-history", daemon=True).start()
@@ -194,6 +205,16 @@ def _child_main(inbox, outbox, cfg: Dict[str, Any]) -> None:
                         batch = [(k, prov._values.get(k)) for k in set(keys).union(fresh) if k in registered]
                     _send_values(send, batch, seen, status)
                     last = now
+                if prov.usage_rev != told_rev and now - told_at >= USAGE_EVERY:
+                    told_rev, told_at = prov.usage_rev, now
+                    counts = prov.usage()
+                    if not counts and told:
+                        told = {}
+                        send(("usage", None))              # a new day: the dashboard starts its count afresh
+                    delta = {k: n for k, n in counts.items() if told.get(k) != n}
+                    if delta:
+                        told.update(delta)
+                        send(("usage", delta))
             except (EOFError, OSError):
                 raise
             except Exception as exc:  # noqa: BLE001 - the helper must survive anything but a lost dashboard
@@ -220,22 +241,24 @@ class IsolatedBloombergProvider(BloombergProvider):
 
     isolated = True
 
-    def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = 120.0,
+    def __init__(self, host: str = "localhost", port: int = 8194, stream: bool = True, price_poll: float = POLL_EVERY,
                  request_timeout: float = 45.0, max_hits_per_day: int = 400000, bfx: str = "off",
                  reconnect_wait: float = 10.0, queue_size: int = QUEUE_SIZE, interval: float = 0.0,
                  blpapi_name: Optional[str] = None, start_timeout: float = 60.0, pump: float = PUMP,
-                 silent_restart: float = SILENT_RESTART):
+                 silent_restart: float = SILENT_RESTART, budget: int = BUDGET):
         super(IsolatedBloombergProvider, self).__init__(
             host, port, stream=stream, price_poll=price_poll, request_timeout=request_timeout,
             max_hits_per_day=max_hits_per_day, bfx=bfx, reconnect_wait=reconnect_wait, queue_size=queue_size,
-            interval=interval)
+            interval=interval, budget=budget)
         self.blpapi_name = blpapi_name
         self.start_timeout = float(start_timeout)
         self._cfg = {"host": host, "port": int(port), "stream": bool(stream), "price_poll": float(price_poll),
                      "request_timeout": float(request_timeout), "max_hits_per_day": int(max_hits_per_day),
                      "reconnect_wait": float(reconnect_wait), "queue_size": int(queue_size or 0),
-                     "interval": float(interval or 0.0), "module": blpapi_name, "pump": float(pump)}
-        self._wanted: Dict[Tuple, Tuple[float, Optional[str]]] = {}     # everything asked for so far
+                     "interval": float(interval or 0.0), "module": blpapi_name, "pump": float(pump),
+                     "budget": int(budget or 0)}
+        self._wanted: Dict[Tuple, Tuple[str, Optional[str]]] = {}       # everything asked for so far: (policy, rt)
+        self._used: Dict[Tuple, int] = {}                                # ... the day each was last read (an ordinal)
         self._outbox: List[Tuple] = []                                   # ... and not sent to the helper yet
         self._sent = 0
         self._seen = 0
@@ -263,6 +286,8 @@ class IsolatedBloombergProvider(BloombergProvider):
         self._said = ""                      # the last word of this side in the log (a fault repeats every few seconds)
         self._kept: List[Tuple] = []         # answers kept from earlier today (preload): the helper's too
         self._got: Dict[Tuple, float] = {}   # key -> when its answer last came from the helper
+        self._desk_args: Optional[Tuple] = None      # (open, close, holidays): the desk's hours, told every helper
+        self._limit_iso = ""                 # Bloomberg's own daily limit, as the helpers said (a new one starts with it)
 
     # ================================================================== lifecycle
     def start(self) -> None:
@@ -292,9 +317,19 @@ class IsolatedBloombergProvider(BloombergProvider):
             child_rx, tx = ctx.Pipe(False)
             ends = [rx, child_tx, child_rx, tx]
             cfg = dict(self._cfg)
+            today = _dt.date.today()
             day, used = self._carry
-            cfg["hits_start"] = used if day == _dt.date.today() else 0
-            cfg["preload"] = self._kept
+            cfg["hits_start"] = used if day == today else 0
+            with self._lock:
+                # every answer held here - kept from earlier today and got since -: a new helper asks none of them again
+                held = {k: (v, t) for k, v, t in self._kept}
+                held.update({k: (v, t) for k, v, t in self.answers(0.0)})
+                cfg["preload"] = [(k, v, t) for k, (v, t) in held.items()]
+                if self.hits_day == today:
+                    cfg["kinds_start"] = dict(self.kinds)
+                    cfg["usage_start"] = dict(self.key_hits)
+            cfg["limit"] = self._limit_iso
+            cfg["desk"] = self._desk_args
             proc = ctx.Process(target=_child_main, args=(child_rx, child_tx, cfg), name="tto-bloomberg", daemon=True)
             proc.start()
             child_rx.close()                 # ours are the other two ends; with these closed here the pipes
@@ -377,14 +412,22 @@ class IsolatedBloombergProvider(BloombergProvider):
         self._threads = []
 
     # ================================================================== engine side (never blocks)
-    def _lookup(self, key: Tuple, refresh: float, rt_field: Optional[str] = None) -> Any:
+    def _lookup(self, key: Tuple, policy: str, rt_field: Optional[str] = None) -> Any:
         with self._lock:
             v = self._values.get(key)
             if key not in self._wanted:
                 # (an answer kept from earlier today is known here already: the helper is still told of the key -
                 # it keeps it as answered and asks again when it is due)
-                self._wanted[key] = (refresh, rt_field)
-                self._outbox.append((key, refresh, rt_field))
+                self._wanted[key] = (policy, rt_field)
+                self._used[key] = self._day_no
+                if rt_field is not None:
+                    self._rt_keys.setdefault((key[1], rt_field), []).append(key)     # (:meth:`quote`)
+                self._outbox.append((key, policy, rt_field))
+                self._wake.set()
+            elif self._used.get(key) != self._day_no:
+                # the first read of a new day: the helper hears of it (only what is used is ever asked again)
+                self._used[key] = self._day_no
+                self._outbox.append((key,) + self._wanted[key])
                 self._wake.set()
             return v if v is not None else REQUESTING
 
@@ -398,12 +441,11 @@ class IsolatedBloombergProvider(BloombergProvider):
                 self._got[key] = fetched
 
     def answers(self, since: float = 0.0) -> List[Tuple[Tuple, Any, float]]:
-        """As :meth:`BloombergProvider.answers`, from what the helper sent."""
-        from .bloomberg import KEEP_REFRESH
+        """As :meth:`BloombergProvider.answers`, from what the helper sent (every key but the one-off ones)."""
         out = []
         with self._lock:
-            for key, (refresh, rt) in self._wanted.items():
-                if rt is not None or refresh < KEEP_REFRESH:
+            for key, (policy, _rt) in self._wanted.items():
+                if policy == P_ONCE:
                     continue
                 t = self._got.get(key, 0.0)
                 v = self._values.get(key)
@@ -417,6 +459,39 @@ class IsolatedBloombergProvider(BloombergProvider):
         today = _dt.date.today()
         self._carry = (today, max(int(hits), used if day == today else 0))
         self.hits = self._carry[1]
+
+    def carry_day(self, kinds=None, usage=None, limit=None) -> None:
+        """As :meth:`BloombergProvider.carry_day`: what the first helper starts from."""
+        with self._lock:
+            self.hits_day = _dt.date.today()
+            for k, n in (kinds or {}).items():
+                self.kinds[k] = max(self.kinds.get(k, 0), int(n))
+            for k, n in (usage or {}).items():
+                self.key_hits[k] = max(self.key_hits.get(k, 0), int(n))
+            if limit:
+                self._limit_iso = str(limit)
+
+    def set_desk_hours(self, open_: str = "08:00", close: str = "19:00", holidays=()) -> None:
+        """As :meth:`BloombergProvider.set_desk_hours`, told to the helper (and to every helper started)."""
+        args = (str(open_), str(close), tuple(sorted(str(d) for d in holidays)))
+        super(IsolatedBloombergProvider, self).set_desk_hours(*args)
+        self._desk_args = args
+        self._post(("desk",) + args)
+
+    def usage(self) -> Dict[Tuple, int]:
+        """As :meth:`BloombergProvider.usage`, as the helper reported it (every few seconds)."""
+        with self._lock:
+            return dict(self.key_hits)
+
+    def _roll_local_day(self) -> None:
+        """The dashboard side's day (what a read counts on); a new one starts the day's counts afresh."""
+        today = _dt.date.today()
+        with self._lock:
+            if today != self.hits_day:
+                self.hits_day = today
+                self.kinds = {}
+                self.key_hits = {}
+            self._day_no = today.toordinal()
 
     def busy(self) -> bool:
         if self._gave_up or self._stop.is_set():
@@ -506,7 +581,10 @@ class IsolatedBloombergProvider(BloombergProvider):
                                   ("requests", 0), ("hits_today", 0), ("ticks", 0), ("last_tick", 0.0),
                                   ("limit_reached", False), ("interval", self.interval), ("queue_size", self.queue_size),
                                   ("slow", False), ("slow_warnings", 0), ("events_dropped", 0), ("messages_lost", 0),
-                                  ("resyncs", 0)):
+                                  ("resyncs", 0), ("budget", self.budget), ("max_hits", self.max_hits_per_day),
+                                  ("tier", 0), ("kinds", {}), ("bbg_limit", self._limit_iso), ("bbg_limit_text", ""),
+                                  ("desk", self.desk.as_dict() if self.desk is not None else None), ("quiet", False),
+                                  ("polled", {}), ("poll_every", self.price_poll), ("poll_empty", 0.0), ("fed", 0)):
                 st.setdefault(name, default)
             return st
 
@@ -528,6 +606,7 @@ class IsolatedBloombergProvider(BloombergProvider):
             self._wake.clear()
             if self._stop.is_set():
                 return
+            self._roll_local_day()
             with self._lock:
                 items, self._outbox = self._outbox, []
             for i in range(0, len(items), CHUNK):
@@ -568,6 +647,12 @@ class IsolatedBloombergProvider(BloombergProvider):
                 kind = msg[0]
                 if kind == "values":
                     self._apply(msg[1], msg[2], msg[3])
+                elif kind == "usage":
+                    with self._lock:
+                        if msg[1] is None:
+                            self.key_hits = {}           # the helper's day changed: its count starts afresh
+                        else:
+                            self.key_hits.update(msg[1])
                 elif kind in ("history", "bars", "ref"):
                     with self._lock:
                         waiter = self._waiters.get(msg[1])
@@ -593,6 +678,10 @@ class IsolatedBloombergProvider(BloombergProvider):
         self.events_dropped = int(status.get("events_dropped") or 0)
         self.messages_lost = int(status.get("messages_lost") or 0)
         self.resyncs = int(status.get("resyncs") or 0)
+        with self._lock:
+            if isinstance(status.get("kinds"), dict):
+                self.kinds = dict(status["kinds"])
+        self._limit_iso = str(status.get("bbg_limit") or "")
 
     def _apply(self, batch, seen: int, status: Dict[str, Any]) -> None:
         now = time.time()
@@ -701,11 +790,12 @@ class IsolatedBloombergProvider(BloombergProvider):
             if proc is not None:
                 self._kill(proc)
             return
-        with self._lock:                       # the new helper knows nothing: ask for everything again
-            self._outbox = [(k, r, f) for k, (r, f) in self._wanted.items()]
+        with self._lock:                       # the new helper is told every key; it holds their answers (preload)
+            self._outbox = [(k, p, f) for k, (p, f) in self._wanted.items()]
             self._sent = 0
             self._seen = 0
             self.restarts += 1
+            answered = sum(1 for k in self._wanted if self._values.get(k) not in (None, REQUESTING))
         self._wake.set()
-        self._say(logging.INFO, "Bloomberg yardımcı süreci yeniden başladı (%d. kez); %d kalem yeniden isteniyor"
-                  % (self.restarts, len(self._outbox)))
+        self._say(logging.INFO, "Bloomberg yardımcı süreci yeniden başladı (%d. kez); %d kalem, %d tanesinin cevabı elde "
+                  "(yeniden sorulmuyor)" % (self.restarts, len(self._outbox), answered))
