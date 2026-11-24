@@ -212,7 +212,9 @@ Tests: `tests/test_tradevalue.py` - `test_schedules_of_a_tenor_and_of_a_broken_d
     approved: "Önerini yap"; VİOP contracts 15 (`VIOP_PER_SYNC`). Which series are rationed:
     [market-data.md](market-data.md);
   - the sync still runs every 15 minutes ("Böyle kalsın", 15.11), but since 24.11 (cache first, below) a series' new
-    days are asked once a day, then its today's point comes from its live quote, else at most hourly - not every sync;
+    days are asked once a day, then its today's point comes from its live quote, else at most hourly - not every sync.
+    The desk's OK to that change of the 15.11 decision, 24.11.2026: "fetch new days once a day and take today's value
+    from the live price";
   - `SOFRRATE Index` is asked once a day after 16:30: not at a start before then, and not again after a restart the
     same day ("1 kalsın", 18.11).
 
