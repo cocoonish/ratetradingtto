@@ -1349,6 +1349,52 @@ def fr_major(pair: str, days: str) -> str:
     return 'IF(%s="EURTRY",%s,%s)' % (pair, rates["EURTRY"], rates["USDTRY"])
 
 
+def implied_try(fwd: str, spot: str, major: str, days: str) -> str:
+    """The simple ACT/360 TRY rate (%) an outright implies, ((fwd/spot)·(1 + major·g/360) − 1)·360/g·100: the exact
+    inverse of spot·(1 + TRY·g/360)/(1 + major·g/360), the outright of the Forward page's forward tables - the
+    value-date tables, the free forward list, TOPLU FORWARD, FORWARD STARTING SWAP's far leg, ÇAPRAZ FORWARD.  The one
+    way back of their two-way cells and of their "elle" columns (``major`` and ``days`` as each table counts them)."""
+    return "((%s/%s)*(1+%s/100*%s/360)-1)*360/%s*100" % (fwd, spot, major, days, days)
+
+
+#: The value-date tables and the free forward list two-way (tto/twoway.py; the desk, 24.11.2026: "Bu söylediklerin ve tüm
+#: tablolar bu şekilde olmalı, kolay çalışmamız için"): an outright, points or points per day typed into a row is kept
+#: on the same row - bid, then ask -, the TRY rate it gives beside them; the TRY % typed stays where it always was
+FR_TW_STORES = (("N", "O", "P"), ("Q", "R", "S"))      # (fwd, puan, P/gün) typed: bid, ask
+FR_TW_RATE = ("T", "U")                               # the TRY bid / ask % the typed one gives ("" when none)
+FR_TW_HEAD = ["Yazılan fwd bid", "Yazılan puan bid", "Yazılan P/gün bid", "Yazılan fwd ask", "Yazılan puan ask",
+              "Yazılan P/gün ask", "Yazılandan TRY bid %", "Yazılandan TRY ask %"]
+FR_LIST_TW = ("Z", "AA", "AB")                        # the free list: swap and forward typed, the minor % they give
+
+
+def _fr_side(b: "SheetBuilder", r: int, i: int, side: int, default: str) -> None:
+    """One side of a value-date table's row, two-way (tto/twoway.py): its TRY % (bid B / ask D: the input it always
+    was, in place - its default the curve's rate, or the rate the value typed gives), outright (E / G), points (H / J)
+    and points per day (K / M); any of the four can be typed, the one typed last stands.  An outright, points or points
+    per day typed is kept in ``FR_TW_STORES``, the TRY rate it gives in ``FR_TW_RATE``: :func:`implied_try` of the
+    outright typed, or of spot + points (points per day · days).  The sheet's own formulas otherwise: bid = spot·(1 + TRY
+    bid·g/360)/(1 + major ask·g/360) - the ask side with the major's bid -, points = (fwd − spot)·10000, per day ÷ days.
+    ``i``: the table's row of the value date (days D, spot F, major bid H / ask L); ``default``: the TRY rate's default
+    formula.  Nothing typed: every value as before."""
+    rate, fwd, pts, ppd, major = (("B", "E", "H", "K", "L"), ("D", "G", "J", "M", "H"))[side]
+    sf, sp, sd = FR_TW_STORES[side]
+    hub = FR_TW_RATE[side]
+    f = {"r": r, "i": i, "rate": rate, "fwd": fwd, "pts": pts, "ppd": ppd, "maj": major, "sf": sf, "sp": sp, "sd": sd, "hub": hub}
+    none = "AND(ISBLANK($%(sf)s%(r)d),ISBLANK($%(sp)s%(r)d),ISBLANK($%(sd)s%(r)d))" % f
+    typed = "$F$%(i)d+IF(ISBLANK($%(sp)s%(r)d),$%(sd)s%(r)d*$D$%(i)d,$%(sp)s%(r)d)/10000" % f        # spot + points typed
+    back = implied_try("IF(ISBLANK($%s%d),%s,$%s%d)" % (sf, r, typed, sf, r), "$F$%d" % i, "$%s$%d" % (major, i), "$D$%d" % i)
+    b.set("%s%d" % (hub, r), '=IF(%s,"",IFERROR(%s,NA()))' % (none, back), fmt="0.0000")
+    b.input("%s%d" % (rate, r), '=IF(%s,%s,IF(ISNUMBER($%s%d),$%s%d,""))' % (none, default.lstrip("="), hub, r, hub, r), fmt="0.0000")
+    own = 'IFERROR($F$%(i)d*(1+$%(rate)s%(r)d/100/360*$D$%(i)d)/(1+$%(maj)s$%(i)d/100/360*$D$%(i)d),"")' % f
+    b.set("%s%d" % (fwd, r), '=IF(ISBLANK($%s%d),IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,IFERROR(%s,"")),$%s%d)'
+          % (sf, r, sp, r, sd, r, own, typed, sf, r), fmt=NUM4, bold=True)
+    b.set("%s%d" % (pts, r), ('=IF(ISBLANK($%(sp)s%(r)d),IF(ISBLANK($%(sd)s%(r)d),IFERROR(($%(fwd)s%(r)d-$F$%(i)d)*10000,""),'
+                              'IFERROR($%(sd)s%(r)d*$D$%(i)d,"")),$%(sp)s%(r)d)') % f, fmt=INT0)
+    b.set("%s%d" % (ppd, r), '=IF(ISBLANK($%(sd)s%(r)d),IFERROR($%(pts)s%(r)d/$D$%(i)d,""),$%(sd)s%(r)d)' % f, fmt="#,##0.0")
+    for col, fmt in ((sf, NUM4), (sp, INT0), (sd, "#,##0.0")):
+        b.input("%s%d" % (col, r), None, fmt=fmt)
+
+
 def _tto_fwd_rates(model: Model) -> None:
     """The Forward page's pricing tables.  Every input is a cell to type over (blank = back to the market), seen by
     whoever typed it only.
@@ -1360,6 +1406,11 @@ def _tto_fwd_rates(model: Model) -> None:
     * the free forward list: any start and end date; the outright at the start, the major and the minor rate of the
       period come from the curves, and the four TRY curves' simple zero rates at the end date stand beside it.
     * the four TRY curves' simple zero rates at the value date, the usual tenors and dates of one's own.
+
+    Two-way (tto/twoway.py; the desk, 24.11.2026: "tüm tablolar bu şekilde olmalı"): in the value-date tables a row
+    side's TRY %, outright, points and points per day (:func:`_fr_side`), in the free list a row's minor %, swap and
+    forward - whichever is typed last stands, the others are worked out from it.  A value typed stays as typed when the
+    value date (``Forward!D2``) changes, as a TRY rate typed always did: the others follow the new date's days.
     """
     b = SheetBuilder(model, FWD_SHEET)
     pct = "0.0000"
@@ -1389,6 +1440,7 @@ def _tto_fwd_rates(model: Model) -> None:
         b.input("L%d" % i, mask, fmt=pct)
         b.head("A%d" % (t + 2), ["Eğri", "TRY bid %", "TRY mid %", "TRY ask %", pair + " bid", pair + " mid", pair + " ask",
                                  "Puan bid", "Puan mid", "Puan ask", "P/gün bid", "P/gün mid", "P/gün ask"])
+        b.head("%s%d" % (FR_TW_STORES[0][0], t + 2), FR_TW_HEAD)
         if usd:
             rows = [(name, "=Forward!%s*100" % bid, "=Forward!%s*100" % ask) for name, _, bid, ask in FR_CURVES]
             # "Elle": the chosen curve's mid - or the mid typed - plus the spread, the curve's own width or the one typed
@@ -1404,17 +1456,14 @@ def _tto_fwd_rates(model: Model) -> None:
             r = t + 3 + k
             f = {"r": r, "i": i}
             b.set("A%d" % r, name, bold=True, align="center")
-            b.input("B%d" % r, bid, fmt=pct)
+            # the mids: of the two sides as they stand (typed or worked out), never typed themselves
             b.set("C%d" % r, '=IFERROR(($B%(r)d+$D%(r)d)/2,"")' % f, fmt=pct)
-            b.input("D%d" % r, ask, fmt=pct)
-            # the sheet's formula: bid = spot·(1 + TRY bid·g/360)/(1 + major ask·g/360), the ask side the other way round
-            b.set("E%d" % r, '=IFERROR($F$%(i)d*(1+$B%(r)d/100/360*$D$%(i)d)/(1+$L$%(i)d/100/360*$D$%(i)d),"")' % f, fmt=NUM4, bold=True)
             b.set("F%d" % r, '=IFERROR(($E%(r)d+$G%(r)d)/2,"")' % f, fmt=NUM4)
-            b.set("G%d" % r, '=IFERROR($F$%(i)d*(1+$D%(r)d/100/360*$D$%(i)d)/(1+$H$%(i)d/100/360*$D$%(i)d),"")' % f, fmt=NUM4, bold=True)
-            for col, src in (("H", "E"), ("I", "F"), ("J", "G")):
-                b.set("%s%d" % (col, r), '=IFERROR(($%s%d-$F$%d)*10000,"")' % (src, r, i), fmt=INT0)
-            for col, src in (("K", "H"), ("L", "I"), ("M", "J")):
-                b.set("%s%d" % (col, r), '=IFERROR($%s%d/$D$%d,"")' % (src, r, i), fmt="#,##0.0")
+            b.set("I%d" % r, '=IFERROR(($F%(r)d-$F$%(i)d)*10000,"")' % f, fmt=INT0)
+            b.set("L%d" % r, '=IFERROR($I%(r)d/$D$%(i)d,"")' % f, fmt="#,##0.0")
+            # each side two-way: its TRY %, outright, points and points per day (bid, then ask)
+            _fr_side(b, r, i, 0, bid)
+            _fr_side(b, r, i, 1, ask)
         last = t + 3 + len(rows)
         if usd:
             s = usd_set
@@ -1447,6 +1496,7 @@ def _tto_fwd_rates(model: Model) -> None:
     b.head("A%d" % h, ["Parite", "Başlangıç", "Bitiş", "Gün", "Spot", "Major %", "Minor %", "Swap", "Forward"] + [n + " %" for n in FR_NAMES])
     b.head("O%d" % h, ["Spot valörü", "Gün başl.", "Gün bitiş", "TRY gün başl.", "TRY gün bitiş", "TRY % başl.", "TRY % bitiş",
                        "Major % başl.", "Major % bitiş", "Parite spotu", "Eğri"])
+    b.head("%s%d" % (FR_LIST_TW[0], h), ["Yazılan swap", "Yazılan forward", "Yazılandan minor %"])
     for r in range(h + 1, h + 1 + FR_FREE):
         f = {"r": r, "c": c, "usd": FR_USD + 1, "eur": FR_EUR + 1, "names": names}
         b.input("A%d" % r, "USDTRY", align="center")
@@ -1460,10 +1510,23 @@ def _tto_fwd_rates(model: Model) -> None:
         # the rates of the period start -> end, from the zero rates of the two dates
         period = '=IFERROR(IF(N($D%(r)d)<=0,"",((1+$%(e)s%(r)d/100*$Q%(r)d/360)/(1+$%(s)s%(r)d/100*$P%(r)d/360)-1)*360/$D%(r)d*100),"")'
         b.input("F%d" % r, period % dict(f, e="W", s="V"), fmt=pct)
-        b.input("G%d" % r, period % dict(f, e="U", s="T"), fmt=pct)
-        b.set("H%d" % r, '=IFERROR(IF($I%(r)d="","",($I%(r)d-$E%(r)d)*10000),"")' % f, fmt=INT0, bold=True)
-        b.set("I%d" % r, '=IFERROR(IF(N($D%(r)d)<=0,"",$E%(r)d*(1+$G%(r)d/100*$D%(r)d/360)/(1+$F%(r)d/100*$D%(r)d/360)),"")' % f,
-              fmt=NUM4, bold=True)
+        # two-way (tto/twoway.py): minor %, swap and forward - any can be typed, the one typed last stands.  A swap or a
+        # forward typed is kept in FR_LIST_TW, the minor % it gives beside them (implied_try of the forward, or of spot +
+        # swap / 10000, on the row's own spot at the start, major % and days); the minor % typed stays in G, as ever
+        sw, fw, hub = FR_LIST_TW
+        f.update(sw=sw, fw=fw, hub=hub, none="AND(ISBLANK($%s%d),ISBLANK($%s%d))" % (sw, r, fw, r))
+        typed = "IF(ISBLANK($%(fw)s%(r)d),$E%(r)d+$%(sw)s%(r)d/10000,$%(fw)s%(r)d)" % f
+        b.set("%s%d" % (hub, r), '=IF(%s,"",IF(N($D%d)<=0,"",IFERROR(%s,NA())))'
+              % (f["none"], r, implied_try(typed, "$E%d" % r, "$F%d" % r, "$D%d" % r)), fmt=pct)
+        b.input("G%d" % r, '=IF(%s,%s,IF(ISNUMBER($%s%d),$%s%d,""))' % (f["none"], (period % dict(f, e="U", s="T"))[1:], hub, r, hub, r),
+                fmt=pct)
+        b.set("H%d" % r, ('=IF(ISBLANK($%(sw)s%(r)d),IFERROR(IF($I%(r)d="","",($I%(r)d-$E%(r)d)*10000),""),$%(sw)s%(r)d)') % f,
+              fmt=INT0, bold=True)
+        b.set("I%d" % r, ('=IF(ISBLANK($%(fw)s%(r)d),IF(ISBLANK($%(sw)s%(r)d),'
+                          'IFERROR(IF(N($D%(r)d)<=0,"",$E%(r)d*(1+$G%(r)d/100*$D%(r)d/360)/(1+$F%(r)d/100*$D%(r)d/360)),""),'
+                          'IFERROR(IF(N($D%(r)d)<=0,"",$E%(r)d+$%(sw)s%(r)d/10000),"")),$%(fw)s%(r)d)') % f, fmt=NUM4, bold=True)
+        b.input("%s%d" % (sw, r), None, fmt=INT0)
+        b.input("%s%d" % (fw, r), None, fmt=NUM4)
         for k, name in enumerate(FR_NAMES):
             b.set("%s%d" % ("JKLM"[k], r), '=IFERROR(IF(ISNUMBER($S%d),%s,""),"")' % (r, fr_rate(name, "$S%d" % r)), fmt="0.00")
         # helpers: the pair's spot date, days from it (the accrual, the major's curve) and from the USDTRY spot date (the
@@ -1920,6 +1983,13 @@ BULK_COLS = "CDEFGHJKNOPQ"        # the formula columns of Forward!B144:Q144 (B:
 #: a row as a trade ("İşleme al"; the desk, 24.11.2026: "3 ekle"): its Parite, Yön, Tutar and Karşı taraf, typed - right
 #: after the way back's R..U, on cells no input ever stood on (a value a user typed is kept by its cell)
 BULK_PAIR, BULK_DIR, BULK_AMOUNT, BULK_CPT = "V", "W", "X", "Y"
+#: two-way (tto/twoway.py; the desk, 24.11.2026: "tüm tablolar bu şekilde olmalı"): a row's Manuel TRY % (L, where it
+#: always was), USDTRY fwd / puan (N / O) and EURTRY fwd / puan (P / Q) - one TRY rate prices both pairs, so a forward
+#: typed for one moves the other's.  A fwd or puan typed is kept in these columns of its row, the TRY rate it gives in
+#: BULK_TW_RATE; the group is BULK_TW_ID of the Forward page ("İşleme al" books a USDTRY fwd / puan typed as the outright)
+BULK_TW_ID = "toplu-forward"
+BULK_TW_STORES = ("Z", "AA", "AB", "AC")          # USDTRY fwd, USDTRY puan, EURTRY fwd, EURTRY puan typed
+BULK_TW_RATE = "AD"
 _ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_!$.':])\$[A-Z]{1,3}\$\d+(?::\$[A-Z]{1,3}\$\d+)?(?![A-Za-z0-9_(])")
 
 
@@ -1963,11 +2033,34 @@ def _bulk_forward_check(model: Model) -> None:
     _need_formula(model, "Forward", "P144", "/(1+K144/100*($B144-$K$2)/360)")
 
 
+def _bulk_twoway(col: str, r: int, body: str) -> str:
+    """A TOPLU FORWARD cell of row ``r`` as the two-way table has it (without "="): the USDTRY / EURTRY fwd and puan show
+    what is typed into them (``BULK_TW_STORES``) - a puan typed gives fwd = spot + puan / 10000 -, else the sheet's own
+    formula (``body``) off the row's TRY rate: Manuel TRY % - typed, or the one a fwd / puan typed gives - else RET mid.
+    Every other column as it is."""
+    su, sp, se, sq = BULK_TW_STORES
+    f = {"r": r, "body": body, "su": su, "sp": sp, "se": se, "sq": sq}
+    if col == "N":
+        return 'IF(ISBLANK($%(su)s%(r)d),IF(ISBLANK($%(sp)s%(r)d),%(body)s,IF($C%(r)d="","",Forward!$F$2+$%(sp)s%(r)d/10000)),$%(su)s%(r)d)' % f
+    if col == "O":
+        return "IF(ISBLANK($%(sp)s%(r)d),%(body)s,$%(sp)s%(r)d)" % f
+    if col == "P":
+        return 'IF(ISBLANK($%(se)s%(r)d),IF(ISBLANK($%(sq)s%(r)d),%(body)s,IF($C%(r)d="","",Forward!$G$2+$%(sq)s%(r)d/10000)),$%(se)s%(r)d)' % f
+    if col == "Q":
+        return "IF(ISBLANK($%(sq)s%(r)d),%(body)s,$%(sq)s%(r)d)" % f
+    return body
+
+
 def _tto_bulk_forward(model: Model) -> None:
     """The Forward sheet's bulk forward table with 100 rows instead of 20 - the sheet's own formulas, row by row,
     the curves and spots still read from the Forward sheet.  Every value date and manual TRY rate starts empty: the
     dates the file was saved with are nobody's choice today (as ``EMPTY_BY_DEFAULT``); what a user types is theirs.
-    The page shows as many rows as are filled, one more on demand."""
+    The page shows as many rows as are filled, one more on demand.
+
+    Two-way (tto/twoway.py; the desk, 24.11.2026): a row's Manuel TRY %, USDTRY fwd / puan and EURTRY fwd / puan - the
+    one typed last stands, the others are worked out from it (:func:`_bulk_twoway`; the TRY rate a fwd / puan typed gives:
+    :func:`implied_try` on the row's spot, USD / EUR % and days).  One TRY rate prices both pairs: a USDTRY fwd typed
+    moves the row's EURTRY fwd, and the other way round.  The "elle" columns (R..U) stay as they were."""
     b = SheetBuilder(model, BULK_SHEET)
     b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid)")
     heads = [model.sheet("Forward").consts.get(parse_a1("%s143" % c)) for c in "BCDEFGHIJKLMNOPQ"]
@@ -1982,21 +2075,33 @@ def _tto_bulk_forward(model: Model) -> None:
     b.head("R4", ["USDTRY fwd (elle)", "İma TRY %", "EURTRY fwd (elle)", "İma TRY %"])
     # a row as a trade (the desk, 24.11.2026: "3 ekle"): what "İşleme al" books it as - the price is the row's own
     b.head(BULK_PAIR + "4", ["Parite", "Yön", "Tutar", "Karşı taraf"])
-    eur_days = "($B%(r)d-Forward!$K$2)"
+    b.head(BULK_TW_STORES[0] + "4", ["Yazılan USDTRY fwd", "Yazılan USDTRY puan", "Yazılan EURTRY fwd", "Yazılan EURTRY puan",
+                                     "Yazılandan TRY %"])
     for k in range(BULK_ROWS):
         r = BULK_FIRST + k
-        f = {"r": r}
         b.input("B%d" % r, None, fmt=DATE)
-        b.input("L%d" % r, None, fmt="0.0000")
+        usd, eur = "$C%d" % r, "($B%d-Forward!$K$2)" % r           # the days of USDTRY and of EURTRY (from its spot date)
         for col in BULK_COLS:
             body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
-            b.set("%s%d" % (col, r), "=" + body, like=None, fmt=_BULK_FMT.get(col, NUM4))
+            b.set("%s%d" % (col, r), "=" + _bulk_twoway(col, r, body), like=None, fmt=_BULK_FMT.get(col, NUM4))
+        # two-way: the Manuel TRY % where it always was (in place) - its default the TRY rate a fwd / puan typed gives
+        su, sp, se, sq = BULK_TW_STORES
+        f = {"r": r, "su": su, "sp": sp, "se": se, "sq": sq, "hub": BULK_TW_RATE}
+        none = "AND(ISBLANK($%(su)s%(r)d),ISBLANK($%(sp)s%(r)d),ISBLANK($%(se)s%(r)d),ISBLANK($%(sq)s%(r)d))" % f
+        typed_usd = "IF(ISBLANK($%(su)s%(r)d),Forward!$F$2+$%(sp)s%(r)d/10000,$%(su)s%(r)d)" % f
+        typed_eur = "IF(ISBLANK($%(se)s%(r)d),Forward!$G$2+$%(sq)s%(r)d/10000,$%(se)s%(r)d)" % f
+        b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,%s),NA())))'
+              % (none, r, su, r, sp, r, implied_try(typed_eur, "Forward!$G$2", "$K%d" % r, eur),
+                 implied_try(typed_usd, "Forward!$F$2", "$J%d" % r, usd)), fmt="0.0000")
+        b.input("L%d" % r, '=IF(%s,"",IF(ISNUMBER($%s%d),$%s%d,""))' % (none, BULK_TW_RATE, r, BULK_TW_RATE, r), fmt="0.0000")
+        for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0)):
+            b.input("%s%d" % (col, r), None, fmt=fmt)
         b.input("R%d" % r, None, fmt=NUM4)
-        b.set("S%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($R%(r)d))),"",(($R%(r)d/Forward!$F$2)*(1+$J%(r)d/100*$C%(r)d/360)-1)'
-                          '*360/$C%(r)d*100),"")') % f, fmt="0.0000", bold=True)
+        b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, implied_try("$R%d" % r, "Forward!$F$2", "$J%d" % r, usd)),
+              fmt="0.0000", bold=True)
         b.input("T%d" % r, None, fmt=NUM4)
-        b.set("U%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($T%(r)d))),"",(($T%(r)d/Forward!$G$2)*(1+$K%(r)d/100*' + eur_days
-                          + '/360)-1)*360/' + eur_days + '*100),"")') % f, fmt="0.0000", bold=True)
+        b.set("U%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($T%d))),"",%s),"")' % (r, r, implied_try("$T%d" % r, "Forward!$G$2", "$K%d" % r, eur)),
+              fmt="0.0000", bold=True)
         for col in (BULK_PAIR, BULK_DIR, BULK_CPT):
             b.input("%s%d" % (col, r), None)
         b.input("%s%d" % (BULK_AMOUNT, r), None, fmt=INT0)
@@ -2069,15 +2174,14 @@ def _tto_fwd_back(model: Model) -> None:
             b.set("G%d" % r, '=IF(%s,G177,"")' % ok, like="G179")
             b.set("H%d" % r, '=IF(%s,G%d+I%d/10000,"")' % (ok, r, r), like="H179")
             b.set("F%d" % r, '=IF(%s,IF(ISNUMBER($C$170),$C$170,F177),"")' % ok, like="F179")
-            b.set("E%d" % r, '=IFERROR(IF(%s,((H%d/G%d)*(1+F%d/100*$H$167/360)-1)*360/$H$167*100,""),"")' % (ok, r, r, r), like="E179",
+            b.set("E%d" % r, '=IFERROR(IF(%s,%s,""),"")' % (ok, implied_try("H%d" % r, "G%d" % r, "F%d" % r, "$H$167")), like="E179",
                   bold=True)
             b.set("J%d" % r, '=IF(%s,I%d/$H$167,"")' % (ok, r), like="J179")
         else:
-            eur = "MAX(0,$G$168-$F$168)"                    # the period on the EURTRY spot dates, as N179 counts it
             b.set("L%d" % r, '=IF(%s,L177,"")' % ok, like="L179")
             b.set("N%d" % r, '=IF(%s,L%d+O%d/10000,"")' % (ok, r, r), like="N179")
             b.set("K%d" % r, '=IF(%s,IF(ISNUMBER($C$171),$C$171,K177),"")' % ok, like="K179")
-            b.set("E%d" % r, '=IFERROR(IF(%s,((N%d/L%d)*(1+K%d/100*%s/360)-1)*360/%s*100,""),"")' % (ok, r, r, r, eur, eur), like="E179",
+            b.set("E%d" % r, '=IFERROR(IF(%s,%s,""),"")' % (ok, implied_try("N%d" % r, "L%d" % r, "K%d" % r, FS_EUR_DAYS)), like="E179",
                   bold=True)
         b.set("D%d" % r, '=IFERROR(IF(%s,((1+C%d/100*$F$167/360)*(1+E%d/100*$H$167/360)-1)*360/$G$167*100,""),"")' % (ok, r, r), like="D179")
         for col, ref, _ in FS_BACK_BP:
@@ -2088,13 +2192,124 @@ def _tto_fwd_back(model: Model) -> None:
     b.set("S%d" % (r1 - 1), "İma TRY %", like="Q%d" % (r1 - 1))
     b.set("T%d" % (r1 - 1), "− RET mid (bp)", like="Q%d" % (r1 - 1))
     for r in range(r1, r2 + 1):
-        f = {"r": r, "c": _CCY}
-        usd = "((%(x)s/$F$2)*(1+$G%(r)d/100*$C%(r)d/360)-1)*360/$C%(r)d*100"
+        f = {"r": r}
         b.input("R%d" % r, None, fmt=NUM4)
-        b.set("S%d" % r, ('=IFERROR(IF(OR($C%(r)d="",NOT(ISNUMBER($R%(r)d))),"",IF(%(c)s="USD",' + usd % {"x": "$R%(r)d", "r": r}
-                          + ',IF(%(c)s="EUR",(($R%(r)d/$G$2)*(1+$H%(r)d/100*($B%(r)d-$K$2)/360)-1)*360/($B%(r)d-$K$2)*100,'
-                          + usd % {"x": "$R%(r)d*AVERAGE($K%(r)d,$L%(r)d)", "r": r} + '))),"")') % f, fmt="0.0000", bold=True)
+        b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, cross_rate("$R%d" % r, r)), fmt="0.0000", bold=True)
         b.set("T%d" % r, '=IFERROR(IF($S%(r)d="","",($S%(r)d-AVERAGE($D%(r)d,$E%(r)d))*100),"")' % f, fmt="0.0")
+
+
+def cross_rate(fwd: str, r: int) -> str:
+    """The TRY rate (%) a XXXTRY forward of ÇAPRAZ FORWARD's row ``r`` implies, the foreign leg held: the inverse of the
+    row's manual forward (Q) - USD and EUR on their OIS % and days (EURTRY's from its spot date), another currency
+    through Bloomberg's USDXXX forward (the mid of K / L), its USDTRY leg on the USD % (:func:`implied_try`)."""
+    return ('IF(%s="USD",%s,IF(%s="EUR",%s,%s))'
+            % (_CCY, implied_try(fwd, "$F$2", "$G%d" % r, "$C%d" % r), _CCY, implied_try(fwd, "$G$2", "$H%d" % r, "($B%d-$K$2)" % r),
+               implied_try("%s*AVERAGE($K%d,$L%d)" % (fwd, r, r), "$F$2", "$G%d" % r, "$C%d" % r)))
+
+
+# ---------------------------------------------------------------------------------------------- Forward: two-way tables
+#: FORWARD STARTING SWAP's "Manuel" row and ÇAPRAZ FORWARD two-way (tto/twoway.py; the desk, 24.11.2026: "Bu
+#: söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için"): what is typed into a member with no cell of
+#: its own is kept beside it, the TRY rate it gives next to that - on cells empty in the workbook, no input ever stood on
+FS_CROSS_TW_NAME = "Forward iki yönlü tablolar"
+FS_TW_ROW = 179
+FS_TW_MEMBERS =("D", "H", "I", "J", "N", "O")         # TRY far %, far outright, FS puan, günlük puan, EURTRY far, EURTRY puan
+FS_TW_STORES = ("U", "V", "W", "X", "Y", "Z")         # ... what is typed into each, on the same row
+FS_TW_RATE = "AA"                                     # the TRY fwd-fwd % the typed one gives (the default of C169)
+FS_TW_HEAD = ["Yazılan TRY far %", "Yazılan far outright", "Yazılan FS puan", "Yazılan günlük puan", "Yazılan EURTRY far",
+              "Yazılan EURTRY puan", "Yazılandan TRY fwd-fwd %"]
+FS_EUR_DAYS = "MAX(0,$G$168-$F$168)"                  # the period on the EURTRY spot dates, as N179 counts it
+CROSS_TW_ID = "capraz-forward"                        # ÇAPRAZ FORWARD's group on the Forward page
+CROSS_TW_STORE, CROSS_TW_RATE = "U", "V"              # its manual forward typed (Q), the TRY % it gives (the default of F)
+CROSS_CCY = "C197"                                    # its currency: a forward typed is a forward of the currency it was typed in
+FS_CROSS_TW_CELLS = (["%s%d" % (c, FS_TW_ROW - 1) for c in FS_TW_STORES + (FS_TW_RATE,)]
+                + ["%s%d" % (c, FS_TW_ROW) for c in FS_TW_STORES + (FS_TW_RATE,)]
+                + ["%s%d" % (c, r) for r in range(CROSS_ROWS[0] - 1, CROSS_ROWS[1] + 1) for c in (CROSS_TW_STORE, CROSS_TW_RATE)])
+
+
+def cross_currency(v: Any) -> str:
+    """ÇAPRAZ FORWARD's currency as its formulas read ``Forward!C197`` (``_CCY``): trimmed, upper case, blank = USD."""
+    return (" ".join(v.split()).upper() if isinstance(v, str) else "") or "USD"
+
+
+def _fwd_twoway_check(model: Model) -> None:
+    """The workbook's "Manuel" row of FORWARD STARTING SWAP and ÇAPRAZ FORWARD's manual forward, whose formulas the
+    two-way cells wrap and invert (as the ways back read them), their typed inputs C169 and F200:F214 blank in the
+    workbook, and the cells taken empty."""
+    _need_sheets(model, "Forward")
+    for addr, text in (("C179", "C177"), ("G179", "G177"), ("L179", "L177"), ("E179", "$C$169"),
+                       ("F179", "IF(ISNUMBER($C$170),$C$170,F177)"), ("K179", "IF(ISNUMBER($C$171),$C$171,K177)"),
+                       ("D179", "((1+C179/100*$F$167/360)*(1+$C$169/100*$H$167/360)-1)*360/$G$167*100"),
+                       ("H179", "G179*(1+E179/100*$H$167/360)/(1+F179/100*$H$167/360)"), ("I179", "(H179-G179)*10000"),
+                       ("J179", "I179/$H$167"), ("O179", "(N179-L179)*10000"),
+                       ("N179", "L179*(1+E179/100*%s/360)/(1+K179/100*%s/360)" % (FS_EUR_DAYS, FS_EUR_DAYS))):
+        _need_formula(model, "Forward", addr, text)
+        _need_formula(model, "Forward", addr, 'AND($F$169="OK",ISNUMBER($C$169))')
+    _need_formula(model, "Forward", "F169", '"OK"')
+    for r in range(CROSS_ROWS[0], CROSS_ROWS[1] + 1):
+        for text in ("NOT(ISNUMBER($F%d))" % r, "$F$2*(1+$F%d/100*$C%d/360)/(1+$G%d/100*$C%d/360)" % (r, r, r, r),
+                     "$G$2*(1+$F%d/100*($B%d-$K$2)/360)/(1+$H%d/100*($B%d-$K$2)/360)" % (r, r, r, r), ")/AVERAGE(K%d,L%d)" % (r, r)):
+            _need_formula(model, "Forward", "Q%d" % r, text)
+    sh = model.sheet("Forward")
+    for addr in ["C169"] + ["F%d" % r for r in range(CROSS_ROWS[0], CROSS_ROWS[1] + 1)] + FS_CROSS_TW_CELLS:
+        if parse_a1(addr) in sh.fml or sh.consts.get(parse_a1(addr)) not in (None, ""):
+            raise ValueError("Forward!%s boş değil" % addr)
+
+
+def _tto_fwd_twoway(model: Model) -> None:
+    """FORWARD STARTING SWAP's "Manuel" row and ÇAPRAZ FORWARD, two-way (tto/twoway.py): the one typed last stands, the
+    others are worked out from it with the row's own formulas and their exact inverses.
+
+    * FORWARD STARTING SWAP: the TRY fwd-fwd % (C169, the input it always was - in place: its default the rate the
+      value typed in the row gives, blank otherwise, so the row shows only once a rate is there, as before), the far
+      TRY % (D179), the far outright, FS points and points per day of USDTRY (H179, I179, J179) and of EURTRY (N179,
+      O179).  One TRY fwd-fwd % prices both legs: a USDTRY value typed moves the EURTRY ones, and the other way round.
+      Each typed value is kept in ``FS_TW_STORES``, the rate it gives in ``FS_TW_RATE``: the far TRY % through D179's
+      own formula, an outright through :func:`implied_try` on the near outright, the USD / EUR fwd-fwd % and the period
+      (EURTRY on its own spot dates: no rate when that period is 0).  The "Elle puan → faiz" rows stay.
+    * ÇAPRAZ FORWARD: each row's Manuel TRY % (F, in place) and its manual XXXTRY forward (Q, kept in
+      ``CROSS_TW_STORE``; the rate it gives - :func:`cross_rate`, the "elle" column's own - in ``CROSS_TW_RATE``).  A
+      forward typed belongs to the currency it was typed in: a change of the currency (C197) takes the typed forwards
+      away (``Service._cross_typed_forwards``); a TRY % typed stays.
+    """
+    b = SheetBuilder(model, "Forward")
+    r = FS_TW_ROW
+    b.head("%s%d" % (FS_TW_STORES[0], r - 1), FS_TW_HEAD)
+    stores = dict(zip(FS_TW_MEMBERS, FS_TW_STORES))
+    f = {"r": r, "hub": FS_TW_RATE, "ok": 'AND($F$169="OK",ISNUMBER($C$169))'}
+    f.update(("s" + m, s) for m, s in stores.items())
+    none = "AND(%s)" % ",".join("ISBLANK($%s$%d)" % (s, r) for s in FS_TW_STORES)
+    far_usd = "IF(ISBLANK($%(sH)s$%(r)d),$G$177+IF(ISBLANK($%(sI)s$%(r)d),$%(sJ)s$%(r)d*$H$167,$%(sI)s$%(r)d)/10000,$%(sH)s$%(r)d)" % f
+    far_eur = "IF(ISBLANK($%(sN)s$%(r)d),$L$177+$%(sO)s$%(r)d/10000,$%(sN)s$%(r)d)" % f
+    usd_typed = "OR(NOT(ISBLANK($%(sH)s$%(r)d)),NOT(ISBLANK($%(sI)s$%(r)d)),NOT(ISBLANK($%(sJ)s$%(r)d)))" % f
+    back = ("IF(NOT(ISBLANK($%(sD)s$%(r)d)),((1+$%(sD)s$%(r)d/100*$G$167/360)/(1+$C$177/100*$F$167/360)-1)*360/$H$167*100," % f
+            + "IF(%s,%s,%s))" % (usd_typed, implied_try(far_usd, "$G$177", "IF(ISNUMBER($C$170),$C$170,$F$177)", "$H$167"),
+                                 implied_try(far_eur, "$L$177", "IF(ISNUMBER($C$171),$C$171,$K$177)", FS_EUR_DAYS)))
+    b.set("%s%d" % (FS_TW_RATE, r), '=IF(%s,"",IF($F$169<>"OK","",IFERROR(%s,NA())))' % (none, back), fmt="0.0000")
+    b.patch("C169", '=IF(%s,"",IF(ISNUMBER($%s$%d),$%s$%d,""))' % (none, FS_TW_RATE, r, FS_TW_RATE, r))
+    old = {m: formula_of(model, "Forward", "%s%d" % (m, r)) for m in FS_TW_MEMBERS}
+    f.update(("o" + m, t) for m, t in old.items())
+    b.patch("D%d" % r, "=IF(ISBLANK($%(sD)s$%(r)d),%(oD)s,$%(sD)s$%(r)d)" % f)
+    b.patch("H%d" % r, ('=IF(ISBLANK($%(sH)s$%(r)d),IF(AND(ISBLANK($%(sI)s$%(r)d),ISBLANK($%(sJ)s$%(r)d)),%(oH)s,'
+                        'IF(%(ok)s,G%(r)d+IF(ISBLANK($%(sI)s$%(r)d),$%(sJ)s$%(r)d*$H$167,$%(sI)s$%(r)d)/10000,"")),$%(sH)s$%(r)d)') % f)
+    b.patch("I%d" % r, ('=IF(ISBLANK($%(sI)s$%(r)d),IF(ISBLANK($%(sJ)s$%(r)d),%(oI)s,IF(%(ok)s,$%(sJ)s$%(r)d*$H$167,"")),'
+                        '$%(sI)s$%(r)d)') % f)
+    b.patch("J%d" % r, "=IF(ISBLANK($%(sJ)s$%(r)d),%(oJ)s,$%(sJ)s$%(r)d)" % f)
+    b.patch("N%d" % r, ('=IF(ISBLANK($%(sN)s$%(r)d),IF(ISBLANK($%(sO)s$%(r)d),%(oN)s,IF(%(ok)s,L%(r)d+$%(sO)s$%(r)d/10000,"")),'
+                        '$%(sN)s$%(r)d)') % f)
+    b.patch("O%d" % r, "=IF(ISBLANK($%(sO)s$%(r)d),%(oO)s,$%(sO)s$%(r)d)" % f)
+    for m, fmt in zip(FS_TW_MEMBERS, ("0.0000", NUM4, "#,##0.0", "#,##0.0", NUM4, "#,##0.0")):
+        b.input("%s%d" % (stores[m], r), None, fmt=fmt)
+    # ÇAPRAZ FORWARD
+    r1, r2 = CROSS_ROWS
+    b.head("%s%d" % (CROSS_TW_STORE, r1 - 1), ["Yazılan fwd (manuel)", "Yazılandan TRY %"])
+    for r in range(r1, r2 + 1):
+        s, hub = CROSS_TW_STORE, CROSS_TW_RATE
+        b.set("%s%d" % (hub, r), '=IF(ISBLANK($%s%d),"",IF($C%d="","",IFERROR(%s,NA())))' % (s, r, r, cross_rate("$%s%d" % (s, r), r)),
+              fmt="0.0000")
+        b.patch("F%d" % r, '=IF(ISBLANK($%s%d),"",IF(ISNUMBER($%s%d),$%s%d,""))' % (s, r, hub, r, hub, r))
+        b.patch("Q%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (s, r, formula_of(model, "Forward", "Q%d" % r), s, r))
+        b.input("%s%d" % (s, r), None, fmt=NUM4)
 
 
 # ---------------------------------------------------------------------------------------------- OIS · PPK: rate -> PPK step
@@ -6267,6 +6482,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (SRC_SHEET, _sources_check, _tto_sources), ("Bulk Bond satırları", _bulk_bond_check, _tto_bulk_bond),
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
             ("Forward puandan faize", _fwd_back_check, _tto_fwd_back),
+            (FS_CROSS_TW_NAME, _fwd_twoway_check, _tto_fwd_twoway),
             (PPK_SHEET, _ppk_back_check, _tto_ppk_back), (FRA_LEG_NAME, _fra_leg_check, _tto_fra_leg),
             (TMOIS_NAME, _tmois_check, _tto_tmois),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),

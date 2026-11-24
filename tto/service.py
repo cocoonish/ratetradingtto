@@ -2935,6 +2935,10 @@ class Service(object):
                 user_vals[(si, rc)] = val
             if tw is not None:
                 siblings(tw)
+        for cell in self._cross_typed_forwards(user, book, calc, user_vals, user_clear):
+            if cell not in user_clear:
+                user_clear.append(cell)                 # (ÇAPRAZ FORWARD's currency changed: its typed forwards go)
+            quiet.add(cell)
         calendar = None
         typed_n = 0
         for cid, typed in keyed.items():
@@ -3175,12 +3179,17 @@ class Service(object):
                 self._trading_after(trading, res)        # (the trading list back to the file's: what entered, what left)
         else:
             rows = self.rowkeys.before_write(user, book, {}, [], {}, cells if refs else list(self._overlay(user, book)))
+            # (ÇAPRAZ FORWARD's currency back to its default, another one: its typed forwards go too - not counted)
+            gone = self._cross_typed_forwards(user, book, None, {}, cells) if refs else []
             ov = dict(self._overlay(user, book))
             targets = cells if refs else list(ov.keys())
             for k in targets:
                 if k in ov:
                     del ov[k]
                     n += 1
+            for k in gone:
+                ov.pop(k, None)
+            targets = targets + [k for k in gone if k not in targets]
             self._overlays[(user, book.id)] = ov
             book.engine.set_user_inputs(user, ov)
             if refs:
@@ -4501,15 +4510,47 @@ class Service(object):
             raise ServiceError("TOPLU FORWARD tablosu yok (çalışma kitabına uymadığı için dışarıda bırakıldı)", 404)
         calc = self._calc(user, book)
         si = book.model.sheet_index[ex.BULK_SHEET]
-        cols = {"date": "B", "ret_mid": "G", "manual": "L", "eur_fwd": "P", "usd_typed": "R", "eur_typed": "T",
+        cols = {"date": "B", "ret_mid": "G", "manual": "L", "usd_fwd": "N", "eur_fwd": "P", "usd_typed": "R", "eur_typed": "T",
                 "pair": ex.BULK_PAIR, "dir": ex.BULK_DIR, "amount": ex.BULK_AMOUNT, "cpt": ex.BULK_CPT}
+        # the row's typed value (its two-way group, twoway.py): which of Manuel TRY % / USDTRY fwd, puan / EURTRY fwd, puan
+        group = self.twoway.groups.get(ex.BULK_TW_ID)
+        overlay = self._overlay(user, book)
         rows = []
         for k in range(ex.BULK_ROWS):
             r = ex.BULK_FIRST + k
             row: Dict[str, Any] = {key: calc.get(si, r, col_to_index(col)) for key, col in cols.items()}
             row.update(n=k + 1, ref="%s!%s%d" % (ex.BULK_SHEET, ex.BULK_AMOUNT, r))
+            if group is not None:
+                m = group.anchor(k, overlay, book.engine.input_value)
+                row["anchor"] = index_to_col(m.cells[k][1] % COLS) if m is not None else None      # (its column)
             rows.append(row)
         return entry.bulk_forward_paste(rows, lang)
+
+    def _cross_typed_forwards(self, user: str, book: Book, calc: Optional[Calc], written: Dict[Tuple[int, int], Any],
+                              cleared: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """ÇAPRAZ FORWARD's manual forwards typed (its two-way group's stores, ``extras.CROSS_TW_ID``) that a write of its
+        currency (``Forward!C197``) takes away: a forward typed is a forward of the currency it was typed in - another
+        currency would read it as its own.  Only when the currency changes (``written`` / ``cleared``: the user's values
+        of the write and the cells it takes back to their default; ``calc``: the user's calculation before it, None: made
+        here); a forward typed in the same write stays, and so does a Manuel TRY % typed: a TRY rate means the same in any
+        currency."""
+        g = self.twoway.groups.get(ex.CROSS_TW_ID)
+        if g is None or g.book is not book:
+            return []
+        si, rc = book.cell("%s!%s" % (g.sheet, ex.CROSS_CCY))
+        r, c = divmod(rc, COLS)
+        if (si, rc) in written:
+            new = written[(si, rc)]
+        elif (si, rc) in cleared:
+            new = book.engine.shared.get(si, r, c)            # (back to its default: the workbook's)
+        else:
+            return []
+        if calc is None:
+            calc = self._calc(user, book)
+        if ex.cross_currency(calc.get(si, r, c)) == ex.cross_currency(new):
+            return []
+        ov = self._overlay(user, book)
+        return [cell for m in g.members if not m.own for cell in m.store if ov.get(cell) is not None and cell not in written]
 
     # ================================================================== what Bloomberg does not know
     #: what a ticker of a known shape is, when Bloomberg does not know it
