@@ -202,8 +202,20 @@ def test_dibs_rv_cg_is_today_once_the_stream_shows_a_trade(server):
     assert sim.p.get_bdp(LTD) == "23.11.2026"
     sim.tick(bond, {"VOLUME": 1.6e9})                            # a trade at the same price: the volume grew
     assert sim.p.get_bdp(LTD) == "24.11.2026" and LTD in sim.p.drain_changes()
-    sim.run(4 * 3600, read=[LAST, VOLUME, LTD])
+    # a bond that has no last price yet (a source it seldom trades on): its subscription delivers - kept by the stream,
+    # not asked hourly -, and the tick that brings its first last price is a trade
+    quiet = "/isin/TRT081128T15@ISL1"
+    server.ref[(quiet, "LAST_TRADE_DATE", ())] = dt.date(2026, 10, 9)
+    q_last, q_ltd = bdp_key("TRT081128T15 @ISL1 ISIN", "LAST_PRICE"), bdp_key("TRT081128T15 @ISL1 ISIN", "LAST_TRADE_DATE")
+    sim.get(q_last)
+    sim.get(q_ltd)
+    sim.run(3600, read=[LAST, VOLUME, LTD, q_last, q_ltd])        # 09:30 - 10:30
+    assert sim.p.get_bdp(q_last) == NA_NA and sim.p.get_bdp(q_ltd) == "9.10.2026" and sim.p.status()["fed"] == 2
+    sim.tick(quiet, {"LAST_PRICE": 93.2})
+    assert sim.p.get_bdp(q_ltd) == "24.11.2026"
+    sim.run(4 * 3600, read=[LAST, VOLUME, LTD, q_last, q_ltd])
     assert sim.asked(bond, "LAST_TRADE_DATE") == 1 and sim.p.get_bdp(LTD) == "24.11.2026"
+    assert sim.asked(quiet, "LAST_TRADE_DATE") == 1
 
 
 def test_interval_low_high_take_the_days_streamed_low_and_high(server):

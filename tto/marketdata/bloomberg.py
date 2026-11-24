@@ -430,6 +430,7 @@ class BloombergProvider(Provider):
         self.hits = 0
         self.hits_day = self._today()
         self._day_no = self.hits_day.toordinal()          # today, as the items keep their days
+        self._day_text = (0, "")                          # (the day, it as YYYYMMDD)
         self._day_serial = float(date_to_serial(self.hits_day))
         self.kinds: Dict[str, int] = {}                     # today's hits by what they were for (KINDS)
         self.key_hits: Dict[Tuple, int] = {}               # ... by key (usage_key): the status page's sheets / fields
@@ -473,7 +474,11 @@ class BloombergProvider(Provider):
         return _dt.date.fromtimestamp(self._now())
 
     def _today_text(self) -> str:
-        return _dt.date.fromordinal(self._day_no).strftime("%Y%m%d")
+        """Today as YYYYMMDD (worked out once a day: every read of a Bloomberg cell asks it)."""
+        day = self._day_no
+        if self._day_text[0] != day:
+            self._day_text = (day, _dt.date.fromordinal(day).strftime("%Y%m%d"))
+        return self._day_text[1]
 
     def set_desk_hours(self, open_: str = "08:00", close: str = "19:00", holidays: Iterable[str] = ()) -> None:
         """The desk's hours (:class:`DeskHours`): no refresh and no poll outside them."""
@@ -875,8 +880,9 @@ class BloombergProvider(Provider):
             return [(k, v) for k, v in self._values.items() if type(v) is str and v in FINAL_ANSWERS]
 
     # ================================================================== values
-    def _set(self, key: Tuple, value: Any, streamed: bool = False) -> None:
-        """Store a value (lock held by the caller): Bloomberg's answer to a request, or a tick of a subscription."""
+    def _set(self, key: Tuple, value: Any, streamed: bool = False, tick: bool = False) -> None:
+        """Store a value (lock held by the caller): Bloomberg's answer to a request, or a message of a subscription
+        (``tick``: a later one, not its first picture)."""
         it = self._items.get(key)
         if it is None:
             it = _Item(P_ONCE)
@@ -910,7 +916,7 @@ class BloombergProvider(Provider):
                     sub.state = "new"                    # it exists after all (a maturity that did not exist yesterday)
                     sub.created = now
         if it.rt and type(value) is float:
-            self._feed(key[1], RT_FIELDS.get(key[2], key[2]), value)
+            self._feed(key[1], RT_FIELDS.get(key[2], key[2]), value, tick and type(old) is str and old not in FINAL_ANSWERS)
 
     def _put(self, key: Tuple, value: Any) -> None:
         """A value worked out from the stream (lock held by the caller): not an answer - when the key was answered
@@ -969,11 +975,11 @@ class BloombergProvider(Provider):
             return self._today_point(key, it, self._source(sec, RT_FIELDS.get(key[2], "")))
         return value
 
-    def _feed(self, security: str, rt_field: str, value: float) -> None:
+    def _feed(self, security: str, rt_field: str, value: float, first_tick: bool = False) -> None:
         """A real-time field of ``security`` has a new value (a tick, a poll's answer): the keys that follow it (lock
-        held by the caller)."""
+        held by the caller).  ``first_tick``: a tick brought the field's first value - it had an answer without one."""
         if rt_field in TRADE_FIELDS:
-            self._trade(security, rt_field, value)
+            self._trade(security, rt_field, value, first_tick)
         keys = self._feeds.get((security, rt_field))
         if not keys:
             return
@@ -993,12 +999,16 @@ class BloombergProvider(Provider):
             elif it.policy == P_BDH:
                 self._put(key, self._today_point(key, it, value))
 
-    def _trade(self, security: str, rt_field: str, value: float) -> None:
+    def _trade(self, security: str, rt_field: str, value: float, first_tick: bool = False) -> None:
         """A trade as the service reads one (``Service._note_trades``): the last price changed or the day's volume grew -
-        not the first value seen today.  ``LAST_TRADE_DATE`` of the security is today from then on."""
+        not the first value seen today -; or a tick of the stream (not its first picture) gave a security its first last
+        price / volume (a bond that had none).  ``LAST_TRADE_DATE`` of the security is today from then on."""
         prev = self._trade_prev.get((security, rt_field))
         self._trade_prev[(security, rt_field)] = value
-        if prev is None or value == prev or (rt_field == "VOLUME" and value < prev):
+        if prev is None:
+            if not first_tick:
+                return
+        elif value == prev or (rt_field == "VOLUME" and value < prev):
             return
         if self._traded.get(security) == self._day_no:
             return
@@ -1028,19 +1038,32 @@ class BloombergProvider(Provider):
             pts[-1] = (pts[-1][0], value)
         return self._history_value(pts, dict(key[5]))
 
+    def _live(self, security: str, rt_field: str) -> bool:
+        """Whether a real-time field of a security is kept current without asking it (lock held): a key of it whose
+        subscription delivers (started, the field not refused - a trade comes as a tick even to a bond without a last
+        price yet), or one polled that has a value."""
+        if (security, rt_field) not in self._rt_keys:
+            return False
+        if self.stream:
+            sub = self._subs.get(security)
+            # (a subscription on its way counts: after a restart the preloaded keys wait for it, not ask meanwhile)
+            if sub is not None and sub.state in ("new", "pending", "started") and rt_field not in sub.bad:
+                return True
+        return self._source(security, rt_field) is not None
+
     def _fed(self, key: Tuple, it: _Item) -> bool:
         """Whether a key that follows the stream has a source that delivers now (lock held): else it is asked hourly."""
         sec = key[1]
         if it.policy == P_LTD:
-            return any(self._source(sec, f) is not None for f in TRADE_FIELDS)
+            return any(self._live(sec, f) for f in TRADE_FIELDS)
         if it.policy == P_CHG:
-            return self._source(sec, "LAST_PRICE") is not None
+            return self._live(sec, "LAST_PRICE")
         if it.policy == P_RANGE:
             src = range_source(key, self._today_text())[0]
-            return bool(src) and self._source(sec, src) is not None
+            return bool(src) and self._live(sec, src)
         if it.policy == P_BDH:
             src = RT_FIELDS.get(key[2])
-            return bool(src) and self._source(sec, src) is not None and bool(it.points) and it.points[-1][0] == self._day_serial
+            return bool(src) and self._live(sec, src) and bool(it.points) and it.points[-1][0] == self._day_serial
         return False
 
     def _convert(self, el, as_text_date: bool) -> Any:
@@ -1781,6 +1804,9 @@ class BloombergProvider(Provider):
             sub = self._subs.get(sec) if sec is not None else None
             if sub is None:
                 continue
+            # a later message, not the stream's first picture: one came before, or it started long enough ago (a security
+            # without any value may send no first picture at all)
+            tick = sub.heard or (sub.state == "started" and now - sub.since > SILENT_AFTER)
             sub.heard = True
             sub.ticked = now
             if root is None:
@@ -1798,7 +1824,7 @@ class BloombergProvider(Provider):
             with self._lock:
                 for field, v in got:
                     for key in self._rt_keys.get((sec, field), ()):
-                        self._set(key, v, streamed=True)
+                        self._set(key, v, streamed=True, tick=tick)
                 self.ticks += 1
                 self.last_tick = now
 
