@@ -157,7 +157,9 @@ def test_what_a_damaged_file_still_holds_comes_back(tmp_path, capsys):
         assert "Şimdiki hali korunanlar" in out and "layout.ali" in out
         # accounts, chat, Broker Chat (a line deleted on the day stays deleted), Trades with its log and close, agenda
         assert s.account("zeynep") is not None
-        assert [m["text"] for m in s.chat()[0]][-2:] == ["işlem tamam", "teşekkürler"] and "chat: 2 mesaj (24.11)" in out
+        msgs = s.chat()[0]
+        said = _dt.date.fromisoformat(msgs[-1]["created_at"][:10]).strftime("%d.%m")    # (a chat line is stamped now)
+        assert [m["text"] for m in msgs][-2:] == ["işlem tamam", "teşekkürler"] and "chat: 2 mesaj (%s)" % said in out
         assert [q["id"] for q in s.broker_quotes(DAY)] == d["quotes"] and s.broker_quotes("2026-11-23") == []
         assert "Broker Chat: 5 satır (24.11) · 1 satır güncellendi" in out
         assert s.tb_get(d["tb2"])["dv01"] == 700
