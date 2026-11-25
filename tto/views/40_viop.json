@@ -933,7 +933,7 @@
    "id": "viop-gold",
    "sheet": "EK_XAU",
    "label": "VİOP XAUTRY hesaplayıcısı",
-   "note": "İki yönlü: TRY %, USDTRY fwd (All In S -> E), SP, günlük SP, XAUTRY teorik ya da ON karşılık - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince sütun varsayılana döner). Kontratlar dönünce yazılan fwd, SP, günlük SP ya da teorik kontratıyla birlikte onun yeni sütununa gider (kontrat tablodan çıktıysa silinir); yazılan TRY % ya da ON sütununda kalır. İkisi aynı sütunda buluşursa sütunda yazılı olan kalır.",
+   "note": "İki yönlü: TRY %, USDTRY fwd (All In S -> E), SP, günlük SP, XAUTRY teorik ya da ON karşılık - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince sütun varsayılana döner). Kontratlar dönünce yazılan fwd, SP, günlük SP ya da teorik - ve kendi VİOP bid / ask'iniz - kontratıyla birlikte onun yeni sütununa gider (kontrat tablodan çıktıysa silinir); yazılan TRY % ya da ON sütununda kalır. İkisi aynı sütunda buluşursa sütunda yazılı olan kalır.",
    "members": [
     {"name": "TRY %", "range": "B46:E46", "store": "B67:E67"},
     {"name": "USDTRY fwd", "range": "B50:E50", "store": "B68:E68"},

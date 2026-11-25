@@ -1610,7 +1610,9 @@ desk typed another code:
   cell differs in form: the free column's TRY % is an empty formula result where it was a blank input. So a free column
   with only its second date typed shows its forward, SP and ON blank until a rate or another member is typed - before, it
   priced them at a TRY rate of 0 (SP −3 962 on the replay data).
-- **Each user's own VİOP bid / ask** (rows 54-55) still go when another contract takes the column, as before.
+- **Each user's own VİOP bid / ask** (rows 54-55) follow their contract too: a typed price, under the same "Evet" (a
+  typed bid / ask never replaces one typed where it lands). Before, they went whenever another contract took the column,
+  also when their contract only moved to the next column (on every expiry).
 - **A temporary copy keeps its values by cell**, as before: on a roll its columns become the next contracts' with what was
   typed in them (the roll moves the table's typed values and the scenarios', not a copy's).
 - No new Bloomberg request.

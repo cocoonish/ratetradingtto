@@ -291,37 +291,47 @@ def _codes(s, codes):
 
 def test_a_roll_takes_a_typed_price_with_its_contract_and_leaves_a_typed_rate_in_its_column(tmp_path):
     """The gold contracts roll (the desk types the next three codes here, as the expiry does by itself): a forward, SP,
-    SP per day or theoretical price typed for a contract goes to the column the contract sits in now, or with the
-    contract that left the table; a TRY % or ON typed stays in its column (the desk's "Evet", 25.11.2026) - each user's,
-    and in the saved scenarios.  A price that would land on a column holding a typed value that stays there goes: the
-    column's own stands (one typed value per column).  The free column is no contract's: it stays as it is."""
+    SP per day or theoretical price typed for a contract - and one's own VİOP bid / ask, a price too - goes to the column
+    the contract sits in now, or with the contract that left the table; a TRY % or ON typed stays in its column (the
+    desk's "Evet", 25.11.2026) - each user's, and in the saved scenarios.  A price that would land on a column holding a
+    typed value that stays there goes: the column's own stands (one typed value per column).  The free column is no
+    contract's: it stays as it is."""
     s = make_service(tmp_path)
     try:
         a, b = s.login("Altın Rol A")["user"], s.login("Altın Rol B")["user"]
         codes = [cell(s, "VIOP!%s45" % c) for c in "MNO"]
         assert codes == ["XLZ6 Comdty", "XLG7 Comdty", "XLJ7 Comdty"] and s.store.get(rk.GOLD_KEY) == codes
-        # A: XLZ6's forward (B), XLG7's theoretical price (C), the third column's TRY rate (D), the free column's forward
-        put(s, a, {"B50": "52,4", "C53": "7050", "D46": "36", "E50": "52,9"})
+        # A: XLZ6's forward (B), XLG7's theoretical price (C), the third column's TRY rate (D), the free column's forward;
+        # its own VİOP bid for XLG7 (C) and ask for XLZ6 (B)
+        put(s, a, {"B50": "52,4", "C53": "7050", "D46": "36", "E50": "52,9", "C54": "7060", "B55": "6702"})
         # B: the first column's O/N rate (B), XLG7's SP per day (C: it lands on B's rate), XLJ7's SP (D)
         put(s, b, {"B61": "33,5", "C52": "421", "D51": "76000"})
         s.save_scenario(a, "rol öncesi")
         s.save_scenario(b, "rol öncesi")
+
+        def own_prices(user):
+            return {k[1]: v for k, v in s.store.user_inputs(user, "tto").items() if k[1][-2:] in ("54", "55")}
+
         _codes(s, ["XLG7 Comdty", "XLJ7 Comdty", "XLM7 Comdty"])
         # A: XLG7's price now in B, XLZ6's forward gone with it, the rate stays in D, the free column as it was
         assert stored(s, a) == {"B71": 7050.0, "D67": 36.0, "E68": 52.9}
         assert column(s, a, "B") == pytest.approx(Col(s, a, "B").typed("teo", 7050.0), rel=1e-9)
         assert cell(s, ref("try", "D"), a) == 36.0 and cell(s, ref("fwd", "E"), a) == 52.9
+        # ... its own VİOP bid for XLG7 with its contract in B, XLZ6's ask gone
+        assert own_prices(a) == {"EK_XAU!B54": 7060.0} and cell(s, "EK_XAU!B54", a) == 7060.0
+        assert cell(s, "EK_XAU!B55", a) == cell(s, "EK_XAU!B55") and cell(s, "EK_XAU!C54", a) == cell(s, "EK_XAU!C54")
         # B: the O/N rate stays in B (XLG7's SP per day would land on it: it goes), XLJ7's SP now in C
         assert stored(s, b) == {"B72": 33.5, "C69": 76000.0}
         assert cell(s, ref("on", "B"), b) == 33.5 and cell(s, ref("sp", "C"), b) == 76000.0
         assert column(s, b, "C") == pytest.approx(Col(s, b, "C").typed("sp", 76000.0), rel=1e-9)
         # the saved scenarios the same way
         assert s.store.scenario(a, "rol öncesi")[0] == {("tto", "EK_XAU!B71"): 7050.0, ("tto", "EK_XAU!D67"): 36.0,
-                                                       ("tto", "EK_XAU!E68"): 52.9}
+                                                       ("tto", "EK_XAU!E68"): 52.9, ("tto", "EK_XAU!B54"): 7060.0}
         assert s.store.scenario(b, "rol öncesi")[0] == {("tto", "EK_XAU!B72"): 33.5, ("tto", "EK_XAU!C69"): 76000.0}
         # the desk takes a contract off the table (XLJ7 → XLQ7 in C): its typed price goes; nothing else moves
         _codes(s, ["XLG7 Comdty", "XLQ7 Comdty", "XLM7 Comdty"])
         assert stored(s, a) == {"B71": 7050.0, "D67": 36.0, "E68": 52.9} and stored(s, b) == {"B72": 33.5}
+        assert own_prices(a) == {"EK_XAU!B54": 7060.0}
         # ... and back: a contract that comes back to the table finds nothing of its own (what it had went with it)
         _codes(s, ["XLG7 Comdty", "XLJ7 Comdty", "XLM7 Comdty"])
         assert stored(s, b) == {"B72": 33.5}

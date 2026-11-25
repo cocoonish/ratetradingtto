@@ -16,9 +16,9 @@ holds is its bond's now.
 Some rows are a form, not a bond, and keep their values: Eurobond Kotaları's own bid / ask (each user's own quote on that
 row of their own list), the Hazine İhalesi blocks, Manuel Tahvil's periods.  VİOP's columns are the places of its
 contracts ("1. kontrat" ...): what is typed for a place stays with the place when the contracts roll - a rate too - but
-what the gold calculator holds for a contract is that contract's: each user's own VİOP bid / ask goes when another
-contract takes the column, and a forward, points or a theoretical price typed into its two-way rows go with their
-contract to its new column (:meth:`RowKeys.roll`; the desk, 25.11.2026: "Evet").
+a price the gold calculator holds for a contract is that contract's: each user's own VİOP bid / ask, and a forward,
+points or a theoretical price typed into its two-way rows, go with their contract to its new column - or with a
+contract that left the table (:meth:`RowKeys.roll`; the desk, 25.11.2026: "Evet").
 
 The key cells - the lists' ISINs, VİOP's contract codes the watch follows a contract by - take no formula
 (:meth:`RowKeys.key_cell`): a formula would change a key by itself, past all of this.
@@ -78,7 +78,8 @@ LISTS: Tuple[RowList, ...] = (
 )
 #: VİOP's contract codes, the desk's (by today's date unless typed): USDTRY 1-12, gold-TRY, gold-USD
 VIOP_CODES = (("L1", "W1"), ("M45", "O45"), ("M60", "O60"))
-#: the gold-TRY contracts and each user's own VİOP bid / ask typed for them in the gold calculator (a column a contract)
+#: the gold-TRY contracts and each user's own VİOP bid / ask typed for them in the gold calculator (a column a contract;
+#: on a roll the price follows its contract)
 GOLD = ("M45", "O45")
 GOLD_PRICES = ("EK_XAU", ("B", "C", "D"), (54, 55))
 GOLD_KEY = "rowkeys.xau"
@@ -459,11 +460,11 @@ class RowKeys(object):
         expired, or the desk typed another - has what each user typed in the gold calculator for the contract it had
         follow that contract (the users' values and the saved scenarios'):
 
-        * their own VİOP bid / ask (``EK_XAU!B54:D55``) goes;
-        * a forward, SP, SP per day or theoretical price typed into the two-way rows (``GOLD_TW``: its store - or the
-          member's own cell, a value kept there from before) goes to the column the contract sits in now (:func:`plan`,
-          as the bond lists), or with a contract that left the table - unless that column holds a value typed that
-          stays there: then it goes (:meth:`_gold_landing`);
+        * their own VİOP bid / ask (``EK_XAU!B54:D55``), and a forward, SP, SP per day or theoretical price typed into
+          the two-way rows (``GOLD_TW``: its store - or the member's own cell, a value kept there from before), go to
+          the column the contract sits in now (:func:`plan`, as the bond lists), or with a contract that left the
+          table - a two-way row's unless that column holds a value typed that stays there: then it goes
+          (:meth:`_gold_landing`; a VİOP price never replaces one typed where it lands, ``Store.move_values``);
         * a TRY % or ON typed, and every other input, stays with the column."""
         book = self.svc.books.get("tto")
         sheet, cols, rows = GOLD_PRICES
@@ -486,7 +487,7 @@ class RowKeys(object):
             if keep != kept:
                 store.put(GOLD_KEY, keep)
             return None
-        follow = {x for own, st, f in GOLD_TW if f for x in (own, st)}
+        follow = {x for own, st, f in GOLD_TW if f for x in (own, st)} | set(rows)
 
         def where(ref: str) -> Any:
             s, _, addr = ref.rpartition("!")
@@ -494,8 +495,6 @@ class RowKeys(object):
             if s.strip("'") != sheet or m is None or m.group(1) not in cols or cols.index(m.group(1)) not in moves:
                 return False
             row, t = int(m.group(2)), moves[cols.index(m.group(1))]
-            if row in rows:
-                return None
             if row not in follow:
                 return False
             return None if t is None else "%s!%s%d" % (sheet, cols[t], row)

@@ -616,8 +616,8 @@ new feature that stores anything by cell, row or position must use one of them *
    - Values follow the ISIN or contract: `rowkeys.<list>` records whose values each row holds.
    - The moves happen in `plan(old, new)` → `store.move_values`, at `before_write`, `start()` and `roll()`.
    - VİOP's gold contracts (`roll()`, codes kept in `rowkeys.xau`): a column of the gold calculator is a contract's; what
-     is typed there as a price or forward (`GOLD_TW`) follows the contract, each user's own VİOP bid / ask goes, a rate
-     and the other inputs stay with the column.
+     is typed there as a price or forward - the two-way rows' (`GOLD_TW`) and each user's own VİOP bid / ask - follows
+     the contract, a rate and the other inputs stay with the column.
    - Key cells take no formula.
 3. **`watch.py` anchors**: old watch items migrated to anchors at startup.
 
