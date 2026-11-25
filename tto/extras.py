@@ -6119,7 +6119,8 @@ def _tto_viop_fra(model: Model) -> None:
 #:   10000, FXswap+bp (Q − FX swap implied) · 10000, Faiz % Q · 100, Fiyat the far limit.
 #:
 #: Hedef değer reads in its type too (the desk, 25.11.2026): a Faiz % row's rate with two decimals (``TRY_PCT``), a Fiyat
-#: row's price as the far limit reads it, bp in the cell's own General - a number format chosen by the row's "Hedef tipi"
+#: row's price as the far limit reads it, bp - FRA+bp, FXswap+bp and any other type the sheet prices as FRA+bp - with one
+#: (``VT_BP_FMT``), typed or worked out - a number format chosen by the row's "Hedef tipi"
 #: (:meth:`SheetBuilder.number_format_if`); the desk strip (MASA!S121:S128) writes it the same way.
 #:
 #: "Hedef tipi" stays the user's: it says what Hedef değer means (the mechanism never writes another input - a type
@@ -6131,6 +6132,7 @@ VT_NAME = "VİOP target iki yönlü"
 VT_STORES = {"P": "AE", "Q": "AF", "S": "AG", "T": "AH", "V": "AI"}
 VT_HEADS = {"AE": "Yazılan hedef değer", "AF": "Yazılan hedef faiz", "AG": "Yazılan uzak limit", "AH": "Yazılan spread fiyatı",
             "AI": "Yazılan hedef − piyasa (bp)"}
+VT_BP_FMT = "0.0"                 # a bp Hedef değer, typed or worked out from another member: one decimal (-1636,1)
 
 
 def viop_fx_implied(r: int) -> str:
@@ -6229,20 +6231,23 @@ def _tto_viop_tw(model: Model) -> None:
                 '&TEXT(%(V)s,"General")&" bp",') % dict(s, r=r)
         v.patch("AB%d" % r, "=" + bad + mine + tip[len(bad):-1] + "))))" + ")")
     # Hedef değer reads in the row's type (the desk, 25.11.2026: "VİOP target kısmında da faiz seçtiğim durumda decimalsiz
-    # yazıyor"): a rate with the TRY rates' two decimals, a far price as the far limit reads (the contract's own four), bp in
-    # the cell's own General (as typed) - one format cannot read all three, so the row's type picks it
+    # yazıyor"): a rate with the TRY rates' two decimals, a far price as the far limit reads (the contract's own four), bp
+    # with one, typed or worked out (any type but these two is priced as FRA+bp) - one format cannot read all three, so the
+    # row's type picks it
     rows = "P%d:P%d" % VFRA_ROWS
-    v.number_format_if(rows, '$O%d="Faiz %%"' % VFRA_ROWS[0], TRY_PCT)
-    v.number_format_if(rows, '$O%d="%s"' % (VFRA_ROWS[0], VPRICE_TYPE), _numfmt(model, "VIOP", "S%d" % VFRA_ROWS[0]))
-    # the desk sheet's strip says the target the same way: a rate to two decimals, a price to four, bp as typed (a worked-out
-    # one to four decimals) - in the page's decimal comma
+    r0 = VFRA_ROWS[0]
+    v.number_format_if(rows, '$O%d="Faiz %%"' % r0, TRY_PCT)
+    v.number_format_if(rows, '$O%d="%s"' % (r0, VPRICE_TYPE), _numfmt(model, "VIOP", "S%d" % r0))
+    v.number_format_if(rows, 'AND($O%d<>"Faiz %%",$O%d<>"%s")' % (r0, r0, VPRICE_TYPE), VT_BP_FMT)
+    # the desk sheet's strip says the target the same way: a rate to two decimals, a price to four, bp to one - in the page's
+    # decimal comma
     for r, h, m in _vfra_rows():
         mf = 'VIOP!$O$%d&" "&VIOP!$P$%d' % (r, r)
         text = formula_of(model, "MASA", "S%d" % m)
         if text.count(mf) == 1:
             shown = ('VIOP!$O$%(r)d&" "&IF(VIOP!$O$%(r)d="Faiz %%",TEXT(VIOP!$P$%(r)d,"%(pct)s"),IF(VIOP!$O$%(r)d="%(price)s",'
-                     'TEXT(VIOP!$P$%(r)d,"0.0000"),TEXT(IF(ISBLANK(VIOP!$%(s)s$%(r)d),ROUND(VIOP!$P$%(r)d,4),VIOP!$P$%(r)d),"General")))'
-                     % {"r": r, "pct": TRY_PCT, "price": VPRICE_TYPE, "s": VT_STORES["P"]})
+                     'TEXT(VIOP!$P$%(r)d,"0.0000"),TEXT(VIOP!$P$%(r)d,"%(bp)s")))'
+                     % {"r": r, "pct": TRY_PCT, "price": VPRICE_TYPE, "bp": VT_BP_FMT})
             SheetBuilder(model, "MASA").patch("S%d" % m, "=" + text.replace(mf, shown))
 
 

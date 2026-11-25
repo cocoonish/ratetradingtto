@@ -6,8 +6,8 @@ gözü. Bunları 2 decimala alalım. VİOP target kısmında da faiz seçtiğim 
   Manuel TRY % and İma TRY %, ÇAPRAZ FORWARD's İma TRY %.  How they read only: the value ("v", what Ctrl+Shift+C copies),
   what is typed and every calculation keep every digit; the USD / EUR rates beside them keep theirs;
 * VİOP Target's "Hedef değer" reads in the row's "Hedef tipi" - a rate with two decimals, a far price as the far limit
-  reads (four), bp as typed (General) - a number format chosen by another cell (``SheetBuilder.number_format_if``, drawn
-  by ``Renderer.cell``); the desk strip (MASA!S121:S128) writes it the same way.
+  reads (four), bp with one, typed or worked out - a number format chosen by another cell
+  (``SheetBuilder.number_format_if``, drawn by ``Renderer.cell``); the desk strip (MASA!S121:S128) writes it the same way.
 
 Every check compares with the values the sheet holds now (the session's shared service: no market literal pinned)."""
 from __future__ import annotations
@@ -147,12 +147,13 @@ def test_free_forward_bulk_and_cross_show_their_try_rates_with_two_decimals(serv
 # ---------------------------------------------------------------------------------------------- VİOP Target
 def test_the_viop_target_value_reads_in_its_type(service):
     """Hedef değer in the row's type: Faiz % a rate with two decimals (typed whole, or worked out from a rate typed in
-    Hedef faiz), Fiyat the price with the far limit's four, FRA+bp / FXswap+bp bp as typed - on the VİOP page and on
-    Masa's VİOP TARGET; its value every digit.  The row's other members read as they did (a rate in %, prices with four
-    decimals, bp whole); the type changed, the same value reads the new type's way.  The desk strip says it alike."""
+    Hedef faiz), Fiyat the price with the far limit's four, FRA+bp / FXswap+bp bp with one (typed, or worked out from
+    another member) - on the VİOP page and on Masa's VİOP TARGET; its value every digit.  The row's other members read as
+    they did (a rate in %, prices with four decimals, bp whole); the type changed, the same value reads the new type's way.
+    The desk strip says it alike."""
     u = service.login("ondalık hedef")["user"]
     rows = {331: ("Faiz %", "45", "45,00"), 332: ("Faiz %", "45,5", "45,50"), 333: ("Fiyat", "51,05", "51,0500"),
-            334: ("FRA+bp", "-75", "-75"), 335: ("FXswap+bp", "40,5", "40,5")}
+            334: ("FRA+bp", "-75", "-75,0"), 335: ("FXswap+bp", "40,5", "40,5")}
     try:
         for r, (kind, value, _) in rows.items():
             put(service, u, {"VIOP!L%d" % r: "Spot", "VIOP!M%d" % r: "31.12.2026", "VIOP!N%d" % r: "LONG", "VIOP!O%d" % r: kind,
@@ -171,11 +172,13 @@ def test_the_viop_target_value_reads_in_its_type(service):
         for r in rows:
             assert re.match(r"^-?\d+,\d{2}%$", page[(r, "Q")]["t"]) and FOUR.match(page[(r, "S")]["t"]) and FOUR.match(page[(r, "T")]["t"])
             assert re.match(r"^-?\d{1,3}(\.\d{3})*$", page[(r, "V")]["t"]), page[(r, "V")]
-        # a far price typed on a bp row: its bp worked out reads in General (as before), the strip to four decimals
+        # a far price typed on a bp row: its bp worked out reads with one decimal (-1636,148629 -> -1636,1), the strip alike
         put(service, u, {"VIOP!S334": "51,2345"})
         p = cell(service, "VIOP!P334", u)
-        assert rows_of(service, u, "viop", "B33")[(334, "P")]["t"] == numfmt.render(p, "General", TR, general_digits=10)[0]
-        assert cell(service, "MASA!S124", u) == ("FRA+bp %s" % round(p, 4)).replace(".", ",")
+        one = numfmt.format_value(p, "0.0", TR)
+        p334 = rows_of(service, u, "viop", "B33")[(334, "P")]
+        assert re.match(r"^-?\d+,\d$", one) and p334["t"] == one and p334["v"] == p and p != round(p, 1)
+        assert cell(service, "MASA!S124", u) == "FRA+bp " + one
         # the type changed: the same far price reads as a price, then as a rate
         for kind, want in (("Fiyat", "51,2345"), ("Faiz %", numfmt.format_value(cell(service, "VIOP!Q334", u) * 100, "0.00", TR))):
             put(service, u, {"VIOP!O334": kind})
@@ -195,8 +198,8 @@ def test_the_formats_by_type_go_with_the_target_table():
     sh = tto.sheet("VIOP")
     assert not [x for x in sh.cf if x["sqref"].startswith("P331")] and ex._numfmt(tto, "VIOP", "P331") == "General"
     assert "TEXT(" not in ex.formula_of(tto, "MASA", "S121") and 'VIOP!$O$331&" "&VIOP!$P$331' in ex.formula_of(tto, "MASA", "S121")
-    tto = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))                   # the file as it is: both rules there
+    tto = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))                   # the file as it is: the three rules there
     remove_sheets("tto", tto)
     assert ex.apply("tto", tto) == []
     rules = [x for x in tto.sheet("VIOP").cf if x["sqref"] == "P331:P338"]
-    assert [tto.dxfs[x["dxf"]]["fmt"] for x in rules] == [ex.TRY_PCT, ex._numfmt(tto, "VIOP", "S331")]
+    assert [tto.dxfs[x["dxf"]]["fmt"] for x in rules] == [ex.TRY_PCT, ex._numfmt(tto, "VIOP", "S331"), "0.0"]
