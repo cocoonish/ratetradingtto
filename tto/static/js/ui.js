@@ -28,8 +28,14 @@ export function append(el, children) {
   }
 }
 
+/**
+ * Empty ``el``: all its children at once.  (One at a time, a box holding the focused control - a list's select just
+ * changed, a spread just typed - was laid out half emptied: Chrome blurs a focused control taken out of the page and
+ * lays the page out right then, and by then the children above it were gone; the box's scroll, or the page's, was
+ * clamped or anchored to that shorter content, and the page jumped when the box was drawn again.)
+ */
 export function clear(el) {
-  while (el.firstChild) el.removeChild(el.firstChild);
+  el.textContent = '';
   return el;
 }
 

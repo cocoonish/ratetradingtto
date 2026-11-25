@@ -29,6 +29,28 @@ function panel(id, title, note) {
   return { el, body };
 }
 
+/**
+ * The control in use in ``box`` (the focused one), to be focused again once ``box`` is drawn again - Chrome drops the
+ * focus of a control taken out of the page, and the next Tab started from the top of the box.  Found again by its id or
+ * by its row's ISIN and its own ``fy-`` class; focused without scrolling, its text selection as it was (a spread tabbed
+ * into is all selected: typing replaces it).  Returns the function that does it.
+ */
+function keepFocus(box) {
+  const a = document.activeElement;
+  if (!a || !box.contains(a)) return () => {};
+  const row = a.closest('tr[data-isin]');
+  const cls = [...a.classList].find((c) => c.startsWith('fy-'));
+  const find = a.id ? () => document.getElementById(a.id)
+    : row && cls ? () => box.querySelector('tr[data-isin="' + row.dataset.isin + '"] .' + cls) : () => null;
+  const text = typeof a.selectionStart === 'number' ? [a.value, a.selectionStart, a.selectionEnd, a.selectionDirection] : null;
+  return () => {
+    const b = find();
+    if (!b || b === document.activeElement || !box.contains(b)) return;
+    b.focus({ preventScroll: true });
+    if (text && b.value === text[0]) b.setSelectionRange(text[1], text[2], text[3]);
+  };
+}
+
 /** A line of the file, as the server writes it (the preview before Kaydet; the file itself is the server's). */
 export function fileLine(r) {
   const b = r.bid || {}, a = r.ask || {};
@@ -134,6 +156,7 @@ export class FiyatYuklemePage {
   // ------------------------------------------------------------------ the list
   drawList() {
     const st = this.state || {};
+    const refocus = keepFocus(this.list.body);
     const body = clear(this.list.body);
     const add = h('div', { class: 'fy-add' });
     this.addText = h('textarea', { class: 'inp', id: 'fy-add-text', rows: '2', spellcheck: 'false', placeholder: 'ISIN ya da ISIN listesi (satır satır ya da virgülle)' });
@@ -185,6 +208,7 @@ export class FiyatYuklemePage {
     }
     if (!(st.list || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '10' }, 'Liste boş: yukarıya ISIN yazıp Ekle')));
     body.appendChild(t);
+    refocus();
   }
 
   async addBonds(text) {
@@ -243,6 +267,7 @@ export class FiyatYuklemePage {
   // ------------------------------------------------------------------ fixed prices ("Sabit fiyat")
   drawSabit() {
     const st = this.state || {};
+    const refocus = keepFocus(this.sabit.body);
     const body = clear(this.sabit.body);
     // Excel's rows pasted: ISIN, bid, offer (the cells between - an empty column, a yield, a stock - skipped by the server)
     const text = h('textarea', { class: 'inp fy-sabit-text', id: 'fy-sabit-text', rows: '4', spellcheck: 'false',
@@ -280,6 +305,7 @@ export class FiyatYuklemePage {
     }
     if (!(st.fixed || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '8' }, 'Sabit fiyatlı kâğıt yok')));
     body.appendChild(t);
+    refocus();
   }
 
   async pasteFixed(text) {
@@ -491,7 +517,11 @@ export class FiyatYuklemePage {
       }
       r.edited = true;
       const old = this.result_.body.querySelector('tr.fy-row[data-isin="' + r.isin + '"]');
-      if (old) old.replaceWith(this.rowEl(r));
+      if (old) {
+        const refocus = keepFocus(this.result_.body);               // (Tab went on to the row's next cell: it stays there)
+        old.replaceWith(this.rowEl(r));
+        refocus();
+      }
       this.saved = null;
       this.drawFile();
     } catch (err) { errorToast(err); inp.value = n3((r[side] || {})[field]); }

@@ -4318,6 +4318,55 @@ async function clipAfter(page, action) {
       fyAll === 'TRB100227T13:mid TRT240227T17:mid TRT150328T24:mid TRT130127T11:mid' && fyAllKept
       && /Mid \/ Bid\/Ask değişti: yeniden Hesapla/.test(await page.evaluate(() => (document.getElementById('fy-result-info') || {}).textContent || '')),
       { fyAll, fyAllKept });
+    // the page keeps its place (the desk, 25.11.2026: "Burada bid ask seçim yaptıktan sonra sayfa yukarı kayıyor"): a list long
+    // enough to scroll in its own box (the catalog's bonds pasted), the box half way down; a row's Mid / Bid/Ask changed, then
+    // its bid spread typed and Tab - the box and the page stay (± 2 px), the row shows what was set, the control in use keeps
+    // the focus and the next Tab goes on from it (before: the box jumped ~90 px up, the focus was lost, Tab went to its top)
+    const fyIn = await page.evaluate(() => [...document.querySelectorAll('#fy-list-table tr.fy-item')].map((tr) => tr.dataset.isin));
+    const fyMore = ((await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds || []).map((b) => b.isin)
+      .filter((i) => /^TR/.test(i) && !fyIn.includes(i)).slice(0, 26);
+    await page.fill('#fy-add-text', fyMore.join('\n'));
+    await page.click('#fy-add');
+    await page.waitForFunction((n) => document.querySelectorAll('#fy-list-table tr.fy-item').length >= n, fyIn.length + 20, { timeout: 30000 }).catch(() => {});
+    const fyRow = await page.evaluate(() => {
+      const box = document.querySelector('#fy-list .body');
+      box.scrollTop = Math.round((box.scrollHeight - box.clientHeight) / 2);
+      const mid = box.getBoundingClientRect().top + box.clientHeight / 2;
+      const tr = [...document.querySelectorAll('#fy-list-table tr.fy-item')].find((t) => t.getBoundingClientRect().top >= mid);
+      return tr ? tr.dataset.isin : null;
+    });
+    await page.waitForTimeout(200);
+    const fyWhere = () => page.evaluate((i) => {
+      const tr = document.querySelector('#fy-list-table tr.fy-item[data-isin="' + i + '"]');
+      const a = document.activeElement;
+      const own = a && a.closest && a.closest('tr.fy-item');
+      return { box: document.querySelector('#fy-list .body').scrollTop, page: document.getElementById('content').scrollTop,
+        base: tr ? tr.querySelector('select.fy-base').value : null, bid: tr ? tr.querySelector('input.fy-sp-bid').value : null,
+        focus: own && own.dataset.isin === i ? [...a.classList].find((c) => c.startsWith('fy-')) : a ? a.id || a.tagName : null };
+    }, fyRow);
+    const fyRowSel = '#fy-list-table tr.fy-item[data-isin="' + fyRow + '"]';
+    const fyS0 = await fyWhere();
+    await page.$eval(fyRowSel + ' select.fy-base', (s) => s.focus({ preventScroll: true }));               // (as a click on it)
+    await Promise.all([fyAyar(), page.selectOption(fyRowSel + ' select.fy-base', 'bidask')]);
+    await page.waitForTimeout(300);
+    const fyS1 = await fyWhere();
+    const fyKept1 = ((((await api(page, 'ayşe yilmaz', 'GET', '/api/fiyat-yukleme')).json || {}).list || []).find((r) => r.isin === fyRow) || {}).base;
+    const fyStill = (s) => Math.abs(s.box - fyS0.box) <= 2 && Math.abs(s.page - fyS0.page) <= 2;
+    check('... the page keeps its place (the desk, 25.11.2026: "bid ask seçim yaptıktan sonra sayfa yukarı kayıyor"): a list scrolling in its '
+      + 'own box, half way down, a row\'s Mid → Bid/Ask - the box and the page do not move, the row shows Bid/Ask (kept), its select keeps the focus',
+      fyRow && fyS0.box > 40 && fyStill(fyS1) && fyS1.base === 'bidask' && fyKept1 === 'bidask' && fyS1.focus === 'fy-base', { fyRow, fyS0, fyS1, fyKept1 });
+    await page.click(fyRowSel + ' input.fy-sp-bid');
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('7');
+    await Promise.all([fyAyar(), page.keyboard.press('Tab')]);
+    await page.waitForTimeout(300);
+    const fyS2 = await fyWhere();
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(100);
+    const fyS3 = await fyWhere();
+    check('... and the row\'s bid spread typed, Tab: the box stays, the spread is 7, the focus on its ask spread - and the next Tab goes on to its '
+      + 'Mid / Bid/Ask (not to the box\'s top)', fyStill(fyS2) && /^7,0+$/.test(fyS2.bid) && fyS2.focus === 'fy-sp-ask' && fyStill(fyS3)
+      && fyS3.focus === 'fy-base', { fyS2, fyS3 });
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');
