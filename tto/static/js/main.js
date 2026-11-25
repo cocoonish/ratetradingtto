@@ -26,6 +26,7 @@ import { openScenarios } from './scenarios.js';
 import { UsersPage } from './pages/users.js';
 import { BackupPage } from './pages/backup.js';
 import { loadHiddenColumns } from './columns.js';
+import { onDecimalsChanged } from './decimals.js';
 import { SocialPage } from './pages/social.js';
 import { AgendaPage } from './pages/agenda.js';
 import { setupDesk, startDesk, stopDesk, deskEvent, deskReconnected, paintNav as paintDeskNav } from './desk.js';
@@ -738,6 +739,7 @@ const events = {
       if (typeof m.gen === 'number') { onGen(m.gen); boxEvent(m); if (!POP) { deskEvent(m.desk); quantEvent(m.quant); presenceEvent(m.presence); } }
       else if (m.online === false) setOnline(false);
       else if (m.online === true) { if (!POP) deskReconnected(); onBack(); }
+      else if (m.decimals) runRefresh();         // (the user's decimals changed in another tab: its tables come whole)
     };
     this.timer = setInterval(() => this.tick(), 1000);
     window.addEventListener('pagehide', this.bye);
@@ -798,6 +800,12 @@ const events = {
 
   close() {
     if (this.es) { this.es.close(); this.es = null; }
+  },
+
+  /** A word to the dashboard's other tabs and windows of this browser (no generation: ``{decimals: true}``). */
+  tell(msg) {
+    if (!this.chan) return;
+    try { this.chan.postMessage(msg); } catch (e) { /* closed meanwhile */ }
   },
 
   /** The tab came into view or went out of it. */
@@ -1078,6 +1086,9 @@ function boot() {
     trade: (price) => api.post('/api/trade/prefill', price).then((res) => ctx.openTrade(res.spec), errorToast),
     onSelect,
   });
+  // this user's own decimals changed (a table's right click): the tables on screen come again - whole, the server's mark
+  // of the setting changed - here and in the other tabs / windows of this browser
+  onDecimalsChanged(() => { runRefresh(); events.tell({ decimals: true }); });
 
   $('login-form').addEventListener('submit', (e) => { e.preventDefault(); submitLogin(); });
   $('login-switch').addEventListener('click', (e) => {
