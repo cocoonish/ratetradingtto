@@ -17,6 +17,9 @@ const f3 = (v) => v.toFixed(3);                       // the file's figures: thr
 const SIDES = [['bid', 'yield', 'fy-bid-y'], ['ask', 'yield', 'fy-ask-y'], ['bid', 'price', 'fy-bid-p'], ['ask', 'price', 'fy-ask-p']];
 // where a bond's two sides start in Bloomberg's prices (the desk, 23.11.2026: "... mid'den mi, bid/asktan mı ... Default mid")
 const BASES = [['mid', 'Mid'], ['bidask', 'Bid/Ask']];
+// the default spreads' boxes (the desk's: one setting each, for every bond without its own)
+const DEFS = [['yield_bid', 'Getiri bid (bp)'], ['yield_ask', 'Getiri ask (bp)'], ['price_bid', 'Fiyat bid'], ['price_ask', 'Fiyat ask'],
+  ['euro_bid', 'Eurobond bid (bp)'], ['euro_ask', 'Eurobond ask (bp)']];
 const BASE_TIP = 'Mid (varsayılan): iki taraf da mid\'den, spread\'ler iki yanına. Bid/Ask: bid tarafı Bloomberg\'in bid\'inden, ask tarafı '
   + 'ask\'inden; spread\'ler her biri kendi tarafına (0 ise ekrandaki fiyat). DİBS RV\'deki kâğıt DİBS RV\'nin bid / ask\'ını kullanır (yeni '
   + 'maliyet yok); diğer DİBS ve Eurobond için Hesapla\'da Bloomberg\'e PX_BID / PX_ASK sorulur (kâğıt başına 2 hit, 5 dakika saklanır). '
@@ -27,6 +30,28 @@ function panel(id, title, note) {
   const el = h('section', { class: 'panel wide fy-panel', id }, h('header', null, h('h2', null, title)), body,
     note ? h('div', { class: 'note' }, note) : null);
   return { el, body };
+}
+
+/**
+ * The control in use in ``box`` (the focused one), to be focused again once ``box`` is drawn again - Chrome drops the
+ * focus of a control taken out of the page, and the next Tab started from the top of the box.  Found again by its id or
+ * by its row's ISIN and its own ``fy-`` class; focused without scrolling, its text selection as it was (a spread tabbed
+ * into is all selected: typing replaces it).  Returns the function that does it.
+ */
+function keepFocus(box) {
+  const a = document.activeElement;
+  if (!a || !box.contains(a)) return () => {};
+  const row = a.closest('tr[data-isin]');
+  const cls = [...a.classList].find((c) => c.startsWith('fy-'));
+  const find = a.id ? () => document.getElementById(a.id)
+    : row && cls ? () => box.querySelector('tr[data-isin="' + row.dataset.isin + '"] .' + cls) : () => null;
+  const text = typeof a.selectionStart === 'number' ? [a.value, a.selectionStart, a.selectionEnd, a.selectionDirection] : null;
+  return () => {
+    const b = find();
+    if (!b || b === document.activeElement || !box.contains(b)) return;
+    b.focus({ preventScroll: true });
+    if (text && b.value === text[0]) b.setSelectionRange(text[1], text[2], text[3]);
+  };
 }
 
 /** A line of the file, as the server writes it (the preview before Kaydet; the file itself is the server's). */
@@ -75,24 +100,74 @@ export class FiyatYuklemePage {
       placeholder: 'Auction prices:\n06/01/2027.t1   31.500\n10/02/2027zc.t1   31.700\n13/01/27 TLREF.t1   100.500' });
     this.parse = h('div', { class: 'fy-parse', id: 'fy-parse' });
     this.ihale.body.append(this.text, this.parse);
-    this.list = panel('fy-list', 'Kâğıt listesi',
-      'Liste sizin: siz çıkarana kadar kalır. Getiriyle kote edilenler (sabit kuponlu, bono, kuponsuz): bid getiri = t0 + bid spread, ask getiri = t0 − ask spread (bp). '
-      + 'Fiyatla kote edilenler (TLREF, FRN, TÜFE): bid fiyat = t0 − bid spread, ask fiyat = t0 + ask spread (fiyat puanı). Eurobond (USD / EUR, ISIN\'iyle '
-      + 'eklenir): mod ne olursa olsun Bloomberg\'in mid\'inden; bid getiri = mid + bid spread, ask getiri = mid − ask spread (bp, kendi varsayılanı), fiyatlar '
-      + 'Bloomberg\'in mid\'ine çapalı sokak kuralıyla. Satırın spread\'i boşsa varsayılan; eksi değer olur (skew). BBG\'den: Mid (varsayılan) '
-      + 'ya da Bid/Ask - bid tarafı Bloomberg\'in bid\'inden, ask tarafı ask\'inden, spread\'ler kendi tarafına (DİBS RV dışındaki kâğıtta '
-      + 'Hesapla başına 2 hit); Tümü hepsini birden değiştirir.');
-    this.sabit = panel('fy-sabit', 'Sabit fiyatlar', 'Bu kâğıtlar hesaplanmadan, girildiği gibi yüklenir ve siz değiştirene ya da çıkarana kadar kalır. Yalnız ISIN, '
-      + 'bid ve offer gerekir (katalogda olmayan döviz DİBS de olur; vadesi ISIN\'den okunur). Değerler dosyaya yazıldığı birimde: bono ve kuponsuz getiri '
-      + '(%, basit), diğerleri temiz fiyat. Aynı ISIN yeniden yapıştırılınca güncellenir. Listede de olan bir kâğıtta sabit fiyat geçerlidir. Hesaplanan bir '
-      + 'satırı "Sabitle" ile buraya alabilirsiniz.');
+    this.list = panel('fy-list', 'Kâğıt listesi (masanın)',
+      'Liste masanın: herkes aynı listeyi görür; eklenen ya da çıkarılan kâğıt, değişen spread, Mid / Bid/Ask ve varsayılan spread bütün masa için '
+      + 'değişir (açık sayfalara da gelir); mod, ihale metni, Hesapla ve kaydedilen dosyalar kişinin kendisinin. Getiriyle kote edilenler (sabit '
+      + 'kuponlu, bono, kuponsuz): bid getiri = t0 + bid spread, ask getiri = t0 − ask spread (bp). Fiyatla kote edilenler (TLREF, FRN, TÜFE): bid '
+      + 'fiyat = t0 − bid spread, ask fiyat = t0 + ask spread (fiyat puanı). Eurobond (USD / EUR, ISIN\'iyle eklenir): mod ne olursa olsun '
+      + 'Bloomberg\'in mid\'inden; bid getiri = mid + bid spread, ask getiri = mid − ask spread (bp, kendi varsayılanı), fiyatlar Bloomberg\'in '
+      + 'mid\'ine çapalı sokak kuralıyla. Satırın spread\'i boşsa varsayılan; eksi değer olur (skew). BBG\'den: Mid (varsayılan) ya da Bid/Ask - bid '
+      + 'tarafı Bloomberg\'in bid\'inden, ask tarafı ask\'inden, spread\'ler kendi tarafına (DİBS RV dışındaki kâğıtta Hesapla başına 2 hit); Tümü '
+      + 'hepsini birden değiştirir.');
+    this.sabit = panel('fy-sabit', 'Sabit fiyatlar (masanın)',
+      'Bu kâğıtlar hesaplanmadan, girildiği gibi yüklenir; liste gibi masanındır, biri değiştirene ya da çıkarana kadar kalır. Yalnız ISIN, bid ve '
+      + 'offer gerekir (katalogda olmayan döviz DİBS de olur; vadesi ISIN\'den okunur). Değerler dosyaya yazıldığı birimde: bono ve kuponsuz getiri '
+      + '(%, basit), diğerleri temiz fiyat. Aynı ISIN yeniden yapıştırılınca güncellenir. Listede de olan bir kâğıtta sabit fiyat geçerlidir. '
+      + 'Hesaplanan bir satırı "Sabitle" ile buraya alabilirsiniz.');
     this.result_ = panel('fy-result', 'Fiyatlar · t0', 'Getiriler BIST basit getiri (%), fiyatlar t0 valöründe temiz. Her hücre düzenlenebilir: getiri değişince fiyatı, '
       + 'fiyat değişince getirisi aynı kurallarla yeniden hesaplanır. Dosyaya: bono / kuponsuz getiriyle, diğerleri fiyatla yazılır. Sabit fiyatlı satırdaki '
       + 'değişiklik yalnız bu Hesapla içindir.');
+    this.buildList();
+    this.buildSabit();
     this.file = panel('fy-file', 'Dosya (Kaydet\'te yazılacak satırlar)');
     this.labels = panel('fy-labels', 'Tanıtılan ihale etiketleri (masanın)');
     panels.append(this.ihale.el, this.list.el, this.sabit.el, this.result_.el, this.file.el, this.labels.el);
     this.host.appendChild(panels);
+  }
+
+  /** The list's own boxes, made once - what is typed in them stays while the desk's list is drawn again: the add box,
+   *  the defaults, who changed the list last; the table under them (``drawList``). */
+  buildList() {
+    this.addText = h('textarea', { class: 'inp', id: 'fy-add-text', rows: '2', spellcheck: 'false', placeholder: 'ISIN ya da ISIN listesi (satır satır ya da virgülle)' });
+    const addBtn = h('button', { class: 'btn', type: 'button', id: 'fy-add' }, 'Ekle');
+    addBtn.addEventListener('click', () => this.addBonds(this.addText.value));
+    const defs = h('div', { class: 'fy-defs', id: 'fy-defs' }, h('span', { class: 'muted' }, 'Varsayılan spread:'));
+    this.defInputs = {};
+    for (const [k, label] of DEFS) {
+      const inp = h('input', { class: 'inp', id: 'fy-def-' + k.replace('_', '-'), size: '6', inputmode: 'decimal' });
+      inp.addEventListener('input', () => { inp.dataset.typed = '1'; });          // (as typed until saved: drawDefs)
+      this.defInputs[k] = inp;
+      defs.append(h('label', null, label + ' ', inp));
+    }
+    const defSave = h('button', { class: 'btn', type: 'button', id: 'fy-def-save' }, 'Kaydet');
+    defSave.addEventListener('click', () => this.saveDefaults());
+    defs.appendChild(defSave);
+    this.deskLine = h('div', { class: 'muted fy-desk', id: 'fy-desk' });
+    this.listBox = h('div', { class: 'fy-list-box' });
+    this.list.body.append(h('div', { class: 'fy-add' }, this.addText, addBtn), defs, this.deskLine, this.listBox);
+    this.waitForFocus(this.listBox, () => this.drawList());
+  }
+
+  /** Sabit fiyatlar' own boxes, made once: the box Excel's rows are pasted in (ISIN, bid, offer - the cells between, an
+   *  empty column, a yield, a stock, skipped by the server), what the last paste did; the table under them (``drawSabit``). */
+  buildSabit() {
+    this.sabitText = h('textarea', { class: 'inp fy-sabit-text', id: 'fy-sabit-text', rows: '4', spellcheck: 'false',
+      placeholder: 'Excel\'den ISIN, Bid ve Offer\'ı kopyalayıp yapıştırın - her satır bir kâğıt (aradaki boş sütun, getiri ve stok sütunları atlanır).\n'
+        + 'TRT191127F19\t99.483\t\t99.726' });
+    const go = h('button', { class: 'btn', type: 'button', id: 'fy-sabit-yapistir' }, 'Ekle / Güncelle');
+    go.addEventListener('click', () => this.pasteFixed(this.sabitText.value));
+    this.rapor = h('div', { class: 'fy-sabit-rapor', id: 'fy-sabit-rapor' });
+    this.sabitBox = h('div', { class: 'fy-sabit-box' });
+    this.sabit.body.append(h('div', { class: 'fy-add' }, this.sabitText, go), this.rapor, this.sabitBox);
+    this.waitForFocus(this.sabitBox, () => this.drawSabit());
+  }
+
+  /** Another user's change waits while this user works in ``box`` (the focus in it: a spread being typed, a select) -
+   *  ``draw`` once the focus has left it (not when only the window lost it: the focus comes back there). */
+  waitForFocus(box, draw) {
+    box.addEventListener('focusout', () => setTimeout(() => {
+      if (box.dataset.waiting && !box.contains(document.activeElement)) draw();
+    }, 0));
   }
 
   async load() {
@@ -101,11 +176,40 @@ export class FiyatYuklemePage {
     this.drawAll();
   }
 
-  // The page holds the user's work (the text, the edits): nothing is fetched again on a new generation.
-  async refresh() {}
+  // Another user's change of the desk's list - its bonds, spreads, Mid / Bid/Ask, defaults, fixed prices - comes on a new
+  // generation: asked for by the list's revision (unchanged: a short answer).  This user's own work stays as it is: what
+  // is typed in the boxes, the auction text, a Hesapla and its edits.
+  async refresh() {
+    if (!this.state) return;
+    const got = await api.get('/api/fiyat-yukleme', { rev: this.state.rev });
+    if (got && !got.unchanged) this.takeDesk(got);
+  }
+
+  /** The desk's list as another user left it (only that of what the server says: this page's mode stays); a Hesapla's
+   *  result said to be stale. */
+  takeDesk(got) {
+    const st = this.state;
+    if (!st || (typeof got.rev === 'number' && typeof st.rev === 'number' && got.rev <= st.rev)) return;    // (not newer)
+    this.took(Object.assign(st, { list: got.list, fixed: got.fixed, defaults: got.defaults, rev: got.rev, desk: got.desk }), null);
+    this.markStale('Masanın listesi değişti: yeniden Hesapla');
+  }
+
+  /** A state the server answered - an action's (the desk's list as it is now, another user's changes in it too) or
+   *  another user's change: the table the action was in (``now``) drawn at once, the other one too unless this user is
+   *  working in it (then once the focus leaves it), the defaults' boxes not typed in, who changed the list last. */
+  took(got, now) {
+    this.state = got;
+    for (const [box, draw] of [[this.listBox, () => this.drawList()], [this.sabitBox, () => this.drawSabit()]]) {
+      if (box === now || !box.contains(document.activeElement)) draw(); else box.dataset.waiting = '1';
+    }
+    this.drawDefs();
+    this.drawDesk();
+  }
 
   drawAll() {
     this.drawMode();
+    this.drawDefs();
+    this.drawDesk();
     this.drawList();
     this.drawSabit();
     this.drawResult();
@@ -123,7 +227,7 @@ export class FiyatYuklemePage {
   async setMode(m) {
     if (!this.state || this.state.mode === m) return;
     try {
-      this.state = await api.post('/api/fiyat-yukleme/ayar', { mode: m });
+      this.took(await api.post('/api/fiyat-yukleme/ayar', { mode: m }), null);
       this.result = null;
       this.drawMode();
       this.drawResult();
@@ -134,27 +238,9 @@ export class FiyatYuklemePage {
   // ------------------------------------------------------------------ the list
   drawList() {
     const st = this.state || {};
-    const body = clear(this.list.body);
-    const add = h('div', { class: 'fy-add' });
-    this.addText = h('textarea', { class: 'inp', id: 'fy-add-text', rows: '2', spellcheck: 'false', placeholder: 'ISIN ya da ISIN listesi (satır satır ya da virgülle)' });
-    const addBtn = h('button', { class: 'btn', type: 'button', id: 'fy-add' }, 'Ekle');
-    addBtn.addEventListener('click', () => this.addBonds(this.addText.value));
-    add.append(this.addText, addBtn);
-    body.appendChild(add);
-    // the defaults: one setting each, for every bond without its own
-    const d = st.defaults || {};
-    const defs = h('div', { class: 'fy-defs', id: 'fy-defs' }, h('span', { class: 'muted' }, 'Varsayılan spread:'));
-    this.defInputs = {};
-    for (const [k, label] of [['yield_bid', 'Getiri bid (bp)'], ['yield_ask', 'Getiri ask (bp)'], ['price_bid', 'Fiyat bid'], ['price_ask', 'Fiyat ask'],
-      ['euro_bid', 'Eurobond bid (bp)'], ['euro_ask', 'Eurobond ask (bp)']]) {
-      const inp = h('input', { class: 'inp', id: 'fy-def-' + k.replace('_', '-'), value: num(d[k], k.startsWith('price') ? 3 : 1, false), size: '6', inputmode: 'decimal' });
-      this.defInputs[k] = inp;
-      defs.append(h('label', null, label + ' ', inp));
-    }
-    const defSave = h('button', { class: 'btn', type: 'button', id: 'fy-def-save' }, 'Kaydet');
-    defSave.addEventListener('click', () => this.saveDefaults());
-    defs.appendChild(defSave);
-    body.appendChild(defs);
+    delete this.listBox.dataset.waiting;
+    const refocus = keepFocus(this.listBox);
+    const body = clear(this.listBox);
     const t = h('table', { class: 'plain fy', id: 'fy-list-table' });
     // Mid or Bid/Ask, each bond's own; "Tümü" sets every bond of the list at once
     const all = h('select', { class: 'inp fy-base-all', id: 'fy-base-all', title: 'Listedeki bütün kâğıtları birden Mid ya da Bid/Ask yap' },
@@ -185,14 +271,29 @@ export class FiyatYuklemePage {
     }
     if (!(st.list || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '10' }, 'Liste boş: yukarıya ISIN yazıp Ekle')));
     body.appendChild(t);
+    refocus();
+  }
+
+  /** The defaults' boxes: the desk's figures - a box typed in and not saved yet keeps what is in it. */
+  drawDefs() {
+    const d = (this.state || {}).defaults || {};
+    for (const [k, inp] of Object.entries(this.defInputs)) {
+      if (!inp.dataset.typed) inp.value = num(d[k], k.startsWith('price') ? 3 : 1, false);
+    }
+  }
+
+  /** Who changed the desk's list last, and when. */
+  drawDesk() {
+    const d = (this.state || {}).desk || {};
+    this.deskLine.textContent = d.by ? 'Masanın listesi · son değişiklik: ' + this.ctx.displayName(d.by) + ', ' + day(d.at) + ' '
+      + String(d.at || '').slice(11, 16) : '';
   }
 
   async addBonds(text) {
     if (!String(text || '').trim()) { toast('ISIN yazın', 'err'); return; }
     try {
       const got = await api.post('/api/fiyat-yukleme/ekle', { isins: text });
-      this.state = got;
-      this.drawList();
+      this.took(got, this.listBox);
       if (got.added.length) toast(got.added.length + ' kâğıt eklendi', 'ok');
       if (got.skipped.length) toast('Zaten listede: ' + got.skipped.join(', '));
       for (const r of got.refused || []) toast(r.isin + ': ' + r.text, 'err', 7000);
@@ -202,8 +303,7 @@ export class FiyatYuklemePage {
 
   async removeBond(isin) {
     try {
-      this.state = await api.post('/api/fiyat-yukleme/cikar', { isin });
-      this.drawList();
+      this.took(await api.post('/api/fiyat-yukleme/cikar', { isin }), this.listBox);
       if (this.result) {
         this.result.rows = this.result.rows.filter((r) => r.isin !== isin);
         this.drawResult();
@@ -214,8 +314,7 @@ export class FiyatYuklemePage {
 
   async saveSpread(isin, side, value) {
     try {
-      this.state = await api.post('/api/fiyat-yukleme/ayar', { spreads: { [isin]: { [side]: value.trim() } } });
-      this.drawList();
+      this.took(await api.post('/api/fiyat-yukleme/ayar', { spreads: { [isin]: { [side]: value.trim() } } }), this.listBox);
       this.markStale();
     } catch (err) { errorToast(err); this.drawList(); }
   }
@@ -223,18 +322,20 @@ export class FiyatYuklemePage {
   /** A bond's Mid / Bid/Ask (``isin`` null: "Tümü", every bond of the list), kept with the list by its ISIN. */
   async saveBase(isin, base) {
     try {
-      this.state = await api.post('/api/fiyat-yukleme/ayar', isin ? { bases: { [isin]: base } } : { base_all: base });
-      this.drawList();
+      this.took(await api.post('/api/fiyat-yukleme/ayar', isin ? { bases: { [isin]: base } } : { base_all: base }), this.listBox);
       this.markStale('Mid / Bid/Ask değişti: yeniden Hesapla');
     } catch (err) { errorToast(err); this.drawList(); }
   }
 
+  // the boxes typed in (none: all of them) - another user's change of the others stands
   async saveDefaults() {
     const defaults = {};
-    for (const [k, inp] of Object.entries(this.defInputs || {})) defaults[k] = inp.value.trim();
+    const typed = Object.entries(this.defInputs).filter(([, inp]) => inp.dataset.typed);
+    for (const [k, inp] of typed.length ? typed : Object.entries(this.defInputs)) defaults[k] = inp.value.trim();
     try {
-      this.state = await api.post('/api/fiyat-yukleme/ayar', { defaults });
-      this.drawList();
+      const got = await api.post('/api/fiyat-yukleme/ayar', { defaults });
+      for (const inp of Object.values(this.defInputs)) delete inp.dataset.typed;
+      this.took(got, this.listBox);
       this.markStale();
       toast('Varsayılan spread kaydedildi', 'ok');
     } catch (err) { errorToast(err); }
@@ -243,23 +344,9 @@ export class FiyatYuklemePage {
   // ------------------------------------------------------------------ fixed prices ("Sabit fiyat")
   drawSabit() {
     const st = this.state || {};
-    const body = clear(this.sabit.body);
-    // Excel's rows pasted: ISIN, bid, offer (the cells between - an empty column, a yield, a stock - skipped by the server)
-    const text = h('textarea', { class: 'inp fy-sabit-text', id: 'fy-sabit-text', rows: '4', spellcheck: 'false',
-      placeholder: 'Excel\'den ISIN, Bid ve Offer\'ı kopyalayıp yapıştırın - her satır bir kâğıt (aradaki boş sütun, getiri ve stok sütunları atlanır).\n'
-        + 'TRT191127F19\t99.483\t\t99.726' });
-    const go = h('button', { class: 'btn', type: 'button', id: 'fy-sabit-yapistir' }, 'Ekle / Güncelle');
-    go.addEventListener('click', () => this.pasteFixed(text.value));
-    body.appendChild(h('div', { class: 'fy-add' }, text, go));
-    this.sabitText = text;
-    const rep = h('div', { class: 'fy-sabit-rapor', id: 'fy-sabit-rapor' });
-    const p = this.lastPaste;
-    if (p) {
-      rep.appendChild(h('div', { class: 'muted' }, p.added.length + ' kâğıt eklendi · ' + p.updated.length + ' güncellendi · ' + p.bad.length
-        + ' satır okunamadı' + (p.ignored ? ' · ' + p.ignored + ' satır yok sayıldı (başlık, grup adı)' : '')));
-      for (const b of p.bad) rep.appendChild(h('div', { class: 'fy-sabit-bad' }, 'Satır ' + b.n + ': ' + b.text + ' - ' + b.why));
-    }
-    body.appendChild(rep);
+    delete this.sabitBox.dataset.waiting;
+    const refocus = keepFocus(this.sabitBox);
+    const body = clear(this.sabitBox);
     const t = h('table', { class: 'plain fy fy-sabit-tbl', id: 'fy-sabit-table' });
     t.appendChild(h('tr', null, ...[['ISIN', 'l'], ['Açıklama', 'l'], ['Vade', ''], ['Birim', 'l'], ['Bid', ''], ['Offer', ''], ['Dosya satırı', 'l'], ['', '']]
       .map(([x, c]) => h('th', { class: c || null }, x))));
@@ -280,16 +367,27 @@ export class FiyatYuklemePage {
     }
     if (!(st.fixed || []).length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: '8' }, 'Sabit fiyatlı kâğıt yok')));
     body.appendChild(t);
+    refocus();
+  }
+
+  /** What the last paste did: added, updated, the lines that could not be read and why. */
+  drawRapor() {
+    const rep = clear(this.rapor);
+    const p = this.lastPaste;
+    if (!p) return;
+    rep.appendChild(h('div', { class: 'muted' }, p.added.length + ' kâğıt eklendi · ' + p.updated.length + ' güncellendi · ' + p.bad.length
+      + ' satır okunamadı' + (p.ignored ? ' · ' + p.ignored + ' satır yok sayıldı (başlık, grup adı)' : '')));
+    for (const b of p.bad) rep.appendChild(h('div', { class: 'fy-sabit-bad' }, 'Satır ' + b.n + ': ' + b.text + ' - ' + b.why));
   }
 
   async pasteFixed(text) {
     if (!String(text || '').trim()) { toast('Excel\'den ISIN, bid ve offer\'ı yapıştırın', 'err'); return; }
     try {
       const got = await api.post('/api/fiyat-yukleme/sabit-yapistir', { text });
-      this.state = got;
       this.lastPaste = got.pasted;
-      this.drawSabit();
-      if (got.pasted.bad.length && this.sabitText) this.sabitText.value = text;      // (the lines left to fix stay)
+      this.drawRapor();
+      this.took(got, this.sabitBox);
+      if (!got.pasted.bad.length) this.sabitText.value = '';          // (with a line left to fix, the text stays)
       this.markStale();
       toast(got.pasted.added.length + ' eklendi, ' + got.pasted.updated.length + ' güncellendi' + (got.pasted.bad.length ? ', ' + got.pasted.bad.length
         + ' satır okunamadı' : ''), got.pasted.bad.length ? 'err' : 'ok');
@@ -303,8 +401,7 @@ export class FiyatYuklemePage {
     if (!isNum(bid) || !isNum(ask)) { toast('Bid ve ask\'i sayı olarak girin', 'err'); return; }
     try {
       const got = await api.post('/api/fiyat-yukleme/sabit', { isin, bid, ask });
-      this.state = got;
-      this.drawSabit();
+      this.took(got, this.sabitBox);
       this.markStale();
       toast(isin + ': sabit fiyat kaydedildi', 'ok');
       if (got.crossed) toast(isin + ': bid ask\'ten iyi (ters kotasyon)', 'err', 6000);
@@ -313,8 +410,7 @@ export class FiyatYuklemePage {
 
   async removeFixed(isin) {
     try {
-      this.state = await api.post('/api/fiyat-yukleme/sabit-sil', { isin });
-      this.drawSabit();
+      this.took(await api.post('/api/fiyat-yukleme/sabit-sil', { isin }), this.sabitBox);
       this.markStale();
     } catch (err) { errorToast(err); }
   }
@@ -491,7 +587,11 @@ export class FiyatYuklemePage {
       }
       r.edited = true;
       const old = this.result_.body.querySelector('tr.fy-row[data-isin="' + r.isin + '"]');
-      if (old) old.replaceWith(this.rowEl(r));
+      if (old) {
+        const refocus = keepFocus(this.result_.body);               // (Tab went on to the row's next cell: it stays there)
+        old.replaceWith(this.rowEl(r));
+        refocus();
+      }
       this.saved = null;
       this.drawFile();
     } catch (err) { errorToast(err); inp.value = n3((r[side] || {})[field]); }

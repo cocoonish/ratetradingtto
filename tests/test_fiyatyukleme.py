@@ -4,11 +4,13 @@ ignored, dd/mm/yy), each line's bond by maturity and tag, an ambiguous one unrec
 next time, .t1 over .t2, a bill's simple yield to its t0 price and back, a fixed coupon bond's price at T+1 to its yield to
 its t0 price (against rvfair's own Newton and quantcurve's accrued interest), the spreads (defaults, a bond's own, skew,
 price spreads for TLREF / TÜFE), a bill's last trade read as a price or a yield, the txt's lines to the character - and on
-the replay day: each user's list kept, İhale's Hesapla and the auction values kept desk-wide, the file and its second
-download, an edited cell's other half; BBG: the trading list's last trade from DİBS RV without a request, a bond off it
-asked once (2 hits) and not again for 5 minutes, a trade that is not today's moved from the last auction with the bond
-curve (Nelson-Siegel, the closes made up) or - without that - TRY OIS, said on the row; Mid or Bid/Ask (23.11.2026): each
-user's, kept by ISIN across a list change, "Tümü", Mid as before, a DİBS RV bond's sides from the sheet, an off-list DİBS's
+the replay day: the desk's list kept, one for everyone (25.11.2026: its bonds, spreads, Mid / Bid/Ask, defaults and fixed
+prices; the mode, the text and the saved files each user's own; made once from the users' own lists before it), İhale's
+Hesapla and the auction values kept desk-wide, the file and its second download, an edited cell's other half; BBG: the
+trading list's last trade from DİBS RV without a request, a bond off it asked once (2 hits) and not again for 5 minutes, a
+trade that is not today's moved from the last auction with the bond curve (Nelson-Siegel, the closes made up) or - without
+that - TRY OIS, said on the row; Mid or Bid/Ask (23.11.2026): kept with the list by ISIN across a list change, "Tümü",
+Mid as before, a DİBS RV bond's sides from the sheet, an off-list DİBS's
 and a Eurobond's from PX_BID / PX_ASK asked only for them (the hits counted), no live order or bid = ask from the mid; the
 provider's one-off request counted and kept nowhere (in process and through the helper); and the HTTP routes (last: the
 client stops the service)."""
@@ -22,7 +24,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import fake_blpapi
-from conftest import ANON, auth, cell
+from conftest import ANON, auth, cell, make_service
 from tto import bonds as bd
 from tto import fiyatyukleme as fy
 from tto import pricing as pr
@@ -296,10 +298,22 @@ def call(svc, user, what, body=None):
     return svc.fiyat_yukleme(user, what, body or {})
 
 
-def test_the_list_is_each_users_and_stays(svc):
+def fresh(s):
+    """The desk's list emptied - it is everyone's since 25.11.2026, so a test starts from none (not from another's)."""
+    s.store.put(fy.KEY_DESK, {"bonds": [], "defaults": {}, "fixed": []})
+
+
+def test_the_list_is_the_desks_and_stays(svc):
+    """(the desk, 25.11.2026: "Kağıt fiyat yüklemedeki isin listesi tüm masa için olmalı") One list for everyone: what a
+    user adds, sets or takes off is the desk's - its bonds, each one's spreads, the defaults; the mode stays each user's
+    own; kept (a new instance of the module: the store's); a change is a new generation and a new revision - a page asking
+    by the one it has hears "unchanged" until then."""
+    fresh(svc)
     u = svc.login("Yükleme Liste")["user"]
     other = svc.login("Yükleme Başka")["user"]
+    gen = svc.gen
     st = call(svc, u, "ekle", {"isins": "%s, %s\n%s %s\t%s" % (ZERO, BILL, FIXED, TLREF, CPI)})
+    assert svc.gen > gen and st["rev"] >= 1 and st["desk"]["by"] == u
     assert st["added"] == [ZERO, BILL, FIXED, TLREF, CPI] and st["skipped"] == [] and st["refused"] == []
     rows = {r["isin"]: r for r in st["list"]}
     assert [r["isin"] for r in st["list"]] == [BILL, ZERO, FIXED, TLREF, CPI]          # by kind, then maturity
@@ -318,8 +332,10 @@ def test_the_list_is_each_users_and_stays(svc):
     with pytest.raises(ServiceError) as e:
         call(svc, u, "ekle", {"isins": "TRT150328T25"})
     assert "kontrol hanesi" in str(e.value)
-    # another user's list is theirs; the list stays (a new page, a new instance of the module: the store's)
-    assert call(svc, other, "state")["list"] == []
+    # the desk's: another user has the same list (and adds nothing new by adding it); it stays (a new page, a new
+    # instance of the module: the store's)
+    assert [r["isin"] for r in call(svc, other, "state")["list"]] == [BILL, ZERO, FIXED, TLREF, CPI]
+    assert call(svc, other, "ekle", {"isins": BILL})["skipped"] == [BILL]
     again = fy.FiyatYukleme(svc).state(u)
     assert [r["isin"] for r in again["list"]] == [BILL, ZERO, FIXED, TLREF, CPI]
     # a bond's own spreads, the defaults, the mode; × takes a bond off
@@ -327,18 +343,79 @@ def test_the_list_is_each_users_and_stays(svc):
     rows = {r["isin"]: r for r in st["list"]}
     assert rows[FIXED]["spread"] == {"bid": 7.5, "ask": 4.0, "own_bid": True, "own_ask": False, "unit": "bp"}
     assert rows[TLREF]["spread"]["bid"] == 0.10 and rows[TLREF]["spread"]["own_bid"] and st["mode"] == "bbg"
+    # ... the other user's too - not the mode: theirs
+    o = call(svc, other, "state")
+    assert {r["isin"]: r for r in o["list"]}[FIXED]["spread"] == rows[FIXED]["spread"] and o["defaults"]["yield_ask"] == 4.0
+    assert o["mode"] == "ihale" and (o["rev"], o["desk"]["by"]) == (st["rev"], u)
     with pytest.raises(ServiceError) as e:
-        call(svc, u, "ayar", {"spreads": {FIXED: {"bid": "900"}}})
-    assert "bp" in str(e.value) and "arasında" in str(e.value)
-    st = call(svc, u, "cikar", {"isin": CPI})
-    assert CPI not in [r["isin"] for r in st["list"]]
+        call(svc, u, "ayar", {"spreads": {FIXED: {"bid": "900"}}, "mode": "ihale"})
+    assert "bp" in str(e.value) and "arasında" in str(e.value) and call(svc, u, "state")["mode"] == "bbg"      # (all or nothing)
+    # × by the other user: off for everyone
+    st = call(svc, other, "cikar", {"isin": CPI})
+    assert CPI not in [r["isin"] for r in call(svc, u, "state")["list"]] and st["desk"]["by"] == other
     with pytest.raises(ServiceError):
         call(svc, u, "cikar", {"isin": CPI})
+    # asked by the revision the page has: unchanged until somebody changes the list; the mode alone is not the list's
+    rev = call(svc, u, "state")["rev"]
+    assert call(svc, u, "state", {"rev": rev}) == {"rev": rev, "unchanged": True}
+    assert call(svc, u, "ayar", {"mode": "ihale"})["rev"] == rev and call(svc, other, "state", {"rev": str(rev)})["unchanged"]
     st = call(svc, u, "ayar", {"spreads": {FIXED: {"bid": None}}, "defaults": {"yield_ask": 5}, "mode": "ihale"})
-    assert {r["isin"]: r for r in st["list"]}[FIXED]["spread"]["own_bid"] is False
+    assert {r["isin"]: r for r in st["list"]}[FIXED]["spread"]["own_bid"] is False and st["rev"] == rev + 1
+    got = call(svc, other, "state", {"rev": rev})
+    assert "unchanged" not in got and got["rev"] == rev + 1 and got["defaults"]["yield_ask"] == 5.0
+
+
+def test_the_desks_list_is_made_once_from_the_users_own_lists(tmp_path):
+    """Before 25.11.2026 each user had a list of their own: the first time the desk's list is asked for, it is made from
+    them - every bond and every fixed price anyone had, by ISIN; a bond two users had with different settings, and the
+    defaults: the latest user's (the newest stamp in their records: a bond added, a fixed price set, a file saved); a
+    fixed price two had: the one set last.  Each user's mode and text stay theirs, their old keys as they were; made once
+    (a bond taken off later does not come back)."""
+    s = make_service(tmp_path)
+    try:
+        a, b = s.login("Liste Eski")["user"], s.login("Liste Yeni")["user"]
+        old_a = {"bonds": [{"isin": FIXED, "bid": 7.0, "ask": None, "base": "bidask", "at": "2026-11-20 09:00:00"},
+                           {"isin": TLREF, "bid": 0.1, "ask": None, "at": "2026-11-20 09:01:00"}],
+                 "defaults": dict(fy.DEFAULTS, yield_bid=6.0),
+                 "fixed": [{"isin": BILL, "bid": 31.4, "ask": 31.3, "at": "2026-11-20 09:05:00"},
+                           {"isin": CPI, "bid": 91.0, "ask": 92.0, "at": "2026-11-24 10:00:00"}],
+                 "mode": "bbg", "text": "06/01/2027.t1   31.500\n"}
+        old_b = {"bonds": [{"isin": FIXED, "bid": 8.0, "ask": 3.0, "at": "2026-11-21 10:00:00"},
+                           {"isin": ZERO, "bid": None, "ask": None, "at": "2026-11-21 10:00:00"}],
+                 "defaults": {"yield_bid": 4.0, "price_ask": 0.07},
+                 "fixed": [{"isin": BILL, "bid": 31.5, "ask": 31.35, "at": "2026-11-21 11:00:00"},
+                           {"isin": CPI, "bid": 90.0, "ask": 91.0, "at": "2026-11-21 11:00:00"}],
+                 "mode": "ihale", "text": ""}
+        s.store.put(fy.KEY_LIST % a, old_a)
+        s.store.put(fy.KEY_LIST % b, old_b)
+        s.store.put(fy.KEY_SAVED % b, {"2026-11-25": [{"at": "2026-11-25 08:30:00", "name": "x.txt", "text": "", "n": 0}]})  # (b: the latest)
+        sa, sb = call(s, a, "state"), call(s, b, "state")
+        assert [r["isin"] for r in sa["list"]] == [r["isin"] for r in sb["list"]] == [ZERO, FIXED, TLREF]       # every bond anyone had
+        rows = {r["isin"]: r for r in sa["list"]}
+        # a bond both had: the latest user's settings (b's spreads, b's Mid - not a's Bid/Ask); a's own one as it was
+        assert (rows[FIXED]["spread"]["bid"], rows[FIXED]["spread"]["ask"], rows[FIXED]["base"]) == (8.0, 3.0, "mid")
+        assert rows[TLREF]["spread"]["bid"] == 0.1 and rows[TLREF]["spread"]["own_bid"]
+        # the defaults: the latest user's (the ones b had not set: the page's own)
+        assert sa["defaults"] == sb["defaults"] == dict(fy.DEFAULTS, yield_bid=4.0, price_ask=0.07)
+        # every fixed price; one both had: the one set last (a's CPI, set after b's; b's bill)
+        assert {r["isin"]: (r["bid"], r["ask"]) for r in sb["fixed"]} == {BILL: (31.5, 31.35), CPI: (91.0, 92.0)}
+        # each one's own: the mode and the text
+        assert (sa["mode"], sa["text"], sb["mode"], sb["text"]) == ("bbg", old_a["text"], "ihale", "")
+        merged = s.store.get(fy.KEY_DESK)["merged"]
+        assert (merged["users"], merged["clash"], merged["clash_fixed"], merged["defaults"]) == ([a, b], [FIXED], [BILL, CPI], b)
+        # the old keys as they were; once: a bond taken off does not come back (a new instance of the module either)
+        assert s.store.get(fy.KEY_LIST % a) == old_a and s.store.get(fy.KEY_LIST % b) == old_b
+        call(s, a, "cikar", {"isin": TLREF})
+        assert TLREF not in [r["isin"] for r in fy.FiyatYukleme(s).state(b)["list"]]
+        # a mode set later: in the user's key, its old fields with it as they were
+        call(s, a, "ayar", {"mode": "ihale"})
+        assert s.store.get(fy.KEY_LIST % a) == dict(old_a, mode="ihale")
+    finally:
+        s.stop()
 
 
 def test_ihale_on_the_replay_day_and_the_values_kept(svc):
+    fresh(svc)
     u = svc.login("Yükleme İhale")["user"]
     call(svc, u, "ekle", {"isins": " ".join((ZERO, BILL, FIXED, TLREF, CPI, "TRT150328T24"))})
     res = call(svc, u, "hesapla", {"mode": "ihale", "text": SAMPLE})
@@ -387,6 +464,7 @@ def test_ihale_on_the_replay_day_and_the_values_kept(svc):
 
 
 def test_an_unrecognised_line_is_named_once_and_known_after(svc):
+    fresh(svc)
     u = svc.login("Yükleme Tanıt")["user"]
     other = svc.login("Yükleme Tanıt İki")["user"]
     call(svc, u, "ekle", {"isins": "TRT080530T27"})
@@ -418,6 +496,7 @@ def test_an_unrecognised_line_is_named_once_and_known_after(svc):
 
 
 def test_kaydet_writes_the_desks_file_and_keeps_it_for_today(svc):
+    fresh(svc)
     u = svc.login("Yükleme Kaydet")["user"]
     other = svc.login("Yükleme Kaydet İki")["user"]
     call(svc, u, "ekle", {"isins": " ".join((ZERO, BILL, FIXED, TLREF, CPI, "TRT150328T24"))})
@@ -438,7 +517,7 @@ def test_kaydet_writes_the_desks_file_and_keeps_it_for_today(svc):
     rows[0]["bid_yield"], rows[0]["ask_yield"] = 31.6, 31.7
     out2 = call(svc, u, "kaydet", {"rows": rows})
     assert out2["lines"][0] == "TRB100227T13,0,0,31.600,31.700" and out2["crossed"] == [BILL]
-    # the day's last file again: ASCII, CRLF; the saves kept per user and day
+    # the day's last file again: ASCII, CRLF; the saves kept per user and day (the list is the desk's, the files each one's)
     raw, name = call(svc, u, "dosya")
     assert name == "dibs_fiyat_20261103.txt" and raw == out2["text"].encode("ascii") and raw.count(b"\r\n") == 6
     assert [x["n"] for x in call(svc, u, "state")["saved"]] == [6, 6]
@@ -446,12 +525,14 @@ def test_kaydet_writes_the_desks_file_and_keeps_it_for_today(svc):
     assert list(kept) == ["2026-11-03"] and len(kept["2026-11-03"]) == 2
     with pytest.raises(ServiceError) as e:
         call(svc, other, "dosya")
-    assert "bugün kaydedilmiş dosya yok" in str(e.value)
+    assert "bugün kaydedilmiş dosya yok" in str(e.value) and call(svc, other, "state")["saved"] == []
+    assert call(svc, other, "kaydet", {"rows": rows})["text"] == out2["text"]                  # (the same list: the same file)
+    assert [x["n"] for x in call(svc, other, "state")["saved"]] == [6] and len(call(svc, u, "state")["saved"]) == 2
     with pytest.raises(ServiceError) as e:
         call(svc, u, "kaydet", {"rows": [{"isin": "TRT150328T24"}]})
     assert "yazılacak fiyat yok" in str(e.value)
     with pytest.raises(ServiceError) as e:
-        call(svc, other, "kaydet", {"rows": rows})
+        call(svc, other, "kaydet", {"rows": [dict(rows[0], isin="TRT080530T27")]})
     assert "listede değil" in str(e.value)
 
 
@@ -479,10 +560,11 @@ def fixed_of(svc, user):
     return {r["isin"]: r for r in call(svc, user, "state")["fixed"]}
 
 
-def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
+def test_fixed_prices_are_the_desks_in_the_txts_unit_and_stay(svc):
     """(the desk, 20.11.2026: "Bir de sabit fiyat kısmı açmalıyız, bazı kağıtları direkt bu şekilde yüklenecek diye girip
     bırakabilmeliyim") A bond's fixed bid / ask, typed in the unit the txt writes it in (a bill's yields, the others'
-    clean prices, a Turkish comma read), kept per user until changed or taken off."""
+    clean prices, a Turkish comma read), kept with the desk's list (25.11.2026: everyone's) until changed or taken off."""
+    fresh(svc)
     u = svc.login("Sabit Fiyat")["user"]
     other = svc.login("Sabit Fiyat İki")["user"]
     call(svc, u, "sabit", {"isin": BILL, "bid": "31,40", "ask": "31,30"})
@@ -494,15 +576,17 @@ def test_fixed_prices_are_each_users_in_the_txts_unit_and_stay(svc):
     assert (f[BILL]["unit"], f[BILL]["bid"], f[BILL]["ask"]) == ("yield", 31.4, 31.3)      # a bill: its simple yields
     assert all(f[c]["unit"] == "price" for c in (FIXED, TLREF, CPI)) and (f[FIXED]["bid"], f[FIXED]["ask"]) == (99.25, 99.75)
     assert f[FIXED]["name"] == "TURKGB 32.6 02/10/27" and f[FIXED]["maturity"] == "2027-02-10" and not f[FIXED]["listed"]
-    # changed: the same bond again; taken off; another user has none; kept (a new instance of the module: the store's)
+    # changed: the same bond again; taken off; another user has the same ones; kept (a new instance of the module: the store's)
     call(svc, u, "sabit", {"isin": BILL, "bid": "31,5", "ask": "31,35"})
     assert (fixed_of(svc, u)[BILL]["bid"], fixed_of(svc, u)[BILL]["ask"], len(fixed_of(svc, u))) == (31.5, 31.35, 4)
     assert call(svc, u, "sabit-sil", {"isin": TLREF})["fixed_removed"] == TLREF and TLREF not in fixed_of(svc, u)
     with pytest.raises(ServiceError) as e:
         call(svc, u, "sabit-sil", {"isin": TLREF})
     assert "sabit fiyatı yok" in str(e.value)
-    assert fixed_of(svc, other) == {}
+    assert fixed_of(svc, other) == fixed_of(svc, u) and list(fixed_of(svc, other)) == [BILL, FIXED, CPI]
     assert [r["isin"] for r in fy.FiyatYukleme(svc).state(u)["fixed"]] == [BILL, FIXED, CPI]
+    assert call(svc, other, "sabit", {"isin": FIXED, "bid": "99,3", "ask": "99,7"})["desk"]["by"] == other         # (anyone's)
+    assert (fixed_of(svc, u)[FIXED]["bid"], fixed_of(svc, u)[FIXED]["ask"]) == (99.3, 99.7)
     # what cannot be fixed: no figures, a price out of reach
     with pytest.raises(ServiceError) as e:
         call(svc, u, "sabit", {"isin": FIXED, "bid": "", "ask": "99"})
@@ -526,6 +610,7 @@ def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc, monkeypatc
     the row's own spreads on it, marked "eğri fiyatı" / "eğri fiyatı (akran farkı)" - "(son fark)" on its own last spread -
     with how and its typical error; a price-quoted bond does not (no price, why); a fixed price still wins; the file takes
     the curve rows as any yield-quoted ones."""
+    fresh(svc)
     u = svc.login("Yükleme Eğri")["user"]
     off, zero2, fixed_one = "TRT090627T12", "TRT210427T18", "TRT110827T16"
     kept = svc.store.get(fy.KEY_AUCTIONS) or {}
@@ -576,6 +661,7 @@ def test_a_bond_with_no_price_gets_its_curve_price_in_both_modes(svc, monkeypatc
 
 
 def test_fixed_bonds_go_as_they_are_in_both_modes_over_the_computed(svc):
+    fresh(svc)
     u = svc.login("Sabit Hesap")["user"]
     call(svc, u, "ekle", {"isins": "%s %s %s" % (ZERO, FIXED, TLREF)})
     call(svc, u, "sabit", {"isin": FIXED, "bid": "99,25", "ask": "99,75"})               # in the list too: fixed wins
@@ -614,6 +700,7 @@ def test_fixed_bonds_go_as_they_are_in_both_modes_over_the_computed(svc):
     z2 = {r["isin"]: r for r in res["rows"]}[ZERO]
     assert z2["fixed"] and (z2["bid"]["yield"], z2["ask"]["yield"]) == (pytest.approx(31.55), pytest.approx(31.45))
     # only fixed bonds (or Eurobonds) in İhale mode: nothing needs the text
+    fresh(svc)
     only = svc.login("Sabit Yalnız")["user"]
     call(svc, only, "sabit", {"isin": TLREF, "bid": "100", "ask": "101"})
     res = call(svc, only, "hesapla", {"mode": "ihale", "text": ""})
@@ -657,6 +744,7 @@ def test_fixed_prices_pasted_need_no_catalog_and_go_to_the_file(svc):
     """Only the ISIN, bid and offer: an FX-denominated DİBS (not in the catalog, by the desk's rule) is "döviz DİBS", its
     maturity read from its ISIN (TRT191127F19: 19.11.2027), in price; a "TRB…" one a bill, in yield; a catalog bond its
     own.  Pasted again: updated."""
+    fresh(svc)
     u = svc.login("Sabit Yapıştır")["user"]
     bill = _valid("TRB150727T1")
     got = call(svc, u, "sabit-yapistir", {"text": LOWER + "%s\t31,2\t\t31,1\n%s\t30.9\t30.8\nbozuk satır\t1\n" % (bill, ZERO)})
@@ -748,6 +836,7 @@ def put_auction(svc, isin: str, day: dt.date, value: float, label: str):
 
 
 def test_bbg_in_replay_the_trading_list_from_dibs_rv_the_rest_from_the_last_auction_and_the_curve(svc, closes):
+    fresh(svc)
     u = svc.login("Yükleme BBG")["user"]
     rv = trading(svc, u)
     off_fixed = next(b["isin"] for b in bd.catalog() if b["kind"] == "fixed" and b["isin"] not in rv and "2027-03-01" < b["maturity"] < "2029-01-01")
@@ -812,6 +901,7 @@ def test_bloombergs_last_trades_are_kept_per_isin_for_the_curve_price(svc, close
     Fiyatlama's last known spread takes it: the bond missing from an auction text is priced at its bucket's base now +
     its spread at that trade, on that day's close curve ("eğri fiyatı (son fark, son işlem <day>)")."""
     from tto import kagitfiyat as kf
+    fresh(svc)
     u = svc.login("Yükleme Son İşlem")["user"]
     rv = trading(svc, u)
     code = "TRT110827T16"
@@ -849,6 +939,7 @@ def test_bbg_the_newer_of_the_last_trade_and_the_last_auction_is_the_reference(s
     """(the desk, 20.11.2026: "dün işlem olmasına rağmen son işlem dün diyor ve göstermiyor") A last trade not of today:
     a trade newer than every auction kept is the reference, moved with the curve since its day; an auction kept on the
     trade's day or later stays the reference ("son trade bugün değilse, son ihale fiyatından itibaren")."""
+    fresh(svc)
     u = svc.login("Yükleme Yenisi")["user"]
     rv = trading(svc, u)
     code = next(c for c, r in rv.items() if fy.date_said(r["date"]) not in (None, REPLAY_DAY) and bd.by_isin(c)["kind"] == "fixed")
@@ -872,21 +963,22 @@ def test_bbg_the_newer_of_the_last_trade_and_the_last_auction_is_the_reference(s
 
 
 # ------------------------------------------------------------------ Mid or Bid/Ask (the desk, 23.11.2026)
-def test_mid_or_bid_ask_is_each_users_kept_by_isin_across_a_list_change(svc):
+def test_mid_or_bid_ask_is_kept_with_the_desks_list_by_isin_across_a_list_change(svc):
     """(the desk, 23.11.2026: "Kağıt fiyat yükleme listesinde bloomberg'te kağıt kağıt bid'i ve ask'i mid'den mi, bid/asktan mı
-    almasını istediğimi de seçebilmeliyim. Default mid") Each bond's choice is its owner's, kept with the list by its ISIN:
-    Mid until set; bonds coming in before it (its row moves) or going leave it as it is; "Tümü" sets every bond; Mid again
-    leaves the list's entry as it was before any choice."""
+    almasını istediğimi de seçebilmeliyim. Default mid") Each bond's choice is kept with the list by its ISIN - the
+    desk's list (25.11.2026: everyone sees it): Mid until set; bonds coming in before it (its row moves) or going leave it
+    as it is; "Tümü" sets every bond; Mid again leaves the list's entry as it was before any choice."""
+    fresh(svc)
     u = svc.login("Yükleme Taraf")["user"]
     other = svc.login("Yükleme Taraf Başka")["user"]
     bond = "TRT150328T24"
     st = call(svc, u, "ekle", {"isins": "%s %s" % (FIXED, bond)})
-    before = [dict(b) for b in svc.store.get(fy.KEY_LIST % u)["bonds"]]
+    before = [dict(b) for b in svc.store.get(fy.KEY_DESK)["bonds"]]
     assert [(r["isin"], r["base"]) for r in st["list"]] == [(FIXED, "mid"), (bond, "mid")]
     assert st["bases"] == [{"id": "mid", "text": "Mid"}, {"id": "bidask", "text": "Bid/Ask"}]
     st = call(svc, u, "ayar", {"bases": {bond.lower(): "bidask"}})
     assert [(r["isin"], r["base"]) for r in st["list"]] == [(FIXED, "mid"), (bond, "bidask")]
-    assert [(r["isin"], r["base"]) for r in call(svc, other, "ekle", {"isins": bond})["list"]] == [(bond, "mid")]   # (another user's own)
+    assert [(r["isin"], r["base"]) for r in call(svc, other, "state")["list"]] == [(FIXED, "mid"), (bond, "bidask")]      # (the desk's)
     # the list changes: bonds sorting before it come in (its row moves down), one goes - the choice stays with its ISIN
     st = call(svc, u, "ekle", {"isins": "%s %s" % (ZERO, BILL)})
     assert [(r["isin"], r["base"]) for r in st["list"]] == [(BILL, "mid"), (ZERO, "mid"), (FIXED, "mid"), (bond, "bidask")]
@@ -896,7 +988,7 @@ def test_mid_or_bid_ask_is_each_users_kept_by_isin_across_a_list_change(svc):
     # "Tümü": every bond at once, either way; Mid again: the entry as before any choice
     assert {r["base"] for r in call(svc, u, "ayar", {"base_all": "bidask"})["list"]} == {"bidask"}
     assert {r["base"] for r in call(svc, u, "ayar", {"base_all": "mid"})["list"]} == {"mid"}
-    kept = svc.store.get(fy.KEY_LIST % u)["bonds"]
+    kept = svc.store.get(fy.KEY_DESK)["bonds"]
     assert all("base" not in b for b in kept) and [b for b in kept if b["isin"] == bond] == [b for b in before if b["isin"] == bond]
     for body, said in (({"bases": {bond: "bid"}}, "Mid ya da Bid/Ask olmalı: bid"), ({"base_all": ""}, "Mid ya da Bid/Ask olmalı: (boş)"),
                        ({"bases": {FIXED: "bidask"}}, "kâğıt listede değil: %s" % FIXED)):
@@ -910,6 +1002,7 @@ def test_bid_ask_on_the_trading_list_from_dibs_rvs_own_bid_and_ask(svc):
     each read as the last trade is (a coupon bond's price at its value date -> its simple yield, the same at t0; a TLREF's
     price as it is), the spreads each on its own side - at 0 the screen's own; a bill whose bid equals its ask (no order
     stands: the last trade on both sides) from the mid as Mid prices it, said on the row; the summary counts them."""
+    fresh(svc)
     u = svc.login("Yükleme Bid Ask")["user"]
     rv = trading(svc, u)
 
@@ -1030,6 +1123,7 @@ def live(tmp_path_factory, module_service):
 
 def test_bbg_asks_bloomberg_only_for_bonds_off_the_trading_list_once_in_five_minutes(live):
     s, provider = live
+    fresh(s)
     assert s.mode == "live"
     u = s.login("Yükleme Canlı")["user"]
     rv = trading(s, u)
@@ -1073,6 +1167,7 @@ def test_bbg_asks_bloomberg_only_for_bonds_off_the_trading_list_once_in_five_min
 
 def test_a_bond_off_the_catalog_comes_in_by_the_desks_route_with_bloomberg(live, monkeypatch):
     s, _ = live
+    fresh(s)
     u = s.login("Yükleme Yeni")["user"]
     asked = []
 
@@ -1087,6 +1182,7 @@ def test_a_bond_off_the_catalog_comes_in_by_the_desks_route_with_bloomberg(live,
 
 def test_a_eurobond_comes_in_with_its_facts_asked_once_never_into_the_dibs_catalog(live):
     s, provider = live
+    fresh(s)
     u = s.login("Yükleme Eurobond")["user"]
     other = s.login("Yükleme Eurobond İki")["user"]
     n0 = len(provider.calls)
@@ -1098,7 +1194,9 @@ def test_a_eurobond_comes_in_with_its_facts_asked_once_never_into_the_dibs_catal
         "Eurobond", "USD", "TURKEY 7 5/8 05/15/34", "2034-05-15", "15.05.34 USD")
     assert rows[EURO2]["ccy"] == "EUR" and rows[EURO1]["spread"]["unit"] == "bp" and rows[EURO1]["write"] == "price"
     assert [r["isin"] for r in got["list"]][-3:] == [EURO2, EURO1, EURO3]                # (Eurobonds last, by maturity)
-    # kept desk-wide: another user's list takes it without asking again; never in the DİBS catalog
+    # its facts kept desk-wide: taken off the list and added again (by another user) without asking again; never in the
+    # DİBS catalog
+    call(s, u, "cikar", {"isin": EURO1})
     assert call(s, other, "ekle", {"isins": EURO1})["added"] == [EURO1] and len(provider.calls) == n0 + 1
     assert bd.by_isin(EURO1) is None and EURO1 in s.store.get(fy.KEY_EURO)
     # one Bloomberg does not know: why
@@ -1109,6 +1207,7 @@ def test_a_eurobond_comes_in_with_its_facts_asked_once_never_into_the_dibs_catal
 
 def test_a_eurobond_is_priced_from_bloombergs_mid_whatever_the_switch(live):
     s, provider = live
+    fresh(s)
     u = s.login("Yükleme Eurobond Fiyat")["user"]
     call(s, u, "ekle", {"isins": "%s %s %s %s" % (EURO1, EURO2, EURO3, FIXED)})
     fyk = s.fiyatyukleme
@@ -1167,6 +1266,7 @@ def test_a_eurobond_is_priced_from_bloombergs_mid_whatever_the_switch(live):
 def test_a_fixed_bond_costs_no_bloomberg_request(live):
     """A fixed bond off the trading list (a zero, a Eurobond): no LAST_PRICE / PX_MID asked in BBG mode - it is not computed."""
     s, provider = live
+    fresh(s)
     u = s.login("Sabit Canlı")["user"]
     call(s, u, "ekle", {"isins": EURO1})                                                # (its facts: once, kept)
     call(s, u, "sabit", {"isin": ZERO, "bid": "31,6", "ask": "31,4"})
@@ -1189,10 +1289,11 @@ def test_mid_is_the_default_and_prices_and_asks_as_before(live):
     before; the trading list's bonds from DİBS RV), no new field on a row or in the summary; a list switched to Bid/Ask and
     back to Mid ("Tümü") is stored as it was and prices to the digit as it did."""
     s, provider = live
+    fresh(s)
     u = s.login("Yükleme Mid")["user"]
     fyk = s.fiyatyukleme
     call(s, u, "ekle", {"isins": "%s %s %s %s %s" % (ZERO, TLREF, "TRT150328T24", EURO1, EURO2)})
-    entries = [dict(b) for b in s.store.get(fy.KEY_LIST % u)["bonds"]]
+    entries = [dict(b) for b in s.store.get(fy.KEY_DESK)["bonds"]]
 
     def run():
         fyk._asked = {}
@@ -1208,7 +1309,7 @@ def test_mid_is_the_default_and_prices_and_asks_as_before(live):
     assert len(res["rows"]) == 5 and not any("base" in r for r in res["rows"])
     call(s, u, "ayar", {"base_all": "bidask"})
     call(s, u, "ayar", {"base_all": "mid"})
-    assert s.store.get(fy.KEY_LIST % u)["bonds"] == entries
+    assert s.store.get(fy.KEY_DESK)["bonds"] == entries
     again, calls2 = run()
     assert calls2 == calls and again == res
 
@@ -1219,6 +1320,7 @@ def test_bid_ask_off_the_trading_list_asks_px_bid_and_px_ask_only_for_those(live
     read as the last trade is, the spreads each on its own side - at 0 the screen's prices; a bond whose bid equals its ask
     (no order stands) and a DİBS RV bond whose order sizes say no order stands ("–") from the mid as Mid prices them, said."""
     s, provider = live
+    fresh(s)
     u = s.login("Yükleme Bid Ask Canlı")["user"]
     zsec, tsec, on_list = "TRT060127T10 @ISL0 ISIN", "TRT130127T11 @ISL1 ISIN", "TRT150328T24"
     saved = {k: provider.answers[k] for k in (zsec, tsec)}
@@ -1268,6 +1370,7 @@ def test_a_eurobond_set_to_bid_ask_starts_its_sides_from_px_bid_and_px_ask(live)
     as the mid is (the convention's yield of the price − the anchor), the yield spreads each on its own side - at 0 bp
     Bloomberg's prices to the digit; one without sides on Bloomberg from the mid, said."""
     s, provider = live
+    fresh(s)
     u = s.login("Yükleme Eurobond Bid Ask")["user"]
     esec = EURO1 + " ISIN"
     saved = provider.answers[esec]
@@ -1353,6 +1456,7 @@ def test_the_helper_process_asks_for_the_dashboard_and_counts(monkeypatch, tmp_p
 
 # ================================================================================================== over HTTP (last: the client stops the service)
 def test_the_routes(svc):
+    fresh(svc)
     with TestClient(create_app(svc)) as c:
         assert c.get("/api/fiyat-yukleme", headers=ANON).status_code == 401
         assert c.post("/api/fiyat-yukleme/hesapla", headers=ANON, json={"mode": "ihale"}).status_code == 401
@@ -1378,6 +1482,11 @@ def test_the_routes(svc):
         assert got.status_code == 200 and got.content == saved["text"].encode("ascii") and b"\r\n" in got.content
         assert got.headers["content-disposition"] == 'attachment; filename="dibs_fiyat_20261103.txt"'
         assert c.get("/static/js/pages/fiyatyukleme.js").status_code == 200
+        # the page asks on a new generation by the list's revision: unchanged - a short answer; changed - the state
+        rev = c.get("/api/fiyat-yukleme", headers=h).json()["rev"]
+        assert c.get("/api/fiyat-yukleme?rev=%d" % rev, headers=h).json() == {"rev": rev, "unchanged": True}
+        c.post("/api/fiyat-yukleme/ayar", headers=h, json={"spreads": {FIXED: {"bid": "6"}}})
+        assert c.get("/api/fiyat-yukleme?rev=%d" % rev, headers=h).json()["rev"] == rev + 1
         # Sabit fiyat: a session needed; a Turkish reason for what cannot be kept
         assert c.post("/api/fiyat-yukleme/sabit", headers=ANON, json={"isin": FIXED, "bid": "99", "ask": "100"}).status_code == 401
         assert c.post("/api/fiyat-yukleme/sabit-sil", headers=ANON, json={"isin": FIXED}).status_code == 401
