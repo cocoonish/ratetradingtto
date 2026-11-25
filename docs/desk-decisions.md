@@ -599,7 +599,8 @@ prices:", "** Min 50 mio, Increment 1 mio", "Auction starts in a minute..."). A 
 yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from the paste day.
 
 - **What it does** (`tto/fiyatyukleme.py`, page "Kâğıt Fiyat Yükleme", the Tahvil menu's entry right after Kâğıt Fiyatlama):
-  - each user's own list (kv `fiyatyukleme.list:<user>`), a bond until its owner takes it off; a bond off the desk's catalog
+  - each user's own list (kv `fiyatyukleme.list:<user>`), a bond until its owner takes it off - the desk's list since
+    25.11.2026 (below, "The list is the desk's"); a bond off the desk's catalog
     comes in by `Service.bond_list_add` (Bloomberg's facts once a new ISIN, it joins Tüm Kâğıtlar) - not in replay;
   - spreads: yield-quoted (fixed coupon, bill, zero) bid yield = t0 + bid bp, ask yield = t0 − ask bp; price-quoted (TLREF,
     FRN, TÜFE) bid price = t0 − bid, ask price = t0 + ask; one default each, a row's own on either side;
@@ -679,8 +680,8 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
 
   - a "Sabit fiyat" section: a bond (any ISIN - no catalog or Bloomberg needed, below) with its fixed bid and ask, typed in the
     unit the txt writes it in - a bill's / zero coupon's simple yields (%), any other's clean prices (fixed coupon,
-    TLREF, TÜFE, FRN, Eurobond) -, the page's number reading (a Turkish comma too). Kept with the user's list
-    (`fiyatyukleme.list:<user>`, `fixed`) until changed or taken off;
+    TLREF, TÜFE, FRN, Eurobond) -, the page's number reading (a Turkish comma too). Kept with the list (`fixed`; the
+    desk's list since 25.11.2026, below) until changed or taken off;
   - on Hesapla, in either mode, each fixed bond is a row as it is, marked "sabit fiyat": never computed, never asked of
     Bloomberg (a fixed bond off the trading list costs nothing in BBG mode). In the list too: the fixed figures win, said
     on the row. Its other unit is shown for information only - a bill's price at t0 from the fixed yield, a fixed coupon
@@ -715,10 +716,10 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
   > "Kağıt fiyat yükleme listesinde bloomberg'te kağıt kağıt bid'i ve ask'i mid'den mi, bid/asktan mı almasını istediğimi
   > de seçebilmeliyim. Default mid"
 
-  - per bond in the list (kv `fiyatyukleme.list:<user>`, the entry's `base`, kept by ISIN): **Mid** (the default: as
-    before) or **Bid/Ask** - the bid side starts from Bloomberg's bid, the ask side from its ask, the desk's spreads on
-    each on its own side (yield spreads for yield-quoted bonds, price spreads for price-quoted ones); at 0 the screen's
-    figures. "Tümü" sets every bond of the list at once;
+  - per bond in the list (the entry's `base`, kept by ISIN; the desk's list since 25.11.2026, below): **Mid** (the
+    default: as before) or **Bid/Ask** - the bid side starts from Bloomberg's bid, the ask side from its ask, the desk's
+    spreads on each on its own side (yield spreads for yield-quoted bonds, price spreads for price-quoted ones); at 0 the
+    screen's figures. "Tümü" sets every bond of the list at once;
   - a bond of DİBS RV's trading list: the sheet's bid / ask (`K` / `L`), no new Bloomberg cost; "–" (its order sizes say
     no order stands): from the mid, said on the row;
   - any other DİBS (BBG mode) and a Eurobond (either mode): `PX_BID` / `PX_ASK` asked on Hesapla, only for the bonds set
@@ -733,7 +734,25 @@ yield (31.500 = 31.5 %), the others' a clean price; .t1 values T+1, .t2 T+2 from
     anchored as the mid is (the convention's yield of the price less the anchor), so at 0 bp the sides are Bloomberg's to
     the digit. In İhale mode a DİBS comes from the auction (the choice is BBG's); a Eurobond follows its choice in both
     modes. Mid back again leaves the stored entry as it was.
-- Code: `tto/fiyatyukleme.py`, `Service.fiyat_yukleme`, `GET /api/fiyat-yukleme`, `POST /api/fiyat-yukleme/{ekle, cikar,
+- **The list is the desk's** (25.11.2026):
+
+  > "Kağıt fiyat yüklemedeki isin listesi tüm masa için olmalı"
+
+  - **one list for everyone** (kv `fiyatyukleme.desk`): its bonds, each bond's spreads and Mid / Bid/Ask, the default
+    spreads and the fixed prices (Sabit fiyatlar) - the defaults and the fixed prices too, so whoever does the upload makes
+    the same file from the same list. Anyone signed in changes it for the whole desk (no read-only role exists; the desk's
+    other shared lists - Tüm Kâğıtlar, the auction labels - are everyone's too); the page says who changed it last;
+  - **each user's own**: the mode (BBG / İhale), the pasted auction text, a Hesapla and its cell edits, the saved files;
+  - an open page takes another user's change on the next generation, drawing the list and Sabit fiyatlar again where it
+    is (no jump); a table the user is working in waits until the focus leaves it, and the boxes being typed in (add, paste,
+    a default typed and not saved) are never drawn again; a Hesapla's result is said to be stale;
+  - **the users' lists before it** (a convention settled here - ask before changing), read once on the first load after
+    the update: every bond and every fixed price anyone had (by ISIN); a bond two users had with different settings, and
+    the defaults, from the latest user - the store keeps no write time, so the user whose newest stamp in the page's
+    records is the latest (a bond added, a fixed price set, a file saved), then the latest seen on the dashboard; a fixed
+    price two had: the one set last (its own stamp). What came from whom is logged and kept with the list (`merged`); the
+    users' old keys stay as they were (their mode and text are still read from there).
+- Code: `tto/fiyatyukleme.py`, `Service.fiyat_yukleme`, `GET /api/fiyat-yukleme[?rev=]`, `POST /api/fiyat-yukleme/{ekle, cikar,
   sabit, sabit-sil, sabit-yapistir, ayar, tanit, hesapla, cevir, kaydet}`, `GET /api/fiyat-yukleme/dosya`, `Provider.reference` (`tto/marketdata`),
   `tto/static/js/pages/fiyatyukleme.js`. Tests: `tests/test_fiyatyukleme.py`, the browser test's Kâğıt Fiyat Yükleme
   checks.

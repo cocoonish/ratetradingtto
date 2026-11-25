@@ -928,8 +928,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
 
     @handler
     async def fiyat_yukleme(request: Request):
-        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): the user's list, spreads and mode, the desk's labels, today's files
-        return ok(await call(svc().fiyat_yukleme, _user(request), "state"))
+        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): the desk's list, spreads and fixed prices, the user's mode, the desk's labels,
+        # today's files (?rev=N: just {"unchanged": true} while the desk's list is still at that revision)
+        return ok(await call(svc().fiyat_yukleme, _user(request), "state", {"rev": request.query_params.get("rev")}))
 
     @handler
     async def fiyat_yukleme_action(request: Request):

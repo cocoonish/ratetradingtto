@@ -343,7 +343,8 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
 | `fx.*`, `ops.*`, `progress.runs`, `curvepoints.*`, `retfair.*`, `desk.*`, `bugun.dibs` | their modules |
 | `kagitfiyat.widths`, `kagitfiyat.log` | `kagitfiyat` (the quote's width by maturity bucket, set by administrators; its changes) |
-| `fiyatyukleme.list:<user>`, `fiyatyukleme.saved:<user>` | `fiyatyukleme` (a user's bonds by ISIN with their own spreads, the defaults, the mode, the last auction text, the fixed bonds with their bid / ask; the user's saved files of the last days) |
+| `fiyatyukleme.desk` | `fiyatyukleme` (desk-wide since 25.11.2026: the bonds by ISIN with their own spreads and Mid / Bid/Ask, the default spreads, the fixed bonds with their bid / ask; `rev` one up at each change, `by` / `at` the last one, `merged` what was taken from whose old list) |
+| `fiyatyukleme.list:<user>`, `fiyatyukleme.saved:<user>` | `fiyatyukleme` (a user's own: the mode, the last auction text - before 25.11.2026 the user's whole list, its `bonds` / `defaults` / `fixed` left there as they were, read once into `fiyatyukleme.desk`; the user's saved files of the last days) |
 | `fiyatyukleme.labels`, `fiyatyukleme.auctions` | `fiyatyukleme` (desk-wide: an auction label's bond, named once; each bond's auction values by day and .t1 / .t2) |
 | `fiyatyukleme.eurobonds` | `fiyatyukleme` (desk-wide: each Eurobond's Bloomberg facts, asked once an ISIN - never in `bonds.desk`) |
 
@@ -564,20 +565,32 @@ cost in [market-data.md](market-data.md#what-costs-hits-ttomarketdatabloombergpy
 
 - **Endpoints** (`Service.fiyat_yukleme(user, what, body)`; each needs a session; a `FiyatError` is a 400 with the Turkish
   reason):
-  - `GET /api/fiyat-yukleme` - the user's list (each bond's description, maturity, kind, spreads), mode, defaults, last
-    auction text, the desk's labels, today's saved files;
+  - `GET /api/fiyat-yukleme[?rev=]` - the desk's list (each bond's description, maturity, kind, spreads, Mid / Bid/Ask),
+    defaults and fixed bonds, `rev` and `desk` (who changed it last, when), the user's mode and last auction text, the
+    desk's labels, the user's saved files today; `?rev=` the revision the page has: `{"rev", "unchanged": true}` while the
+    list is still at it;
   - `POST /api/fiyat-yukleme/ekle` `{"isins": "…"}` / `cikar` `{"isin"}` - the list (a bond off the catalog through
     `Service.bond_list_add`; refused in replay);
   - `POST /api/fiyat-yukleme/sabit` `{"isin", "bid", "ask"}` / `sabit-sil` `{"isin"}` / `sabit-yapistir` `{"text"}` - a
     bond's fixed bid / ask in the txt's unit (set or change / take off / Excel's rows pasted, `parse_fixed`): kept in the
-    user's list state (`fixed`); the bond needs no catalog (`fixed_record`: the catalog's, a Eurobond's facts if held, else
+    desk's list (`fixed`); the bond needs no catalog (`fixed_record`: the catalog's, a Eurobond's facts if held, else
     what its ISIN says); on Hesapla a row as it is (`_fixed_row`), never computed or asked of Bloomberg;
-  - `POST /api/fiyat-yukleme/ayar` `{"mode"?, "defaults"?, "spreads"?: {isin: {bid, ask}}}`;
+  - `POST /api/fiyat-yukleme/ayar` `{"mode"?, "defaults"?, "spreads"?: {isin: {bid, ask}}, "bases"?, "base_all"?}` - the
+    mode the user's own, the rest the desk's list's (all or nothing);
   - `POST /api/fiyat-yukleme/tanit` `{"label", "isin"}` - the desk names an auction label's bond (an empty ISIN forgets it);
   - `POST /api/fiyat-yukleme/hesapla` `{"mode": "ihale" | "bbg", "text"}` - every bond at t0 (İhale keeps the day's auction
     values desk-wide); `POST /api/fiyat-yukleme/cevir` `{"isin", "field", "value"}` - an edited cell's other half;
   - `POST /api/fiyat-yukleme/kaydet` `{"rows": [...]}` - the file's lines (kept per user and day); `GET
     /api/fiyat-yukleme/dosya[?gun=]` - the day's last file again (an attachment: ASCII, CRLF).
+- **The desk's list** (25.11.2026): one for everyone, anyone signed in changes it (as Tüm Kâğıtlar and the labels); each
+  user's own are the mode, the text, a Hesapla and its edits (the page's), the saved files. `_desk` reads it - the first
+  time made from the users' old lists (`_merged`: every bond and fixed price by ISIN; a bond two had with different
+  settings and the defaults from the user with the newest stamp in the page's records - a bond added, a fixed price set,
+  a file saved; the kv store keeps no write time -, then the latest seen; a fixed price two had: the one set last; logged
+  and kept as `merged`). A change (`_put_desk`) stamps who and when, puts `rev` one up and bumps the generation
+  (`market=True`: no workbook depends on it); the open page's `refresh()` asks by `rev` and draws the list and Sabit
+  fiyatlar again - a table the user is working in (the focus in it) once the focus leaves it; the boxes being typed in
+  (add, paste, a default typed and not saved) are never drawn again.
 - **Threads.** Everything on the request thread but two short engine calls in BBG mode: `_read` (DİBS RV's `AS` / `I` / `BS`
   / `S` of the list's bonds on it, quantcurve's `read_engine` rows for the bond curve now, Tüm Kâğıtlar's sources) and,
   only when a bond falls back to OIS, `_read_ois` (Motor's market and the Bootstrap, as Kâğıt Fiyatlama reads them). The

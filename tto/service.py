@@ -368,8 +368,8 @@ class Service(object):
         # Kâğıt Fiyatlama (kagitfiyat.py): one fair level per bond, a quote around it, the good levels and how it was built
         from .kagitfiyat import KagitFiyat
         self.kagitfiyat = KagitFiyat(self)
-        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): each user's bonds priced from the morning's auction or Bloomberg's last
-        # trade, the spreads on them, saved as the desk's upload file
+        # Kâğıt Fiyat Yükleme (fiyatyukleme.py): the desk's list of bonds priced from the morning's auction or Bloomberg's
+        # last trade, the spreads on them, saved as the desk's upload file
         from .fiyatyukleme import FiyatYukleme
         self.fiyatyukleme = FiyatYukleme(self)
         # Bugün (bugun.py): the morning screen - what wants attention, read from what the service holds
@@ -8331,7 +8331,8 @@ class Service(object):
 
     # ================================================================== Kâğıt Fiyat Yükleme (fiyatyukleme.py)
     def fiyat_yukleme(self, user: Optional[str], what: str, body: Optional[Dict[str, Any]] = None) -> Any:
-        """Kâğıt Fiyat Yükleme (:mod:`tto.fiyatyukleme`): ``what`` - "state" (the user's list, settings, the desk's labels),
+        """Kâğıt Fiyat Yükleme (:mod:`tto.fiyatyukleme`): ``what`` - "state" (the desk's list and its settings, the user's
+        mode and text, the desk's labels; ``{"rev"}``: unchanged since that revision of the list - just that),
         "ekle" / "cikar" (the list), "sabit" / "sabit-sil" (a bond's fixed bid and ask: set or change / take off),
         "sabit-yapistir" (fixed prices pasted from Excel), "ayar"
         (mode, default and per bond spreads, a bond's Mid / Bid/Ask), "tanit" (the desk names an auction
@@ -8342,7 +8343,7 @@ class Service(object):
         b = body if isinstance(body, dict) else {}
         try:
             if what == "state":
-                return fy.state(user)
+                return fy.state(user, b.get("rev"))
             if what == "ekle":
                 return fy.add(user, b.get("isins") if "isins" in b else b.get("isin"))
             if what == "cikar":

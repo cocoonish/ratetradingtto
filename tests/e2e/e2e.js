@@ -4367,6 +4367,33 @@ async function clipAfter(page, action) {
     check('... and the row\'s bid spread typed, Tab: the box stays, the spread is 7, the focus on its ask spread - and the next Tab goes on to its '
       + 'Mid / Bid/Ask (not to the box\'s top)', fyStill(fyS2) && /^7,0+$/.test(fyS2.bid) && fyS2.focus === 'fy-sp-ask' && fyStill(fyS3)
       && fyS3.focus === 'fy-base', { fyS2, fyS3 });
+    // the list is the desk's (the desk, 25.11.2026: "Kağıt fiyat yüklemedeki isin listesi tüm masa için olmalı"): a bond another
+    // account adds comes onto this open page without a reload - once this user leaves the spread they are typing in (what
+    // they typed stays, then is saved) -; the same list for both, each one's mode their own
+    const fyHere = await page.evaluate(() => [...document.querySelectorAll('#fy-list-table tr.fy-item')].map((tr) => tr.dataset.isin));
+    const fyOther = ((await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds || []).map((b) => b.isin)
+      .find((i) => /^TR/.test(i) && !fyHere.includes(i));
+    const fyTyping = '#fy-list-table tr.fy-item[data-isin="' + fyHere[0] + '"] input.fy-sp-ask';
+    await page.click(fyTyping);
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('3');
+    const fyBy = await api(page, 'mehmet', 'POST', '/api/fiyat-yukleme/ekle', { isins: fyOther });
+    await page.waitForFunction(() => /Mehmet/.test((document.getElementById('fy-desk') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    const fyNow = () => page.evaluate(([o, s]) => ({ there: !!document.querySelector('#fy-list-table tr.fy-item[data-isin="' + o + '"]'),
+      typed: (document.querySelector(s) || {}).value, focus: document.activeElement === document.querySelector(s),
+      desk: (document.getElementById('fy-desk') || {}).textContent }), [fyOther, fyTyping]);
+    const fyWait = await fyNow();
+    await Promise.all([fyAyar(), page.click('#fy-list > header')]);
+    await page.waitForFunction((o) => !!document.querySelector('#fy-list-table tr.fy-item[data-isin="' + o + '"]'), fyOther, { timeout: 20000 }).catch(() => {});
+    const fyAfter = await fyNow();
+    const [fyM, fyA] = [(await api(page, 'mehmet', 'GET', '/api/fiyat-yukleme')).json || {}, (await api(page, 'ayşe yilmaz', 'GET', '/api/fiyat-yukleme')).json || {}];
+    const fyIsins = (st) => (st.list || []).map((r) => r.isin).join();
+    check('Kâğıt Fiyat Yükleme\'s list is the desk\'s (the desk, 25.11.2026: "... tüm masa için olmalı"): a bond another account adds is on this '
+      + 'open page without a reload (said: "son değişiklik: Mehmet") - drawn once this user leaves the spread being typed (kept, then saved); the same '
+      + 'list for both, each one\'s mode their own', fyBy.status === 200 && ((fyBy.json || {}).added || []).includes(fyOther) && /Mehmet/.test(fyWait.desk)
+      && !fyWait.there && fyWait.typed === '3' && fyWait.focus && fyAfter.there && /^3,0+$/.test(fyAfter.typed) && fyIsins(fyM) === fyIsins(fyA)
+      && fyIsins(fyA).includes(fyOther) && fyM.mode === 'ihale' && fyA.mode === 'bbg', { fyOther, by: fyBy.json && fyBy.json.added, fyWait, fyAfter, modes: [fyM.mode, fyA.mode] });
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');

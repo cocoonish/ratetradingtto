@@ -9,9 +9,14 @@ government bonds and save them as a txt file to upload elsewhere - the desk's re
 
 (the whole text and the four answers: docs/desk-decisions.md, "Kâğıt fiyat yükleme").
 
-**The list** is each user's (``KEY_LIST``): a bond stays until its owner takes it off; each row its own two spreads or
-the defaults.  A bond not in the desk's catalog comes in by the desk's own route (``Service.bond_list_add``: Bloomberg's
-facts once per new ISIN); without Bloomberg (replay) it cannot.
+**The list** is the desk's (``KEY_DESK``; the desk, 25.11.2026: "Kağıt fiyat yüklemedeki isin listesi tüm masa için
+olmalı"): one list for everyone - its bonds, each with its own two spreads (or the defaults) and its Mid / Bid/Ask, the
+default spreads and the fixed prices - and whoever is signed in changes it for the whole desk, as Tüm Kâğıtlar and the
+auction labels; a bond stays until someone takes it off.  Each user's own: the mode, the pasted auction text, a Hesapla
+and its edits, the saved files.  Until 25.11.2026 each user had a list of their own: the first time the desk's list is
+asked for it is made from them (``_merged``).  An open page hears of a change on the next generation (``state``'s
+``since``) and draws the list again.  A bond not in the desk's catalog comes in by the desk's own route
+(``Service.bond_list_add``: Bloomberg's facts once per new ISIN); without Bloomberg (replay) it cannot.
 
 **Spreads** ("İki tarafa da ayrı ayrı"): a yield-quoted bond (fixed coupon, bill, zero coupon) bid yield = t0 + bid bp,
 ask yield = t0 − ask bp; a price-quoted one (TLREF floater, FRN, TÜFE linker: "price spread") bid price = t0 − bid,
@@ -52,7 +57,7 @@ price at the mid yield), so the mid is Bloomberg's to the digit and the anchor (
 by the convention's curvature only.  In the txt: clean prices, yields 0.
 
 **Mid or Bid/Ask** (the desk, 23.11.2026: "Kağıt fiyat yükleme listesinde bloomberg'te kağıt kağıt bid'i ve ask'i mid'den
-mi, bid/asktan mı almasını istediğimi de seçebilmeliyim. Default mid"): each bond of a user's list, kept with it by its ISIN
+mi, bid/asktan mı almasını istediğimi de seçebilmeliyim. Default mid"): each bond of the desk's list, kept with it by its ISIN
 (``base_of``) - "mid", the default: both sides from the mid, as above; "bidask": the bid side from Bloomberg's bid, the ask
 side from its ask, the desk's spreads on each on its own side as they go on the mid (``quote``; at 0 the screen's own).  A
 bond of DİBS RV's trading list: the sheet's bid / ask (``K`` / ``L``: Bloomberg's figure, "–" where the order sizes ``XR`` /
@@ -67,7 +72,7 @@ both sides): the row from the mid, and it says why.
 girip bırakabilmeliyim"): a bond's bid and ask in the unit the txt writes it in (a bill's / zero's simple yields, any
 other's clean prices), typed (``set_fixed``) or pasted from Excel ("Sabitlemeyi de tablo olarak atacağım excelden
 kopyalayıp [...]": ``parse_fixed`` - the ISIN, the first number after it, the next within ±10 % of it), kept with the
-user's list until changed or taken off.  Only the ISIN and the two figures are needed (``fixed_record``: the catalog's
+desk's list until changed or taken off.  Only the ISIN and the two figures are needed (``fixed_record``: the catalog's
 record, a Eurobond's facts if held, else what a Turkish ISIN says - its maturity, "TRB…" a bill, "TRT…F…" an
 FX-denominated DİBS).  On Hesapla, in either mode, it is a row as it is (``_fixed_row``: its other unit for information
 only), never computed and never asked of Bloomberg; in the list too, the fixed figures win.  An edit of its cells is that
@@ -80,6 +85,7 @@ from __future__ import annotations
 
 import calendar
 import datetime as _dt
+import logging
 import math
 import re
 import threading
@@ -99,7 +105,7 @@ MODE_TEXT = {"ihale": "İhale", "bbg": "BBG"}
 #: a Eurobond (a USD / EUR Turkish sovereign, "XS…", "US900123…"): the desk's addition of 20.11.2026 - priced from
 #: Bloomberg's mid whatever the switch says, its spreads in yield bp ("Eurobondlar da yield spreadi")
 EURO = "euro"
-#: the defaults until a user sets theirs: DİBS quoted in yield in bp of the simple yield, price-quoted ones in price points,
+#: the defaults until the desk sets its own: DİBS quoted in yield in bp of the simple yield, price-quoted ones in price points,
 #: Eurobonds in bp of Bloomberg's yield (their own pair: much tighter than DİBS)
 DEFAULTS: Dict[str, float] = {"yield_bid": 5.0, "yield_ask": 5.0, "price_bid": 0.05, "price_ask": 0.05, "euro_bid": 2.0, "euro_ask": 2.0}
 #: a spread's bounds (either way: a negative one skews the quote)
@@ -109,8 +115,10 @@ YIELD_KINDS = ("fixed", "bill", "zero")
 WRITE_YIELD = ("bill", "zero")
 #: the kinds in the order the page lists them (as Tüm Kâğıtlar groups them; Eurobonds last)
 ORDER = ("bill", "zero", "fixed", "float", "frn", "cpi", EURO)
-#: the store's keys (kv): a user's list and settings, a user's saved files, the desk's labels, the desk's auction values,
-#: the Eurobonds' facts (desk-wide: asked of Bloomberg once an ISIN)
+#: the store's keys (kv): the desk's list (its bonds, defaults and fixed prices), a user's own part (the mode, the pasted
+#: text; until 25.11.2026 the user's whole list - its bonds, defaults and fixed prices stay there as they were), a user's
+#: saved files, the desk's labels, the desk's auction values, the Eurobonds' facts (desk-wide: asked of Bloomberg once an ISIN)
+KEY_DESK = "fiyatyukleme.desk"
 KEY_LIST, KEY_SAVED = "fiyatyukleme.list:%s", "fiyatyukleme.saved:%s"
 KEY_LABELS, KEY_AUCTIONS, KEY_EURO = "fiyatyukleme.labels", "fiyatyukleme.auctions", "fiyatyukleme.eurobonds"
 #: the last trade Bloomberg answered for a bond off the trading list (BBG mode), kept per ISIN beyond the answers'
@@ -128,7 +136,7 @@ BASES = ("mid", "bidask")
 BASE_TEXT = {"mid": "Mid", "bidask": "Bid/Ask"}
 EURO_LAG = 2                               # business days to settle when Bloomberg does not say (DAYS_TO_SETTLE)
 ANCHOR_WARN = 0.05                         # price points: the street convention this far from Bloomberg's mid is flagged
-LIST_MAX = 200                             # bonds on a user's list
+LIST_MAX = 200                             # bonds on the desk's list
 TEXT_MAX = 100000                          # characters of a pasted auction text
 AUCTIONS_KEPT = 30                         # auction values kept per bond (the latest)
 SAVED_DAYS, SAVED_PER_DAY = 10, 10         # a user's saved files kept: days, files a day
@@ -551,7 +559,7 @@ def quote(kind: str, bond: Optional[qc.Bond], t0: _dt.date, t0_yield: Optional[f
 
 
 def base_of(entry: Dict[str, Any]) -> str:
-    """Where a list entry's two sides start: "bidask" when its owner set it so, else "mid" (the default)."""
+    """Where a list entry's two sides start: "bidask" when the desk set it so, else "mid" (the default)."""
     return "bidask" if entry.get("base") == "bidask" else "mid"
 
 
@@ -767,12 +775,12 @@ def file_name(day: _dt.date) -> str:
 
 # ---------------------------------------------------------------------------------------------- the page
 class FiyatYukleme(object):
-    """The page's data and actions (``/api/fiyat-yukleme…``): each user's list, the desk's labels and auction values,
+    """The page's data and actions (``/api/fiyat-yukleme…``): the desk's list, the desk's labels and auction values,
     Hesapla in both modes, the edits' conversions and the file."""
 
     def __init__(self, svc):
         self.svc = svc
-        self._lock = threading.Lock()                                   # the store's read-modify-writes
+        self._lock = threading.RLock()                                  # the store's read-modify-writes (_desk inside them)
         self._asked: Dict[str, Tuple[float, Dict[str, Any]]] = {}       # BBG answers by security: (when, answer)
         self._closes: Optional[Tuple[Any, Dict[str, Any]]] = None       # (history revision and day, the bonds' closes)
         self._fits: Dict[Any, Optional[qc.Nss]] = {}                     # a past day's bond curve, by what it is made of
@@ -784,19 +792,108 @@ class FiyatYukleme(object):
         hol = frozenset(self.svc.holiday_dates(("TRY",)))
         return today, t0_of(today, hol), hol
 
-    def _load(self, key: str) -> Dict[str, Any]:
-        st = self.svc.store.get(KEY_LIST % key)
+    @staticmethod
+    def _clean(st: Any) -> Dict[str, Any]:
+        """A list as kept (the desk's, or a user's before 25.11.2026): its bonds, its defaults (filled in) and its fixed
+        prices, an entry without what it needs left out."""
         st = st if isinstance(st, dict) else {}
         d = st.get("defaults") if isinstance(st.get("defaults"), dict) else {}
         defaults = {k: float(d[k]) if isinstance(d.get(k), (int, float)) else v for k, v in DEFAULTS.items()}
         bonds = [b for b in (st.get("bonds") or []) if isinstance(b, dict) and b.get("isin")]
         fixed = [f for f in (st.get("fixed") or []) if isinstance(f, dict) and f.get("isin") and isinstance(f.get("bid"), (int, float))
                  and isinstance(f.get("ask"), (int, float))]
-        return {"bonds": bonds, "defaults": defaults, "mode": st.get("mode") if st.get("mode") in MODES else "ihale",
-                "text": st.get("text") if isinstance(st.get("text"), str) else "", "fixed": fixed}
+        return {"bonds": bonds, "defaults": defaults, "fixed": fixed}
 
-    def _save(self, key: str, st: Dict[str, Any]) -> None:
-        self.svc.store.put(KEY_LIST % key, st)
+    def _desk(self) -> Dict[str, Any]:
+        """The desk's list (``KEY_DESK``): its bonds, defaults and fixed prices, its revision (one up at each change), who
+        changed it last and when.  The first time it is asked for, made from the users' own lists (``_merged``)."""
+        with self._lock:
+            got = self.svc.store.get(KEY_DESK)
+            if not isinstance(got, dict):
+                got = self._merged()
+                self.svc.store.put(KEY_DESK, got)
+        rev = got.get("rev")
+        return dict(got, rev=rev if isinstance(rev, int) and not isinstance(rev, bool) else 0, **self._clean(got))
+
+    def _put_desk(self, key: str, desk: Dict[str, Any]) -> None:
+        """The desk's list kept: who changed it, when, its revision one up (the open pages ask by it: ``state``)."""
+        from .store import now_iso
+        desk.update(by=key, at=now_iso(), rev=desk["rev"] + 1)
+        self.svc.store.put(KEY_DESK, desk)
+
+    def _changed(self) -> None:
+        """The desk's list changed: a new generation, so every open page asks for it again (no workbook depends on it:
+        as a market tick - no user's own calculation is checked again for it)."""
+        self.svc.bump(market=True)
+
+    def _mine(self, key: str) -> Dict[str, str]:
+        """The user's own part (``KEY_LIST``): the mode and the last pasted auction text."""
+        st = self.svc.store.get(KEY_LIST % key)
+        st = st if isinstance(st, dict) else {}
+        return {"mode": st.get("mode") if st.get("mode") in MODES else "ihale", "text": st.get("text") if isinstance(st.get("text"), str) else ""}
+
+    def _put_mine(self, key: str, mode: str, text: str) -> None:
+        """The user's mode and text kept - in their key as it is (a list kept there before 25.11.2026 stays as it was)."""
+        st = self.svc.store.get(KEY_LIST % key)
+        st = dict(st) if isinstance(st, dict) else {}
+        if st.get("mode") != mode or st.get("text") != text:
+            st.update(mode=mode, text=text)
+            self.svc.store.put(KEY_LIST % key, st)
+
+    def _load(self, key: str) -> Dict[str, Any]:
+        """What a Hesapla, the page and the file work from: the desk's list with the user's mode and text."""
+        return dict(self._desk(), **self._mine(key))
+
+    def _merged(self) -> Dict[str, Any]:
+        """The desk's list made once from the users' own lists (before 25.11.2026 each user had one): every bond and every
+        fixed price anyone had, by ISIN.  A bond two users had with different settings (spreads, Mid / Bid/Ask) and the
+        defaults: the latest user's - the store keeps no time of a write, so the user whose newest stamp in the page's own
+        records (a bond added, a fixed price set, a file saved) is the latest, then the latest seen on the dashboard.  A
+        fixed price two users had: the one set last (its own stamp).  The users' keys stay as they were; what was taken
+        from whom is kept with the list (``merged``) and logged."""
+        from .store import now_iso
+        store = self.svc.store
+        prefix = KEY_LIST.split("%")[0]
+        lists = {k[len(prefix):]: v for k, v in store.kv_prefixed(prefix).items() if isinstance(v, dict)}
+
+        def stamp(key: str) -> Tuple[str, str, str]:
+            st = self._clean(lists[key])
+            ats = [str(x.get("at") or "") for x in st["bonds"] + st["fixed"]]
+            saved = store.get(KEY_SAVED % key)
+            for files in (saved.values() if isinstance(saved, dict) else ()):
+                ats += [str(f.get("at") or "") for f in files or [] if isinstance(f, dict)]
+            return max(ats + [""]), str((store.account(key) or {}).get("last_seen") or ""), key
+
+        order = sorted(lists, key=stamp)                                 # the oldest first: a later user's settings win
+        bonds: Dict[str, Dict[str, Any]] = {}
+        fixed: Dict[str, Dict[str, Any]] = {}
+        defaults: Optional[Dict[str, float]] = None
+        by_default, clash, clash_fixed = None, set(), set()
+        for key in order:
+            st = self._clean(lists[key])
+            for b in st["bonds"]:
+                old = bonds.get(b["isin"])
+                if old is not None and (old.get("bid"), old.get("ask"), base_of(old)) != (b.get("bid"), b.get("ask"), base_of(b)):
+                    clash.add(b["isin"])
+                bonds[b["isin"]] = dict(b)
+            for f in st["fixed"]:
+                old = fixed.get(f["isin"])
+                if old is not None and (old["bid"], old["ask"]) != (f["bid"], f["ask"]):
+                    clash_fixed.add(f["isin"])
+                if old is None or str(f.get("at") or "") >= str(old.get("at") or ""):
+                    fixed[f["isin"]] = dict(f)
+            if isinstance(lists[key].get("defaults"), dict):
+                defaults, by_default = st["defaults"], key
+        merged = {"at": now_iso(), "users": order, "bonds": len(bonds), "fixed": len(fixed), "clash": sorted(clash),
+                  "clash_fixed": sorted(clash_fixed), "defaults": by_default}
+        if order:
+            logging.getLogger("tto").info(
+                "Kâğıt Fiyat Yükleme: masanın listesi %d kullanıcının listesinden kuruldu (eskiden yeniye: %s): %d kâğıt, "
+                "%d sabit fiyat; ayarı farklı kâğıtlar (en yeni kullanıcınınki alındı): %s; sabit fiyatı farklı kâğıtlar (en "
+                "son girilen alındı): %s; varsayılan spread'ler: %s", len(order), ", ".join(order), len(bonds), len(fixed),
+                ", ".join(merged["clash"]) or "yok", ", ".join(merged["clash_fixed"]) or "yok", by_default or "başlangıçtaki")
+        return {"bonds": list(bonds.values()), "defaults": defaults or dict(DEFAULTS), "fixed": list(fixed.values()), "rev": 0,
+                "by": "", "at": merged["at"], "merged": merged}
 
     def labels(self) -> Dict[str, Dict[str, Any]]:
         got = self.svc.store.get(KEY_LABELS)
@@ -834,11 +931,16 @@ class FiyatYukleme(object):
                                 x[0]["isin"]))
         return out
 
-    def state(self, user: Optional[str]) -> Dict[str, Any]:
-        """``GET /api/fiyat-yukleme``: the user's list (each bond's description, maturity, kind, spreads, Mid or Bid/Ask),
-        the mode, the defaults, the last pasted text, the desk's labels, today's saved files."""
+    def state(self, user: Optional[str], since: Any = None) -> Dict[str, Any]:
+        """``GET /api/fiyat-yukleme``: the desk's list (each bond's description, maturity, kind, spreads, Mid or Bid/Ask),
+        its defaults and fixed prices, its revision and who changed it last (``desk``); the user's mode and last pasted
+        text; the desk's labels, the user's files saved today.  ``since``: the revision the page has - the same one:
+        ``{"rev", "unchanged": true}`` (an open page asks on every new generation: another user's change)."""
         key = self.svc.require_user(user)
-        st = self._load(key)
+        desk = self._desk()
+        if since is not None and str(since).strip() == str(desk["rev"]):
+            return {"rev": desk["rev"], "unchanged": True}
+        st = dict(desk, **self._mine(key))
         today, t0, _ = self._today()
         rows = []
         for e, rec in self._rows(st):
@@ -848,10 +950,11 @@ class FiyatYukleme(object):
                 "bases": [{"id": b, "text": BASE_TEXT[b]} for b in BASES], "defaults": st["defaults"],
                 "text": st["text"], "list": rows, "fixed": self.fixed_rows(st), "labels": self.label_rows(),
                 "saved": self.saved_today(key, today), "today": today.isoformat(), "t0": t0.isoformat(),
-                "live": self.svc.mode == "live", "limits": LIMITS, "file": file_name(today), "gen": self.svc.gen}
+                "live": self.svc.mode == "live", "limits": LIMITS, "file": file_name(today), "gen": self.svc.gen,
+                "rev": desk["rev"], "desk": {"by": desk.get("by") or "", "at": desk.get("at") or ""}}
 
     def fixed_rows(self, st: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """The user's fixed bonds as the page's "Sabit fiyatlar" table lists them: the bond (description, maturity), the unit
+        """The desk's fixed bonds as the page's "Sabit fiyatlar" table lists them: the bond (description, maturity), the unit
         its two figures are in (the txt's: a bill's / zero's yields, any other's clean prices), the figures, the file line
         they give, when they were set, in the list too."""
         listed = {b["isin"] for b in st["bonds"]}
@@ -894,7 +997,7 @@ class FiyatYukleme(object):
 
     # ------------------------------------------------------------------ the list
     def add(self, user: Optional[str], text: Any) -> Dict[str, Any]:
-        """Bonds onto the user's list: one ISIN or a pasted list (lines, commas).  A bond the desk's catalog has comes in
+        """Bonds onto the desk's list: one ISIN or a pasted list (lines, commas).  A bond the desk's catalog has comes in
         at once; a Turkish ISIN it does not have through the desk's route (``Service.bond_list_add``: Bloomberg says what it
         is, and it joins Tüm Kâğıtlar for everyone); any other - and a TR one Bloomberg says is in a foreign currency - as a
         Eurobond, its facts asked of Bloomberg once and kept here (never in the DİBS catalog: "foreign-currency bonds are
@@ -910,8 +1013,8 @@ class FiyatYukleme(object):
         gone = {r["isin"] for r in refused}
         added, skipped = [], []
         with self._lock:
-            st = self._load(key)
-            have = {b["isin"] for b in st["bonds"]}
+            desk = self._desk()
+            have = {b["isin"] for b in desk["bonds"]}
             for c in codes:
                 if c in gone:
                     continue
@@ -922,14 +1025,16 @@ class FiyatYukleme(object):
                 if rec.get("maturity") and rec["maturity"] < today.isoformat():
                     refused.append({"isin": c, "text": "vadesi geçmiş"})
                     continue
-                if len(st["bonds"]) >= LIST_MAX:
+                if len(desk["bonds"]) >= LIST_MAX:
                     refused.append({"isin": c, "text": "liste dolu (%d kâğıt)" % LIST_MAX})
                     continue
-                st["bonds"].append({"isin": c, "bid": None, "ask": None, "at": now_iso()})
+                desk["bonds"].append({"isin": c, "bid": None, "ask": None, "at": now_iso()})
                 have.add(c)
                 added.append(c)
             if added:
-                self._save(key, st)
+                self._put_desk(key, desk)
+        if added:
+            self._changed()
         return dict(self.state(key), added=added, skipped=skipped, refused=refused)
 
     def _admit(self, key: str, codes: List[str]) -> List[Dict[str, Any]]:
@@ -983,10 +1088,11 @@ class FiyatYukleme(object):
         if why:
             raise FiyatError(why)
         with self._lock:
-            st = self._load(key)
-            if self._put_fixed(st, codes[0], bid, ask) is None:
+            desk = self._desk()
+            if self._put_fixed(desk, codes[0], bid, ask) is None:
                 raise FiyatError("sabit fiyat listesi dolu (%d kâğıt)" % LIST_MAX)
-            self._save(key, st)
+            self._put_desk(key, desk)
+        self._changed()
         crossed = bid < ask if self.fixed_unit(codes[0]) == "yield" else bid > ask
         return dict(self.state(key), fixed_set=codes[0], crossed=crossed)
 
@@ -1004,7 +1110,7 @@ class FiyatYukleme(object):
 
     @staticmethod
     def _put_fixed(st: Dict[str, Any], code: str, bid: float, ask: float) -> Optional[bool]:
-        """A fixed price into the user's state (``st``, in place): True when it was new, False when it changed one, None
+        """A fixed price into the desk's list (``st``, in place): True when it was new, False when it changed one, None
         when the list is full."""
         from .store import now_iso
         left = [f for f in st["fixed"] if f["isin"] != code]
@@ -1027,10 +1133,10 @@ class FiyatYukleme(object):
         today, _, _ = self._today()
         added, updated, bad = [], [], list(got["bad"])
         with self._lock:
-            st = self._load(key)
+            desk = self._desk()
             for r in got["rows"]:
                 why = self._fixed_why(r["isin"], r["bid"], r["ask"], today)
-                new = None if why else self._put_fixed(st, r["isin"], r["bid"], r["ask"])
+                new = None if why else self._put_fixed(desk, r["isin"], r["bid"], r["ask"])
                 if why or new is None:
                     bad.append({"n": r["n"], "text": r["text"], "why": why or "sabit fiyat listesi dolu (%d kâğıt)" % LIST_MAX})
                 elif new:
@@ -1038,7 +1144,9 @@ class FiyatYukleme(object):
                 elif r["isin"] not in added:
                     updated.append(r["isin"])
             if added or updated:
-                self._save(key, st)
+                self._put_desk(key, desk)
+        if added or updated:
+            self._changed()
         bad.sort(key=lambda x: x["n"])
         return dict(self.state(key), pasted={"added": added, "updated": updated, "bad": bad, "ignored": len(got["ignored"])})
 
@@ -1046,12 +1154,13 @@ class FiyatYukleme(object):
         key = self.svc.require_user(user)
         code = "".join(str(isin or "").split()).upper()
         with self._lock:
-            st = self._load(key)
-            left = [f for f in st["fixed"] if f["isin"] != code]
-            if len(left) == len(st["fixed"]):
+            desk = self._desk()
+            left = [f for f in desk["fixed"] if f["isin"] != code]
+            if len(left) == len(desk["fixed"]):
                 raise FiyatError("sabit fiyatı yok: %s" % (code or "(boş)"))
-            st["fixed"] = left
-            self._save(key, st)
+            desk["fixed"] = left
+            self._put_desk(key, desk)
+        self._changed()
         return dict(self.state(key), fixed_removed=code)
 
     def _add_eurobonds(self, key: str, codes: List[str]) -> List[Dict[str, Any]]:
@@ -1079,12 +1188,13 @@ class FiyatYukleme(object):
         key = self.svc.require_user(user)
         code = "".join(str(isin or "").split()).upper()
         with self._lock:
-            st = self._load(key)
-            left = [b for b in st["bonds"] if b["isin"] != code]
-            if len(left) == len(st["bonds"]):
+            desk = self._desk()
+            left = [b for b in desk["bonds"] if b["isin"] != code]
+            if len(left) == len(desk["bonds"]):
                 raise FiyatError("kâğıt listede değil: %s" % (code or "(boş)"))
-            st["bonds"] = left
-            self._save(key, st)
+            desk["bonds"] = left
+            self._put_desk(key, desk)
+        self._changed()
         return dict(self.state(key), removed=code)
 
     def _spread(self, v: Any, unit: str, what: str) -> Optional[float]:
@@ -1098,10 +1208,11 @@ class FiyatYukleme(object):
         return round(x, 4)
 
     def set_options(self, user: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
-        """The user's settings: ``{"mode"?, "defaults"?: {yield_bid, yield_ask, price_bid, price_ask}, "spreads"?: {isin:
-        {"bid", "ask"} - a side left empty uses the default}, "bases"?: {isin: "mid" | "bidask"}, "base_all"?: "mid" |
-        "bidask" - every bond of the list ("Tümü")}``.  A bond's Mid / Bid/Ask is kept with it by its ISIN (Mid: the key
-        dropped, the entry as it was)."""
+        """The settings: the user's own ``{"mode"?}`` and the desk's list's ``{"defaults"?: {yield_bid, yield_ask, price_bid,
+        price_ask, euro_bid, euro_ask}, "spreads"?: {isin: {"bid", "ask"} - a side left empty uses the default}, "bases"?:
+        {isin: "mid" | "bidask"}, "base_all"?: "mid" | "bidask" - every bond of the list ("Tümü")}`` (for the whole desk).
+        A bond's Mid / Bid/Ask is kept with it by its ISIN (Mid: the key dropped, the entry as it was).  All or nothing:
+        one that cannot be kept, none is."""
         key = self.svc.require_user(user)
         body = body if isinstance(body, dict) else {}
 
@@ -1116,23 +1227,24 @@ class FiyatYukleme(object):
             else:
                 entry.pop("base", None)
 
+        desk_part = any(k in body for k in ("base_all", "bases", "defaults", "spreads"))
         with self._lock:
-            st = self._load(key)
+            desk, mine = self._desk(), self._mine(key)
+            listed = {b["isin"]: b for b in desk["bonds"]}
             if "base_all" in body:
                 v = base(body["base_all"])
-                for b in st["bonds"]:
+                for b in desk["bonds"]:
                     put_base(b, v)
             if isinstance(body.get("bases"), dict):
-                mine = {b["isin"]: b for b in st["bonds"]}
                 for isin, v in body["bases"].items():
                     code = "".join(str(isin or "").split()).upper()
-                    if code not in mine:
+                    if code not in listed:
                         raise FiyatError("kâğıt listede değil: %s" % code)
-                    put_base(mine[code], base(v))
+                    put_base(listed[code], base(v))
             if "mode" in body:
                 if body["mode"] not in MODES:
                     raise FiyatError("mod BBG ya da İhale olmalı")
-                st["mode"] = body["mode"]
+                mine["mode"] = body["mode"]
             if isinstance(body.get("defaults"), dict):
                 for k, v in body["defaults"].items():
                     if k not in DEFAULTS:
@@ -1140,19 +1252,22 @@ class FiyatYukleme(object):
                     x = self._spread(v, "price" if k.startswith("price") else "bp", "varsayılan spread")
                     if x is None:
                         raise FiyatError("varsayılan spread boş olamaz")
-                    st["defaults"][k] = x
+                    desk["defaults"][k] = x
             if isinstance(body.get("spreads"), dict):
-                mine = {b["isin"]: b for b in st["bonds"]}
                 for isin, sides in body["spreads"].items():
                     code = "".join(str(isin or "").split()).upper()
-                    if code not in mine:
+                    if code not in listed:
                         raise FiyatError("kâğıt listede değil: %s" % code)
                     unit = "bp" if quoted_of(self.record(code).get("kind")) == "yield" else "price"
                     sides = sides if isinstance(sides, dict) else {"bid": None, "ask": None}
                     for side in ("bid", "ask"):
                         if side in sides:
-                            mine[code][side] = self._spread(sides[side], unit, "%s spread'i (%s)" % (side, code))
-            self._save(key, st)
+                            listed[code][side] = self._spread(sides[side], unit, "%s spread'i (%s)" % (side, code))
+            self._put_mine(key, mine["mode"], mine["text"])
+            if desk_part:
+                self._put_desk(key, desk)
+        if desk_part:
+            self._changed()
         return self.state(key)
 
     # ------------------------------------------------------------------ the desk's labels
@@ -1183,7 +1298,7 @@ class FiyatYukleme(object):
 
     # ------------------------------------------------------------------ Hesapla
     def calculate(self, user: Optional[str], body: Dict[str, Any]) -> Dict[str, Any]:
-        """Hesapla: ``{"mode": "ihale" | "bbg", "text"}`` - every bond of the user's list at t0, its bid and ask by its
+        """Hesapla: ``{"mode": "ihale" | "bbg", "text"}`` - every bond of the desk's list at t0, its bid and ask by its
         spreads; İhale mode reads (and keeps) the pasted auction text."""
         key = self.svc.require_user(user)
         body = body if isinstance(body, dict) else {}
@@ -1198,7 +1313,7 @@ class FiyatYukleme(object):
                 if len(text) > TEXT_MAX:
                     raise FiyatError("metin çok uzun (en çok %d karakter)" % TEXT_MAX)
                 st["text"] = text
-            self._save(key, st)
+            self._put_mine(key, st["mode"], st["text"])
         today, t0, hol = self._today()
         rows = self._rows(st)
         # fixed bonds: as they are, whatever the mode - not computed, no Bloomberg asked for them (in the list too: fixed wins)
