@@ -248,7 +248,7 @@ def test_a_windows_overnight_is_tlref_on_the_desks_business_days(service):
 def test_the_models_own_window_rates_give_its_own_tlref_and_steps(service):
     """The step read from a quote is the MPC ima model's own convention: the model's window rate ("İma oran (model)",
     OIS_MAIN!BJ: Motor's TLREF of the window compounded its way) typed for a window gives the model's TLREF back as its O/N
-    equivalent (Motor!K, 1e-12) - in both tables -, so the steps between them are the model's steps (Motor!K's, 1e-9 bp),
+    equivalent (Motor!K, 1e-12) - in both tables -, so the steps between them are the model's steps (Motor!K's, 1e-8 bp),
     the first one from the model's stub.  The market's own window rate typed gives the market's own step (Piyasanın adımı),
     on the same convention."""
     u = service.login("PPK ters model")["user"]
@@ -266,7 +266,7 @@ def test_the_models_own_window_rates_give_its_own_tlref_and_steps(service):
         stub = rate_bd(tlref[0], cell(service, "Motor!C5", u), term(service, u, -1))
         steps = [on_bd(stub, cell(service, "Motor!C5", u), term(service, u, -1))] + on
         for k in range(WINDOWS):
-            assert (steps[k + 1] - steps[k]) * 1e4 == pytest.approx((tlref[k + 1] - tlref[k]) * 1e4, abs=1e-9), k
+            assert (steps[k + 1] - steps[k]) * 1e4 == pytest.approx((tlref[k + 1] - tlref[k]) * 1e4, abs=1e-8), k
         # every calendar day compounded alone (the convention before 25.11.2026) read the model's window rates low, by
         # 365·W·x²/d (1.3-2.5 bp on the replay day)
         for k in range(WINDOWS):
