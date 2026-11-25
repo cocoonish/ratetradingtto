@@ -126,7 +126,7 @@ def test_a_rates_consensus_is_sized_at_the_median_its_money_and_legs_with_it():
     assert len(out) == 1
     c = out[0]
     assert c["families"] == ["ml", "sira", "trend"] and c["consensus"]["k"] == 1.0 and "birleşik 1,0 bin $ DV01" in c["line"]
-    assert c["line"].startswith("pay 2Y OIS · 3 aile (Makine öğrenmesi, Carry + momentum, Trend)") and "hedef %38,20" in c["line"]
+    assert c["line"].startswith("pay 2Y OIS · 3 aile (Makine öğrenmesi, Carry + momentum, Trend)") and "hedef %38,200" in c["line"]
     # (the best is ml at 1,0: nothing to scale) - a best of another size is scaled to the median
     live2 = [ois("trend", k=0.7, exp=0.05), ois("ml", k=2.0, exp=0.30), ois("sira", k=1.4, exp=0.12)]
     c2 = qcons.lines(live2, REG)[0]
@@ -140,7 +140,7 @@ def test_a_rates_consensus_is_sized_at_the_median_its_money_and_legs_with_it():
 def test_a_model_level_consensus_says_its_instruments_levels_the_gap_beside_them():
     """Lines whose level is a model's own (a gap to the PPK path) agreeing on their instrument: the consensus line says the
     best family's levels in the traded instrument's (the FRA's rate), the gap beside each (quantfam.inst_quote)."""
-    quote = {"inst": "6x9 FRA", "unit": "%", "digits": 2, "label": "6x9 FRA %", "base": 38.65, "scale": 0.01, "entry": 38.719,
+    quote = {"inst": "6x9 FRA", "unit": "%", "digits": qf.RATE_DIGITS, "label": "6x9 FRA %", "base": 38.65, "scale": 0.01, "entry": 38.719,
              "target": 38.651, "stop": 38.729, "gap": {"name": "patika farkı", "of": "patikanın", "at": "patikada", "unit": "bp", "digits": 1}}
 
     def fra(fam, exp):
@@ -149,7 +149,7 @@ def test_a_model_level_consensus_says_its_instruments_levels_the_gap_beside_them
 
     out = qcons.lines([fra("trend", 0.05), fra("ml", 0.30), fra("sira", 0.12)], REG)
     assert len(out) == 1
-    assert "hedef %38,65 (+0,1 bp patikanın üstünde) · stop %38,73 (+7,9 bp patikanın üstünde)" in out[0]["line"]
+    assert "hedef %38,651 (+0,1 bp patikanın üstünde) · stop %38,729 (+7,9 bp patikanın üstünde)" in out[0]["line"]
     assert out[0]["quote"]["entry"] == 38.719                        # (the best line's quote: its levels are the line's)
 
 

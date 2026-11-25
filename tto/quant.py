@@ -1390,7 +1390,7 @@ class Quant(object):
         alarm = "quant:" + a["sid"]
         try:
             z = ("%+.2f" % a["z"]).replace(".", ",")
-            # (with the line's levels in the traded instrument's own: "… · giriş %38,72 · hedef %38,65 · stop %38,73 (6x9 FRA; …)")
+            # (with the line's levels in the traded instrument's own: "… · giriş %38,720 · hedef %38,652 · stop %38,730 (6x9 FRA; …)")
             desk.fired([{"id": alarm, "label": "Sinyal · %s: %s" % (a["family_label"], a["expression"]), "time": _now().strftime("%H:%M:%S"),
                          "mode": "level", "value_text": "z %s (%s)" % (z, a["strength"]) + (" · " + a["levels"] if a.get("levels") else ""),
                          "condition": "yön döndü (YENİ)" if e.get("daily") else "giriş eşiği |z| ≥ %s" % _txt(float(e.get("entry_z") or DEFAULTS["entry_z"])),

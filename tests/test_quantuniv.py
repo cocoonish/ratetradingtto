@@ -323,7 +323,8 @@ def test_a_fly_is_told_with_the_ois_sheet_s_quote_beside_it():
     fl, sp, o = reg["OISF:6M/1Y/2Y"], reg["OISS:1Y/2Y"], reg["OIS:2Y"]
     assert fl.sheet(-12.5) == -25.0 and sp.sheet(3.0) is None and o.sheet(38.5) is None
     assert fl.level_text(-12.5) == "-12,5 bp (OIS sayfasında -25,0)" and fl.level_text(4.0) == "+4,0 bp (OIS sayfasında +8,0)"
-    assert sp.level_text(3.0) == "+3,0 bp" and o.level_text(38.5) == "%38,50" and reg["FX:EURUSD"].level_text(1.0843) == "1,08430"
+    assert sp.level_text(3.0) == "+3,0 bp" and o.level_text(38.5) == "%38,500" and reg["FX:EURUSD"].level_text(1.0843) == "1,08430"
+    assert o.digits == qf.RATE_DIGITS == 3 and reg["FX:EURUSD"].digits == 5          # (a rate's three decimals, the desk's 25.11.2026)
     assert fl.line(-1, 0.7, entry=-12.5, target=-8.0, stop=-15.0) == (
         "gövde receive / kanatlar pay 6M/1Y/2Y fly · 700 $ DV01 · giriş -12,5 bp (OIS sayfasında -25,0) · hedef -8,0 bp "
         "(OIS sayfasında -16,0) · stop -15,0 bp (OIS sayfasında -30,0)")
