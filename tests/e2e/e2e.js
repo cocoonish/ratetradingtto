@@ -4761,6 +4761,64 @@ async function clipAfter(page, action) {
     await page.click('.menu >> text=Gizlediğiniz sütunları göster (1)');
     check('... and comes back from the same menu', !(await page.evaluate(() => [...document.getElementById('watch-table').rows[0].cells].some((c) => c.hidden))));
 
+    // ------------------------------------------------------------------ the decimals each user sees (right click)
+    // the desk, 25.11.2026: "İstediğim şeyleri seçip sağ tıklayıp decimal formatını yapabilmeliyim" - OIS · PPK's OUTRIGHT:
+    // B a percent (2 decimals), C the expected bp (accounting, none), D a text (YÖN), E the nominal in millions ("6.265M")
+    console.log('decimals');
+    await open(page, 'ois');
+    const decRefs = ['B9', 'C9', 'D9', 'E9', 'B10', 'C10', 'D10', 'E10'].map((a) => 'OIS_MAIN!' + a);
+    const decTexts = async () => { const o = {}; for (const r of decRefs) o[r.split('!')[1]] = ((await cellText(page, r)) || '').trim(); return o; };
+    const decBefore = await decTexts();
+    await (await cellHandle(page, 'OIS_MAIN!B9')).click();
+    await (await cellHandle(page, 'OIS_MAIN!E10')).click({ modifiers: ['Shift'] });
+    await (await cellHandle(page, 'OIS_MAIN!C10')).click({ button: 'right' });
+    await page.waitForSelector('.menu #menu-decimals');
+    const decMenu = await page.$$eval('.menu > *', (xs) => xs.map((x) => x.textContent));
+    check('decimals: a right click on a selection holding numbers offers "Ondalık 0 … 6", "Ondalık artır" / "azalt" - nothing to take back yet',
+      decMenu.includes('Ondalık0123456') && decMenu.includes('Ondalık artır') && decMenu.includes('Ondalık azalt')
+      && !decMenu.some((x) => /varsayılana/.test(x)) && decMenu.indexOf('Ondalık0123456') > decMenu.findIndex((x) => /^Tüm tabloyu seç/.test(x)), decMenu);
+    await page.click('.menu #menu-decimals button[data-v="2"]');
+    await page.waitForFunction(() => /,\d\dM$/.test(window.tto.findCell('OIS_MAIN!E9').textContent), null, { timeout: 20000 });
+    const dec2 = await decTexts();
+    const pct2 = /^\d+,\d\d%$/;
+    const bp2 = /^(-?\d+,\d\d|-)$/;
+    check('... "2": every number of the selection shows 2 decimals - the percent stays a percent, the bp gets its decimals, the '
+      + 'millions keep their "M"; the text is as it was, the selection stays',
+      dec2.B9 === decBefore.B9 && pct2.test(dec2.B10) && bp2.test(dec2.C9) && bp2.test(dec2.C10) && /^[\d.]+,\d\dM$/.test(dec2.E9)
+      && /^[\d.]+,\d\dM$/.test(dec2.E10) && dec2.D9 === decBefore.D9 && dec2.D10 === decBefore.D10
+      && await page.evaluate(() => document.querySelectorAll('#content td.sel').length) === 8, [decBefore, dec2]);
+    await (await cellHandle(page, 'OIS_MAIN!B9')).click();
+    await (await cellHandle(page, 'OIS_MAIN!B9')).click({ button: 'right' });
+    await page.click('.menu button:text-is("Ondalık artır")');
+    await waitCell(page, 'OIS_MAIN!B9', '/,\\d{3}%$/.test(t)');
+    const b9 = (await cellText(page, 'OIS_MAIN!B9')).trim();
+    const b9copy = await page.evaluate(() => [window.tto.selectionText(false), window.tto.selectionText(true)]);
+    check('... "Ondalık artır" on one cell: one decimal more, a percent still; "Kopyala" takes what is shown, "Tam hassasiyetle '
+      + 'kopyala" the value to its last digit (as before)', /^\d+,\d{3}%$/.test(b9)
+      && Math.abs(trNumber(b9) - trNumber(decBefore.B9)) <= 0.005 && b9copy[0] === b9 && /^0,\d+$/.test(b9copy[1]), [b9, b9copy]);
+    await page.reload();
+    await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'ois' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+    const decKept = await decTexts();
+    check('... kept with the account: the page opened again shows them', decKept.B9 === b9 && decKept.C9 === dec2.C9
+      && decKept.E10 === dec2.E10, [decKept, dec2, b9]);
+    const decM = await request.newContext();
+    await decM.post(BASE + '/api/login', { data: { name: 'Mehmet', password: PASSWORD } });
+    const decTheirs = await (await decM.get(BASE + '/api/view/ois?panels=B3')).json();
+    await decM.dispose();
+    const decT = decTheirs.panels && decTheirs.panels[0] && decTheirs.panels[0].data;
+    const theirText = (a) => (decT ? String(decT.rows[decT.r.indexOf(Number(a.slice(1)))][decT.c.indexOf(a[0])].t).trim() : null);
+    check('... another account sees the file\'s own format', decT && theirText('B9') === decBefore.B9 && theirText('C9') === decBefore.C9
+      && theirText('E10') === decBefore.E10, [theirText('B9'), theirText('C9'), theirText('E10'), decBefore]);
+    await (await cellHandle(page, 'OIS_MAIN!B9')).click();
+    await (await cellHandle(page, 'OIS_MAIN!E10')).click({ modifiers: ['Shift'] });
+    await (await cellHandle(page, 'OIS_MAIN!B9')).click({ button: 'right' });
+    await page.click('.menu button:text-is("Ondalığı varsayılana döndür")');
+    await waitCell(page, 'OIS_MAIN!E9', '!/,\\d\\dM$/.test(t)');
+    const decBack = await decTexts();
+    check('... "Ondalığı varsayılana döndür": back to the file\'s own format', JSON.stringify(decBack) === JSON.stringify(decBefore)
+      && JSON.stringify((await api(page, 'ayşe yilmaz', 'GET', '/api/decimals')).json.cells) === '{}', [decBack, decBefore]);
+    await page.keyboard.press('Escape');
+
     // ------------------------------------------------------------------ the desk's own: Hata / Öneri, Sosyal, Ajanda
     console.log('reports, chat, agenda');
     const ctxD = await browser.newContext({ viewport: { width: 1600, height: 1000 } });

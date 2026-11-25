@@ -1,10 +1,12 @@
 // Spreadsheet-like table: range selection, Excel-compatible copy / paste, in-cell editing of input cells,
-// in-place refresh with change flashes, the columns each user hides.  An input cell takes a formula as Excel does: "="
-// and a click on a cell - of this table, another one on the page, another tab's, the side drawer's, a launchpad's -
-// puts its reference in where a reference may go (Ctrl+click anywhere); the server evaluates it, live (inputformula.py).
+// in-place refresh with change flashes, the columns each user hides, the decimals each user sees (decimals.js).  An
+// input cell takes a formula as Excel does: "=" and a click on a cell - of this table, another one on the page, another
+// tab's, the side drawer's, a launchpad's - puts its reference in where a reference may go (Ctrl+click anywhere); the
+// server evaluates it, live (inputformula.py).
 import { h, clear, menu, closeMenu, inFormControl, toast } from './ui.js';
 import { raw } from './format.js';
 import { Columns, captionKey, columnOrder, markGaps, uniqueKeys } from './columns.js';
+import { decimalItems, decimalsTip } from './decimals.js';
 import { workbookRef, canPoint, isFormula } from './pointing.js';
 
 const hooks = {
@@ -119,7 +121,8 @@ function cellClass(cell) {
 function signature(cell) {
   return (cell.t || '') + '\u0001' + cellClass(cell) + '\u0001' + (cell.heat || '') + '\u0001' + (cell.rs || 1) + 'x' + (cell.cs || 1)
     + '\u0001' + (typeof cell.bar === 'number' ? cell.bar : '') + '\u0001' + (cell.ff || '') + '\u0001' + (cell.fe || '')
-    + '\u0001' + (cell.tip || '') + '\u0001' + (cell.ro || '') + '\u0001' + (cell.an || '') + '\u0001' + (cell.ao || '');
+    + '\u0001' + (cell.tip || '') + '\u0001' + (cell.ro || '') + '\u0001' + (cell.an || '') + '\u0001' + (cell.ao || '')
+    + '\u0001' + (cell.dp === undefined ? '' : cell.dp) + (cell.dpc ? 'c' : '');
 }
 
 /** What a cell says when the mouse rests on it: an input's formula, the workbook's comment, a long text in full - in a
@@ -136,6 +139,8 @@ function tipOf(cell) {
   else if (cell.ao) tip = 'Hesaplanan: bu satırda yazılan değer ' + cell.ao + ', bu hücre ondan hesaplanır. Buraya yazarsanız '
     + 'yazılan değer bu olur.' + (tip ? '\n' + tip : '');
   if (cell.ro) tip = 'Kopyada salt okunur: ' + cell.ro + (tip ? '\n' + tip : '');
+  const dp = decimalsTip(cell);                         // (the decimals this user set for the cell)
+  if (dp) tip = tip ? tip + '\n' + dp : dp;
   return tip;
 }
 
@@ -335,6 +340,8 @@ export class Grid {
    *             never pointed at by a formula - a formula reads the table itself)
    *       rowItems ((i, j) -> menu items: what the right-click menu offers for the row clicked - a row's quote - first,
    *                 after a price's "İşlem gir")
+   *       decimals (bool: the right-click menu sets this user's own decimals of the numbers selected - a table of a
+   *                 workbook page, whose answers the server puts them on: decimals.js)
    */
   constructor(opts) {
     this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
@@ -601,7 +608,8 @@ export class Grid {
         // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with
         // it; a date typed as a shortcut: what was typed; a two-way table's row typed into or back to its default)
         if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size
-            || (cell.an || '') !== (before.an || '') || (cell.ao || '') !== (before.ao || '')) td.title = titleOf(this, i, j, cell);
+            || (cell.an || '') !== (before.an || '') || (cell.ao || '') !== (before.ao || '')
+            || cell.dp !== before.dp || cell.dpc !== before.dpc) td.title = titleOf(this, i, j, cell);
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
         else td.style.removeProperty('--bar');
@@ -694,6 +702,8 @@ export class Grid {
     }
     // what the page offers for the row clicked (its quote: "Bu satırın kotasyonu"), after "İşlem gir"
     const own = this.opts.rowItems ? (this.opts.rowItems(td.__i, td.__j) || []) : [];
+    // the decimals of the numbers selected, this user's own (a table of a workbook page: the server puts them on)
+    const decs = this.opts.decimals && this.book ? decimalItems(this, cur) : [];
     menu(e.clientX, e.clientY, [
       price && !price.why ? { label: 'İşlem gir', action: () => hooks.trade(price) } : null,
       price && price.why ? { label: 'İşlem gir · ' + price.why, disabled: true } : null,
@@ -711,6 +721,7 @@ export class Grid {
       mine.length ? { label: copy ? 'Kopyadaki değeri sil → tablonun değerine dön' : 'Kendi girdimi sil → varsayılana dön',
         action: () => resetRefs(this, mine, false) } : null,
       shared.length ? { label: 'Ortak girdiyi dosyadaki değere döndür', action: () => resetRefs(this, shared, true) } : null,
+      ...decs,
       ...cols,
     ]);
   }

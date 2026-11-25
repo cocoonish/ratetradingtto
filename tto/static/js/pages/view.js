@@ -104,10 +104,17 @@ export class ViewPage {
     const ids = (this.placed || []).filter((id) => this.items.has(id));
     if (!ids.length || this.dead) return;
     const since = Math.min(...ids.map((id) => this.items.get(id).gen || 0));
-    const data = await this.fetch({ since, panels: ids.join(','), as: this.as });
+    const had = this.as;
+    const data = await this.fetch({ since, panels: ids.join(','), as: had });
     if (this.dead) return;
-    // (the generations are those of the page the server says this is: everybody's, or the user's own)
+    // (the generations are those of the page the server says this is: everybody's, or the user's own - with the user's
+    // own decimals on it)
     const seen = (held) => {
+      if (had !== undefined && data.as !== had) {
+        // another page now (the user's decimals changed - no new generation for it): the other tabs' panels are of the one
+        // before, asked for whole when their tab is opened
+        for (const [id, it] of this.items) if (!ids.includes(id)) it.gen = 0;
+      }
       this.as = data.as;
       for (const id of ids) {
         const it = this.items.get(id);
@@ -557,15 +564,15 @@ export class ViewPage {
       if (p.lead && p.lead.length) {
         // a temporary copy's strip of inputs it is computed from (the dates of TARİH ARASI FORWARD): the copy's own too
         it.leads = p.lead.map((l) => {
-          const g = l.data ? new Grid({ book: this.book, data: l.data, editable: true, adhoc: false, copy }) : null;
+          const g = l.data ? new Grid({ book: this.book, data: l.data, editable: true, adhoc: false, copy, decimals: true }) : null;
           body.appendChild(h('div', { class: 'copy-lead' }, l.title ? h('div', { class: 'lead-title' }, l.title) : null,
             g ? g.el : h('div', { class: 'err' }, l.error || 'Tablo okunamadı')));
           return g;
         });
       }
       // each user hides columns of their own: by the page and the table, a column by its letter in the sheet (a copy: as
-      // its table); a copy takes what is typed into its own inputs, never "Elle değer"
-      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: copy ? false : this.adhoc, copy,
+      // its table); a copy takes what is typed into its own inputs, never "Elle değer"; each user's own decimals
+      it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: copy ? false : this.adhoc, copy, decimals: true,
         name: p.type === 'notes' ? null : 'v/' + this.id + '/' + (p.copy ? p.copy.of : p.id), order: true, tools,
          rowItems: !copy && quoteRows(p.client_quote) ? (i) => quoteRowItems(this.id, p, it.grid, i) : null });
       body.appendChild(it.grid.el);

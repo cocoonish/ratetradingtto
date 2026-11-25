@@ -247,13 +247,14 @@ export class PanelBox {
         this.dropContent();
         clear(this.body);
         this.leads = (e.lead || []).map((l) => {
-          const g = l.data ? new Grid({ book: this.book, data: l.data, editable: true, adhoc: false, copy }) : null;
+          const g = l.data ? new Grid({ book: this.book, data: l.data, editable: true, adhoc: false, copy, decimals: true }) : null;
           this.body.appendChild(h('div', { class: 'copy-lead' }, l.title ? h('div', { class: 'lead-title' }, l.title) : null,
             g ? g.el : h('div', { class: 'err' }, l.error || 'Tablo okunamadı')));
           return g;
         });
         this.grid = new Grid({ book: this.book, data: e.data, editable: true, adhoc: copy ? false : (this.opts.adhoc ? this.opts.adhoc() : false),
-          copy, name: e.type === 'notes' ? null : 'v/' + this.item.view + '/' + (e.copy ? e.copy.of : this.item.panel), order: true, tools: this.tools });
+          copy, decimals: true, name: e.type === 'notes' ? null : 'v/' + this.item.view + '/' + (e.copy ? e.copy.of : this.item.panel),
+          order: true, tools: this.tools });
         this.body.appendChild(this.grid.el);
         if (e.card === 'bond') bondCardLinks(this.ctx, this.grid.el);
         if (e.flags === 'dibs') bondFlags(this.ctx, this.grid.el);

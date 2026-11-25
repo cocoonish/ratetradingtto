@@ -220,6 +220,9 @@ def _then(fut: "concurrent.futures.Future", fn: Callable[[Any], Any]) -> "concur
 
 _DUMMY: List[str] = []
 _NOT_SET = object()
+#: which page a browser has a table of ("s": everybody's, "p": the user's own) and the mark of the user's own decimals
+#: on it (decimals.py) - what an answer's ``as`` says
+_AS = re.compile(r"^[sp](~[0-9a-f]{1,8})?$")
 
 
 def _flag(v: Any) -> bool:
@@ -318,6 +321,7 @@ class Service(object):
         self._market_thread: Optional[threading.Thread] = None
         self.started_at = time.time()
         self.formulas = None                             # the inputs typed as formulas (inputformula.py), below
+        self.decimals = None                             # each user's own decimals (decimals.py), below
         self.et.call(self._setup, provider)
         from .history import History
         self.history = History(self)
@@ -390,6 +394,9 @@ class Service(object):
         self.copies = Copies(self)
         with self._render_lock:
             self._private_users |= self.copies.users()          # (their pages hold their copies: their own)
+        # each user's own number of decimals in the tables (decimals.py): put on the answers, never on the pages kept
+        from .decimals import Decimals
+        self.decimals = Decimals(self)
         self._watch_kick = threading.Event()
         self._watch_thread = threading.Thread(target=self._watch_loop, name="tto-watch", daemon=True)
         self._watch_thread.start()
@@ -1787,7 +1794,8 @@ class Service(object):
              since: Optional[int] = None, panels: Optional[List[str]] = None, as_: Optional[str] = None) -> Dict[str, Any]:
         if self.et.here():
             key = self._render_key(user, view_id, show_hidden, locale)
-            return self._answer(self._render_job(None, key, user, view_id, show_hidden, locale, None), since, None, as_)
+            return self._answer(self._render_job(None, key, user, view_id, show_hidden, locale, None), since, None, as_,
+                                user)
         return self.view_future(user, view_id, show_hidden, locale, since, panels, None, as_).result()
 
     def view_future(self, user: Optional[str], view_id: str, show_hidden: bool = False, locale: Optional[str] = None,
@@ -1803,8 +1811,8 @@ class Service(object):
 
         ``panels``: only these (the open tab's); ``since``: the generation the browser has them from - the panels that
         did not change since are left out (``{"unchanged": true}`` when none did).  ``as_``: which page the browser has
-        them of (``"s"``: the one everybody shares, ``"p"``: the user's own - an answer says ``as``); ``since`` counts
-        only on the same one."""
+        them of (``"s"``: the one everybody shares, ``"p"``: the user's own - and the mark of the user's own decimals
+        their cells carry, decimals.py; an answer says ``as``); ``since`` counts only on the same one."""
         v = self.view_index.get(view_id)
         if v is not None and v.get("admin") and user is not None and not (role == "admin" if role is not None else self._is_admin(user)):
             fut: "concurrent.futures.Future" = concurrent.futures.Future()
@@ -1816,13 +1824,13 @@ class Service(object):
         with self._render_lock:
             rec = self._renders.get(key)
             if rec is not None and self._fresh(rec, gen, wanted, key):
-                return _done(self._answer(rec, since, wanted, as_))
+                return _done(self._answer(rec, since, wanted, as_, user))
             jk = (key, user, gen, wanted)
             job = self._inflight.get(jk)
             if job is None:
                 job = self.et.submit_at(EngineThread.VIEW, self._render_job, jk, key, user, view_id, show_hidden, locale, wanted)
                 self._inflight[jk] = job
-        return _then(job, lambda rec: self._answer(rec, since, wanted, as_))
+        return _then(job, lambda rec: self._answer(rec, since, wanted, as_, user))
 
     def _render_key(self, user: Optional[str], what: str, show_hidden: bool = False, locale: Optional[str] = None,
                     role: Optional[str] = None) -> Tuple:
@@ -1928,9 +1936,12 @@ class Service(object):
                 "inputs": calc.engine.input_changes, "desk": desk}      # (shared inputs / desk changes so far: _fresh)
 
     def _answer(self, rec: Dict[str, Any], since: Optional[int], wanted: Optional[Tuple],
-                as_: Optional[str] = None) -> Dict[str, Any]:
-        """What the browser gets of a kept page (never changing what is kept)."""
-        kind = "p" if rec["key"][0] else "s"
+                as_: Optional[str] = None, user: Optional[str] = None) -> Dict[str, Any]:
+        """What the browser gets of a kept page (never changing what is kept) - ``user``'s own decimals on its cells
+        (decimals.py: their mark in ``as``, so that a browser holding the page from before a change gets it whole)."""
+        dec = self.decimals
+        mark = dec.mark(user) if dec is not None and user else ""
+        kind = ("p" if rec["key"][0] else "s") + mark
         if as_ is not None and as_ != kind:
             since = None                                 # (the browser has the other page: everything)
         ids = set(wanted) if wanted is not None else None
@@ -1944,6 +1955,8 @@ class Service(object):
         out["gen"] = rec["gen"]
         out["ms"] = rec["ms"]
         out["panels"] = [p["entry"] for p in panels]
+        if mark:
+            out["panels"] = dec.apply(user, rec.get("book"), rec["key"][3], out["panels"])
         out["ids"] = rec["ids"]
         out["as"] = kind
         if since is not None or wanted is not None:
@@ -2057,7 +2070,8 @@ class Service(object):
     def _view(self, user, view_id, show_hidden, locale) -> Dict[str, Any]:
         """A whole page made from scratch, nothing kept (the calculation thread)."""
         key = self._render_key(user, view_id, show_hidden, locale)
-        return self._answer(self._render(None, key, user, view_id, show_hidden, locale, None, self.gen), None, None)
+        return self._answer(self._render(None, key, user, view_id, show_hidden, locale, None, self.gen), None, None,
+                            None, user)
 
     # ================================================================== tables of many pages at once
     #: the tables one request may ask for (a launchpad, the side drawer, a pop-out window)
@@ -2149,7 +2163,8 @@ class Service(object):
             since = x.get("since")
             if isinstance(since, bool) or not isinstance(since, int):
                 since = None
-            kind = x.get("as") if x.get("as") in ("s", "p") else None
+            # (the page it has them of: "s" / "p", and the mark of the user's own decimals - _answer)
+            kind = x.get("as") if isinstance(x.get("as"), str) and _AS.match(x["as"]) else None
             out.append({"key": key, "view": vid, "panel": pid, "rows": rows, "cols": cols, "all": x.get("all") is True,
                         "since": since, "as": kind, "keys": x.get("keys") is True})
         return out

@@ -1862,6 +1862,43 @@ Code: `tto/extras.py` (`TRY_PCT`, `_fr_side`, `_tto_fwd_rates`, `_tto_bulk_forwa
 `tests/test_ondalik.py`; `tests/test_viop_twoway.py`, `tests/test_viopfra.py`, `tests/test_views.py` (the strip's texts);
 `tests/e2e/e2e.js` (the Forward page's TRY rates and their full precision copy, TOPLU FORWARD, a Faiz % target).
 
+### Sağ tık → ondalık: each user's own decimals (25.11.2026)
+
+> "İstediğim şeyleri seçip sağ tıklayıp decimal formatını yapabilmeliyim"
+
+**What the desk gets.** In a table of a workbook page, a right click on a selection holding numbers (one cell, a block,
+the whole table with Ctrl+A): **Ondalık 0 1 2 3 4 5 6**, **Ondalık artır** / **Ondalık azalt** (Excel's buttons: each
+cell one decimal from what it shows), **Ondalığı varsayılana döndür**.
+
+**Choices made while building it** (ask the desk before changing):
+- **Each user's own, a display setting** - as the hidden columns are: kept with the account (any computer, a reload, a
+  restart, the next day), nobody else's view changes. Values, calculations, typed inputs, alarms and "Tam hassasiyetle
+  kopyala" are unchanged; "Kopyala" copies what is shown, and so does a price right-clicked into "İşlem gir" (as before:
+  the price as it is on screen). "Kotasyon kopyala" and "Kota mesajı" keep their own formats.
+- **Only the decimals change**: a percent stays a percent; thousands separators, a scaling (`6.265M`), the negatives'
+  look and colour, a prefix or a suffix stay; the accounting format's zero (`-`) stays a dash. Dates, times and text are
+  never touched. General becomes `0.00…` (no grouping, as General had none).
+- **What a setting covers in a selection**: its numbers, and the formula / input cells that show no number yet (empty, an
+  error): the number shows with the chosen decimals when it comes. Artır / azalt step each number from what it shows.
+- **A place, not a row**: a setting belongs to its cell and stays there when the rows of a list move (a PPK / FOMC
+  calendar change, a VİOP roll, a bond list) - decimals are a column's look (a rate column, a price column), whatever the
+  list holds in it; what was typed still moves with its row as before.
+- **Temporary copies**: what is set in a copy is the copy's own (the table is untouched); in its other cells the copy shows
+  the table's setting - it follows the table, as its values do where nothing was typed in it; "Ondalığı tablonunkine
+  döndür" in the copy; closing the copy drops its own.
+- **Where**: the tables of the workbook pages - on the page, a launchpad, the side drawer, a window of its own, a copy
+  (DİBS RV · Genel's mirrors of those tables show the same). Not the columns the dashboard adds to a table (PPK basamak,
+  Broker bid …: no cell of a sheet) and not the dashboard's own pages' tables (Günlük İşlemler, Trades …).
+- The menu offers 0–6; a setting may go up to 10 decimals (artır).
+
+Code: `tto/decimals.py` (kept in `decimals.<user>`; put on each answer of a page by `Service._answer`, see
+[architecture.md](architecture.md#request-path)), `tto/xl/numfmt.py` (`with_decimals`, `is_number_format`),
+`tto/render.py` (`Renderer.xf_of` / `format_of`: a cell's own format, read in one place), `tto/copies.py` (`close`),
+`tto/server.py` (`/api/decimals`), `tto/static/js/decimals.js`, `grid.js` (the menu, `dp` in the tooltip),
+`ui.js` (`menu`'s row of buttons), `pages/view.js` / `boxes.js` (the tables that offer it; another tab's panels whole after
+a change), `main.js` (the refresh, the word to the other tabs). Tests: `tests/test_decimals.py`, `tests/test_numfmt.py`,
+the browser test's "decimals: …".
+
 ## Process
 
 - **The single-file install is a requirement.** Everything must install from GitHub's single `kurulum/tto_kur.txt`

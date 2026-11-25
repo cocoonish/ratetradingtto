@@ -69,7 +69,8 @@ export function closeMenu() {
 /**
  * items: [{label, action, header, sep, disabled}]; {check: true, on, label, sub, id, action(on)} is a line with a tick
  * box (``id``: the box's) that leaves the menu open (several in a row can be changed); its action returns false to refuse
- * the change.
+ * the change.  {choices: [{label, action, on, title, value}], label, id, title} is a line of small buttons side by side
+ * (``Ondalık: 0 1 2 3 …``; ``on``: the one in use, ``value``: the button's data-v) - a click acts and closes the menu.
  */
 export function menu(x, y, items) {
   closeMenu();
@@ -78,6 +79,17 @@ export function menu(x, y, items) {
     if (!it) continue;
     if (it.sep) { el.appendChild(h('div', { class: 'sep' })); continue; }
     if (it.header) { el.appendChild(h('div', { class: 'mh' }, it.header)); continue; }
+    if (it.choices) {
+      const row = h('div', { class: 'mrow', id: it.id || null, title: it.title || null }, h('span', { class: 't' }, it.label));
+      for (const c of it.choices) {
+        const b = h('button', { type: 'button', class: c.on ? 'on' : null, title: c.title || null, disabled: !!c.disabled }, c.label);
+        if (c.value !== undefined) b.dataset.v = String(c.value);
+        b.addEventListener('click', () => { closeMenu(); c.action(); });
+        row.appendChild(b);
+      }
+      el.appendChild(row);
+      continue;
+    }
     if (it.check) {
       const box = h('input', { type: 'checkbox', disabled: !!it.disabled, id: it.id || null });
       box.checked = !!it.on;
