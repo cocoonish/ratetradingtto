@@ -246,8 +246,8 @@ same limit.) What the dashboard does since (details and costs: [market-data.md](
 - **The cost is shown**: the status window (the top bar's badge) gives today's hits in % of the budget, by kind, and the
   top 10 sheets and fields.
 - The history's new days: once a day, then the live quote or hourly (above, *History pacing*).
-- To decide: the desk's hours (08:00 - 19:00 by default) and the budget (100 000) are the dashboard's guesses; Bloomberg
-  did not say its limit. Code: `tto/marketdata/bloomberg.py` (`policy_of`, `DeskHours`, `_tier`, `_hit_limit`),
+- The desk's hours (08:00 - 19:00) and the budget (100 000 a day) - the desk's "Ok", 25.11.2026 (Bloomberg did not say
+  its limit; the hours are settable in Masa alarmları → Ayarlar). Code: `tto/marketdata/bloomberg.py` (`policy_of`, `DeskHours`, `_tier`, `_hit_limit`),
   `bbg_process.py`, `Service._keep_bloomberg` / `_kept_bloomberg` / `market_usage`, `History._fetch`; tests
   `tests/test_bloomberg_cache.py`.
 - **Where Bloomberg data may not go:** the repository, an external service, GitHub, or a cloud-synced folder. This
