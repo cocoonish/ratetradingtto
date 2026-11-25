@@ -992,7 +992,8 @@ Offered to the desk and approved (the offers as they were relayed, in English):
 - **Fiyat** (VİOP Target): the near limit by the row's side, as the sheet takes it (SHORT: the near contract's ask, LONG:
   its bid); the rate is the exact inverse of the sheet's far limit price. OIS FRA stays the bootstrapped curve's, as on a
   Faiz % row (the FRA's curve does nothing there). A price that is not above zero gives no rate. "Hedef değer" shows a
-  price's decimals (the file's integer format became General).
+  price's decimals (the file's integer format became General; since 25.11.2026 the row's type picks its format - below,
+  *TRY faizleri iki ondalık; VİOP Target'ın hedef değeri tipinde*).
 
 Code: `tto/extras.py` (`_tto_tarih`, `_tarih_formulas`; `_tto_viop_price`, `viop_price_rate`, `VFRA_OTHER_TYPES`),
 `tto/views/10_masa.json` (TAF, TAFH). Tests: `tests/test_toplufaiz.py`, `tests/test_viopfra.py` (the Fiyat section), the
@@ -1809,6 +1810,54 @@ Code: `tto/ppkcurve.py` (`growth`, `window_rate`, `window_overnight`, `ON_STEPS`
 `tests/test_ppkters.py` (`test_a_windows_overnight_is_tlref_on_the_desks_business_days`,
 `test_the_models_own_window_rates_give_its_own_tlref_and_steps`, the calendar move), `tests/test_ois_twoway.py`,
 `tests/test_brokerchat.py`.
+
+### TRY faizleri iki ondalık; VİOP Target'ın hedef değeri tipinde (25.11.2026)
+
+The desk:
+
+> "Forward fiyatlama kısımlarında try faizleri 4 decimal'i çok yoruyor gözü. Bunları 2 decimala alalım. VİOP target
+> kısmında da faiz seçtiğim durumda decimalsiz yazıyor."
+
+**What became two decimals** (`extras.TRY_PCT`, the Forward page's pricing tables - the dashboard's own sheets; the
+workbook's own tables there - FORWARD STARTING SWAP, ÇAPRAZ FORWARD's rates, the calculators, RET, the curves - were two
+decimals already, so no workbook cell needed a format of its own):
+- USDTRY / EURTRY FORWARD (`EK_FWD` 47–51, 58–62): every curve's TRY bid / mid / ask % (four decimals before), "Elle
+  ayarı"'s mid % (`D52`);
+- SERBEST FORWARD: minor % (`G68:G77`, four before);
+- TOPLU FORWARD FİYATLAMA (`EK_BULK`): offshore / OIS mid %, RET bid / mid / ask % (three before), Manuel TRY % and both
+  İma TRY % (four before);
+- ÇAPRAZ FORWARD's İma TRY % (`Forward!S200:S214`, four before).
+FORWARD KOTASYON, PUAN → OIS SPREAD, FAİZ → SPREAD and TRY FAİZLERİ VADELERE GÖRE were two decimals already.
+
+**How it reads only.** The value, every calculation, what is typed (36,123456 shows 36,12; the forward is priced off
+36,123456) and Ctrl+Shift+C ("Tam hassasiyetle kopyala": the cell's value) keep every digit. What copies the text the
+page shows follows it: Ctrl+C, *Kota mesajı*, *Kotasyon kopyala* and *İşlem gir* (a TRY rate clicked fills Günlük
+İşlemler with two decimals - the form takes the price as the user saw it, as it always did).
+
+**Left as they were - a question for the desk:** the USD / EUR rates beside them - the value date's USD / EUR bid / mid /
+ask % of the USDTRY / EURTRY tables (`EK_FWD!H45`, `J45`, `L45`, `H56`, `J56`, `L56`) and SERBEST FORWARD's major %
+(four decimals), TOPLU FORWARD's USD % / EUR % (three; the workbook's own bulk table, `Forward!J144:K163`, and its old free
+list, `Forward!G25:H27`, show them with two). The hidden helper columns - the rate a typed value gives (`EK_FWD!T:U`,
+`AB`, `AT:AU`; `EK_BULK!AD`; `Forward!V200:V214`, `AA179`) and the curves' rates of the quote matrix (`AE:AK`) - keep
+their precision for checking. Other pages' rates with more decimals (Masa's KIRIK VADE & KARŞILIK, `0.000%`; VİOP's gold
+calculator) were not part of the request.
+
+**VİOP Target's Hedef değer reads in its type** (`VIOP!P331:P338`; VİOP → Kontratlar → Target, Masa's VİOP TARGET strip).
+Since 23.11 (the Fiyat type) the cell's format is General, so a rate typed whole showed whole ("45") next to Hedef faiz's
+45,00 %. One format cannot read the four types well - a rate wants two decimals, a far price the contract's four, a bp value
+none (a format with 2–4 decimals would show bp as -75,00 and a worked-out rate with four) - so the row's "Hedef tipi" picks
+it: **Faiz %** two decimals (`TRY_PCT`, the desk's TRY rates), **Fiyat** the far limit's own format (`S331`: four
+decimals), **FRA+bp / FXswap+bp** the cell's own General, as before (as typed; a bp worked out from another member shows
+General's digits, e.g. -1636,148629). It is a number format chosen by another cell - Excel's conditional format with a
+number format (`SheetBuilder.number_format_if`, drawn by `Renderer.cell`). The desk strip (`MASA!S121:S128`, "VİOP ·
+TARGET") writes the target the same way with the page's decimal comma: `Faiz % 45,00`, `Fiyat 51,0500`, `FRA+bp -75`
+(a worked-out bp to four decimals, as before; it used to print a decimal point). The row's other members already read well:
+Hedef faiz and Piyasa ima `0.00%`, near / far limit and spread price four decimals, Hedef − piyasa whole bp.
+
+Code: `tto/extras.py` (`TRY_PCT`, `_fr_side`, `_tto_fwd_rates`, `_tto_bulk_forward` / `_BULK_FMT`, `_tto_fwd_back`,
+`SheetBuilder.number_format_if`, `_tto_viop_tw`), `tto/render.py` (`Renderer.cell`: a conditional format's `fmt`). Tests:
+`tests/test_ondalik.py`; `tests/test_viop_twoway.py`, `tests/test_viopfra.py`, `tests/test_views.py` (the strip's texts);
+`tests/e2e/e2e.js` (the Forward page's TRY rates and their full precision copy, TOPLU FORWARD, a Faiz % target).
 
 ## Process
 

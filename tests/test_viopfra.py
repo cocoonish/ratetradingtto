@@ -215,7 +215,7 @@ def test_other_target_types_are_not_touched_by_the_curve(svc):
             cells = page_cells(svc, u, "viop", "B33", r)
             assert cells["Z"]["tip"] == "Hedef tipi %s: FRA eğrisi bu satırda etkisiz (yalnız FRA+bp satırında geçerli)" % kind
             assert cells["W"]["tip"] == "OIS FRA, %s eğrisinden - seçilen FRA eğrisi (%s) yalnız FRA+bp satırında geçerli" % (BOOT, S2)
-            assert "tip" not in cells["Q"] and cell(svc, "MASA!S%d" % (r - 210), u) == "%s %s" % (kind, "-150" if r == 331 else "34")
+            assert "tip" not in cells["Q"] and cell(svc, "MASA!S%d" % (r - 210), u) == "%s %s" % (kind, "-150" if r == 331 else "34,00")
         assert cell(svc, "VIOP!W333", u) == cell(svc, "EK_VFRA!R%d" % helper_row(333), u) != cell(svc, "VIOP!W331", u)
         assert cell(svc, "VIOP!Q333", u) == pytest.approx(cell(svc, "VIOP!W333", u) - 0.015, rel=1e-12)
         assert cell(svc, "VIOP!W330", u) == "OIS FRA · eğri satıra göre"
@@ -372,7 +372,7 @@ def test_a_contract_that_rolls_off_leaves_its_rows_marked_and_the_others_on_thei
         why = "Geçersiz: dönem OIS spot valöründen (01.12.2026) sonra bitmiyor (uzak kontratın vade günü ya da geçmiş): satır hesaplanmıyor"
         assert cell(s, "EK_VFRA!U11", u) == cell(s, "EK_VFRA!U12", u) == why
         assert cell(s, "EK_VFRA!R11", u) == 0.0                              # (what the curves would give: nothing to price)
-        for r, label in ((332, "FRA+bp -150 · geçersiz"), (333, "Faiz % 34 · geçersiz")):
+        for r, label in ((332, "FRA+bp -150 · geçersiz"), (333, "Faiz % 34,00 · geçersiz")):
             assert [cell(s, "VIOP!%s%d" % (c, r), u) for c in "QRSTVW"] == [""] * 6, r       # target, limits, spread, − market, FRA
             assert cell(s, "VIOP!Y%d" % r, u) == -1.0                                       # (the days stay, as the sheet counts them)
             m = r - 210
@@ -452,15 +452,15 @@ def test_a_rows_own_far_price_typed_back_gives_its_rate(svc):
 
 
 def test_a_price_typed_as_the_desk_types_it(svc):
-    """"Fiyat" is an item of the type's list; the price is typed with a comma (51,10) and shown with its decimals - a bp
-    value as before.  The rate is the inverse of the far limit formula, worked by hand; a price that is not above zero
-    gives no rate (and nothing built on it)."""
+    """"Fiyat" is an item of the type's list; the price is typed with a comma (51,10) and shown with the far limit's four
+    decimals (the desk, 25.11.2026: Hedef değer reads in its type) - a bp value as before.  The rate is the inverse of the
+    far limit formula, worked by hand; a price that is not above zero gives no rate (and nothing built on it)."""
     u = svc.login("Fiyat hedefi yazım")["user"]
     try:
         assert svc.cell_info(u, "tto", "VIOP!O331")["cell"]["o"] == ["FRA+bp", "FXswap+bp", "Faiz %", "Fiyat"]
         put(svc, u, dict(target(331, "Spot", "31.12.2026", "SHORT", "fiyat", "51,10"), **target(332, "Spot", "31.12.2026")))
         assert cell(svc, "VIOP!O331", u) == "Fiyat" and cell(svc, "VIOP!P331", u) == 51.1
-        assert page_cells(svc, u, "viop", "B33", 331)["P"]["t"] == "51,1" and page_cells(svc, u, "viop", "B33", 332)["P"]["t"] == "-150"
+        assert page_cells(svc, u, "viop", "B33", 331)["P"]["t"] == "51,1000" and page_cells(svc, u, "viop", "B33", 332)["P"]["t"] == "-150"
         near, days = cell(svc, "VIOP!R331", u), cell(svc, "VIOP!Y331", u)
         # the USD leg between the two contracts, as the sheet's rows 98 / 101 have it
         cols = {cell(svc, "VIOP!%s97" % c, u): c for c in "LMNOPQRSTUVWX"}

@@ -166,7 +166,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 - **VİOP Target** (`extras._tto_viop_tw`): five members per row (stores `VIOP!AE:AI`), the target rate the hub. A member
   shown in only part of a table (Masa's TARGET strip shows Hedef değer alone) has a limit in that table's temporary copy:
   the copy cannot empty the row-side's other stores (`Copies.overlay` keeps the copy's own cells only), so a value typed
-  there on the VİOP page shows through.
+  there on the VİOP page shows through. Hedef değer reads in its row's type (`SheetBuilder.number_format_if`, below).
 - **VİOP's gold calculator** (`EK_XAU`, `extras.XAU_TW` / `_xau_hub`): six members per column (a row-side is a column),
   every one in a store (`B67:E72`, helper XAU6; copyable), TRY % the hub. Its columns are contracts that roll: the stores
   of the members typed as a price or forward follow their contract, the rates' stay with the column (`rowkeys.GOLD_TW`,
@@ -268,6 +268,16 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
     constant and look copied to the rows below - one template, no formula text parsed again (EK_TARIH's 100 rows).
   - `patch(addr, formula)` replaces a workbook cell's formula.
   - `recorded(addr, value)` gives a new Bloomberg cell the file's saved value, for replay.
+  - `number_format_if(range, condition, fmt)`: **a number format chosen by another cell** - Excel's conditional format
+    with a number format (the desk, 25.11.2026: VİOP Target's Hedef değer in its row's type, `_tto_viop_tw`). Where the
+    condition (an Excel formula written for the range's first cell, `'$O331="Faiz %"'`) holds, `Renderer.cell` shows the
+    number in `fmt` - the first such rule that holds, in the order added; elsewhere the cell's own format. How it reads
+    only, in the pages' tables (launchpads, copies, borrowed tables too): the value (`v`, Ctrl+Shift+C), formulas, what is
+    typed (parsed by the cell's own format) and what formats a single cell by its own format (`/api/cell`, client quotes,
+    the xlsx download, the watch list) are untouched. Its rules go after the workbook's in the sheet's `cf`, each with a
+    style of its own in `model.dxfs` (`{"fmt": …}`; the importer reads no number format from a workbook's conditional
+    formats). A cell's one format for everybody is its builder's `fmt=` (the Forward page's TRY rates: `TRY_PCT`); the
+    workbook's own cells needed none so far (their rates were two decimals already).
 
 | Sheet | Book | What |
 |---|---|---|

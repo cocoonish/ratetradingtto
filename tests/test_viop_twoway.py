@@ -194,8 +194,8 @@ def test_a_contract_that_rolled_off_leaves_the_row_invalid_with_its_typed_value(
 
 def test_a_pasted_column_a_scenario_and_masas_strip(svc):
     """Far prices pasted down three rows: each row's typed value; saved in a scenario and loaded back as they were;
-    Masa's TARGET strip reads the rows (a worked-out Hedef değer to four decimals) and its strip of inputs types Hedef
-    değer into the same store."""
+    Masa's TARGET strip reads the rows (a worked-out Hedef değer to four decimals, the page's decimal comma) and its strip
+    of inputs types Hedef değer into the same store."""
     u = svc.login("vt yapıştır")["user"]
     try:
         for r in (336, 337, 338):
@@ -209,7 +209,7 @@ def test_a_pasted_column_a_scenario_and_masas_strip(svc):
         svc.load_scenario(u, "vt senaryo")
         assert {r: row(svc, u, r) for r in (336, 337, 338)} == want
         p = want[336]["P"]
-        assert cell(svc, "MASA!S126", u) == "FRA+bp %s" % round(p, 4) and cell(svc, "MASA!V126", u) == 51.2
+        assert cell(svc, "MASA!S126", u) == ("FRA+bp %s" % round(p, 4)).replace(".", ",") and cell(svc, "MASA!V126", u) == 51.2
         # Masa's strip of the target's inputs: Hedef değer typed there is the row's typed value
         res = svc.set_inputs(u, "tto", [{"ref": "VIOP!P337", "value": "-80"}])
         assert res["errors"] == [] and stored(svc, u)["AE337"] == -80.0 and "AG337" not in stored(svc, u)

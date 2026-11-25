@@ -464,7 +464,7 @@ def test_inputs_typed_beside_a_table_are_its_own(service):
         assert [c.get("t") for c in deals["rows"][deals["r"].index(111)]][1:3] == ["Spot", "30.11.2026"]
         assert not any(c.get("t") for c in deals["rows"][deals["r"].index(112)][1:])               # no second one
         first = [c.get("t") for c in target["rows"][target["r"].index(121)]]
-        assert first[:5] == ["Spot", "31.12.2026", "LONG", "Faiz % 34", "34,00%"]
+        assert first[:5] == ["Spot", "31.12.2026", "LONG", "Faiz % 34,00", "34,00%"]          # (a rate: two decimals)
         assert cell(service, "MASA!AB121", user) == 57.0                                 # days to the far leg
     finally:
         service.reset_inputs(user, "tto", ["VIOP!W321"] + ["VIOP!%s331" % c for c in "LMNOP"])
