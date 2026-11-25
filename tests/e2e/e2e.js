@@ -2187,6 +2187,35 @@ async function clipAfter(page, action) {
     check('gold calculator, free column: price from a rate and the rate a price implies, all typed by hand',
       Math.abs(freeTeo - 3990 * freeFwd / 31.1035) < 0.02 && trNumber(await cellText(page, 'EK_XAU!E58')) > trNumber(await cellText(page, 'EK_XAU!E46')),
       [freeTeo, freeFwd, await cellText(page, 'EK_XAU!E58')]);
+    // the gold calculator two-way (the desk, 25.11.2026: "Evet"): a theoretical price typed into a contract's column stays,
+    // its TRY % is the rate that price implies, the rest worked out from it, the price marked (✎); Delete on a value
+    // worked out: the column's market rate again, nothing marked
+    const goldV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
+    const goldRead = () => page.evaluate(() => {
+      const one = (r) => { const td = window.tto.findCell(r); return { t: td.textContent.trim(), anchor: td.classList.contains('anchor'), tip: td.title || '' }; };
+      const note = document.querySelector('#content .panel[data-panel="XAU4"] .note');
+      return { teo: one('EK_XAU!C53'), try: one('EK_XAU!C46'), note: note ? note.textContent : '' };
+    });
+    const goldTry0 = (await cellText(page, 'EK_XAU!C46')).trim();
+    await typeInto(page, 'EK_XAU!C53', '7100');
+    await page.waitForFunction(() => window.tto.findCell('EK_XAU!C53').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    await waitCell(page, 'EK_XAU!C46', 't.trim() !== "' + goldTry0 + '"');
+    const goldTw = await goldRead();
+    const gv = { try: await goldV('EK_XAU!C46'), fwd: await goldV('EK_XAU!C50'), s: await goldV('EK_XAU!C43'),
+      usd: await goldV('EK_XAU!C45'), n: await goldV('EK_XAU!C42'), xfwd: await goldV('EK_XAU!C48') };
+    const goldRate = ((7100 * 31.1035 / gv.xfwd) / gv.s * (1 + gv.usd / 100 / 360 * gv.n) - 1) * 360 / gv.n * 100;
+    check('VİOP gold calculator is two-way: a theoretical price typed stays, TRY % is the rate it implies (1e-9), the USDTRY forward '
+      + 'follows, the price marked as the typed value and the others worked out from it; the note says what a roll does',
+      goldTw.teo.t === '7.100,00' && goldTw.teo.anchor && /Yazdığınız değer/.test(goldTw.teo.tip) && !goldTw.try.anchor
+      && /XAUTRY teorik · C53/.test(goldTw.try.tip) && Math.abs(gv.try - goldRate) < 1e-9
+      && Math.abs(gv.fwd - 7100 * 31.1035 / gv.xfwd) < 1e-9 && /hangisini yazarsanız o kalır/.test(goldTw.note)
+      && /yazılan TRY % ya da ON sütununda kalır/.test(goldTw.note), { goldTw, gv, goldRate });
+    await (await cellHandle(page, 'EK_XAU!C51')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_XAU!C46', 't.trim() === "' + goldTry0 + '"');
+    const goldBack = await goldRead();
+    check('... Delete on a value worked out (SP): the column\'s market TRY rate again, nothing marked',
+      goldBack.try.t === goldTry0 && !goldBack.teo.anchor && !goldBack.try.anchor && goldBack.teo.t !== '7.100,00', goldBack);
     // the history of the implied rate and of the spread over OIS (offline only today's point is there)
     await tab(page, 'basis');
     const vh = await page.evaluate(() => ({ panels: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel).slice(0, 4),

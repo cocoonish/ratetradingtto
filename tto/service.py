@@ -1003,7 +1003,7 @@ class Service(object):
                     self._classify_pending()
                 if self.rowkeys.roll_due():        # a new day, a gold code typed: VİOP's gold contracts changed?
                     rolled = self.et.submit(self.rowkeys.roll).result(timeout=60)
-                    if rolled and (rolled["dropped"] or rolled["scenarios"]):
+                    if rolled and (rolled["moved"] or rolled["dropped"] or rolled["scenarios"]):
                         self.bump()
             except Exception:  # noqa: BLE001
                 pass

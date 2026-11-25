@@ -328,11 +328,18 @@
    "label": "VİOP XAUTRY hesaplayıcısı: USDTRY ve XAUUSD spot (boş = piyasa)"
   },
   {
-   "range": "EK_XAU!B45:E47",
+   "range": "EK_XAU!B45:E45",
    "scope": "user",
    "group": "xau-calc",
    "kind": "number",
-   "label": "VİOP XAUTRY hesaplayıcısı: USD %, TRY % ve (isteğe bağlı) altın swap %"
+   "label": "VİOP XAUTRY hesaplayıcısı: USD %"
+  },
+  {
+   "range": "EK_XAU!B47:E47",
+   "scope": "user",
+   "group": "xau-calc",
+   "kind": "number",
+   "label": "VİOP XAUTRY hesaplayıcısı: (isteğe bağlı) altın swap %"
   },
   {
    "range": "EK_XAU!B48:E48",
@@ -893,6 +900,15 @@
    "hidden": true,
    "keep_title": true,
    "title": "Yardımcı · VİOP Target'ın yazılan değerleri (iki yönlü: hedef değer, hedef faiz, uzak limit, spread fiyatı, hedef − piyasa)"
+  },
+  {
+   "id": "XAU6",
+   "type": "table",
+   "sheet": "EK_XAU",
+   "range": "A66:E72",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · VİOP XAUTRY hesaplayıcısının yazılan değerleri (iki yönlü: TRY %, USDTRY fwd, SP, günlük SP, XAUTRY teorik, ON karşılık; kontrat sütunlarında)"
   }
  ],
  "twoway": [
@@ -911,6 +927,20 @@
      "label": "Target 'Spread fiyatı' typed (two-way: far limit = near limit + spread; the rate, hedef değer and gap follow)"},
     {"name": "Hedef − piyasa", "range": "V331:V338", "store": "AI331:AI338",
      "label": "Target 'Hedef − piyasa (bp)' typed (two-way: the rate = market implied + gap; hedef değer and limits follow)"}
+   ]
+  },
+  {
+   "id": "viop-gold",
+   "sheet": "EK_XAU",
+   "label": "VİOP XAUTRY hesaplayıcısı",
+   "note": "İki yönlü: TRY %, USDTRY fwd (All In S -> E), SP, günlük SP, XAUTRY teorik ya da ON karşılık - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince sütun varsayılana döner). Kontratlar dönünce yazılan fwd, SP, günlük SP ya da teorik kontratıyla birlikte onun yeni sütununa gider (kontrat tablodan çıktıysa silinir); yazılan TRY % ya da ON sütununda kalır. İkisi aynı sütunda buluşursa sütunda yazılı olan kalır.",
+   "members": [
+    {"name": "TRY %", "range": "B46:E46", "store": "B67:E67"},
+    {"name": "USDTRY fwd", "range": "B50:E50", "store": "B68:E68"},
+    {"name": "SP", "range": "B51:E51", "store": "B69:E69"},
+    {"name": "Günlük SP", "range": "B52:E52", "store": "B70:E70"},
+    {"name": "XAUTRY teorik", "range": "B53:E53", "store": "B71:E71"},
+    {"name": "ON karşılık", "range": "B61:E61", "store": "B72:E72"}
    ]
   }
  ],

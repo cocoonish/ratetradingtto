@@ -15,9 +15,10 @@ holds is its bond's now.
 
 Some rows are a form, not a bond, and keep their values: Eurobond Kotaları's own bid / ask (each user's own quote on that
 row of their own list), the Hazine İhalesi blocks, Manuel Tahvil's periods.  VİOP's columns are the places of its
-contracts ("1. kontrat" ...): what is typed for a place stays with the place when the contracts roll - but each user's own
-VİOP bid / ask typed into the gold calculator for a contract is that contract's price, and goes when another contract
-takes the column (:meth:`RowKeys.roll`).
+contracts ("1. kontrat" ...): what is typed for a place stays with the place when the contracts roll - a rate too - but
+what the gold calculator holds for a contract is that contract's: each user's own VİOP bid / ask goes when another
+contract takes the column, and a forward, points or a theoretical price typed into its two-way rows go with their
+contract to its new column (:meth:`RowKeys.roll`; the desk, 25.11.2026: "Evet").
 
 The key cells - the lists' ISINs, VİOP's contract codes the watch follows a contract by - take no formula
 (:meth:`RowKeys.key_cell`): a formula would change a key by itself, past all of this.
@@ -81,6 +82,11 @@ VIOP_CODES = (("L1", "W1"), ("M45", "O45"), ("M60", "O60"))
 GOLD = ("M45", "O45")
 GOLD_PRICES = ("EK_XAU", ("B", "C", "D"), (54, 55))
 GOLD_KEY = "rowkeys.xau"
+_XAU_ROWS = dict((name, ex.XAU_CALC + 1 + k) for k, name in enumerate(ex.XAU_CALC_ROWS))
+#: the gold calculator's two-way rows (``extras.XAU_TW``): (each member's own row, its store's, whether what is typed there
+#: follows its contract when the contracts roll - a price or a forward - or stays in its column - a rate; the desk,
+#: 25.11.2026: "Evet")
+GOLD_TW = tuple((_XAU_ROWS[name], ex.XAU_TW_FIRST + k, follows) for k, (name, _, follows) in enumerate(ex.XAU_TW))
 
 
 def isin_of(v: Any) -> str:
@@ -450,8 +456,15 @@ class RowKeys(object):
 
     def roll(self) -> Optional[Dict[str, Any]]:
         """VİOP's gold-TRY contracts (``VIOP!M45:O45``) now against the ones kept: a column whose contract changed - it
-        expired, or the desk typed another - loses each user's own VİOP bid / ask typed for the contract it had
-        (``EK_XAU!B54:D55``; in the saved scenarios too).  The other values typed per column stay with the column."""
+        expired, or the desk typed another - has what each user typed in the gold calculator for the contract it had
+        follow that contract (the users' values and the saved scenarios'):
+
+        * their own VİOP bid / ask (``EK_XAU!B54:D55``) goes;
+        * a forward, SP, SP per day or theoretical price typed into the two-way rows (``GOLD_TW``: its store - or the
+          member's own cell, a value kept there from before) goes to the column the contract sits in now (:func:`plan`,
+          as the bond lists), or with a contract that left the table - unless that column holds a value typed that
+          stays there: then it goes (:meth:`_gold_landing`);
+        * a TRY % or ON typed, and every other input, stays with the column."""
         book = self.svc.books.get("tto")
         sheet, cols, rows = GOLD_PRICES
         if book is None or "VIOP" not in book.model.sheet_index or sheet not in book.model.sheet_index:
@@ -466,25 +479,92 @@ class RowKeys(object):
         if not isinstance(kept, list) or len(kept) != len(now):
             store.put(GOLD_KEY, now)
             return None
-        gone = [k for k, (a, b) in enumerate(zip(kept, now)) if a and b and a != b]
         keep = [b or a for a, b in zip(kept, now)]
-        if not gone:
+        # (a column whose contract was not known - none kept - has nothing of its own to move)
+        moves = {k: t for k, t in plan(kept, keep).items() if kept[k] and k < len(cols)}
+        if not moves:
             if keep != kept:
                 store.put(GOLD_KEY, keep)
             return None
-        drop = {cols[k] for k in gone if k < len(cols)}
+        follow = {x for own, st, f in GOLD_TW if f for x in (own, st)}
 
         def where(ref: str) -> Any:
             s, _, addr = ref.rpartition("!")
             m = _A1.match(addr)
-            return None if s.strip("'") == sheet and m and m.group(1) in drop and int(m.group(2)) in rows else False
+            if s.strip("'") != sheet or m is None or m.group(1) not in cols or cols.index(m.group(1)) not in moves:
+                return False
+            row, t = int(m.group(2)), moves[cols.index(m.group(1))]
+            if row in rows:
+                return None
+            if row not in follow:
+                return False
+            return None if t is None else "%s!%s%d" % (sheet, cols[t], row)
 
-        res = store.move_values(book.id, where, shared=False, scenarios=True, put=[(GOLD_KEY, keep)])
+        with store.transaction():                     # (the landing values gone and the moves: together, or neither)
+            landed = self._gold_landing(book.id, sheet, cols, moves, follow)
+            res = store.move_values(book.id, where, shared=False, scenarios=True, put=[(GOLD_KEY, keep)])
+        res["dropped"] = landed["dropped"] + res["dropped"]
+        res["scenario_dropped"] += len(landed["scenario_cells"])
+        res["scenario_cells_dropped"] = landed["scenario_cells"] + res["scenario_cells_dropped"]
+        res["scenarios"] += landed["scenarios"]
         self._engine(book, res)
-        if res["dropped"] or res["scenario_dropped"]:
-            log.info("VİOP altın kontratı değişti (%s): kendi VİOP fiyatları silindi - %d değer, %d senaryo",
-                     ", ".join("%s → %s" % (kept[k], now[k]) for k in gone), len(res["dropped"]), res["scenarios"])
+        if res["moved"] or res["dropped"] or res["scenario_moved"] or res["scenario_dropped"]:
+            log.info("VİOP altın kontratı değişti (%s): altın hesaplayıcısında kontrata yazılanlar - %d değer kontratıyla "
+                     "taşındı, %d değer silindi, %d senaryo", ", ".join("%s → %s" % (kept[k], keep[k]) for k in sorted(moves)),
+                     len(res["moved"]), len(res["dropped"]), res["scenarios"])
         return res
+
+    def _gold_landing(self, book_id: str, sheet: str, cols: Sequence[str], moves: Dict[int, Optional[int]],
+                      follow: set) -> Dict[str, Any]:
+        """Before a roll moves them (in its transaction): the values typed that would land on a column whose two-way
+        row-side holds a value staying there - a rate typed (it stays in its column), or a price of a contract that
+        stayed - go instead: a row-side has one typed value, and a value moved never replaces one typed where it lands
+        (``Store.move_values``' rule, for the row-side); of values landing from two columns (a contract listed twice), the
+        first column's.  Every user's values and every saved scenario's.  Returns ``{"dropped": [(user, cell)],
+        "scenario_cells": [cell], "scenarios": scenarios changed}``."""
+        store = self.svc.store
+        tw_rows = {x for own, st, _ in GOLD_TW for x in (own, st)}
+
+        def place(ref: str) -> Optional[Tuple[int, int]]:
+            s, _, addr = ref.rpartition("!")
+            m = _A1.match(addr)
+            if s.strip("'") != sheet or m is None or m.group(1) not in cols or int(m.group(2)) not in tw_rows:
+                return None
+            return cols.index(m.group(1)), int(m.group(2))
+
+        def going(refs: List[str]) -> List[str]:
+            held = sorted((p, ref) for ref in refs for p in [place(ref)] if p is not None)
+            staying = {k for (k, row), _ in held if row not in follow or k not in moves}
+            first: Dict[int, int] = {}
+            out = []
+            for (k, row), ref in held:
+                if row not in follow or moves.get(k) is None:
+                    continue                          # (it stays, or goes with its contract anyway)
+                t = moves[k]
+                if t in staying or first.setdefault(t, k) != k:
+                    out.append(ref)
+            return out
+
+        cells = ["%s!%s%d" % (sheet, c, row) for c in cols for row in sorted(tw_rows)]
+        mine: Dict[str, List[str]] = {}
+        for x in store.input_rows(book_id, cells):
+            mine.setdefault(x["user"], []).append(x["cell"])
+        dropped: List[Tuple[Optional[str], str]] = []
+        for user, refs in sorted(mine.items()):
+            gone = going(refs)
+            if gone:
+                store.clear_user_inputs(user, book_id, gone)
+                dropped.extend((user, ref) for ref in gone)
+        sc_cells: List[str] = []
+        changed = 0
+        for sc in store.scenario_rows():
+            items = sc["items"]
+            gone = set(going([x[1] for x in items if x[0] == book_id]))
+            if gone:
+                store.put_scenario_items(sc["id"], [x for x in items if not (x[0] == book_id and x[1] in gone)])
+                sc_cells.extend(sorted(gone))
+                changed += 1
+        return {"dropped": dropped, "scenario_cells": sc_cells, "scenarios": changed}
 
     # ------------------------------------------------------------------ the key cells
     def key_cell(self, book, si: int, rc: int) -> Optional[str]:
