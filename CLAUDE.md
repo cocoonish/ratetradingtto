@@ -99,7 +99,9 @@ The desk has two TRY discount curves. **They are not interchangeable** ("OIS ile
 ## Rows move
 
 A PPK or FOMC calendar change, a VİOP roll or a bond-list change moves users' data between rows. Anything stored by
-cell, row or position must follow its row (`tto/meetings.py`, `tto/rowkeys.py`) and have a test for the move.
+cell, row or position must follow its row (`tto/meetings.py`, `tto/rowkeys.py`) and have a test for the move. One
+exception on purpose: a user's own decimals (`tto/decimals.py`) are a column's look and stay at their cell
+(`docs/desk-decisions.md`; the move is tested too).
 
 ## Working here
 
