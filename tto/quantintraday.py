@@ -231,10 +231,10 @@ def intraday_monitors(ctx: qf.Ctx, bars: Dict[str, Dict[str, List[Tuple[int, flo
             if n < 2:
                 return None
             base = sum(tail) / (n - 1)
-            return {"inst": name, "unit": "%", "digits": 2, "base": base, "scale": 0.01 * n / (n - 1),
+            return {"inst": name, "unit": "%", "digits": qf.RATE_DIGITS, "base": base, "scale": 0.01 * n / (n - 1),
                     "gap": {"name": "60 dk farkı", "of": "60 dakikalık ortalamanın", "at": "60 dakikalık ortalamada"},
-                    "model": "son %d barın ortalaması (%%%s)" % (n - 1, qf._th(base, 2)), "note": "hedef / stop son 60 dakikanın barlarıyla",
-                    "held": "Hedef ve stop son 60 dakikanın barlarıyla (ortalama %%%s): yeni bar gelince onlar da değişir." % qf._th(base, 2)}
+                    "model": "son %d barın ortalaması (%s)" % (n - 1, qf.rate_text(base)), "note": "hedef / stop son 60 dakikanın barlarıyla",
+                    "held": "Hedef ve stop son 60 dakikanın barlarıyla (ortalama %s): yeni bar gelince onlar da değişir." % qf.rate_text(base)}
         mon = qf.Monitor("izscore:" + key, "izscore", "FX" if fx else ("Offshore" if key.startswith("OFF:") else "TRY OIS"),
                          "%s · 60 dk ortalamasına uzaklık" % name, unit, 2, hist_lbl[-400:], hist_d[-400:],
                          [{"key": key, "name": name, "weight": 1.0}], calc, mean=mean, sd=sd, half_life=ou["half_life"] if ou else None,

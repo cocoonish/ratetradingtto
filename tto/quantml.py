@@ -1077,7 +1077,7 @@ def phrase(name: str, v: Optional[float], inst: qu.Instrument) -> str:
     if name == "volchg":
         return "oynaklık %s (20 / 60 gün %s)" % ("arttı" if v > 0 else "azaldı", _v(math.exp(v), 2))
     if name == "lvl":
-        return "2Y OIS %%%s" % _v(v, 2)
+        return "2Y OIS %s" % qf.rate_text(v)
     if name == "slope":
         return "2s10s %s bp" % _s(v)
     if name == "fly":

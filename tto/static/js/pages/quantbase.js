@@ -38,10 +38,15 @@ export function money(v, ccy, sign = true) {
   return s + t + (ccy ? ' ' + ccy : '');
 }
 
-/** A level as the desk writes it: a rate "%38,50", a spread "+3,0 bp", anything else with its unit. */
+/** A rate in % - a traded level, a leg's rate, a family's own level in % - has three decimals, so that the move between
+ * two of them reads as the bp gap beside them does (the desk, 25.11.2026: "3 decimal"; tto/quantfam.py RATE_DIGITS). */
+export const RATE_DIGITS = 3;
+
+/** A level as the desk writes it: a rate "%38,500" (RATE_DIGITS, whatever ``digits`` says), a spread "+3,0 bp", anything
+ * else with its unit. */
 export function levelText(v, unit, digits = 2) {
   if (!isNum(v)) return '—';
-  if (unit === '%') return '%' + num(v, Math.min(digits, 2));
+  if (unit === '%') return '%' + num(v, RATE_DIGITS);
   if (unit === 'bp') return sgn(v, 1) + ' bp';
   return fmt(v, digits) + (unit ? ' ' + unit : '');
 }
@@ -60,11 +65,9 @@ export function sheetText(s, v) {
 // the model's gap beside each (the desk, 24.11.2026: "6x9 net bir seviye değil mi, bps olarak yazdıklarını anlayamadım").
 const GAP_UNIT = { vol: 'vol puanı' };
 
-/** The instrument's level as the desk writes it: a rate "%38,72", a vol "14,20 vol", a price "42,8150". */
+/** The instrument's level as the desk writes it: a rate "%38,720", a vol "14,20 vol", a price "42,8150". */
 export function quoteText(q, v) {
-  if (!isNum(v)) return '—';
-  const d = isNum(q.digits) ? q.digits : 2;
-  return q.unit === '%' ? '%' + num(v, d, false) : levelText(v, q.unit, d);
+  return levelText(v, q.unit, isNum(q.digits) ? q.digits : 2);
 }
 
 /** The model's gap beside it: "+6,9 bp patikanın üstünde", "-2,00 vol puanı gerçekleşen vol'ün altında", "0,0 bp: patikada". */
@@ -85,8 +88,8 @@ export function gapsText(q) {
     + ' ' + (GAP_UNIT[g.unit] || g.unit || '')).trim();
 }
 
-/** A level of the model's own (the signal's units) as the instrument's level, the gap beside it: "%38,72 (+6,9 bp
- * patikanın üstünde)"; a VİOP contract's price after its rate ("%38,40 · fiyat 42,8150 (…)"). */
+/** A level of the model's own (the signal's units) as the instrument's level, the gap beside it: "%38,720 (+6,9 bp
+ * patikanın üstünde)"; a VİOP contract's price after its rate ("%38,400 · fiyat 42,8150 (…)"). */
 export function quoteLevel(q, v) {
   if (!isNum(v)) return '—';
   const alt = q.alt || null;
@@ -362,7 +365,7 @@ export class SignalChart {
       this.zHead.textContent = (m.score_name || 'z') + ' · gün gün';
       if (this.charts.z) this.charts.z.update(zspec); else this.charts.z = new Chart(this.zHost, zspec, { height: 250 });
     }
-    // (a level of the model's own: the traded instrument's level first, the gap beside it - "Şimdi 6x9 FRA %38,72 (+6,9 bp …)")
+    // (a level of the model's own: the traded instrument's level first, the gap beside it - "Şimdi 6x9 FRA %38,720 (+6,9 bp …)")
     const sq = s && !s.px && s.quote ? s.quote : null;
     this.statEl.textContent = 'Şimdi ' + (sq ? sq.inst + ' ' + quoteLevel(sq, m.level) : fmt(m.level, digits) + (unit ? ' ' + unit : '') + sheetText(s || m, m.level))
       + ' · ' + (m.score_name || 'z') + ' ' + sgn(m.z, 2)
@@ -532,7 +535,7 @@ export class SignalChart {
     rows.push(['Beklenen K/Z', h('td', { id: this.id('quant-sig-pnl'), title: tip }, pnl)]);
     const rr = isNum(s.rr) ? s.rr : (isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     let ends = '';
-    // (a level of the model's own: the instrument's level at the target and the stop first - "hedefte (%38,65) 6,8 bp …")
+    // (a level of the model's own: the instrument's level at the target and the stop first - "hedefte (%38,652) 6,8 bp …")
     const at = (k) => (q && isNum(q[k]) ? '(' + quoteText(q, q[k]) + ') ' : '');
     if (px && (isNum(mo.target) || isNum(mo.stop))) {
       ends = 'hedefte ' + (money(mo.target, mo.ccy) || '—') + ' · stopta ' + (money(mo.stop, mo.ccy) || '—') + ' (1 mn ' + mo.base + ')';

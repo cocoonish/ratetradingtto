@@ -1085,12 +1085,13 @@ def fam_curve(ctx: qf.Ctx) -> Tuple[List[qf.Monitor], Dict[str, Any]]:
                 return None
             fit = rate - r / 100.0
             name = qf._ois_name(ctx, key)
-            return {"inst": name, "unit": "%", "digits": 2, "base": fit, "scale": 0.01,
+            return {"inst": name, "unit": "%", "digits": qf.RATE_DIGITS, "base": fit, "scale": 0.01,
                     "gap": {"name": "NSS farkı", "of": "NSS uyumunun", "at": "NSS uyumunda"},
-                    "model": "NSS uyumunun %s par faizi (%%%s)" % (name, qf._th(fit, 2)), "note": "hedef / stop bugünkü NSS uyumuyla",
-                    "held": "Hedef ve stop bugünkü NSS uyumuyla (uyumun %s par faizi %%%s): eğri yeniden uyunca onlar da değişir." % (
-                        name, qf._th(fit, 2)),
-                    "legs": [{"key": lg["key"], "name": lg["name"], "level": ctx.cur(lg["key"], live), "unit": "%", "digits": 2} for lg in legs]}
+                    "model": "NSS uyumunun %s par faizi (%s)" % (name, qf.rate_text(fit)), "note": "hedef / stop bugünkü NSS uyumuyla",
+                    "held": "Hedef ve stop bugünkü NSS uyumuyla (uyumun %s par faizi %s): eğri yeniden uyunca onlar da değişir." % (
+                        name, qf.rate_text(fit)),
+                    "legs": [{"key": lg["key"], "name": lg["name"], "level": ctx.cur(lg["key"], live), "unit": "%", "digits": qf.RATE_DIGITS}
+                             for lg in legs]}
 
         # the series is the tenor's own distance from the fit ("NSS farkı"); the trade is the tenor against its two
         # neighbours - the hedge is the package's, not the series'
@@ -1297,14 +1298,14 @@ def fam_dibs(ctx: qf.Ctx, eng: Dict[str, Any], ois: Optional[Dict[str, Any]]) ->
                     return None
                 fit = y - r / 100.0
                 cv = "bileşik" if conv[isin] == "compound" else "basit"
-                return {"inst": _bond_label(b), "unit": "%", "digits": 2, "base": fit, "scale": 0.01,
+                return {"inst": _bond_label(b), "unit": "%", "digits": qf.RATE_DIGITS, "base": fit, "scale": 0.01,
                         "gap": {"name": "%s farkı" % model, "of": "%s uyumunun" % model, "at": "%s uyumunda" % model},
-                        "model": "%s uyumunun model getirisi (%s, %%%s)" % (model, cv, qf._th(fit, 2)),
+                        "model": "%s uyumunun model getirisi (%s, %s)" % (model, cv, qf.rate_text(fit)),
                         "note": "%s getiri; hedef / stop bugünkü %s uyumuyla" % (cv, model),
-                        "held": "Hedef ve stop bugünkü %s uyumuyla (kâğıdın model getirisi %%%s, %s): eğri yeniden uyunca onlar da "
-                                "değişir." % (model, qf._th(fit, 2), cv),
+                        "held": "Hedef ve stop bugünkü %s uyumuyla (kâğıdın model getirisi %s, %s): eğri yeniden uyunca onlar da "
+                                "değişir." % (model, qf.rate_text(fit), cv),
                         "legs": [{"key": "DIBS:" + keys[i], "name": _bond_label(bonds[keys[i]]), "level": _yield_now(ctx, keys[i], conv[keys[i]], live),
-                                  "unit": "%", "digits": 2} for i in idx]}
+                                  "unit": "%", "digits": qf.RATE_DIGITS} for i in idx]}
 
             # the series is the bond's own distance from the fit ("NS farkı"); the hedges are its packages'
             mon = qf.mr_monitor(ctx, "dibsfv:" + isin, "dibsfv", "DİBS", "%s · %s farkı" % (_bond_label(b), model), "bp", 1,

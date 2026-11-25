@@ -1673,6 +1673,10 @@ said before that it wants AL / SAT lines with tradeable levels ("Quant prints tr
   intraday breakout / RV / carry path, DİBS switch, EM carry, Forward primi, the universe's families, Konsensüs (the best
   family's line as it is). **The offshore − OIS and the USDTRY points pairs stay too**: their y is an offshore level, and
   an offshore level is never worked out from OIS ([curves.md](curves.md#where-ois-and-offshore-meet)).
+- **Rates with three decimals** (25.11.2026). Asked whether %38,72 → %38,65 - read as 7 bp beside a gap of 6,8 bp -
+  should show three decimals, the desk answered "3 decimal": every rate in % of a quant line (the traded level and its
+  legs' rates, a family's own level in % - outright OIS and the like -) has three wherever it is shown, %38,720 →
+  %38,652 (`quantfam.RATE_DIGITS`, `quantbase.js` `RATE_DIGITS`); bp, prices, vol, FX levels and z as they were.
 
 Code: `tto/quantfam.py` (`Monitor.quote`, `inst_quote`, `quote_text` / `gap_text` / `gaps_text` / `levels_line`, the texts in
 `plain_text` / `what_text`; the quotes of `fam_frapath`, `fam_pca`, `fam_pairs` (`_pair_quote`), `fam_viopcal`, `fam_vol`),

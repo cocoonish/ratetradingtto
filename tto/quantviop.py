@@ -1034,8 +1034,8 @@ def fam_viop(ctx: qf.Ctx, eng: Dict[str, Any], bars: Optional[Dict[str, Dict[str
             if o is None:
                 return None
             fair = o * 360.0 / 365.0
-            fo = "%%%s" % qf._th(fair, 2)
-            out: Dict[str, Any] = {"inst": "VİOP %s ima faizi" % name, "unit": "%", "digits": 2, "base": fair, "scale": 0.01,
+            fo = qf.rate_text(fair)
+            out: Dict[str, Any] = {"inst": "VİOP %s ima faizi" % name, "unit": "%", "digits": qf.RATE_DIGITS, "base": fair, "scale": 0.01,
                                    "gap": {"name": "OIS farkı", "of": "OIS'in", "at": "OIS'te"},
                                    "model": "vadesinin OIS'i (%s, ACT/360)" % fo, "note": "hedef / stop bugünkü OIS'le",
                                    "held": "Hedef ve stop vadesinin bugünkü OIS'iyle (%s, ACT/360): OIS oynarsa onlar da değişir." % fo}

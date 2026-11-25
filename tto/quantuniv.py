@@ -351,7 +351,7 @@ class Instrument(object):
     tradeable = True
     kind = "rate"                 # how its level moves (quantfam.change): rate (%) in bp, bp, fx (a price) in %, vol, pts
     unit = "%"                    # the level's unit as shown
-    digits = 2
+    digits = qf.RATE_DIGITS       # (a rate in %: the desk's three decimals)
     asset = "TRY OIS"             # quantfam.ASSETS: the list's asset filter
     ccy = "TL"                    # what its money is in
     pkg = "rate"                  # quantfam.PKG_VERBS: how its expression is said (None: by its legs)
@@ -411,7 +411,7 @@ class Instrument(object):
         return v * self.sheet_factor if self.sheet_factor and v is not None else None
 
     def level_text(self, v: Optional[float]) -> str:
-        """A level as the desk writes it ("%38,50", "+3,0 bp", "1,08430"), a fly's with the OIS sheet's quote beside it:
+        """A level as the desk writes it ("%38,500", "+3,0 bp", "1,08430"), a fly's with the OIS sheet's quote beside it:
         "-12,5 bp (OIS sayfasında -25,0)"."""
         if v is None:
             return "—"
@@ -641,7 +641,7 @@ class FxVol(Instrument):
     """A G10 option quote (ATM, 25D RR, 25D BF): 10.000 $ vega a vol point - a straddle ("vol al / sat"), a risk
     reversal ("RR al / sat"), a butterfly ("BF al / sat")."""
 
-    kind, unit, asset, ccy, pkg = "vol", "vol", "FX vol", "USD", "vol"
+    kind, unit, digits, asset, ccy, pkg = "vol", "vol", 2, "FX vol", "USD", "vol"
     VERBS = {"ATM": ("vol al", "vol sat"), "RR25": ("RR al", "RR sat"), "BF25": ("BF al", "BF sat")}
 
     def __init__(self, reg: "Registry", pair: str, vkind: str, tenor: str, **kw: Any):
@@ -676,7 +676,7 @@ class OisPackage(Instrument):
         self.quote, self.dv01w = quote, dv01
         self.kind = kind
         self.unit = "%" if kind == "rate" else "bp"
-        self.digits = 2 if kind == "rate" else 1
+        self.digits = qf.RATE_DIGITS if kind == "rate" else 1
         self.pkg = pkg
         if kind == "bp":
             # (the quote's bp in the package's: a spread's 1, a fly's ½)
@@ -1026,6 +1026,7 @@ class Input(Instrument):
         super().__init__(reg, key, "Girdi", meta.get("label") or key, ("", ""), **kw)
         self.kind = meta.get("kind") or "rate"
         self.unit = qf.level_unit(self.kind)
+        self.digits = qf.RATE_DIGITS if self.unit == "%" else 2
         self.asset = "Global"
 
     def per_unit(self, live: Optional[Dict[str, float]] = None) -> Optional[float]:

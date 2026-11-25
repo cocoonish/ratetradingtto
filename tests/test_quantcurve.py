@@ -388,7 +388,7 @@ def test_a_fit_signal_is_told_in_the_tenors_rate_and_a_bonds_yield_the_gap_besid
     for which in ("entry", "target", "stop"):
         assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which])
     assert {lg["key"]: lg["level"]["level"] for lg in s["legs"]} == {lg["key"]: pytest.approx(ctx.cur(lg["key"])) for lg in m.legs}
-    assert "2Y OIS şimdi %%%s (%s bp NSS uyumunun üstünde)" % (qf._th(q["entry"], 2), qf._sg(s["level"], 1)) in s["plain"]
+    assert "2Y OIS şimdi %%%s (%s bp NSS uyumunun üstünde)" % (qf._th(q["entry"], 3), qf._sg(s["level"], 1)) in s["plain"]
     assert "Hedef ve stop bugünkü NSS uyumuyla" in s["plain"] and "2Y OIS (%" in s["trade_tr"]
     # the bond: its yield in the fit's own convention, the model yield the base
     b = next(x for x in mons if x.sid == "dibsfv:" + qx.PLANTED)

@@ -815,6 +815,17 @@ def _th(v: float, d: int = 0) -> str:
     return ("-" if v < 0 and any(c in "123456789" for c in s) else "") + out
 
 
+#: a rate in % on the quant pages - a traded level, a leg's rate, a family's own level in % - has three decimals, so that
+#: the move between two of them reads as the bp gap beside them does (the desk, 25.11.2026: "3 decimal" - %38,72 →
+#: %38,65 read as 7 bp where the gap said 6,8; %38,720 → %38,652 is the 6,8)
+RATE_DIGITS = 3
+
+
+def rate_text(v: float) -> str:
+    """A rate in % as the desk writes it: "%38,720"."""
+    return "%" + _th(v, RATE_DIGITS)
+
+
 def _money(v: Optional[float], ccy: str, sign: bool = True) -> str:
     """Money as the desk says it: "+525 bin TRY", "4,2 bin USD", "-1.800 bin TL" (thousands; 10 mn and over in mn)."""
     if v is None:
@@ -968,8 +979,9 @@ def inst_quote(m: "Monitor", target: Optional[float], stop: Optional[float]) -> 
     anlayamadım bunun da net olması lazım"): entry, target and stop in it, the model's gap beside each.
 
     ``Monitor.quote(values now)`` gives the instrument and today's model value: ``inst`` (its name), ``unit`` ("%" a
-    rate or a yield, "vol" vol points, "" a price), ``digits``, ``base`` (its level where the model's gap is 0 - the
-    path's forward, the fit's rate …) and ``scale`` (its units a unit of the gap: 0.01 for bp of a rate) - the map is
+    rate or a yield, "vol" vol points, "" a price), ``digits`` (a rate's are ``RATE_DIGITS``, whatever it says),
+    ``base`` (its level where the model's gap is 0 - the path's forward, the fit's rate …) and ``scale`` (its units a
+    unit of the gap: 0.01 for bp of a rate) - the map is
     exact with the model value held: instrument = base + scale × gap -, ``gap`` ({name, of, at}: "patika farkı",
     "patikanın", "patikada"), ``model`` (what the base is), ``note`` and ``held`` (what is held for the target and the
     stop: a few words, a sentence), optional ``legs`` (the legs' own levels now: [{key, name, level, unit, digits}] -
@@ -992,7 +1004,8 @@ def inst_quote(m: "Monitor", target: Optional[float], stop: Optional[float]) -> 
 
     unit = q.get("unit") or ""
     out = {k: q.get(k) for k in ("inst", "model", "note", "held", "fra", "asof")}
-    out.update({"unit": unit, "digits": int(q.get("digits") if q.get("digits") is not None else 2), "base": base, "scale": scale,
+    digits = RATE_DIGITS if unit == "%" else int(q.get("digits") if q.get("digits") is not None else 2)
+    out.update({"unit": unit, "digits": digits, "base": base, "scale": scale,
                 "entry": at(m.level), "target": at(target), "stop": at(stop),
                 "label": ("%s %s" % (q["inst"], unit)).strip() if unit in ("%", "bp") else q["inst"],
                 "gap": dict(q.get("gap") or {}, unit=m.unit, digits=m.digits, entry=m.level, target=target, stop=stop),
@@ -1006,17 +1019,14 @@ def inst_quote(m: "Monitor", target: Optional[float], stop: Optional[float]) -> 
 
 
 def quote_text(q: Dict[str, Any], v: Optional[float]) -> str:
-    """An instrument's level as the desk writes it: a rate "%38,72", a vol "14,20 vol", a price "42,8150"."""
-    if v is None:
-        return "—"
-    unit, d = q.get("unit") or "", int(q.get("digits") if q.get("digits") is not None else 2)
-    return "%" + _th(v, d) if unit == "%" else _level_text(v, unit, d)
+    """An instrument's level as the desk writes it: a rate "%38,720", a vol "14,20 vol", a price "42,8150"."""
+    return _level_text(v, q.get("unit") or "", int(q.get("digits") if q.get("digits") is not None else 2))
 
 
 def _q_level(q: Dict[str, Any], v: Optional[float], inner: bool = False) -> str:
     """A level of the model's own (``v``, the signal's units) as the instrument's level with the gap beside it:
-    "%38,72 (+6,9 bp patikanın üstünde)" - ``inner`` (inside a parenthesis already) "%38,65; +0,1 bp patikanın üstünde";
-    the other reading after it ("%38,40 · fiyat 42,8150 …": a VİOP contract's price at today's spot)."""
+    "%38,720 (+6,9 bp patikanın üstünde)" - ``inner`` (inside a parenthesis already) "%38,652; +0,1 bp patikanın
+    üstünde"; the other reading after it ("%38,400 · fiyat 42,8150 …": a VİOP contract's price at today's spot)."""
     if v is None:
         return "—"
     txt = quote_text(q, q["base"] + q["scale"] * v)
@@ -1049,7 +1059,7 @@ def gaps_text(q: Dict[str, Any]) -> str:
 
 def levels_line(sg: Dict[str, Any]) -> str:
     """A line's entry, target and stop in one, in the traded instrument's own level - what an alarm says: "giriş
-    %38,72 · hedef %38,65 · stop %38,73 (6x9 FRA; patika farkı +6,9 / +0,1 / +7,9 bp)", an FX line's in the forward's
+    %38,720 · hedef %38,652 · stop %38,730 (6x9 FRA; patika farkı +6,9 / +0,1 / +7,9 bp)", an FX line's in the forward's
     price, any other's in its level."""
     q, px = sg.get("quote"), sg.get("px")
     target_word = "iz süren stop" if sg.get("trail") else "—"
@@ -1087,7 +1097,7 @@ def _leg_kind(key: str) -> str:
 def what_text(legs: List[Dict[str, Any]]) -> str:
     """The legs of a trade in plain words, grouped by what is done: "sabit faiz alınan (receive): 2Y OIS · sabit faiz
     ödenen (pay): 1Y OIS ×0,45, 5Y OIS ×0,30" - and the floating leg of a TRY / USD OIS; a leg whose level now the line
-    carries (``level``: a model-relative line's quote, :func:`inst_quote`) with it: "9M OIS (%39,50) ×3,27"."""
+    carries (``level``: a model-relative line's quote, :func:`inst_quote`) with it: "9M OIS (%39,500) ×3,27"."""
     groups: Dict[str, List[str]] = {}
     for leg in legs:
         word = _LEG_WORDS.get((_leg_kind(leg.get("key") or ""), leg.get("action")), _LEG_WORDS.get(("", leg.get("action")), leg.get("action") or ""))
@@ -1537,11 +1547,12 @@ def trade_text(sg: Dict[str, Any]) -> str:
 
 
 def _level_text(v: Optional[float], unit: str, digits: int) -> str:
-    """A level as the desk writes it: a rate "%38,50", a spread "+3,0 bp", anything else with its unit."""
+    """A level as the desk writes it: a rate "%38,500" (``RATE_DIGITS``, whatever ``digits`` says), a spread "+3,0 bp",
+    anything else with its unit."""
     if v is None:
         return "—"
     if unit == "%":
-        return "%" + _th(v, min(digits, 2))
+        return rate_text(v)
     if unit == "bp":
         return "%s bp" % _sg(v, 1)
     return ("%s %s" % (_th(v, digits), unit)).strip()
@@ -1928,13 +1939,14 @@ def fam_pca(ctx: Ctx, fit: Optional[Dict[str, Any]]) -> Tuple[List[Monitor], Dic
                 return None
             gap = sum(w * (lv[i] - xbar[i]) for i, w in weights.items()) * 100.0
             hedges = ", ".join(lg["name"] for lg in legs[1:])
-            return {"inst": legs[0]["name"], "unit": "%", "digits": 2, "base": lv[j] - gap / 100.0, "scale": 0.01,
+            return {"inst": legs[0]["name"], "unit": "%", "digits": RATE_DIGITS, "base": lv[j] - gap / 100.0, "scale": 0.01,
                     "gap": {"name": "paket farkı", "of": "paket ortalamasının", "at": "paket ortalamasında"},
                     "model": "hedge'li paketin %d günlük ortalaması" % w_main,
                     "note": "hedef / stop hedge bacakları (%s) bugünkü oranlarındayken" % hedges,
                     "held": "Hedef ve stop: hedge bacakları (%s) bugünkü oranlarındayken paketin farkının hedefte / stopta olduğu %s faizi; "
                             "bacaklar oynarsa onlar da değişir." % (hedges, legs[0]["name"]),
-                    "legs": [{"key": lg["key"], "name": lg["name"], "level": ctx.cur(lg["key"], live), "unit": "%", "digits": 2} for lg in legs]}
+                    "legs": [{"key": lg["key"], "name": lg["name"], "level": ctx.cur(lg["key"], live), "unit": "%", "digits": RATE_DIGITS}
+                             for lg in legs]}
 
         def pthesis(sg, key=key, zs=zs):
             other = ", ".join("%d günde z %s" % (w, _sg(z, 1)) for w, z in sorted(zs.items()) if z is not None)
@@ -2434,19 +2446,19 @@ def _pair_quote(ctx: Ctx, spec: Dict[str, Any], calc: Callable[[Dict[str, float]
         if yv is None or xv is None or gap is None:
             return None
         fair = yv - gap / k                                  # y at a zero residual, x held (y's units): α + β·x
-        on = "%s %%%s" % (xname, _th(xv, 2))
+        on = "%s %s" % (xname, rate_text(xv))
         out = {"gap": {"name": "denge farkı", "of": "dengenin", "at": "dengede"},
                "model": "çiftin dengesi α + β × %s (β %s)" % (on, _f2(b)), "note": "hedef / stop %s bugünkü seviyesindeyken" % xname,
                "held": "Hedef ve stop %s bugünkü seviyesindeyken (denge α + β × OIS, β %s): OIS oynarsa onlar da değişir." % (on, _f2(b))}
-        x_leg = [] if oisat else [{"key": spec["x"], "name": xname, "level": xv, "unit": "%", "digits": 2}]
+        x_leg = [] if oisat else [{"key": spec["x"], "name": xname, "level": xv, "unit": "%", "digits": RATE_DIGITS}]
         if spec.get("floater"):
             years = _months_between(ctx.today, spec["maturity"]) / 12.0
             price = ctx.last(y)
             out.update({"inst": "%s fiyatı" % yname, "unit": "", "digits": 3, "base": 100.0 - fair * years / 100.0, "scale": -years / 100.0 / k,
                         "legs": ([{"key": y, "name": yname, "level": price, "unit": "", "digits": 3}] if price is not None else []) + x_leg})
         else:
-            out.update({"inst": yname, "unit": "%", "digits": 2, "base": fair, "scale": 1.0 / k,
-                        "legs": [{"key": y, "name": yname, "level": yv, "unit": "%", "digits": 2}] + x_leg})
+            out.update({"inst": yname, "unit": "%", "digits": RATE_DIGITS, "base": fair, "scale": 1.0 / k,
+                        "legs": [{"key": y, "name": yname, "level": yv, "unit": "%", "digits": RATE_DIGITS}] + x_leg})
         return out
     return quote
 
@@ -2581,13 +2593,13 @@ def fam_viopcal(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
                 f = fwds(live)
                 if f is None:
                     return None
-                fo = "%%%s" % _th(f[1], 2)
-                return {"inst": "VİOP %s ima forward'ı" % label, "unit": "%", "digits": 2, "base": f[1], "scale": 0.01,
+                fo = rate_text(f[1])
+                return {"inst": "VİOP %s ima forward'ı" % label, "unit": "%", "digits": RATE_DIGITS, "base": f[1], "scale": 0.01,
                         "gap": {"name": "adil forward farkı", "of": "adil forward'ın", "at": "adil forward'da"},
                         "model": "OIS'ten faiz paritesiyle adil forward (%s, ACT/360)" % fo, "note": "hedef / stop bugünkü adil forward'la",
                         "held": "Hedef ve stop bugünkü adil forward'la (OIS'ten faiz paritesiyle %s): OIS oynarsa onlar da değişir." % fo,
-                        "legs": [{"key": "VIOPI:" + c["ticker"], "name": "VİOP " + (c["name"] or c["ticker"]), "level": v, "unit": "%", "digits": 2}
-                                 for c, v in ((far, f[3]), (near, f[2]))]}
+                        "legs": [{"key": "VIOPI:" + c["ticker"], "name": "VİOP " + (c["name"] or c["ticker"]), "level": v, "unit": "%",
+                                  "digits": RATE_DIGITS} for c, v in ((far, f[3]), (near, f[2]))]}
 
             legs = [{"key": "VIOPI:" + far["ticker"], "name": "VİOP " + (far["name"] or far["ticker"]), "weight": 1.0},
                     {"key": "VIOPI:" + near["ticker"], "name": "VİOP " + (near["name"] or near["ticker"]), "weight": -1.0}]
@@ -2895,15 +2907,15 @@ def fam_frapath(ctx: Ctx) -> Tuple[List[Monitor], Dict[str, Any]]:
             if f is None:
                 return None
             on = "bugünkü PPK patikasıyla" if day is None else "%s kapanışının PPK patikasıyla" % _tr(day)
-            fwd = "%%%s" % _th(f["path"], 2)
-            return {"inst": "%s FRA" % name, "unit": "%", "digits": 2, "base": f["path"], "scale": 0.01, "fra": name,
+            fwd = rate_text(f["path"])
+            return {"inst": "%s FRA" % name, "unit": "%", "digits": RATE_DIGITS, "base": f["path"], "scale": 0.01, "fra": name,
                     "gap": {"name": "patika farkı", "of": "patikanın", "at": "patikada"},
                     "model": "PPK patikasının %s forward'ı (%s)" % (name, fwd), "note": "hedef / stop " + on,
                     "held": ("Hedef ve stop %s (patikanın %s forward'ı %s): patika değişirse onlar da değişir." % (on, name, fwd)
                              if day is None else "Hedef ve stop %s (patikanın %s forward'ı %s); bugünün patikası gelince onunla "
                                                  "yenilenir." % (on, name, fwd)),
                     "asof": "canlı" if day is None else "son kapanış",
-                    "legs": [{"key": k, "name": _ois_name(ctx, k), "level": q.get(mm), "unit": "%", "digits": 2}
+                    "legs": [{"key": k, "name": _ois_name(ctx, k), "level": q.get(mm), "unit": "%", "digits": RATE_DIGITS}
                              for k, mm in ((far, m2), (near, m1)) if q.get(mm) is not None]}
 
         def fthesis(sg, name=name):
@@ -3893,7 +3905,7 @@ def rationale(ctx: Ctx, m: Monitor, sg: Optional[Dict[str, Any]], cfg: Dict[str,
         inv.append("Stop: %s %s (giriş %s)%s" % (px["inst"], _th(px["stop"], px["digits"]), _th(px["entry"], px["digits"]),
                                                  _stop_why(sg, m, cfg)))
     elif sg and qt and qt.get("stop") is not None:
-        # (a level of the model's own: the instrument's stop level, the gap there beside it - "Stop: 6x9 FRA %38,73 …")
+        # (a level of the model's own: the instrument's stop level, the gap there beside it - "Stop: 6x9 FRA %38,730 …")
         inv.append("Stop: %s %s (giriş %s; %s)%s" % (qt["inst"], quote_text(qt, qt["stop"]), quote_text(qt, qt["entry"]),
                                                      gap_text(qt, sg.get("stop")), _stop_why(sg, m, cfg)))
     elif sg and sg.get("stop") is not None:

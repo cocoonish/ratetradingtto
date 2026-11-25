@@ -835,8 +835,8 @@ def cal_monitor(ctx: qf.Ctx, bank: str, now: Dict[str, Any], st: State) -> Optio
         if not cur.get("rows") or _num(cur.get("base")) is None:
             return None
         rate = BANKS[bank]["rate"]
-        fb = "%%%s" % qf._th(cur["base"], 2)
-        return {"inst": name, "unit": "%", "digits": 2, "base": cur["base"], "scale": 0.01,
+        fb = qf.rate_text(cur["base"])
+        return {"inst": name, "unit": "%", "digits": qf.RATE_DIGITS, "base": cur["base"], "scale": 0.01,
                 "gap": {"name": "fiyatlanan hareket", "of": "patika tabanının", "at": "patika tabanında"},
                 "model": "patikanın tabanı (%s %s)" % (rate, fb), "note": "hedef / stop bugünkü patikanın tabanıyla",
                 "held": "Hedef ve stop bugünkü patikanın tabanıyla (%s %s): dönemin seviyesi = taban + fiyatlanan hareket; taban "

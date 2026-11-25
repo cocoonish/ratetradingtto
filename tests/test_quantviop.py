@@ -359,7 +359,7 @@ def test_the_family_on_a_synthetic_history_and_its_signal():
     for which in ("entry", "target", "stop"):
         assert (q[which] - q["base"]) * 100.0 == pytest.approx(s[which])
         assert q["alt"][which] == pytest.approx(qv.price_of(q[which], live["VQS:" + t], live["VQU:" + t], live["VQG:" + t]))
-    head = "VİOP Kas26 ima faizi şimdi %%%s · fiyat %s (%s bp OIS'in üstünde)" % (qf._th(q["entry"], 2), qf._th(q["alt"]["entry"], 4), qf._sg(s["level"], 1))
+    head = "VİOP Kas26 ima faizi şimdi %%%s · fiyat %s (%s bp OIS'in üstünde)" % (qf._th(q["entry"], 3), qf._th(q["alt"]["entry"], 4), qf._sg(s["level"], 1))
     assert q["alt"]["label"] == "fiyat" and head in s["plain"], s["plain"]
     built = tab["_build"](live, dt.datetime(2026, 11, 3, 11, 0))
     row = next(x for x in built["rows"] if x["ticker"] == "A1X6 Curncy")

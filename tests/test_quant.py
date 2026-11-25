@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 import random
+import re
 import threading
 
 import pytest
@@ -703,17 +704,17 @@ def test_an_fra_signal_is_told_in_the_fra_rate_with_the_path_gap_beside_it():
     assert q["target"] < q["entry"] < q["stop"]                          # (receive: the rate falls to the target)
     # the legs' par rates now, their DV01 weights as before
     assert {lg["key"]: lg["level"]["level"] for lg in s["legs"]} == {"OIS:6M": pytest.approx(live["OIS:6M"]), "OIS:3M": pytest.approx(live["OIS:3M"])}
-    assert "6M OIS (%" + qf._th(live["OIS:6M"], 2) + ") ×" in s["trade_tr"] and "3M OIS (%" in s["trade_tr"]
+    assert "6M OIS (%" + qf._th(live["OIS:6M"], 3) + ") ×" in s["trade_tr"] and "3M OIS (%" in s["trade_tr"]
     # in words: the rate first, the gap beside it; what is held for target and stop
-    entry_txt = "%" + qf._th(q["entry"], 2)
+    entry_txt = "%" + qf._th(q["entry"], 3)
     assert "3x6 FRA şimdi %s (%s bp patikanın üstünde)" % (entry_txt, qf._sg(s["level"], 1)) in s["plain"]
-    assert "hedef seviyesine (%%%s; " % qf._th(q["target"], 2) in s["plain"] and "Hedef ve stop bugünkü PPK patikasıyla" in s["plain"]
+    assert "hedef seviyesine (%%%s; " % qf._th(q["target"], 3) in s["plain"] and "Hedef ve stop bugünkü PPK patikasıyla" in s["plain"]
     assert "(%s)" % entry_txt in s["thesis"] and "patika değişirse" in q["held"]
     assert qf.levels_line(s).startswith("giriş %s · hedef %%%s · stop %%%s (3x6 FRA; patika farkı %s / " % (
-        entry_txt, qf._th(q["target"], 2), qf._th(q["stop"], 2), qf._sg(s["level"], 1)))
+        entry_txt, qf._th(q["target"], 3), qf._th(q["stop"], 3), qf._sg(s["level"], 1)))
     # the rationale's stop in the FRA's rate too
     inv = qf.rationale(ctx, m, s, cfg(usdtry=40.0))["invalidation"]
-    assert inv[0].startswith("Stop: 3x6 FRA %%%s (giriş %s; %s bp patikanın üstünde)" % (qf._th(q["stop"], 2), entry_txt, qf._sg(s["stop"], 1)))
+    assert inv[0].startswith("Stop: 3x6 FRA %%%s (giriş %s; %s bp patikanın üstünde)" % (qf._th(q["stop"], 3), entry_txt, qf._sg(s["stop"], 1)))
     # live: the 6M moves 5 bp - the level and the rates follow, today's path held (its forward the same)
     live2 = dict(live, **{"OIS:6M": live["OIS:6M"] + 0.05})
     qf.score_all(ctx, [m], live2)
@@ -731,6 +732,29 @@ def test_an_fra_signal_is_told_in_the_fra_rate_with_the_path_gap_beside_it():
     q0 = s0["quote"]
     assert q0["asof"] == "son kapanış" and "kapanışının PPK patikasıyla" in q0["note"] and m0.level == pytest.approx(m0.values[-1])
     assert (q0["entry"] - q0["base"]) * 100.0 == pytest.approx(s0["level"])
+
+
+def test_an_fra_rate_reads_with_three_decimals_entry_less_target_the_bp_gap():
+    """The desk, 25.11.2026: "3 decimal" - a rate in % is written with three decimals, so that the FRA / PPK line's entry
+    − target read in % is the bp gap's own difference (with two, %38,72 → %38,65 read as 7 bp where the gap said 6,8):
+    the converted FRA rates in the alarm's line and the card's sentence, the digits the list's cells read, to 0,1 bp."""
+    ctx, live, _ = _fra_ctx()
+    m = next(x for x in qf.fam_frapath(ctx)[0] if x.sid == "frapath:3x6")
+    qf.score_all(ctx, [m], live)
+    s = qf.make_signal(m, cfg(usdtry=40.0), "10:00")
+    q = s["quote"]
+    assert q["digits"] == qf.RATE_DIGITS == 3 and all(lg["level"]["digits"] == 3 for lg in s["legs"])
+    line = qf.levels_line(s)
+    got = re.match(r"giriş %(\d+,\d{3}) · hedef %(\d+,\d{3}) · stop %(\d+,\d{3}) \(3x6 FRA; patika farkı ", line)
+    assert got, line
+    entry, target, stop = (float(x.replace(",", ".")) for x in got.groups())
+    assert "3x6 FRA şimdi %%%s (" % got.group(1) in s["plain"] and "hedef seviyesine (%%%s; " % got.group(2) in s["plain"]
+    # entry − target (and stop − entry) as the desk reads them in % are the gaps' differences in bp, to 0,1 bp
+    assert s["entry"] - s["target"] > 1.0 and abs((entry - target) * 100.0 - (s["entry"] - s["target"])) <= 0.1 + 1e-9
+    assert abs((stop - entry) * 100.0 - (s["stop"] - s["entry"])) <= 0.1 + 1e-9
+    # the desk's photo (24.11.2026): the path's 6x9 forward %38,651, the gap +6,9 / +0,1 / +7,9 bp - %38,720 → %38,652
+    # is the 6,8 bp the gaps say
+    assert [qf.quote_text(q, 38.651 + gap / 100.0) for gap in (6.9, 0.1, 7.9)] == ["%38,720", "%38,652", "%38,730"]
 
 
 def test_the_workbook_s_own_path_reproduces_its_quotes():
@@ -1329,6 +1353,7 @@ def test_an_fra_line_s_alarm_says_the_fra_rates_the_gap_beside_them():
     c = cfg()
     path_fwd = 38.65
     m = _mon("frapath:6x9", "frapath", 1.0)
+    # (a family's digits for a rate do not count: a rate in % is written with RATE_DIGITS)
     m.quote = lambda live: {"inst": "6x9 FRA", "unit": "%", "digits": 2, "base": path_fwd, "scale": 0.01, "fra": "6x9",
                             "gap": {"name": "patika farkı", "of": "patikanın", "at": "patikada"}, "note": "hedef / stop bugünkü PPK patikasıyla"}
     q._track({"cfg": c, "today": "2026-11-02", "mons": {m.sid: m}}, [])
@@ -1338,9 +1363,9 @@ def test_an_fra_line_s_alarm_says_the_fra_rates_the_gap_beside_them():
     sg = qf.make_signal(m, c, "10:00")
     q._track({"cfg": c, "today": "2026-11-03", "mons": {m.sid: m}}, [sg])
     qt = sg["quote"]
-    want = "giriş %%38,72 · hedef %%%s · stop %%%s (6x9 FRA; patika farkı +6,9 / %s / %s bp)" % (
-        qf._th(path_fwd + sg["target"] / 100.0, 2), qf._th(path_fwd + sg["stop"] / 100.0, 2), qf._sg(sg["target"], 1), qf._sg(sg["stop"], 1))
-    assert qt["entry"] == pytest.approx(38.719) and qf.levels_line(sg) == want
+    want = "giriş %%38,719 · hedef %%%s · stop %%%s (6x9 FRA; patika farkı +6,9 / %s / %s bp)" % (
+        qf._th(path_fwd + sg["target"] / 100.0, 3), qf._th(path_fwd + sg["stop"] / 100.0, 3), qf._sg(sg["target"], 1), qf._sg(sg["stop"], 1))
+    assert qt["entry"] == pytest.approx(38.719) and qt["digits"] == 3 and qf.levels_line(sg) == want
     assert desk.events[0]["value_text"] == "z +3,20 (Güçlü) · " + want
     e = q._log()[0]
     assert e["levels_text"] == want and e["level"] == 6.9 and e["quote"]["entry"] == pytest.approx(38.719) and e["quote"]["label"] == "6x9 FRA %"
