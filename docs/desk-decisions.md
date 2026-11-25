@@ -1306,6 +1306,8 @@ Items 2, 3 and 13 of that list (as they were put to the desk, in English):
   before, for the first window the bootstrap's stub from the OIS spot. So a chat line and the page give the same bp
   (tested). The workbook's own MPC path (Motor, the "MPC ima" model) compounds TLREF on business days with a weekend
   term instead; the two conversions differ slightly (see [curves.md](curves.md#meeting-steps-from-a-rate)).
+  **Changed on 25.11.2026:** both now compound on business days, as the model does - the desk's "B"
+  ([below](#ppk-adımı-tlref-iş-günlerinde-bileşik-25112026)); the page and the chat still give the same bp.
 - **The market follows the viewer's curve setting**, as the MPC OIS table and the chat do: Bootstrap (Murex's MTM) by
   default, a PPK basamak user's own curve otherwise.
 - **A spread's step is the later window's**, on the same base as a rate typed for that window (the earlier window's
@@ -1748,6 +1750,46 @@ the PCA, vol, VİOP calendar and intraday tests), `tests/test_quantcurve.py`, `t
 `tests/test_quantpath.py`, `tests/test_trades_levels.py` (`test_an_fra_path_line_fills_its_fra_at_the_fra_rate`,
 `test_the_fra_path_lines_fra_rate_is_the_rate_trades_values_the_fra_at` - the family's FRA rate is Trades' par of the FRA),
 `tests/test_bugun.py`, `tests/test_quantcons.py`, the browser test's FRA / PPK card, row and Bugün checks.
+
+### PPK adımı: TLREF iş günlerinde bileşik (25.11.2026)
+
+Put to the desk (in short): a meeting swap's rate typed on the PPK step table is turned into the overnight rate over its
+window, and compared with the window before to give the step. (a) As it was, on the page and in Broker Chat: the
+overnight rate compounds every calendar day, as if weekends earned like weekdays. (b) As TLREF accrues, and as the MPC ima
+model on OIS · PPK compounds it: on business days only - over a weekend or a holiday Friday's rate counts for three days
+in one step. They differ by up to about 1 bp in the step; switch the table and Broker Chat to (b) together? The desk:
+
+> "B"
+
+**What changed** ([curves.md](curves.md#meeting-steps-from-a-rate)):
+- **One conversion, the model's** (`tto/ppkcurve.py`, "TLREF over a window"): ln(1 + R·d/365) = d·ln(1 + x) − W·x², x =
+  O/N / 365, W = Σ g(g − 1)/2 over the gaps g between the window's business days on the TRY list (`Motor!A361:A523`) - read,
+  as the model reads it, from Motor's Pcum at the window's ends (`Motor!J`). `ppkcurve.window_overnight` /
+  `window_rate` are Broker Chat's (`Service._mpc_implied`, `OisMarket.mpc_term`) and the model curve's (`StepCurve` uses
+  the same `growth`); EK_PPK's cells take the same steps (`extras.overnight_bd` / `overnight_bd_back`).
+- **EK_PPK** (MPC OIS → PPK ADIMI, MPC SPREAD → PPK ADIMI): every O/N (the window's, the period before's, the market's,
+  the later window's) and every way back (an O/N or a step typed → the rate) on it; the two-way round trips stay exact.
+- **The window's dates and day count are the model's**: from a meeting's effective day (the business day after the
+  decision) to the next one's, ACT/365; the first window's period before from the OIS spot (Pcum 0).
+- **The model's own window rate gives the model's own TLREF and steps** (`OIS_MAIN!BJ` typed → `Motor!K`, tested); the
+  market's own window rate gives the market's own step.
+
+**Choices made while building it** (ask the desk before changing):
+- **The model's second-order form, not the exact product.** The MPC ima model writes Π (1 + x·g) as d·ln(1 + x) − W·x²;
+  the step uses the same, so a step read from a quote is the model's step convention exactly. The exact product would put
+  the O/N a few thousandths of a bp away over a weekend, a few hundredths over a bayram.
+- **What was typed keeps its meaning:** a rate typed stays the rate, a step or an O/N typed stays the step / the O/N;
+  only what is worked out from them moved (replay, 03.11.2026: the market's steps by −0.87 … +0.95 bp).
+- **USD · FOMC is left as it is** (SOFR, the USD page's own `K`: every calendar day, ACT/360); the question was TLREF's.
+- No new Bloomberg request; no Bootstrap number changes (only EK_PPK's O/N and steps, and the chat's step).
+
+Code: `tto/ppkcurve.py` (`growth`, `window_rate`, `window_overnight`, `ON_STEPS`), `tto/extras.py` (`overnight_bd`,
+`overnight_bd_back`, `ppk_term`, `_ppk_back_check`: Motor!J), `tto/blotter.py` (`OisMarket.mpc_table`'s `pcum`,
+`mpc_term`), `tto/service.py` (`_mpc_implied`), `tto/views/20_ois.json` (the PPK1 note), `tto/static/js/pages/broker.js`
+(the step's tooltip). Tests: `tests/test_ppkcurve.py` (`test_a_windows_tlref_compounds_on_business_days_by_hand`),
+`tests/test_ppkters.py` (`test_a_windows_overnight_is_tlref_on_the_desks_business_days`,
+`test_the_models_own_window_rates_give_its_own_tlref_and_steps`, the calendar move), `tests/test_ois_twoway.py`,
+`tests/test_brokerchat.py`.
 
 ## Process
 

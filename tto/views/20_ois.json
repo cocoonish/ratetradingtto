@@ -535,7 +535,7 @@
    "title": "MPC OIS → PPK ADIMI",
    "hidden": false,
    "wide": true,
-   "note": "Bir toplantı döneminin (MPC OIS'teki satırı) swap faizini \"MPC OIS (elle)\" sütununa yazın: fiyatladığı PPK adımı (bp) = faizin O/N eşdeğeri (ACT/365, her gün bileşik) − önceki dönemin piyasa faizininki (MPC OIS'in bir önceki satırının \"Piyasa (bootstrap)\"ı; ilk dönemde OIS spot'tan ilk toplantıya stub). Broker Chat'in toplantı swap'ı satırlarındaki ima adımla aynı hesap, aynı sayı. Piyasa Bootstrap (Murex'in MTM'i); Ayarlar'da PPK basamak seçtiyseniz sizin eğriniz. Yazdığınız faiz toplantısıyla gider."
+   "note": "Bir toplantı döneminin (MPC OIS'teki satırı) swap faizini \"MPC OIS (elle)\" sütununa yazın: fiyatladığı PPK adımı (bp) = faizin O/N eşdeğeri − önceki dönemin piyasa faizininki (MPC OIS'in bir önceki satırının \"Piyasa (bootstrap)\"ı; ilk dönemde OIS spot'tan ilk toplantıya stub). O/N eşdeğeri TLREF gibi yalnız iş günlerinde bileşiktir (masanın TRY tatil listesi): Cuma'nın faizi hafta sonu boyunca üç gün tek adımda işler, tatilde aradaki günler kadar; ACT/365 - MPC ima modelinin bileşiği. Broker Chat'in toplantı swap'ı satırlarındaki ima adımla aynı hesap, aynı sayı. Piyasa Bootstrap (Murex'in MTM'i); Ayarlar'da PPK basamak seçtiyseniz sizin eğriniz. Yazdığınız faiz toplantısıyla gider."
   },
   {
    "id": "B14",

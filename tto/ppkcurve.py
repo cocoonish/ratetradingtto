@@ -38,6 +38,8 @@ from .xl.values import date_to_serial, serial_to_date, to_num
 BASIS = 365.0
 #: a calibrated quote comes back within ``TOLERANCE`` (|par − quote|, a rate) after at most ``STEPS`` secant steps
 TOLERANCE, STEPS = 1e-12, 60
+#: :func:`window_overnight`'s steps - the sheet's formula takes as many (extras.overnight_bd)
+ON_STEPS = 8
 
 # where the TRY workbook keeps what both ways are built from (1-based rows / columns)
 #: Motor's meeting table: C the effective day (days from the OIS spot), K the implied TLREF from it on (L: its ln G)
@@ -103,10 +105,50 @@ class LogLinear(object):
         return math.exp(self.ln(t))
 
 
+# ================================================================================================== TLREF over a window
+# How TLREF compounds over a window of days - the MPC ima model's own (Motor!L, OIS_MAIN!BJ; :class:`StepCurve`), and so
+# the PPK step a window's rate prices on OIS · PPK (EK_PPK) and in Broker Chat (the desk, 25.11.2026: "B"): on business
+# days only, each business day's overnight rate accruing for the calendar days to the next business day (1; 3 over a
+# weekend - Friday's rate for three days in one step -; more over a holiday), ACT/365.  Over ``days`` calendar days whose
+# business days are g apart the growth is Π (1 + x·g), x = O/N / 365; the model takes its log to the second order in x:
+#
+#     ln G = days·ln(1 + x) − term·x²,    term = Σ g(g − 1)/2,
+#
+# ``term`` the window's weekend / holiday term - Motor's Pcum (its daily calendar on the TRY holiday list, F528:F4228;
+# J at a meeting's effective day) at the window's end less at its start, days counted from the OIS spot.  A window's
+# simple ACT/365 rate R is 1 + R·days/365 = G.  With no weekend or holiday in the window (term 0) it is every day
+# compounded alone.
+def growth(on: float, days: float, term: float) -> float:
+    """ln G of a window of ``days`` calendar days at the overnight rate ``on`` (decimal, ACT/365) compounded on business
+    days, ``term`` its weekend / holiday term."""
+    x = on / BASIS
+    return days * math.log(1.0 + x) - term * x * x
+
+
+def window_rate(on: float, days: float, term: float) -> float:
+    """The simple ACT/365 rate of a window at the overnight rate ``on``: (G − 1)·365 / days - the model's window rate
+    (OIS_MAIN!BJ's formula on Motor's TLREF)."""
+    return (math.exp(growth(on, days, term)) - 1.0) * BASIS / days
+
+
+def window_overnight(rate: float, days: float, term: float) -> float:
+    """The overnight rate that, compounded on business days over the window, gives its simple ACT/365 rate ``rate`` -
+    :func:`window_rate`'s inverse: ln(1 + x) = (ln(1 + R·days/365) + term·x²) / days, solved in ``ON_STEPS`` steps from
+    the rate compounded every day (term 0; each step a few hundred times closer at TRY's rates, so the last ones leave
+    nothing - the sheet's formula takes the same steps).  ValueError without a window or below −365/days."""
+    if not days > 0:
+        raise ValueError("dönem yok")
+    lr = math.log(1.0 + rate * days / BASIS)
+    x = math.exp(lr / days) - 1.0
+    for _ in range(ON_STEPS - 1):
+        x = math.exp((lr + term * (x * x)) / days) - 1.0
+    return BASIS * x
+
+
 class StepCurve(object):
-    """Discount factors from an overnight rate flat between knots, compounded as Motor compounds TLREF: over a stretch
-    [a, b) at the rate r the growth factor's log rises by (b − a)·ln(1 + r/365) − (P(b) − P(a))·(r/365)², P the
-    calendar's cumulative weekend / holiday term (Motor!F528:F4228: Σ g(g − 1)/2 over the gaps between business days,
+    """Discount factors from an overnight rate flat between knots, compounded as Motor compounds TLREF (:func:`growth`):
+    over a stretch [a, b) at the rate r the growth factor's log rises by (b − a)·ln(1 + r/365) − (P(b) − P(a))·(r/365)², P
+    the calendar's cumulative weekend / holiday term (Motor!F528:F4228: Σ g(g − 1)/2 over the gaps between business days,
     read at MIN(t, its last day) as the sheet reads it).
 
     ``knots``, ``rates``: the days the rate steps (the meetings' effective days; the spot, 0, first) and the rate from
@@ -152,8 +194,7 @@ class StepCurve(object):
         return p[min(max(int(t), 0), len(p) - 1)] if p else 0.0
 
     def _piece(self, a: float, b: float, r: float) -> float:
-        x = r / BASIS
-        return (b - a) * math.log(1.0 + x) - (self._p(b) - self._p(a)) * x * x
+        return growth(r, b - a, self._p(b) - self._p(a))
 
     def _path_rate(self, t: float) -> float:
         return self.rates[max(bisect.bisect_right(self.knots, t) - 1, 0)]

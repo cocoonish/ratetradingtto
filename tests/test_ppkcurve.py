@@ -57,6 +57,60 @@ def test_the_step_curve_compounds_tlref_as_motor_does():
         pk.StepCurve([XlError("#N/A")], [0.3])
 
 
+def solve(f, lo=-0.2, hi=0.2):
+    """The root of ``f``, increasing around it, by bisection - an algorithm of its own, to check the module's against."""
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        lo, hi = (mid, hi) if f(mid) < 0.0 else (lo, mid)
+    return (lo + hi) / 2.0
+
+
+def test_a_windows_tlref_compounds_on_business_days_by_hand():
+    """A window's rate ↔ the overnight rate in it as TLREF accrues and the MPC ima model compounds it (the desk,
+    25.11.2026: "B"): only on business days, each business day's rate for the calendar days to the next one, ACT/365 -
+    ln(1 + R·d/365) = d·ln(1 + x) − W·x², W = Σ g(g − 1)/2 over the gaps g, Π (1 + x·g) to the second order.  Counted by
+    hand on two weeks of the TRY calendar: one with a weekend, one with the Ramazan Bayramı of 2027."""
+    # Monday 16.11.2026 → Monday 23.11.2026: Monday … Friday, then Friday's rate for the weekend - gaps 1, 1, 1, 1, 3
+    gaps, d = [1, 1, 1, 1, 3], 7
+    term = sum(g * (g - 1) / 2 for g in gaps)
+    assert term == 3.0
+    # Monday 08.03.2027 → Monday 15.03.2027, 09–11.03 bayram: Monday's rate for four days, Friday's for three
+    gaps2, d2 = [4, 3], 7
+    term2 = sum(g * (g - 1) / 2 for g in gaps2)
+    assert term2 == 9.0
+    for gs, days, w in ((gaps, d, term), (gaps2, d2, term2)):
+        for rate in (0.35, 0.4275, 0.05, -0.01):
+            on = pk.window_overnight(rate, days, w)
+            # the model's own equation, solved by bisection: the same overnight rate (to the digits ln(1 + x) keeps of a
+            # daily rate: 365·2⁻⁵² ≈ 1e-13, a billionth of a bp)
+            x = solve(lambda v: days * math.log(1 + v) - w * v * v - math.log(1 + rate * days / 365.0))
+            assert on == pytest.approx(365.0 * x, rel=0, abs=1e-13), (gs, rate)
+            assert pk.window_rate(on, days, w) == pytest.approx(rate, rel=0, abs=1e-13)       # the exact way back
+            assert pk.growth(on, days, w) == pytest.approx(math.log(1 + rate * days / 365.0), rel=0, abs=1e-15)
+            # Π (1 + x·g) by hand: the model is its second order - its O/N a few thousandths of a bp off over a weekend,
+            # a few hundredths over a bayram, at TRY's rates
+            exact = solve(lambda v: sum(math.log(1 + v * g) for g in gs) - math.log(1 + rate * days / 365.0))
+            assert abs(on - 365.0 * exact) < (1e-6 if gs is gaps else 3e-6), (gs, rate)
+            # against every day compounded alone (the old convention): the weekend / holiday term lifts the O/N
+            assert on > 365.0 * ((1 + rate * days / 365.0) ** (1.0 / days) - 1.0), (gs, rate)
+    # 35 % over the two weeks: 1.43 bp, and 4.31 bp over the bayram's, above every day compounded alone - one simple
+    # period over the weekend / the bayram instead of a day at a time
+    for days, w, lift in ((d, term, 1.43), (d2, term2, 4.31)):
+        assert (pk.window_overnight(0.35, days, w) - 365.0 * ((1 + 0.35 * days / 365.0) ** (1 / days) - 1)) * 1e4 == pytest.approx(lift, abs=0.005)
+    # no weekend, no holiday: every day compounded alone (and one day: the rate itself)
+    assert pk.window_overnight(0.35, 4.0, 0.0) == pytest.approx(365.0 * ((1 + 0.35 * 4 / 365.0) ** 0.25 - 1), rel=1e-14)
+    assert pk.window_overnight(0.35, 1.0, 0.0) == pytest.approx(0.35, rel=1e-15)
+    # the model's curve compounds with the same function: a stretch of StepCurve is growth() over it
+    pc = calendar(60)
+    c = pk.StepCurve([0.0, 37.0], [0.36, 0.35], pc)
+    assert c.lng(30.0) - c.lng(9.0) == pytest.approx(pk.growth(0.36, 21.0, pc[30] - pc[9]), abs=1e-16)
+    assert c.lng(37.0) == pk.growth(0.36, 37.0, pc[37])
+    with pytest.raises(ValueError):
+        pk.window_overnight(0.35, 0.0, 0.0)
+    with pytest.raises(ValueError):
+        pk.window_overnight(-60.0, 7.0, 3.0)                                                  # 1 + R·d/365 ≤ 0
+
+
 def test_a_path_seen_from_another_spot():
     pc = calendar(500)
     c = pk.StepCurve([0.0, 37.0, 79.0], [0.36, 0.35, 0.34], pc)
