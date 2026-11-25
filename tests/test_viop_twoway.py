@@ -11,6 +11,7 @@ import pytest
 
 from conftest import cell
 from tto import extras as ex
+from tto.xl import numfmt
 from tto.xl.model import Model
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -169,7 +170,7 @@ def test_a_row_typed_before_reads_as_before(svc):
         assert stored(svc, u) == {"AE331": -150.0} and cell(svc, "VIOP!P331", u) == -150.0
         assert cell(svc, "VIOP!Q331", u) == pytest.approx(0.34301087462666635, rel=1e-12)          # (test_defaults' value)
         assert cell(svc, "VIOP!R331", u) == pytest.approx(49.9975) and cell(svc, "VIOP!Y331", u) == 26.0
-        assert cell(svc, "MASA!S121", u) == "FRA+bp -150" and cell(svc, "MASA!T121", u) == cell(svc, "VIOP!Q331", u)
+        assert cell(svc, "MASA!S121", u) == "FRA+bp -150,0" and cell(svc, "MASA!T121", u) == cell(svc, "VIOP!Q331", u)
     finally:
         svc.reset_inputs(u, "tto")
 
@@ -194,7 +195,7 @@ def test_a_contract_that_rolled_off_leaves_the_row_invalid_with_its_typed_value(
 
 def test_a_pasted_column_a_scenario_and_masas_strip(svc):
     """Far prices pasted down three rows: each row's typed value; saved in a scenario and loaded back as they were;
-    Masa's TARGET strip reads the rows (a worked-out Hedef değer to four decimals, the page's decimal comma) and its strip
+    Masa's TARGET strip reads the rows (a bp Hedef değer worked out to one decimal, the page's decimal comma) and its strip
     of inputs types Hedef değer into the same store."""
     u = svc.login("vt yapıştır")["user"]
     try:
@@ -209,7 +210,8 @@ def test_a_pasted_column_a_scenario_and_masas_strip(svc):
         svc.load_scenario(u, "vt senaryo")
         assert {r: row(svc, u, r) for r in (336, 337, 338)} == want
         p = want[336]["P"]
-        assert cell(svc, "MASA!S126", u) == ("FRA+bp %s" % round(p, 4)).replace(".", ",") and cell(svc, "MASA!V126", u) == 51.2
+        assert cell(svc, "MASA!S126", u) == "FRA+bp " + numfmt.format_value(p, ex.VT_BP_FMT, numfmt.get_locale("tr"))
+        assert cell(svc, "MASA!V126", u) == 51.2
         # Masa's strip of the target's inputs: Hedef değer typed there is the row's typed value
         res = svc.set_inputs(u, "tto", [{"ref": "VIOP!P337", "value": "-80"}])
         assert res["errors"] == [] and stored(svc, u)["AE337"] == -80.0 and "AG337" not in stored(svc, u)

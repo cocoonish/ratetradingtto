@@ -1826,14 +1826,17 @@ calculator) were not part of the request.
 **VİOP Target's Hedef değer reads in its type** (`VIOP!P331:P338`; VİOP → Kontratlar → Target, Masa's VİOP TARGET strip).
 Since 23.11 (the Fiyat type) the cell's format is General, so a rate typed whole showed whole ("45") next to Hedef faiz's
 45,00 %. One format cannot read the four types well - a rate wants two decimals, a far price the contract's four, a bp value
-none (a format with 2–4 decimals would show bp as -75,00 and a worked-out rate with four) - so the row's "Hedef tipi" picks
+one (a format with 2–4 decimals would show bp as -75,00 and a worked-out rate with four) - so the row's "Hedef tipi" picks
 it: **Faiz %** two decimals (`TRY_PCT`, the desk's TRY rates), **Fiyat** the far limit's own format (`S331`: four
-decimals), **FRA+bp / FXswap+bp** the cell's own General, as before (as typed; a bp worked out from another member shows
-General's digits, e.g. -1636,148629). It is a number format chosen by another cell - Excel's conditional format with a
-number format (`SheetBuilder.number_format_if`, drawn by `Renderer.cell`). The desk strip (`MASA!S121:S128`, "VİOP ·
-TARGET") writes the target the same way with the page's decimal comma: `Faiz % 45,00`, `Fiyat 51,0500`, `FRA+bp -75`
-(a worked-out bp to four decimals, as before; it used to print a decimal point). The row's other members already read well:
-Hedef faiz and Piyasa ima `0.00%`, near / far limit and spread price four decimals, Hedef − piyasa whole bp.
+decimals), **FRA+bp / FXswap+bp** - and any other type, which the sheet prices as FRA+bp - one decimal (`VT_BP_FMT`,
+`0.0`), typed or worked out from another member (-75 → -75,0; a far price typed: -1636,148629 → -1636,1). The bp types
+first kept the cell's General (as typed, a worked-out one with General's digits); the same day, on the desk's "gözü
+yoruyor" (the report's question, settled by the integrator), one decimal. It is a number format chosen by another cell -
+Excel's conditional format with a number format (`SheetBuilder.number_format_if`, drawn by `Renderer.cell`). The desk
+strip (`MASA!S121:S128`, "VİOP · TARGET") writes the target the same way with the page's decimal comma: `Faiz % 45,00`,
+`Fiyat 51,0500`, `FRA+bp -75,0`, a worked-out one `FRA+bp -1636,1` (it used to print `-1636.1486`). The row's other
+members already read well: Hedef faiz and Piyasa ima `0.00%`, near / far limit and spread price four decimals, Hedef −
+piyasa whole bp.
 
 Code: `tto/extras.py` (`TRY_PCT`, `_fr_side`, `_tto_fwd_rates`, `_tto_bulk_forward` / `_BULK_FMT`, `_tto_fwd_back`,
 `SheetBuilder.number_format_if`, `_tto_viop_tw`), `tto/render.py` (`Renderer.cell`: a conditional format's `fmt`). Tests:
