@@ -423,12 +423,27 @@ def test_a_bulk_rows_spread_or_its_plus_spread(svc):
 
 
 # ============================================================================== OIS · PPK: MPC OIS / MPC SPREAD -> PPK step
-def on365(r, d):
-    return 365.0 * ((1.0 + r * d / 365.0) ** (1.0 / d) - 1.0)
+def on_bd(r, d, w):
+    """A window's rate -> its O/N as TLREF compounds (business days; the window's weekend / holiday term ``w``) - written
+    out: ln(1 + r·d/365) = d·ln(1 + x) − w·x², solved by bisection."""
+    import math
+    lo, hi, lr = -0.2, 0.2, math.log(1.0 + r * d / 365.0)
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        lo, hi = (mid, hi) if d * math.log(1.0 + mid) - w * mid * mid < lr else (lo, mid)
+    return 365.0 * (lo + hi) / 2.0
 
 
-def rate365(on, d):
-    return ((1.0 + on / 365.0) ** d - 1.0) * 365.0 / d
+def rate_bd(on, d, w):
+    """... and back: (exp(d·ln(1 + x) − w·x²) − 1)·365/d (OIS_MAIN!BJ's formula)."""
+    import math
+    x = on / 365.0
+    return (math.exp(d * math.log(1.0 + x) - w * x * x) - 1.0) * 365.0 / d
+
+
+def term(svc, user, slot):
+    """The weekend / holiday term of meeting slot ``slot``'s window (the model's: Motor's Pcum at its ends)."""
+    return cell(svc, "Motor!J%d" % (slot + 6), user) - cell(svc, "Motor!J%d" % (slot + 5), user)
 
 
 WINDOWS = ex.PPK_WINDOWS[1] - ex.PPK_WINDOWS[0] + 1
@@ -438,19 +453,20 @@ PAIRS = ex.PPK_PAIRS[1] - ex.PPK_PAIRS[0] + 1
 def test_a_windows_rate_its_overnight_or_its_step(svc):
     """MPC OIS → PPK ADIMI, every window: a step typed -> the O/N = the period before's O/N + the step -> the rate; an O/N
     typed -> the rate and the step; the rate typed back gives the same row (1e-9 bp); the step of the rate found is Broker
-    Chat's for that rate (the chat's line at it)."""
+    Chat's for that rate (the chat's line at it).  The O/N ↔ rate is TLREF's on business days (the desk, 25.11.2026)."""
     u = svc.login("PPK iki yönlü pencere")["user"]
     p = lambda c, r: cell(svc, "EK_PPK!%s%d" % (c, r), u)                        # noqa: E731
     try:
         last = {}
         for k in range(WINDOWS):
             r = ex.PPK_FIRST + k
-            j, e = p("J", r), p("E", r)
+            j, e, w = p("J", r), p("E", r), term(svc, u, k)
             put(svc, u, {"EK_PPK!L%d" % r: "-37,5"})
-            assert p("L", r) == -37.5 and close(p("K", r), j - 0.00375, 1e-13) and close(p("G", r), rate365(j - 0.00375, e), 1e-13), k
+            assert p("L", r) == -37.5 and close(p("K", r), j - 0.00375, 1e-13) and close(p("G", r), rate_bd(j - 0.00375, e, w), 1e-13), k
             row = [p(c, r) for c in "GKL"]
             put(svc, u, {"EK_PPK!K%d" % r: p("K", r) + 0.001})
-            assert close(p("G", r), rate365(row[1] + 0.001, e), 1e-13) and close(p("L", r), -27.5, 1e-9), k
+            assert close(p("G", r), rate_bd(row[1] + 0.001, e, w), 1e-13) and close(p("L", r), -27.5, 1e-9), k
+            assert close(on_bd(p("G", r), e, w), row[1] + 0.001, 1e-13), k                 # (the rate's O/N, by bisection)
             for c, v in zip("GKL", row):                                         # each typed back: the same row
                 put(svc, u, {"EK_PPK!%s%d" % (c, r): v})
                 assert all(close(p(x, r), y, 1e-9) for x, y in zip("GKL", row)), (k, c)
@@ -474,16 +490,16 @@ def test_a_pairs_spread_its_later_rate_its_overnight_or_its_step(svc):
     try:
         for k in range(PAIRS):
             r, n = ex.PPK_FIRST + k, ex.PPK_FIRST + k + 1
-            f, jn, en = p("F", r), p("J", n), p("E", n)
+            f, jn, en, wn = p("F", r), p("J", n), p("E", n), term(svc, u, k + 1)
             put(svc, u, {"EK_PPK!V%d" % r: "25"})
             assert p("V", r) == 25.0 and close(p("U", r), jn + 0.0025, 1e-13), k
-            assert close(p("T", r), rate365(jn + 0.0025, en), 1e-13) and close(p("S", r), (p("T", r) - f) * 1e4, 1e-9), k
+            assert close(p("T", r), rate_bd(jn + 0.0025, en, wn), 1e-13) and close(p("S", r), (p("T", r) - f) * 1e4, 1e-9), k
             row = [p(c, r) for c in "STUV"]
             for c, v in zip("STUV", row):
                 put(svc, u, {"EK_PPK!%s%d" % (c, r): v})
                 assert all(close(p(x, r), y, 1e-9) for x, y in zip("STUV", row)), (k, c)
             put(svc, u, {"EK_PPK!T%d" % r: "36"})
-            assert p("T", r) == 0.36 and close(p("S", r), (0.36 - f) * 1e4, 1e-9) and close(p("U", r), on365(0.36, en), 1e-13)
+            assert p("T", r) == 0.36 and close(p("S", r), (0.36 - f) * 1e4, 1e-9) and close(p("U", r), on_bd(0.36, en, wn), 1e-13)
         mine = stored(svc, u, "EK_PPK")
         assert mine == {"AA%d" % (ex.PPK_FIRST + k): 0.36 for k in range(PAIRS)}
         put(svc, u, {"EK_PPK!S3": "-40"})                                         # the spread typed: the later rate's store goes

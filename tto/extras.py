@@ -48,6 +48,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import aswfx
+from . import ppkcurve as pk
 from .xl.model import COLS, Model, Sheet, parse_a1, parse_range
 from .xl.tokenizer import index_to_col, to_template
 from .xl.values import date_to_serial
@@ -259,8 +260,9 @@ def _need_formula(model: Model, sheet: str, addr: str, containing: str = "") -> 
 
 
 def overnight(rate: str, days: str, basis: int = 360) -> str:
-    """O/N equivalent of a simple rate over ``days`` on its own day count - ACT/360 (``basis`` 360, the BIST swaps') or
-    ACT/365 (365, TRY OIS: Broker Chat's ``Service._overnight``): basis·((1 + r·g/basis)^(1/g) − 1)."""
+    """O/N equivalent of a simple rate over ``days`` on its own day count, compounded every calendar day - ACT/360
+    (``basis`` 360, the BIST swaps'): basis·((1 + r·g/basis)^(1/g) − 1).  (A TRY OIS meeting window's is
+    :func:`overnight_bd`: TLREF compounds on business days.)"""
     return ('IF(AND(ISNUMBER(%(r)s),ISNUMBER(%(d)s),N(%(d)s)>0),%(b)d*((1+%(r)s*%(d)s/%(b)d)^(1/%(d)s)-1),"")'
             % {"r": rate, "d": days, "b": basis})
 
@@ -269,6 +271,25 @@ def overnight_back(on: str, days: str, basis: int = 360) -> str:
     """:func:`overnight`'s exact inverse (no guard: the caller's): the simple rate over ``days`` whose O/N equivalent is
     ``on`` - ((1 + on/basis)^g − 1)·basis/g (``basis`` 36000: rates in %, as USD · FOMC's)."""
     return "((1+%(o)s/%(b)d)^%(d)s-1)*%(b)d/%(d)s" % {"o": on, "d": days, "b": basis}
+
+
+def overnight_bd(rate: str, days: str, term: str) -> str:
+    """The overnight rate of a TRY OIS window's simple ACT/365 rate ``rate`` as TLREF compounds - on business days, the
+    window's weekend / holiday term ``term`` (Motor's Pcum at its end − at its start) - the MPC ima model's convention
+    (:mod:`tto.ppkcurve`, "TLREF over a window"): :func:`tto.ppkcurve.window_overnight`'s steps, one for one, so the page
+    and Broker Chat (which calls that function) give the same number."""
+    lr = "LN(1+%s*%s/365)" % (rate, days)
+    x = "(EXP(%s/%s)-1)" % (lr, days)
+    for _ in range(pk.ON_STEPS - 1):
+        x = "(EXP((%s+%s*%s^2)/%s)-1)" % (lr, term, x, days)
+    return 'IF(AND(ISNUMBER(%(r)s),ISNUMBER(%(d)s),N(%(d)s)>0),365*%(x)s,"")' % {"r": rate, "d": days, "x": x}
+
+
+def overnight_bd_back(on: str, days: str, term: str) -> str:
+    """:func:`overnight_bd`'s exact inverse (no guard: the caller's): the window's simple ACT/365 rate at the overnight
+    rate ``on`` - (EXP(d·LN(1 + on/365) − term·(on/365)²) − 1)·365/d, OIS_MAIN!BJ's formula
+    (:func:`tto.ppkcurve.window_rate`)."""
+    return "(EXP(%(d)s*LN(1+%(o)s/365)-%(t)s*(%(o)s/365)^2)-1)*365/%(d)s" % {"o": on, "d": days, "t": term}
 
 
 # ---------------------------------------------------------------------------------------------- Borsa swap
@@ -2319,26 +2340,34 @@ def _tto_fwd_twoway(model: Model) -> None:
 #: (A101:K117) each pair of consecutive windows' spread, (later − earlier)·10000 bp.
 #:
 #: * A meeting swap's rate typed for a window (G) -> the PPK step it prices at the window's meeting: the rate's overnight
-#:   equivalent (ACT/365, compounded every day) − that of the market's rate for the period before the meeting - the
-#:   table's own D of the window before it; for the first window the bootstrap's stub from the OIS spot (its ln DF at the
-#:   window's start, BK84, against 0 at the spot).  Beside it the market's own step (the window's D the same way).
+#:   equivalent − that of the market's rate for the period before the meeting - the table's own D of the window before
+#:   it; for the first window the bootstrap's stub from the OIS spot (its ln DF at the window's start, BK84, against 0 at
+#:   the spot).  Beside it the market's own step (the window's D the same way).
 #: * An MPC spread typed for a pair (S) -> the later window's rate, the earlier window's market rate + the spread, and the
 #:   step that rate prices at the later window's meeting, on the same base (the earlier window's market rate).
 #:
-#: This is Broker Chat's implied step of a meeting swap (``Service._mpc_implied`` / ``_overnight``) cell for cell - the same
-#: period before, its rate off the same ln DFs, the same conversion: a chat line and the page give the same bp.  The market
-#: is the table's: Bootstrap (Murex's MTM); a user on PPK basamak sees theirs, as the table and the chat do.  Row
-#: ``PPK_FIRST + k`` is window k (OIS_MAIN row 84 + k: from meeting slot k's effective day) and pair k (row 103 + k:
-#: windows k and k + 1); what is typed there goes with meeting slot k when the calendar changes or a meeting passes
-#: (``meetings.TCMB``'s bands on this sheet).
+#: **The overnight equivalent is TLREF's, as the MPC ima model compounds it** (the desk, 25.11.2026: "B" - before, every
+#: calendar day compounded alone): on business days, Friday's rate for the weekend in one step, ACT/365 -
+#: ln(1 + R·E/365) = E·ln(1 + x) − W·x², x = O/N / 365 (:mod:`tto.ppkcurve`, "TLREF over a window"; Motor!L, OIS_MAIN!BJ).
+#: W, the window's weekend / holiday term, is the model's own: Motor's Pcum at the window's end less at its start - row k's
+#: window Motor!J(6 + k) − J(5 + k), its period before J(5 + k) − J(4 + k) (the first one's from the spot, J4 = 0) - so
+#: the model's own window rate (BJ) gives the model's own TLREF (Motor!K) back, and its steps.
+#:
+#: This is Broker Chat's implied step of a meeting swap (``Service._mpc_implied``, :func:`tto.ppkcurve.window_overnight`)
+#: cell for cell - the same period before, its rate off the same ln DFs, the same term, the same conversion: a chat line and
+#: the page give the same bp.  The market is the table's: Bootstrap (Murex's MTM); a user on PPK basamak sees theirs, as
+#: the table and the chat do.  Row ``PPK_FIRST + k`` is window k (OIS_MAIN row 84 + k: from meeting slot k's effective
+#: day) and pair k (row 103 + k: windows k and k + 1); what is typed there goes with meeting slot k when the calendar
+#: changes or a meeting passes (``meetings.TCMB``'s bands on this sheet).
 #:
 #: Both tables are two-way (tto/twoway.py; the desk, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık
 #: olmaması için"): a window's rate (G), its O/N equivalent (K) or its step (L) - and a pair's spread (S), its later window's
 #: rate (T), that rate's O/N (U) or its step (V) - can be typed; the one typed last stands, the others are worked out from it
-#: with the same conversion and its exact inverse (:func:`overnight_back`): L → K = J + L/10000 → G = ((1 + K/365)^E −
-#: 1)·365/E; V → U = J' + V/10000 → T = ((1 + U/365)^E' − 1)·365/E' → S = (T − F)·10000 (' : the later window's row).  The
-#: rate and the spread are kept where they always were (G, S: their old values keep their meaning); K / L typed are kept
-#: in ``PPK_TW_WINDOW``, T / U / V in ``PPK_TW_PAIR`` of the same row - with the meeting, as G and S (``meetings.TCMB``).
+#: with the same conversion and its exact inverse (:func:`overnight_bd_back`, the model's window rate): L → K = J + L/10000
+#: → G = (EXP(E·LN(1 + K/365) − W·(K/365)²) − 1)·365/E; V → U = J' + V/10000 → T the same on the later window (E', W') →
+#: S = (T − F)·10000 (' : the later window's row).  The rate and the spread are kept where they always were (G, S: their
+#: old values keep their meaning); K / L typed are kept in ``PPK_TW_WINDOW``, T / U / V in ``PPK_TW_PAIR`` of the same row
+#: - with the meeting, as G and S (``meetings.TCMB``).
 PPK_SHEET = "EK_PPK"
 PPK_FIRST = 3
 PPK_WINDOWS = (84, 99)             # OIS_MAIN's 'MPC OIS' rows (16 windows) ...
@@ -2351,15 +2380,30 @@ PPK_TW_PAIR = ("AA", "AB", "AC")   # a pair's later window's rate (T) / its O/N 
 PCT3 = "0.000%"
 
 
+def ppk_term(slot: int) -> str:
+    """The weekend / holiday term of the window from meeting slot ``slot``'s effective day to the next one's - slot −1:
+    the stub from the OIS spot - as the MPC ima model reads it: Motor's Pcum at the two days (Motor!J, J4 = 0 at the
+    spot)."""
+    return "(Motor!$J$%d-Motor!$J$%d)" % (slot + 6, slot + 5)
+
+
 def _ppk_back_check(model: Model) -> None:
     """'MPC OIS' and 'MPC SPREAD' as the way back reads them: each window's dates (meeting slot k's effective day to slot
-    k + 1's) and market rate off the ln DFs, the first window's start ln DF, each pair's spread of two windows."""
+    k + 1's) and market rate off the ln DFs, the first window's start ln DF, each pair's spread of two windows; the MPC ima
+    model's calendar term at those days (Motor!J: Pcum of the daily calendar at each effective day, 0 at the spot)."""
     _need_sheets(model, "OIS_MAIN", "Motor")
     if PPK_SHEET in model.sheet_index:
         raise ValueError("%s sayfası zaten var" % PPK_SHEET)
     _need_captions(model, (("OIS_MAIN", "A82", "MPC OIS"), ("OIS_MAIN", "B83", "Başlangıç"), ("OIS_MAIN", "C83", "Bitiş"),
                            ("OIS_MAIN", "D83", "Piyasa (bootstrap)"), ("OIS_MAIN", "A101", "MPC SPREAD – MPCk vs MPCk+1"),
-                           ("OIS_MAIN", "B102", "Piyasa (bp)")))
+                           ("OIS_MAIN", "B102", "Piyasa (bp)"), ("Motor", "J3", "Pcum(etkin)"), ("Motor", "F527", "Pcum")))
+    motor = model.sheet("Motor")
+    if parse_a1("J4") in motor.fml or motor.consts.get(parse_a1("J4")) != 0.0:
+        raise ValueError("Motor!J4 0 değil")
+    for slot in range(5, 5 + PPK_WINDOWS[1] - PPK_WINDOWS[0] + 2):   # Pcum at every window's ends
+        want = "INDEX($F$528:$F$4228,MIN(C%d,3700)+1)" % slot
+        if _need_formula(model, "Motor", "J%d" % slot) != want:
+            raise ValueError("Motor!J%d beklenen formül değil (%s değil)" % (slot, want))
     for k, r in enumerate(range(PPK_WINDOWS[0], PPK_WINDOWS[1] + 1)):
         for col, slot in (("B", 5 + k), ("C", 6 + k)):              # meeting slot k's effective day, and slot k + 1's
             want = "$B$2+Motor!$C$%d" % slot
@@ -2390,6 +2434,7 @@ def _tto_ppk_back(model: Model) -> None:
     for k in range(PPK_WINDOWS[1] - w0 + 1):
         r = PPK_FIRST + k
         f = {"r": r, "w": w0 + k, "p": w0 + k - 1, "m": 10 + k, "x": PPK_RATE, "kon": kon, "kstep": kstep}   # m: meeting slot k's row of OIS_MAIN
+        term, before = ppk_term(k), ppk_term(k - 1)        # the window's weekend / holiday term, the period before's
         b.set("A%d" % r, "=OIS_MAIN!$A%(w)d" % f)
         b.set("B%d" % r, '=IF(ISNUMBER(OIS_MAIN!$P%(m)d),OIS_MAIN!$P%(m)d,"")' % f, fmt=DATE)
         b.set("C%d" % r, "=OIS_MAIN!$B%(w)d" % f, fmt=DATE)
@@ -2397,10 +2442,10 @@ def _tto_ppk_back(model: Model) -> None:
         b.set("E%d" % r, '=IFERROR($D%(r)d-$C%(r)d,"")' % f, fmt=INT0)
         b.set("F%d" % r, "=OIS_MAIN!$D%(w)d" % f, fmt=PCT3)
         # the rate typed (where it always was); with an O/N or a step typed instead, the rate that gives it: the step on
-        # the period before's O/N, back to the window's simple ACT/365 rate (overnight's inverse)
+        # the period before's O/N, back to the window's simple ACT/365 rate (overnight_bd's inverse)
         on = "IF(ISBLANK($%(kon)s%(r)d),$J%(r)d+$%(kstep)s%(r)d/10000,$%(kon)s%(r)d)" % f
         b.input("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(kon)s%(r)d),ISBLANK($%(kstep)s%(r)d)),"",IFERROR(IF(N($E%(r)d)>0,'
-                                   % f) + overnight_back(on, "$E%d" % r, 365) + ',""),""))', fmt=PCT3)
+                                   % f) + overnight_bd_back(on, "$E%d" % r, term) + ',""),""))', fmt=PCT3)
         b.input("%(kon)s%(r)d" % f, None, fmt=PCT3)
         b.input("%(kstep)s%(r)d" % f, None, fmt="0.0")
         if k == 0:
@@ -2411,11 +2456,12 @@ def _tto_ppk_back(model: Model) -> None:
             # ... and before any other: the window before it, at its market rate
             b.set("H%d" % r, "=OIS_MAIN!$D%(p)d" % f, fmt=PCT3)
             b.set("I%d" % r, '=IFERROR(OIS_MAIN!$C%(p)d-OIS_MAIN!$B%(p)d,"")' % f, fmt=INT0)
-        b.set("J%d" % r, "=" + overnight("$H%d" % r, "$I%d" % r, 365), fmt=PCT3)
+        b.set("J%d" % r, "=" + overnight_bd("$H%d" % r, "$I%d" % r, before), fmt=PCT3)
         # (two-way: what is typed in a column stands, else it is worked out from the rate - typed or given by the others)
-        b.set("K%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (kon, r, overnight("$%(x)s%(r)d" % f, "$E%d" % r, 365), kon, r), fmt=PCT3)
+        b.set("K%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (kon, r, overnight_bd("$%(x)s%(r)d" % f, "$E%d" % r, term), kon, r),
+              fmt=PCT3)
         b.set("L%d" % r, '=IF(ISBLANK($%(kstep)s%(r)d),IFERROR(($K%(r)d-$J%(r)d)*10000,""),$%(kstep)s%(r)d)' % f, fmt="0.0", bold=True)
-        b.set("M%d" % r, '=IFERROR((%s-$J%d)*10000,"")' % (overnight("$F%d" % r, "$E%d" % r, 365), r), fmt="0.0")
+        b.set("M%d" % r, '=IFERROR((%s-$J%d)*10000,"")' % (overnight_bd("$F%d" % r, "$E%d" % r, term), r), fmt="0.0")
     b.title("P1", "MPC SPREAD → PPK ADIMI")
     b.head("P2", ["Spread", "Adımın toplantısı", "Piyasa (bp)", "Elle spread (bp)", "MPCk+1 dönemi (ima)", "O/N eşdeğeri",
                   "İma PPK adımı (bp)", "Piyasanın adımı (bp)"])
@@ -2423,6 +2469,7 @@ def _tto_ppk_back(model: Model) -> None:
         # pair k: windows k (this row of A:M) and k + 1 (the next row) - the step at the later window's meeting
         r = PPK_FIRST + k
         f = {"r": r, "n": r + 1, "s": p0 + k, "x": PPK_SPREAD, "tl": tlater, "to": ton, "ts": tstep}
+        term = ppk_term(k + 1)                             # the later window's weekend / holiday term
         b.set("P%d" % r, "=OIS_MAIN!$A%(s)d" % f)
         b.set("Q%d" % r, "=$B%(n)d" % f, fmt=DATE)
         b.set("R%d" % r, "=OIS_MAIN!$B%(s)d" % f, fmt="0.0")
@@ -2430,14 +2477,15 @@ def _tto_ppk_back(model: Model) -> None:
         # spread that gives it: the step on the later window's period before (J'), back to its simple rate, less the
         # earlier window's market rate
         on = "IF(ISBLANK($%(to)s%(r)d),$J%(n)d+$%(ts)s%(r)d/10000,$%(to)s%(r)d)" % f
-        later = "IF(ISBLANK($%s%d),%s,$%s%d)" % (tlater, r, overnight_back(on, "$E%d" % (r + 1), 365), tlater, r)
+        later = "IF(ISBLANK($%s%d),%s,$%s%d)" % (tlater, r, overnight_bd_back(on, "$E%d" % (r + 1), term), tlater, r)
         b.input("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(tl)s%(r)d),ISBLANK($%(to)s%(r)d),ISBLANK($%(ts)s%(r)d)),"",IFERROR(('
                                    % f) + later + '-$F%d)*10000,""))' % r, fmt="0.0")
         for col, fmt in ((tlater, PCT3), (ton, PCT3), (tstep, "0.0")):
             b.input("%s%d" % (col, r), None, fmt=fmt)
         b.set("T%d" % r, '=IF(ISBLANK($%(tl)s%(r)d),IFERROR(IF(ISNUMBER($%(x)s%(r)d),$F%(r)d+$%(x)s%(r)d/10000,""),""),$%(tl)s%(r)d)' % f,
               fmt=PCT3)
-        b.set("U%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (ton, r, overnight("$T%d" % r, "$E%d" % (r + 1), 365), ton, r), fmt=PCT3)
+        b.set("U%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (ton, r, overnight_bd("$T%d" % r, "$E%d" % (r + 1), term), ton, r),
+              fmt=PCT3)
         b.set("V%d" % r, '=IF(ISBLANK($%(ts)s%(r)d),IFERROR(($U%(r)d-$J%(n)d)*10000,""),$%(ts)s%(r)d)' % f, fmt="0.0", bold=True)
         b.set("W%d" % r, "=$M%(n)d" % f, fmt="0.0")
 

@@ -3738,6 +3738,21 @@ async function clipAfter(page, action) {
       && Math.abs(trNumber(sprBack.later) - (trNumber(mpcMkt) - 0.30)) < 0.0015 && /^[+−-]?\d/.test(sprBack.step), { ppkBack, sprBack });
     await ppkClear('EK_PPK!G3');
     await ppkClear('EK_PPK!S3');
+    // the page and Broker Chat read a meeting swap's rate alike - TLREF compounded on business days, as the MPC ima model
+    // does (the desk's "B", 25.11.2026): the first window's rate typed on the page and said in a chat line, one step
+    await typeInto(page, 'EK_PPK!G3', '36,5');
+    await waitCell(page, 'EK_PPK!L3', 't.trim() !== ""');
+    const ppkChat = (await api(page, 'ayşe yilmaz', 'POST', '/api/broker/parse', { text: '10:00:00 mpc1 36.50/37.00' })).json || {};
+    const ppkLine = (ppkChat.rows || []).find((q) => q.mpc && q.mpc.start && q.implied) || {};
+    const ppkBd = { l: await cellV('EK_PPK!L3'), start: await cellV('EK_PPK!C3'), chat: (ppkLine.implied || {}).bid,
+      chatStart: (ppkLine.mpc || {}).start, note: await page.evaluate(() => {
+        const n = document.querySelector('#content .panel[data-panel="PPK1"] .note'); return n ? n.textContent : ''; }) };
+    check('OIS · PPK and Broker Chat give a meeting swap\'s rate one PPK step, TLREF compounded on business days (the note under '
+      + 'the table says so): 36,50 % typed for the first window = the chat\'s "mpc1 36.50/37.00"',
+      typeof ppkBd.l === 'number' && typeof ppkBd.chat === 'number' && Math.abs(ppkBd.l - ppkBd.chat) < 1e-9
+      && typeof ppkBd.start === 'number' && new Date(Date.UTC(1899, 11, 30) + ppkBd.start * 86400000).toISOString().slice(0, 10) === ppkBd.chatStart
+      && /iş günlerinde bileşik/.test(ppkBd.note), ppkBd);
+    await ppkClear('EK_PPK!G3');
     // two-way: a step typed reads the O/N (the period before's + the step) and the window's rate that prices it
     await typeInto(page, 'EK_PPK!L4', '-25');
     await waitCell(page, 'EK_PPK!G4', 't.trim() !== ""');

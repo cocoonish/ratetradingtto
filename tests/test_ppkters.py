@@ -2,10 +2,12 @@
 ``tto/extras.py``):
 
 * **MPC OIS / MPC SPREAD → PPK adımı** (``EK_PPK``): a meeting window's swap rate typed -> the PPK step it prices, the
-  overnight equivalent (ACT/365) of the rate − that of the market's rate for the period before the meeting; an MPC spread
-  typed -> the later window's rate (the earlier window's market + the spread) and its step.  Broker Chat's implied step
-  of a meeting swap (``Service._mpc_implied``), cell for cell: the page and a chat line give the same bp - on Bootstrap
-  and on PPK basamak.
+  overnight equivalent of the rate − that of the market's rate for the period before the meeting; an MPC spread typed ->
+  the later window's rate (the earlier window's market + the spread) and its step.  Broker Chat's implied step of a
+  meeting swap (``Service._mpc_implied``), cell for cell: the page and a chat line give the same bp - on Bootstrap and on
+  PPK basamak.  The overnight equivalent is TLREF's as the MPC ima model compounds it (the desk, 25.11.2026: "B"): on
+  the TRY calendar's business days, ACT/365 (``ppkcurve.window_overnight``) - the model's own window rate gives the
+  model's own TLREF back, and its steps.
 * **TÜM FORWARD / FRA**: a target FRA typed -> the end leg (with the start leg's fill) or the start leg (with the end
   leg's) it needs: the realized FRA's own formula, inverted.
 * **USD · FOMC**: a window's OIS rate typed -> its O/N (the İma O/N formula on the rate's DF ratio) and the FOMC step it
@@ -22,10 +24,10 @@ import pytest
 from conftest import cell, make_service
 from tto import extras as ex
 from tto import meetings as mt
-from tto.service import Service
+from tto import ppkcurve as pk
 from tto.views import load_views
 from tto.xl.model import Model, parse_a1, parse_range
-from tto.xl.values import date_to_serial
+from tto.xl.values import date_to_serial, serial_to_date
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOWS = ex.PPK_WINDOWS[1] - ex.PPK_WINDOWS[0] + 1            # 16 windows of 'MPC OIS' ...
@@ -39,13 +41,14 @@ def put(svc, user, cells, book="tto", **kw):
     return res
 
 
-#: Broker Chat's overnight equivalent of a meeting window's rate: compounded every day, ACT/365 - the page's own
-on365 = Service._overnight
+def term(svc, user, slot):
+    """The weekend / holiday term of the window from meeting slot ``slot``'s effective day to the next one's (slot −1:
+    the stub from the OIS spot), as the MPC ima model has it: Motor's Pcum at its end − at its start."""
+    return cell(svc, "Motor!J%d" % (slot + 6), user) - cell(svc, "Motor!J%d" % (slot + 5), user)
 
 
-def rate365(on, days):
-    """The other way: the simple ACT/365 rate a daily-compounded overnight rate makes over ``days``."""
-    return ((1.0 + on / 365.0) ** days - 1.0) * 365.0 / days
+#: Broker Chat's overnight equivalent of a meeting window's rate, and its way back: TLREF on business days (ACT/365)
+on_bd, rate_bd = pk.window_overnight, pk.window_rate
 
 
 def ppk(svc, user, col, r):
@@ -61,10 +64,13 @@ def chat(svc, user, text):
 # ============================================================================== MPC OIS / MPC SPREAD -> PPK step
 def test_the_windows_are_mpc_ois_rows_with_the_period_before_each(service):
     """A row of EK_PPK is a window of 'MPC OIS': its dates, days and market rate; the period before it the window before
-    (its market rate and days) - for the first window the bootstrap's stub from the OIS spot (ln DF 0 there)."""
+    (its market rate and days) - for the first window the bootstrap's stub from the OIS spot (ln DF 0 there).  Their
+    overnight equivalents are TLREF's on business days, each window with its own weekend / holiday term (the model's,
+    Motor's Pcum: 0 at the spot)."""
     import math
     u = service.login("PPK ters satırlar")["user"]
     spot = cell(service, "OIS_MAIN!B2", u)
+    assert cell(service, "Motor!J4", u) == 0.0 and cell(service, "Motor!C4", u) == 0.0
     for k in range(WINDOWS):
         r, w = ex.PPK_FIRST + k, ex.PPK_WINDOWS[0] + k
         assert ppk(service, u, "A", r) == cell(service, "OIS_MAIN!A%d" % w, u)
@@ -73,6 +79,9 @@ def test_the_windows_are_mpc_ois_rows_with_the_period_before_each(service):
         assert ppk(service, u, "D", r) == cell(service, "OIS_MAIN!C%d" % w, u)
         assert ppk(service, u, "E", r) == cell(service, "OIS_MAIN!C%d" % w, u) - cell(service, "OIS_MAIN!B%d" % w, u) > 0
         assert ppk(service, u, "F", r) == cell(service, "OIS_MAIN!D%d" % w, u)
+        # the model's window: its days are Motor's effective days, counted from the OIS spot
+        assert ppk(service, u, "C", r) == spot + cell(service, "Motor!C%d" % (5 + k), u)
+        assert ppk(service, u, "D", r) == spot + cell(service, "Motor!C%d" % (6 + k), u)
         if k:
             assert ppk(service, u, "H", r) == cell(service, "OIS_MAIN!D%d" % (w - 1), u)
             assert ppk(service, u, "I", r) == ppk(service, u, "E", r - 1)
@@ -80,10 +89,10 @@ def test_the_windows_are_mpc_ois_rows_with_the_period_before_each(service):
             start = cell(service, "OIS_MAIN!B%d" % w, u)
             assert ppk(service, u, "I", r) == start - spot > 0
             assert ppk(service, u, "H", r) == pytest.approx((math.exp(-cell(service, "OIS_MAIN!BK%d" % w, u)) - 1) * 365 / (start - spot), rel=1e-15)
-        assert ppk(service, u, "J", r) == pytest.approx(on365(ppk(service, u, "H", r), ppk(service, u, "I", r)), rel=1e-15)
+        assert ppk(service, u, "J", r) == pytest.approx(on_bd(ppk(service, u, "H", r), ppk(service, u, "I", r), term(service, u, k - 1)), rel=1e-15)
         # nothing typed: no step; the market's own step beside it (the rate's cell: its two-way default, nothing)
         assert ppk(service, u, ex.PPK_RATE, r) == "" and ppk(service, u, "K", r) == "" and ppk(service, u, "L", r) == ""
-        on_mkt = on365(ppk(service, u, "F", r), ppk(service, u, "E", r))
+        on_mkt = on_bd(ppk(service, u, "F", r), ppk(service, u, "E", r), term(service, u, k))
         assert ppk(service, u, "M", r) == pytest.approx((on_mkt - ppk(service, u, "J", r)) * 1e4, abs=1e-9)
     for k in range(PAIRS):
         r = ex.PPK_FIRST + k
@@ -115,9 +124,9 @@ def test_a_windows_rate_gives_broker_chats_step_and_goes_back(service):
             assert ppk(service, u, "L", r) == pytest.approx(imp["bid"], abs=1e-9), said            # the page = the chat
             assert ppk(service, u, "M", r) == pytest.approx(imp["model"], abs=1e-9), said
             # back: the step on the period before's overnight rate makes the rate typed
-            step, base, days = ppk(service, u, "L", r), ppk(service, u, "J", r), ppk(service, u, "E", r)
-            assert rate365(base + step / 1e4, days) == pytest.approx(ppk(service, u, ex.PPK_RATE, r), abs=1e-12)
-            assert ppk(service, u, "K", r) == pytest.approx(on365(ppk(service, u, ex.PPK_RATE, r), days), rel=1e-15)
+            step, base, days, w = ppk(service, u, "L", r), ppk(service, u, "J", r), ppk(service, u, "E", r), term(service, u, r - ex.PPK_FIRST)
+            assert rate_bd(base + step / 1e4, days, w) == pytest.approx(ppk(service, u, ex.PPK_RATE, r), abs=1e-12)
+            assert ppk(service, u, "K", r) == pytest.approx(on_bd(ppk(service, u, ex.PPK_RATE, r), days, w), rel=1e-15)
         assert lines["dec"]["implied"]["ask"] > lines["dec"]["implied"]["bid"]
         # the market's own rate typed: the market's own step; a higher rate, a higher step
         for k in range(WINDOWS):
@@ -155,7 +164,7 @@ def test_an_mpc_spread_gives_the_later_windows_rate_and_its_step(service):
         assert ppk(service, u, "V", 3) == pytest.approx(chat(service, u, "10:00:00 jan27 mpc 35.46/35.50")["jan27"]["implied"]["bid"], abs=1e-9)
         put(service, u, {"EK_PPK!S3": "-30"})
         assert ppk(service, u, "T", 3) == pytest.approx(ppk(service, u, "F", 3) - 0.003, abs=1e-15)
-        assert ppk(service, u, "U", 3) == pytest.approx(on365(ppk(service, u, "T", 3), ppk(service, u, "E", 4)), rel=1e-15)
+        assert ppk(service, u, "U", 3) == pytest.approx(on_bd(ppk(service, u, "T", 3), ppk(service, u, "E", 4), term(service, u, 1)), rel=1e-15)
         put(service, u, {"EK_PPK!S3": ""})
         assert ppk(service, u, "T", 3) == "" and ppk(service, u, "V", 3) == ""
     finally:
@@ -186,6 +195,92 @@ def test_the_market_and_the_chat_follow_the_curve_setting_alike(service):
         service.set_interp(step, "boot")
         service.reset_inputs(step, "tto")
         service.reset_inputs(boot, "tto")
+
+
+def solve(f, lo=-0.2, hi=0.2):
+    """The root of ``f``, increasing around it, by bisection (an algorithm of its own)."""
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        lo, hi = (mid, hi) if f(mid) < 0.0 else (lo, mid)
+    return (lo + hi) / 2.0
+
+
+def test_a_windows_overnight_is_tlref_on_the_desks_business_days(service):
+    """The desk, 25.11.2026: "B" - a window's rate is turned into its overnight rate as TLREF accrues: on the business days
+    of the desk's TRY calendar (the dashboard's TR holiday list, Ayarlar → Tatiller), each one's rate for the calendar days
+    to the next business day.  Counted by hand from the list for every window of the table: its ends are business days,
+    its term Σ g(g − 1)/2 over the gaps is the model's (Motor's Pcum), and the O/N of a rate typed solves the model's own
+    equation (bisection).  The replay's second window holds the Ramazan Bayramı of 2027 (09–11.03: Monday's rate for four
+    days) and the first one New Year's Day (Thursday's rate for four days)."""
+    import math
+    u = service.login("PPK ters iş günü")["user"]
+    holidays = service.holiday_dates(("TRY",))
+    try:
+        for k in range(WINDOWS):
+            r = ex.PPK_FIRST + k
+            start, end = (serial_to_date(ppk(service, u, c, r)) for c in "CD")
+            days = [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
+            business = [d for d in days if d.weekday() < 5 and d not in holidays]
+            assert business[0] == start and business[-1] == end, k                       # effective days are business days
+            gaps = [(b - a).days for a, b in zip(business, business[1:])]
+            assert sum(gaps) == ppk(service, u, "E", r)
+            assert sum(g * (g - 1) / 2 for g in gaps) == term(service, u, k), k          # the model's term is the list's
+            if start == dt.date(2027, 1, 22) and end == dt.date(2027, 3, 19):              # (the replay's calendar)
+                assert (dt.date(2027, 3, 8), dt.date(2027, 3, 12)) in list(zip(business, business[1:]))
+                assert (len(business), gaps.count(3), gaps.count(4), term(service, u, k)) == (38, 8, 1, 30.0)
+            if start == dt.date(2026, 12, 11):
+                assert (dt.date(2026, 12, 31), dt.date(2027, 1, 4)) in list(zip(business, business[1:]))
+        # a rate typed for each window: its O/N by hand, from the window's own days and term
+        put(service, u, {"EK_PPK!G%d" % (ex.PPK_FIRST + k): "35,5" for k in range(WINDOWS)})
+        for k in range(WINDOWS):
+            r = ex.PPK_FIRST + k
+            d, w = ppk(service, u, "E", r), term(service, u, k)
+            x = solve(lambda v: d * math.log(1 + v) - w * v * v - math.log(1 + 0.355 * d / 365))
+            assert ppk(service, u, "K", r) == pytest.approx(365 * x, rel=0, abs=1e-13), k      # (LN(1 + x)'s digits: 1e-9 bp)
+            # (every calendar day compounded alone - before 25.11.2026 - is below it by 365·W·x²/d: 1.5 bp over six
+            # weekends at 35,5 %)
+            daily = 365 * ((1 + 0.355 * d / 365) ** (1 / d) - 1)
+            assert ppk(service, u, "K", r) - daily == pytest.approx(365 * w * x * x / d, rel=0.01), k
+    finally:
+        service.reset_inputs(u, "tto")
+
+
+def test_the_models_own_window_rates_give_its_own_tlref_and_steps(service):
+    """The step read from a quote is the MPC ima model's own convention: the model's window rate ("İma oran (model)",
+    OIS_MAIN!BJ: Motor's TLREF of the window compounded its way) typed for a window gives the model's TLREF back as its O/N
+    equivalent (Motor!K, 1e-12) - in both tables -, so the steps between them are the model's steps (Motor!K's, 1e-9 bp),
+    the first one from the model's stub.  The market's own window rate typed gives the market's own step (Piyasanın adımı),
+    on the same convention."""
+    u = service.login("PPK ters model")["user"]
+    try:
+        bj = [cell(service, "OIS_MAIN!BJ%d" % (ex.PPK_WINDOWS[0] + k), u) for k in range(WINDOWS)]
+        tlref = [cell(service, "Motor!K%d" % (4 + k), u) for k in range(WINDOWS + 1)]      # the stub's, then each window's
+        put(service, u, {"EK_PPK!G%d" % (ex.PPK_FIRST + k): bj[k] for k in range(WINDOWS)})
+        put(service, u, {"EK_PPK!T%d" % (ex.PPK_FIRST + k): bj[k + 1] for k in range(PAIRS)})    # the later windows' rates
+        on = [ppk(service, u, "K", ex.PPK_FIRST + k) for k in range(WINDOWS)]
+        for k in range(WINDOWS):
+            assert on[k] == pytest.approx(tlref[k + 1], abs=1e-12), k
+        for k in range(PAIRS):
+            assert ppk(service, u, "U", ex.PPK_FIRST + k) == pytest.approx(tlref[k + 2], abs=1e-12), k
+        # the model's stub rate (the spot to the first effective day at Motor!K4) gives its TLREF: the first step too
+        stub = rate_bd(tlref[0], cell(service, "Motor!C5", u), term(service, u, -1))
+        steps = [on_bd(stub, cell(service, "Motor!C5", u), term(service, u, -1))] + on
+        for k in range(WINDOWS):
+            assert (steps[k + 1] - steps[k]) * 1e4 == pytest.approx((tlref[k + 1] - tlref[k]) * 1e4, abs=1e-9), k
+        # every calendar day compounded alone (the convention before 25.11.2026) read the model's window rates low, by
+        # 365·W·x²/d (1.3-2.5 bp on the replay day)
+        for k in range(WINDOWS):
+            e, x = ppk(service, u, "E", ex.PPK_FIRST + k), tlref[k + 1] / 365
+            daily = 365 * ((1 + bj[k] * e / 365) ** (1 / e) - 1)
+            assert tlref[k + 1] - daily == pytest.approx(365 * term(service, u, k) * x * x / e, rel=0.01), k
+        # the market's own window rate: the market's own step, as the page's market column reads it
+        put(service, u, {"EK_PPK!G%d" % (ex.PPK_FIRST + k): ppk(service, u, "F", ex.PPK_FIRST + k) for k in range(WINDOWS)})
+        for k in range(WINDOWS):
+            r = ex.PPK_FIRST + k
+            assert ppk(service, u, "L", r) == pytest.approx(ppk(service, u, "M", r), abs=1e-9), k
+            assert ppk(service, u, "K", r) == pytest.approx(on_bd(ppk(service, u, "F", r), ppk(service, u, "E", r), term(service, u, k)), rel=1e-15)
+    finally:
+        service.reset_inputs(u, "tto")
 
 
 # ============================================================================== TÜM FORWARD / FRA: the other leg
@@ -334,9 +429,16 @@ def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
         assert cell(svc, "EK_PPK!B6", a) == float(date_to_serial(dt.date(2027, 3, 18)))           # the spread's first window
         assert cell(svc, "EK_PPK!B5", a) == float(date_to_serial(dt.date(2027, 2, 11)))           # the new meeting: nothing typed
         assert cell(svc, "EK_PPK!S5", a) == "" and cell(svc, "EK_PPK!T5", a) == ""
-        # the 21.01.2027 window ends at the new meeting now: the same rate, another window - another step
+        # the 21.01.2027 window ends at the new meeting now: the same rate, another window - another step, read on the new
+        # window's business days (22.01 → 12.02.2027: 21 days, three weekends)
         assert cell(svc, "EK_PPK!D4", a) == cell(svc, "OIS_MAIN!C85", a) == float(date_to_serial(dt.date(2027, 2, 12)))
         assert cell(svc, "EK_PPK!L4", a) != pytest.approx(step, abs=1e-6)
+        assert (cell(svc, "EK_PPK!G4", a), cell(svc, "EK_PPK!E4", a), term(svc, a, 1)) == (0.35, 21.0, 9.0)
+        assert cell(svc, "EK_PPK!K4", a) == pytest.approx(on_bd(0.35, 21.0, 9.0), rel=1e-15)
+        assert cell(svc, "EK_PPK!L4", a) == pytest.approx((on_bd(0.35, 21.0, 9.0) - cell(svc, "EK_PPK!J4", a)) * 1e4, abs=1e-9)
+        # the step typed for the 18.03.2027 window stays the step; the rate that prices it follows the new window
+        assert cell(svc, "EK_PPK!L6", a) == 12.5
+        assert cell(svc, "EK_PPK!G6", a) == pytest.approx(rate_bd(cell(svc, "EK_PPK!J6", a) + 0.00125, cell(svc, "EK_PPK!E6", a), term(svc, a, 3)), abs=1e-15)
         assert cell(svc, "EK_PPK!T6", a) == pytest.approx(cell(svc, "EK_PPK!F6", a) - 0.0025, abs=1e-15)
         # ---- the roll: 10.12.2026 has passed - its window's rate is set aside, the others a row up
         def move_spot():
@@ -350,6 +452,9 @@ def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
         assert mt.parked(svc.store)["tcmb"]["2026-12-10"]["user"] == {a: {"EK_PPK!G": 0.365}}
         assert cell(svc, "EK_PPK!B3", a) == float(date_to_serial(dt.date(2027, 1, 21))) and cell(svc, "EK_PPK!G3", a) == 0.35
         assert isinstance(cell(svc, "EK_PPK!L3", a), float)
+        # (the calendar term counted from the new spot: the window's own still)
+        assert cell(svc, "EK_PPK!K3", a) == pytest.approx(on_bd(0.35, cell(svc, "EK_PPK!E3", a), term(svc, a, 0)), rel=1e-15)
+        assert term(svc, a, 0) == 9.0 and term(svc, a, -1) == cell(svc, "Motor!J5", a) > 0
         # ---- the FOMC list pasted without the two held meetings: a rate typed goes with its meeting
         put(svc, a, {"SOFR_FOMC!AB74": "3,9", "SOFR_FOMC!AB76": "4,2"}, book="sofr")
         new = ["17.03.2027", "28.04.2027", "09.06.2027", "28.07.2027", "15.09.2027", "27.10.2027", "08.12.2027",
@@ -438,6 +543,9 @@ def test_left_out_when_the_tables_are_not_what_they_read():
     tto = Model.load(path)
     ex.SheetBuilder(tto, "OIS_MAIN").patch("B110", "=ROUND((D92-D91)*100,2)")                 # a spread in another unit
     assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!B110 beklenen formül değil (ROUND((D92-D91)*10000,2) yok)"]
+    tto = Model.load(path)
+    ex.SheetBuilder(tto, "Motor").patch("J9", "=INDEX($F$528:$F$4228,C9)")                   # the model's term read a day off
+    assert ex.apply("tto", tto) == ["EK_PPK: Motor!J9 beklenen formül değil (INDEX($F$528:$F$4228,MIN(C9,3700)+1) değil)"]
     tto = Model.load(path)
     ex.SheetBuilder(tto, "OIS_MAIN").patch("S400", "=(R400*P400-Q400*O400)/(P400-O400)")       # fills without the market
     problems = ex.apply("tto", tto)

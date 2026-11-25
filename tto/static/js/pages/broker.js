@@ -286,7 +286,9 @@ function impliedTip(q) {
   const m = q.implied;
   if (!m) return '';
   if (m.kind === 'mpc') {
-    return 'İma PPK adımı (' + isoToTr(m.meeting) + ' toplantısı, bp): seviyenin günlük bileşik ON karşılığı (' + num(m.days, 0) + ' gün, ACT/365) − '
+    return 'İma PPK adımı (' + isoToTr(m.meeting) + ' toplantısı, bp): seviyenin ON karşılığı (' + num(m.days, 0) + ' gün; TLREF gibi yalnız iş '
+      + 'günlerinde bileşik - hafta sonu / tatilde önceki iş gününün faizi aradaki günler kadar tek adımda -, ACT/365: MPC ima modelinin '
+      + 'bileşiği, OIS · PPK\'daki MPC OIS → PPK ADIMI\'yla aynı) − '
       + 'toplantıdan önceki dönemin MPC OIS bootstrap seviyesinin ON karşılığı (' + isoToTr(m.prev_from) + ' → ' + isoToTr(m.prev_to) + ': '
       + num(m.prev, 2, false) + ' % → ON ' + num(m.prev_on, 2, false) + ' %). Model: bootstrap\'ın kendi dönem seviyesi '
       + (typeof m.model_level === 'number' ? num(m.model_level, 2, false) + ' % → adım ' + num(m.model, 0, false) + ' bp' : 'yok')

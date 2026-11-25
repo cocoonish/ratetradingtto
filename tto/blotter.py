@@ -531,14 +531,23 @@ class OisMarket(object):
     def mpc_table(self) -> Dict[str, Any]:
         """The 'MPC OIS' table of OIS_MAIN as days and discount factors: the OIS spot (B2) and, for every meeting it
         covers, its decision day (the workbook's list, P10…) and effective day (B / C), with the bootstrap ln
-        discount factor of each day (BK / BL; 0 at the spot).  ``{"spot", "meetings": [(decision, effective)],
-        "lndf": {day: ln DF}}`` (Excel serials).  Read once per market object: what :meth:`mpc_span` prices with."""
+        discount factor of each day (BK / BL; 0 at the spot) and the MPC ima model's calendar term there (Pcum, Motor!J
+        of the meeting's row - B / C of row 84 + k are the spot + Motor!C of rows 5 + k / 6 + k -; Motor!J4, 0, at the
+        spot).  ``{"spot", "meetings": [(decision, effective)], "lndf": {day: ln DF}, "pcum": {day: Pcum}}`` (Excel
+        serials).  Read once per market object: what :meth:`mpc_span` and :meth:`mpc_term` price with."""
         if self._mpc is not None:
             return self._mpc
         spot = self.value("OIS_MAIN!B2")
-        out: Dict[str, Any] = {"spot": spot if type(spot) is float else None, "meetings": [], "lndf": {}}
+        out: Dict[str, Any] = {"spot": spot if type(spot) is float else None, "meetings": [], "lndf": {}, "pcum": {}}
+
+        def pcum(day: float, row: int) -> None:
+            v = self.value("Motor!J%d" % row)
+            if type(v) is float:
+                out["pcum"][day] = v
+
         if out["spot"] is not None:
             out["lndf"][spot] = 0.0
+            pcum(spot, 4)
         for k, r in enumerate(range(MPC_ROWS[0], MPC_ROWS[1] + 1)):
             start, end = self.value("OIS_MAIN!B%d" % r), self.value("OIS_MAIN!C%d" % r)
             a, b = self.value("OIS_MAIN!BK%d" % r), self.value("OIS_MAIN!BL%d" % r)
@@ -548,9 +557,11 @@ class OisMarket(object):
                 first = self.value("OIS_MAIN!P%d" % (10 + k))
                 out["meetings"].append((first if type(first) is float else start - 1.0, start))
                 out["lndf"][start] = a
+                pcum(start, 5 + k)
             decision = self.value("OIS_MAIN!P%d" % (11 + k))
             out["meetings"].append((decision if type(decision) is float else end - 1.0, end))
             out["lndf"][end] = b
+            pcum(end, 6 + k)
         self._mpc = out
         return out
 
@@ -562,6 +573,15 @@ class OisMarket(object):
         if start not in lndf or end not in lndf or end <= start:
             return None
         return (math.exp(lndf[start] - lndf[end]) - 1.0) * 365.0 / (end - start)
+
+    def mpc_term(self, start: float, end: float) -> Optional[float]:
+        """The weekend / holiday term of the period between two days of the 'MPC OIS' table, as the MPC ima model reads
+        it - its Pcum at the end − at the start (:func:`tto.ppkcurve.growth`; what EK_PPK reads, ``extras.ppk_term``).
+        ``None`` for any other day."""
+        pcum = self.mpc_table()["pcum"]
+        if start not in pcum or end not in pcum or end <= start:
+            return None
+        return pcum[end] - pcum[start]
 
     def between(self, start: float, end: float) -> Dict[str, Any]:
         """A swap from one date to another, paid once at the end - how a meeting-dated OIS trades.  The numbers

@@ -326,35 +326,55 @@ The ways back of 24.11.2026 ([desk-decisions.md](desk-decisions.md#ways-back-rat
 
 **TRY OIS - a meeting window's rate → the PPK step** (`EK_PPK`, Broker Chat's `Service._mpc_implied`):
 - A window of 'MPC OIS' runs from a meeting's effective day to the next one's (`OIS_MAIN!B84:C99`, Motor's `C5:C21` from
-  the OIS spot). Its market rate is simple ACT/365 off the table's ln DFs (`D` = (DF start / DF end − 1)·365 / days, `BK`
-  / `BL` read on `BOOT_*`): **the viewer's curve** - Bootstrap, or a PPK basamak user's.
-- O/N equivalent: **compounded every calendar day, ACT/365**: 365·((1 + r·d/365)^(1/d) − 1) (`Service._overnight`,
-  `extras.overnight(…, 365)`).
-- Step = the rate's O/N − the O/N of the market's rate for the period before (the window before; for the first window the
-  bootstrap's stub from the OIS spot, ln DF 0 there). An MPC spread typed: the later window's rate = the earlier window's
-  market + the spread, on the same base.
-- **Not Motor's MPC path convention.** Motor's "MPC ima" model (`OIS_MAIN!BJ`, `BD:BF`, `Motor!K / L`) compounds TLREF on
-  business days with a weekend term, ln growth = d·ln(1 + x/365) − Pcum·(x/365)² (`Motor!F528:F4228`). On the replay
-  windows (03.11.2026) its O/N is 1.3–2.3 bp above the chat's for the same rate, and a step differs by at most 0.95 bp
-  (most under 0.3 bp). The page uses the chat's, so the two give the same answer (the desk's request); do not mix the two
-  in one step.
+  the OIS spot: the business day after the decision, `Motor!G`). Its market rate is simple ACT/365 off the table's ln DFs
+  (`D` = (DF start / DF end − 1)·365 / days, `BK` / `BL` read on `BOOT_*`): **the viewer's curve** - Bootstrap, or a PPK
+  basamak user's.
+- **O/N equivalent: TLREF's, as the MPC ima model compounds it** (the desk, 25.11.2026: "B";
+  [desk-decisions.md](desk-decisions.md#ppk-adımı-tlref-iş-günlerinde-bileşik-25112026)). Only business days of the TRY
+  list (`Motor!A361:A523`, Ayarlar → Tatiller) accrue, each for the calendar days to the next business day (1; 3 over a
+  weekend - Friday's rate for three days in one step -; more over a holiday), ACT/365. Over a window of d days whose
+  business days are g apart that is Π (1 + x·g), x = O/N / 365; the model (`Motor!L`, `OIS_MAIN!BJ`, `ppkcurve.StepCurve`)
+  takes its log to the second order, and so does the step:
+  - ln(1 + r·d/365) = d·ln(1 + x) − W·x², **W = Σ g(g − 1)/2** - the window's weekend / holiday term, the model's own:
+    Motor's Pcum (its daily calendar `Motor!F528:F4228`, days from the OIS spot; `Motor!J` at a meeting's effective day,
+    `J4` = 0 at the spot) at the window's end − at its start (`extras.ppk_term`, `OisMarket.mpc_term`);
+  - rate → O/N: that equation solved (`ppkcurve.window_overnight`, eight fixed-point steps from the calendar day's answer;
+    `extras.overnight_bd` writes the same steps as the cells' formula, so the page and the chat agree to the last digit);
+    O/N → rate: (exp(d·ln(1 + x) − W·x²) − 1)·365/d, `OIS_MAIN!BJ`'s formula (`ppkcurve.window_rate`,
+    `extras.overnight_bd_back`). With no weekend or holiday in the window (W = 0) it is every day compounded alone.
+  - **Consistency:** the model's own window rate (`OIS_MAIN!BJ`, "İma oran (model)") typed gives the model's TLREF
+    (`Motor!K`) back as its O/N (1e-12), so the O/Ns of consecutive windows step by the model's steps; the market's own
+    window rate gives the market's own step (`M`). On the replay windows the terms Motor reads are the TRY list's, counted
+    by hand (the first window holds New Year's Day, the second the 2027 Ramazan Bayramı).
+  - The second order against the exact product Π (1 + x·g): a few thousandths of a bp of O/N over a weekend, a few
+    hundredths over a bayram week, at TRY's rates (`test_ppkcurve`); on the replay windows (03.11.2026, the model's own
+    window rates) at most 0.008 bp of O/N and 0.004 bp of a step.
+- Step = the rate's O/N − the O/N of the market's rate for the period before (the window before, with its own term; for
+  the first window the bootstrap's stub from the OIS spot, ln DF 0 there, term `Motor!J5 − J4`). An MPC spread typed: the
+  later window's rate = the earlier window's market + the spread, on the same base.
+- **Until 25.11.2026 every calendar day compounded alone**, 365·((1 + r·d/365)^(1/d) − 1), in both the page and the chat;
+  for the same rate that O/N is 1.3–2.5 bp below TLREF's on the replay windows (the model's window rates read 1.3–2.5 bp
+  under the model's TLREF). The market's step moved by −0.87 … +0.95 bp (replay, 03.11.2026; a step typed stays the step,
+  a rate typed stays the rate - only what is worked out from them moves).
 
 **USD (SOFR / FF OIS) - a FOMC window's rate → the step** (`SOFR_FOMC!AA:AE`): the window from a meeting's effective day
 to the next active meeting's (`F:H`); its rate simple **ACT/360** (İşlem 1's `E` = (exp(ln DF start − ln DF end) − 1)·36000 /
 days); O/N compounded daily, ((1 + r·d/36000)^(1/d) − 1)·36000 - the page's own `K` on the rate's DF ratio; step = O/N −
 `L` (the previous active meeting's `K`, the first's the stub O/N `B7 + B16/100`), in bp and in steps of `B9` (as `N`).
+**Not part of the 25.11.2026 decision:** SOFR is the USD page's own convention (its `K` compounds every calendar day), so
+USD · FOMC keeps it - the business-day change is TRY OIS's (TLREF) alone.
 
 **FRA from two spot swaps** (`OIS_MAIN!S336:S438`, TRY OIS): FRA = (R·P − Q·O) / (P − O), O / P the annuities to the start
 / end month on Motor's quarterly calendar (ACT/365), a blank fill the market's par (`I` / `J`). Its inverse (`U:W`): end
 leg = (F·(P − O) + Q·O) / P, start leg = (R·P − F·(P − O)) / O.
 
 **Two-way** (24.11.2026): the PPK tables and the FOMC table invert their own conversions in place - a step typed: O/N =
-the period before's O/N + the step, then the window's simple rate = ((1 + O/N/basis)^days − 1)·basis/days
-(`extras.overnight_back`, the exact inverse of `overnight`: ACT/365 for TRY OIS, ACT/360 in % for USD); a pair's later
-rate or its O/N or step gives the spread (later − the earlier window's market rate). Same curves and bases as above. The
-FRA list too (the desk's "Ok", 24.11.2026): an FRA typed into Gerçekleşen FRA holds the start leg (its fill, else its
-market par) and gives the end leg's fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula
-(`extras.fra_end_leg`, one implementation for both).
+the period before's O/N + the step, then the window's simple rate from that O/N - TRY OIS on business days
+(`extras.overnight_bd_back`, the model's window rate, the exact inverse of `overnight_bd`), USD every day in % on ACT/360
+(`extras.overnight_back`, ((1 + O/N/36000)^days − 1)·36000/days); a pair's later rate or its O/N or step gives the spread
+(later − the earlier window's market rate). Same curves and bases as above. The FRA list too (the desk's "Ok",
+24.11.2026): an FRA typed into Gerçekleşen FRA holds the start leg (its fill, else its market par) and gives the end leg's
+fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula (`extras.fra_end_leg`, one implementation for both).
 
 ## Spot and value dates
 

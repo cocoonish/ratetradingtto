@@ -8601,17 +8601,14 @@ class Service(object):
         return {"meetings": [(d, effective.get(d, d + _dt.timedelta(days=1))) for d in sorted(days)],
                 "spot": serial_to_date(table["spot"]) if table["spot"] is not None else None, "on": _dt.date.fromisoformat(day)}
 
-    @staticmethod
-    def _overnight(rate: float, days: float) -> float:
-        """The overnight rate (ACT/365) that compounded every day for ``days`` gives the simple rate ``rate``: what
-        TLREF has to average over a meeting's period."""
-        return 365.0 * ((1.0 + rate * days / 365.0) ** (1.0 / days) - 1.0)
-
     def _mpc_implied(self, user: Optional[str], rows: List[Dict[str, Any]], board: Optional[List[Dict[str, Any]]] = None) -> None:
         """A meeting swap of one period - from a meeting to the next - next to the MPC OIS bootstrap: the step at its
         meeting that each of its levels stands for (``implied``, ``kind`` "mpc", bp) - the level's overnight
         equivalent − that of the bootstrap's rate for the period before the meeting (from the meeting before it, or
-        from the OIS spot for the first one).  ``model``: the bootstrap's own step for the meeting."""
+        from the OIS spot for the first one).  ``model``: the bootstrap's own step for the meeting.  The overnight
+        equivalent is TLREF's as the MPC ima model compounds it - on business days, the period's weekend / holiday term
+        the model's (:func:`tto.ppkcurve.window_overnight`, :meth:`OisMarket.mpc_term`; the desk, 25.11.2026: "B") -,
+        EK_PPK's to the bp's last digit."""
         items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "best_bid", "best_ask")) for r in board or ()]
         items = [(q, f) for q, f in items if q.get("kind") == "mpc" and (q.get("mpc") or {}).get("start") and (q.get("mpc") or {}).get("meeting")]
         mkt = self._broker_market(user) if items else None
@@ -8621,22 +8618,33 @@ class Service(object):
             days = sorted(mkt.mpc_table()["lndf"])
         except Exception:  # noqa: BLE001 - a workbook without the table
             return
+
+        def overnight(rate: float, a: float, b: float) -> Optional[float]:
+            term = mkt.mpc_term(a, b)
+            try:
+                return None if term is None else pk.window_overnight(rate, b - a, term)
+            except (ValueError, OverflowError):
+                return None
+
         for q, fields in items:
             s, e = self._serial(q["mpc"]["start"]), self._serial(q["mpc"]["end"])
             if s not in days or e not in days or days.index(s) == 0 or days.index(e) != days.index(s) + 1:
                 continue                                    # several periods, or days the table does not have
             p = days[days.index(s) - 1]
             prev, model = mkt.mpc_span(p, s), mkt.mpc_span(s, e)
-            if prev is None:
+            base = None if prev is None else overnight(prev, p, s)
+            if base is None:
                 continue
-            base = self._overnight(prev, s - p)
+            on_model = None if model is None else overnight(model, s, e)
             out: Dict[str, Any] = {"kind": "mpc", "meeting": q["mpc"]["meeting"], "days": e - s, "prev": prev * 100.0,
                                    "prev_on": base * 100.0, "prev_from": serial_to_date(p).isoformat(), "prev_to": q["mpc"]["start"],
-                                   "model": None if model is None else (self._overnight(model, e - s) - base) * 1e4,
+                                   "model": None if on_model is None else (on_model - base) * 1e4,
                                    "model_level": None if model is None else model * 100.0}
             for f in fields:
                 if type(q.get(f)) is float:
-                    out[f] = (self._overnight(q[f] / 100.0, e - s) - base) * 1e4
+                    on = overnight(q[f] / 100.0, s, e)
+                    if on is not None:
+                        out[f] = (on - base) * 1e4
             q["implied"] = out
 
     def _fx_market(self, user: Optional[str]) -> Optional[Callable[[str, float, str], Optional[Dict[str, float]]]]:

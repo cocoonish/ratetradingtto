@@ -899,8 +899,15 @@ def test_switches_next_to_the_screen(desk):
     assert all(t.get("kind") != "switch" for t in svc.broker(u, day)["rows"] if t.get("isin"))
 
 
-def overnight(rate, days):
-    return 365.0 * ((1.0 + rate * days / 365.0) ** (1.0 / days) - 1.0)
+def overnight(rate, days, term):
+    """A meeting window's rate -> its O/N as TLREF compounds (the desk, 25.11.2026: "B"): on business days, ``term`` the
+    window's weekend / holiday term - ln(1 + r·d/365) = d·ln(1 + x) − term·x², solved here by bisection."""
+    import math
+    lo, hi, lr = -0.2, 0.2, math.log(1.0 + rate * days / 365.0)
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        lo, hi = (mid, hi) if days * math.log(1.0 + mid) - term * mid * mid < lr else (lo, mid)
+    return 365.0 * (lo + hi) / 2.0
 
 
 def test_meeting_dated_quotes_next_to_the_mpc_bootstrap(desk):
@@ -928,13 +935,17 @@ def test_meeting_dated_quotes_next_to_the_mpc_bootstrap(desk):
     assert rows["spot/dec"]["model"] == pytest.approx(market(spot, e1), rel=1e-12) and rows["spot/dec"]["label"] == "MPC Spot–Ara26"
     far = rows["dec40"]
     assert far["flags"] == ["mpc?"] and far["model"] is None and far["key"] == "OIS:mpc:Ara40"
-    # the step at the December meeting: overnight equivalent of the level − that of the bootstrap's period before it
+    # the step at the December meeting: overnight equivalent of the level − that of the bootstrap's period before it, both
+    # TLREF's on business days - each period's weekend / holiday term the MPC ima model's (Motor's Pcum at its two days)
     stub = market(spot, e1) / 100
-    base = overnight(stub, e1 - spot)
+    t0, t1 = cell(svc, "Motor!J5", u) - cell(svc, "Motor!J4", u), cell(svc, "Motor!J6", u) - cell(svc, "Motor!J5", u)
+    assert (cell(svc, "Motor!C5", u), cell(svc, "Motor!C6", u)) == (e1 - spot, e2 - spot) and t0 > 0 and t1 > 0
+    base = overnight(stub, e1 - spot, t0)
     step = dec["implied"]
     assert step["kind"] == "mpc" and step["meeting"] == "2026-12-10" and step["days"] == e2 - e1
-    assert step["bid"] == pytest.approx((overnight(0.365, e2 - e1) - base) * 1e4) and step["ask"] == pytest.approx((overnight(0.37, e2 - e1) - base) * 1e4)
-    assert step["model"] == pytest.approx((overnight(dec["model"] / 100, e2 - e1) - base) * 1e4) and step["prev"] == pytest.approx(stub * 100)
+    assert step["prev_on"] == pytest.approx(base * 100, rel=1e-12)
+    assert step["bid"] == pytest.approx((overnight(0.365, e2 - e1, t1) - base) * 1e4) and step["ask"] == pytest.approx((overnight(0.37, e2 - e1, t1) - base) * 1e4)
+    assert step["model"] == pytest.approx((overnight(dec["model"] / 100, e2 - e1, t1) - base) * 1e4) and step["prev"] == pytest.approx(stub * 100)
     assert -300 < step["model"] < 300 and step["bid"] < step["ask"]
     assert "implied" not in rows["dec/mar"] and "implied" not in rows["spot/dec"]       # a step belongs to one meeting's period
     # kept: one board row per meeting swap, after the outrights, with the bootstrap as its model and the trade on it
@@ -943,7 +954,7 @@ def test_meeting_dated_quotes_next_to_the_mpc_bootstrap(desk):
     assert [r["label"] for r in board] == ["1Y", "MPC Spot–Ara26", "MPC Ara26", "MPC Ara26–Mar27", "MPC Oca27", "MPC Ara40"]
     r = next(x for x in board if x["label"] == "MPC Ara26")
     assert (r["kind"], r["bid"], r["ask"], r["last"]) == ("mpc", 36.50, 37.00, 36.75) and r["mid"] == pytest.approx(dec["model"])
-    assert r["bid_diff"] == pytest.approx((36.50 - dec["model"]) * 100) and r["implied"]["last"] == pytest.approx((overnight(0.3675, e2 - e1) - base) * 1e4)
+    assert r["bid_diff"] == pytest.approx((36.50 - dec["model"]) * 100) and r["implied"]["last"] == pytest.approx((overnight(0.3675, e2 - e1, t1) - base) * 1e4)
     # the trade form books it between the same two days, at the same market level
     q = svc.quote_ois(u, {"strategy": "mpc", "side": "PAY", "start": serial(r["mpc"]["start"]), "end": serial(r["mpc"]["end"]), "level": "36,75"})
     assert q["info"]["market"] * 100 == pytest.approx(r["mid"], rel=1e-12) and q["legs"][0]["tenor"] == "MPC 11.12.26–22.01.27"
