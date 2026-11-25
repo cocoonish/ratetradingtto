@@ -490,3 +490,93 @@ def is_date_format(fmt: str) -> bool:
 def is_percent_format(fmt: str) -> bool:
     secs = _sections(fmt or "General")
     return secs[0].pct > 0
+
+
+def is_number_format(fmt: str) -> bool:
+    """Whether a number in a cell of this format is shown as a number (General, ``0.00%``, ``#,##0" bp"`` ...) - not as
+    a date or a time, not as text (``@``), not as a fixed text (``"-"``)."""
+    return _sections(fmt or "General")[0].kind in ("num", "general")
+
+
+#: the most decimals a user's own number of decimals may ask for (a double holds 15-17 significant digits)
+MAX_DECIMALS = 10
+_DEC_CACHE: Dict[Tuple[str, int], str] = {}
+
+
+def with_decimals(fmt: str, n: int) -> str:
+    """``fmt`` showing ``n`` decimals - Excel's "Increase / Decrease Decimal": only the decimals change, the rest of the
+    format stays as it is: a percent stays a percent, the thousands separators, a scaling comma (``#,##0,,\\M``), the
+    negatives' section and its colour or brackets, a prefix or a suffix, an exponent's own digits.  Each number section
+    gets exactly ``n`` decimal zeros (``0.0#`` too).  A date, time or text section stays; so does a zero section that
+    shows no digit for zero (the accounting format's ``"-"??``: a dash has no decimals).  General becomes ``0.00…``
+    (no grouping, as General has none)."""
+    n = max(0, min(int(n), MAX_DECIMALS))
+    key = (fmt or "General", n)
+    hit = _DEC_CACHE.get(key)
+    if hit is not None:
+        return hit
+    parts = _split_sections(key[0])
+    out = [_section_with_decimals(part, n, zero=(k == 2)) for k, part in enumerate(parts)]
+    res = ";".join(out)
+    if len(_DEC_CACHE) > 2000:
+        _DEC_CACHE.clear()
+    _DEC_CACHE[key] = res
+    return res
+
+
+def _section_with_decimals(text: str, n: int, zero: bool) -> str:
+    """One section of a format (as ``_split_sections`` gives it) with ``n`` decimals; anything but a number section as it
+    is.  ``zero``: the third section (the one a zero takes)."""
+    sec = _parse_section(text)
+    if sec.kind == "general":
+        return "0" + ("." + "0" * n if n else "")
+    if sec.kind != "num" or (zero and "0" not in sec.int_ph + sec.frac_ph):
+        return text
+    # the section's own pieces, each with its text as written: what is not a digit of the number is kept verbatim
+    toks: List[Tuple[str, str]] = []
+    i, size = 0, len(text)
+    seen_dec = False
+    while i < size:
+        ch = text[i]
+        if ch == '"':
+            j = text.find('"', i + 1)
+            j = size - 1 if j < 0 else j
+            toks.append(("lit", text[i:j + 1]))
+            i = j + 1
+        elif ch in "\\_*" and i + 1 < size:
+            toks.append(("lit", text[i:i + 2]))           # an escaped character, a padding or a fill character
+            i += 2
+        elif ch == "[":
+            j = text.find("]", i)
+            j = size - 1 if j < 0 else j
+            toks.append(("lit", text[i:j + 1]))           # a colour, a currency [$₺-41F], a condition
+            i = j + 1
+        elif ch in "eE" and i + 1 < size and text[i + 1] in "+-":
+            j = i + 2
+            while j < size and text[j] in "0#?":
+                j += 1
+            toks.append(("lit", text[i:j]))               # the exponent and its own digits
+            i = j
+        elif ch in "0#?":
+            j = i
+            while j < size and text[j] in "0#?":
+                j += 1
+            toks.append(("frac" if seen_dec else "int", text[i:j]))
+            i = j
+        elif ch == "." and not seen_dec and _digits_follow_or_precede(text, i):
+            seen_dec = True
+            toks.append(("dec", "."))
+            i += 1
+        else:
+            toks.append(("lit", ch))                      # a grouping / scaling comma, %, a sign, a space ...
+            i += 1
+    point = "." + "0" * n if n else ""
+    at = next((k for k, t in enumerate(toks) if t[0] == "dec"), None)
+    if at is None:
+        ints = [k for k, t in enumerate(toks) if t[0] == "int"]
+        if not ints:
+            return text
+        at = ints[-1] + 1                                  # right after the integer digits (before a scaling comma)
+    else:
+        toks = toks[:at] + [t for t in toks[at:] if t[0] not in ("dec", "frac")]      # (the point and its digits go)
+    return "".join(t[1] for t in toks[:at]) + point + "".join(t[1] for t in toks[at:])

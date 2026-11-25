@@ -252,6 +252,18 @@ class Renderer(object):
             self._cf[si] = idx
         return idx
 
+    def xf_of(self, si: int, rc: int) -> List[Any]:
+        """A cell's look - [number format, bold, font colour, fill, alignment, italic] - as the model has it (the
+        workbook's, and what the dashboard's own sheets set at the start).  The one place a cell's own format is read:
+        a user's own number of decimals (tto/decimals.py) sits on top of it."""
+        model = self.book.model
+        xf_i = model.sheets[si].styles.get(rc, 0)
+        return model.xfs[xf_i] if xf_i < len(model.xfs) else model.xfs[0]
+
+    def format_of(self, si: int, rc: int) -> str:
+        """A cell's own number format (see :meth:`xf_of`)."""
+        return self.xf_of(si, rc)[0]
+
     # ------------------------------------------------------------------ single cell
     def cell(self, calc, si: int, r: int, c: int, loc: numfmt.Locale, overlay=None, cf_rules=(), cf_cache=None,
              shared_values=None) -> Dict[str, Any]:
@@ -264,8 +276,7 @@ class Renderer(object):
         except Exception as exc:  # noqa: BLE001
             return {"t": "#ERR", "k": "e", "tip": "%s: %s" % (type(exc).__name__, str(exc)[:120])}
         out: Dict[str, Any] = {}
-        xf_i = sheet.styles.get(rc, 0)
-        xf = model.xfs[xf_i] if xf_i < len(model.xfs) else model.xfs[0]
+        xf = self.xf_of(si, rc)
         fmt = xf[0]
         tv = type(v)
         if tv is float and v - v != 0.0:
