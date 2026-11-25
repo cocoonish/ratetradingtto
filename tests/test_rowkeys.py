@@ -242,8 +242,9 @@ def test_an_earlier_versions_database_is_taken_as_it_is_once(tmp_path):
 
 def test_ones_own_viop_prices_go_when_another_gold_contract_takes_the_column(tmp_path):
     """VİOP's columns are places: what is typed for a place stays with it when the contracts roll - but one's own VİOP bid
-    / ask typed into the gold calculator is that contract's price: when another contract takes the column (it expired, or
-    the desk typed another), it goes - for everyone, in the saved scenarios too; the other columns' stay."""
+    / ask typed into the gold calculator is that contract's price: when another contract takes the column and its own
+    left the table (the desk typed another; or it expired), it goes - for everyone, in the saved scenarios too; the other
+    columns' stay.  A contract that moved to another column takes it there (test_xau_twoway.py)."""
     s = make_service(tmp_path)
     try:
         a = s.login("Altın Fiyat")["user"]

@@ -1555,7 +1555,7 @@ Hesaplayıcılar's Weighted Average (which line to solve is ambiguous), TÜFE'ye
 **VİOP's gold calculator** (`EK_XAU` A38:E63) is left for the desk: its contract columns roll, and on a roll only the
 column's typed VİOP bid / ask go (`rowkeys.GOLD_PRICES`), the rest stays with the column - a value typed there two-way
 (a forward, points or a theoretical price belong to the contract; a rate may stay with the column) needs the desk's
-rule of which survive a roll.
+rule of which survive a roll. The desk answered on 25.11.2026 ("Evet"): *VİOP altın hesaplayıcısı iki yönlü* below.
 
 Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_STORES`, `viop_fx_implied`,
 `_tto_viop_tw`), `tto/views/90_calc.json`, `70_dv01.json`, `40_viop.json` (`"twoway"`, helper tables B36 / B11s / VT1),
@@ -1563,6 +1563,64 @@ Code: `tto/extras.py` (`TwHub`, `TW_HUBS`, `tw_hub_formula`, `_tto_tw_hub`; `VT_
 (`typed`, `markAnchor`); `tto/swaption.py` (`PREMIUM_UNITS`, `premium_of`, `normal_from_premium`),
 `tto/static/js/pages/swaption.js` (`editable`, `markTyped`). Tests: `tests/test_hesap_twoway.py`,
 `tests/test_viop_twoway.py`, `tests/test_prop.py`, `tests/test_swaption.py`.
+
+### VİOP altın hesaplayıcısı iki yönlü (25.11.2026)
+
+The two-way work of 24.11 left VİOP's gold calculator out, its contract columns roll (above). The question put to the
+desk:
+
+> "VİOP gold calculator: should it be two-way, with a typed price or forward following its contract when it rolls and a
+> typed rate staying in its column?"
+
+The desk, 25.11.2026: **"Evet"**.
+
+**What became two-way** (`EK_XAU` A38:E63, VİOP → Hesaplayıcılar and Altın; the mechanism of `tto/twoway.py`): in each
+column - the three VİOP XAUTRY contracts and Serbest - **TRY %**, **All In S -> E** (the USDTRY forward), **SP**,
+**Günlük SP**, **XAUTRY teorik** and **ON karşılık** can be typed. The one typed last stands exactly, also when the market
+moves; the others are worked out from it with the calculator's own formulas and their exact inverses (typed back, a
+computed value gives the same column, 1e-9); Delete on any of them takes the column back to its default:
+- TRY % is the column's hub. fwd = spot · (1 + TRY · VKGS/360) / (1 + USD · VKGS/360), and back TRY = ((fwd / spot) ·
+  (1 + USD · VKGS/360) − 1) · 360 / VKGS (`extras.xau_usdtry_fwd` / `xau_try_rate` - the way back "İma TRY %" already took
+  from a VİOP price); SP = (fwd − spot) · 10000; Günlük SP = SP / VKGS; XAUTRY teorik = XAUUSD fwd · fwd / 31.1035; ON =
+  360 · ((1 + TRY · VKGS/360)^(1/VKGS) − 1) and back (`on_equivalent` / `on_simple`, the Forward calculators' own).
+- The calculator's other inputs - the dates, spots, USD %, gold swap %, XAUUSD fwd, VİOP bid / ask - stay its inputs: when
+  they change, the typed member stays and the others follow. The VİOP bid / ask rows and their İma TRY % / İma altın
+  swap % stay the separate way back from a price, as before ("Yeni açtığımız tablolar kalsın").
+
+**The roll** (the desk's "Evet"; `rowkeys.RowKeys.roll`), when a column's VİOP gold contract changes - it expired, or the
+desk typed another code:
+- a typed **USDTRY fwd, SP, Günlük SP or XAUTRY teorik** goes with its contract: to the column the contract sits in now
+  (on an expiry, one column to the left), or with a contract that left the table it goes - deleted, as a bond's values
+  when the bond leaves its list; not set aside to come back;
+- a typed **TRY % or ON** stays in its column, as every other input of the column does;
+- each user's values and the saved scenarios' alike, in one transaction (the page refreshes).
+
+**Choices made while building it** (said in README and under the table; ask the desk before changing):
+- **One typed value per column.** A price or forward that would land on a column holding a typed value that stays there
+  (a TRY % or ON typed in that column, or a price of a contract that did not move) goes; the column's own stands. This
+  is the rule of every move of typed values here: a value moved never replaces one typed where it lands. On an expiry it
+  is the case of a rate typed in one column and a price typed for the next contract in the column to its right.
+- **Every member keeps what is typed in a store** (`EK_XAU!B67:E72`, the hidden helper table XAU6, the contracts in its
+  header row): the calculator is copyable, and in a temporary copy any member can be typed whatever the table holds. TRY
+  % is no input of its own any more: a TRY % users typed before is its column's typed value (moved to its store once,
+  `twoway.TwoWay.adopt`; a formula typed there moves with it and stays live) and reads as before; an "Elle değer" over a
+  worked-out member is that column's typed value.
+- **Nothing typed, every number as before**: every `EK_XAU` value and the VİOP / Forward cells it feeds were compared
+  cell for cell with the commit before (8ba7a5d), the desk's calculation and a user's with values typed the old way. One
+  cell differs in form: the free column's TRY % is an empty formula result where it was a blank input. So a free column
+  with only its second date typed shows its forward, SP and ON blank until a rate or another member is typed - before, it
+  priced them at a TRY rate of 0 (SP −3 962 on the replay data).
+- **Each user's own VİOP bid / ask** (rows 54-55) follow their contract too: a typed price, under the same "Evet" (a
+  typed bid / ask never replaces one typed where it lands). Before, they went whenever another contract took the column,
+  also when their contract only moved to the next column (on every expiry).
+- **A temporary copy keeps its values by cell**, as before: on a roll its columns become the next contracts' with what was
+  typed in them (the roll moves the table's typed values and the scenarios', not a copy's).
+- No new Bloomberg request.
+
+Code: `tto/extras.py` (`XAU_TW`, `XAU_TW_FIRST`, `xau_usdtry_fwd`, `xau_try_rate`, `_xau_hub`, in `_tto_gold`),
+`tto/rowkeys.py` (`GOLD_TW`, `RowKeys.roll`, `_gold_landing`), `tto/service.py` (a roll that moved values refreshes the
+pages), `tto/views/40_viop.json` (`"twoway"`: viop-gold; the helper table XAU6). Tests: `tests/test_xau_twoway.py`, the
+browser test's check "VİOP gold calculator is two-way".
 
 ### Forward sayfasının tabloları iki yönlü (24.11.2026)
 

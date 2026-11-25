@@ -167,6 +167,11 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   shown in only part of a table (Masa's TARGET strip shows Hedef değer alone) has a limit in that table's temporary copy:
   the copy cannot empty the row-side's other stores (`Copies.overlay` keeps the copy's own cells only), so a value typed
   there on the VİOP page shows through.
+- **VİOP's gold calculator** (`EK_XAU`, `extras.XAU_TW` / `_xau_hub`): six members per column (a row-side is a column),
+  every one in a store (`B67:E72`, helper XAU6; copyable), TRY % the hub. Its columns are contracts that roll: the stores
+  of the members typed as a price or forward follow their contract, the rates' stay with the column (`rowkeys.GOLD_TW`,
+  `RowKeys.roll`); one landing on a column whose row-side holds a typed value staying there goes
+  (`RowKeys._gold_landing`), so a row-side keeps one typed value after a roll too.
 
 ## Books and the formula engine
 
@@ -268,7 +273,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 |---|---|---|
 | EK_TATIL | tto, borsa | USD (Fed) / EUR (TARGET2) holiday lists beside the TRY copy; joint FX calendars |
 | EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders); the value-date tables and the free forward list two-way (typed values in `N:U` / `Z:AB` of their rows) |
-| EK_XAU | tto | gold forwards, VİOP gold calculator |
+| EK_XAU | tto | gold forwards, VİOP gold calculator (two-way: typed values in `B67:E72`, a contract each column - on a roll a typed price or forward follows its contract, `rowkeys.RowKeys.roll`) |
 | EK_VIOP | tto | VİOP contract history for charts |
 | EK_KAYNAK | tto | pricing-source order for OIS / offshore / XCCY (see [market-data.md](market-data.md#pricing-sources)) |
 | EK_BULK | tto | 100-row bulk forward table, two-way (Manuel TRY % / USDTRY fwd, puan / EURTRY fwd, puan; typed values in `Z:AC`, their rate `AD`); each row's Parite / Yön / Tutar / Karşı taraf (V..Y) for "İşleme al" (below, *Prices and rows as trades*) |
@@ -610,6 +615,9 @@ new feature that stores anything by cell, row or position must use one of them *
    - It covers DİBS RV / EK_DIBS, ASW, Eurobond Kotaları (per user), Tüm Kâğıtlar, and the VİOP gold contracts.
    - Values follow the ISIN or contract: `rowkeys.<list>` records whose values each row holds.
    - The moves happen in `plan(old, new)` → `store.move_values`, at `before_write`, `start()` and `roll()`.
+   - VİOP's gold contracts (`roll()`, codes kept in `rowkeys.xau`): a column of the gold calculator is a contract's; what
+     is typed there as a price or forward - the two-way rows' (`GOLD_TW`) and each user's own VİOP bid / ask - follows
+     the contract, a rate and the other inputs stay with the column.
    - Key cells take no formula.
 3. **`watch.py` anchors**: old watch items migrated to anchors at startup.
 

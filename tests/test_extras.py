@@ -947,8 +947,9 @@ def test_gold_panels_are_on_the_viop_page(svc, gold):
     assert len(shared) == 7 and any(c.get("o") == list(extras.XAU_SOURCES) for c in shared)        # incl. the ticker key
     assert sum(1 for row in panels["XAU2"]["data"]["rows"] for c in row if c.get("i") == "s") == 14       # tickers + manual rates
     assert [row[3]["t"] for row in panels["XAU2"]["data"]["rows"][1:]] == ROOTS
-    # every driver of the calculator can be typed: dates, spots, USD / TRY / gold swap rate, gold forward, VİOP bid / ask
-    assert sum(1 for row in panels["XAU4"]["data"]["rows"] for c in row if c.get("i") == "u") == 10 * 4
+    # every driver of the calculator can be typed: dates, spots, USD / gold swap rate, gold forward, VİOP bid / ask - and,
+    # two-way (test_xau_twoway.py), TRY %, the USDTRY forward, SP, SP per day, the theoretical price, the O/N rate
+    assert sum(1 for row in panels["XAU4"]["data"]["rows"] for c in row if c.get("i") == "u") == 15 * 4
     assert sum(1 for row in panels["XAU3"]["data"]["rows"] for c in row if c.get("t") == "Swap faizi") == 7
     fwd = {p["id"]: p for p in svc.view(None, "forward")["panels"]}
     assert "swap faizi (XAUSR)" in fwd["B16"]["note"]
