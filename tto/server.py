@@ -521,6 +521,16 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
             out.update(await call_free(svc().set_columns, _user(request), data.get("table"), data.get("hidden")))
         return ok(out)
 
+    # ------------------------------------------------------------------ the decimals a user sees (decimals.py)
+    @handler
+    async def decimals(request: Request):
+        if request.method == "GET":
+            return ok(await call_free(svc().decimals.listing, _user(request)))
+        # {book, copy?, set?: {"Sheet!A1": n}, reset?: ["Sheet!A1"]}: a display setting - no calculation is waited for
+        data = await _body(request)
+        return ok(await call_free(svc().decimals.change, _user(request), data.get("book"), data.get("copy"),
+                                  data.get("set"), data.get("reset")))
+
     # ------------------------------------------------------------------ RET curve
     @handler
     async def ret(request: Request):
@@ -1385,6 +1395,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/scenarios", scenarios, methods=["GET", "POST", "DELETE"]),
         Route("/api/scenarios/load", scenario_load, methods=["POST"]),
         Route("/api/columns", columns, methods=["GET", "POST"]),
+        Route("/api/decimals", decimals, methods=["GET", "POST"]),
         Route("/api/ret", ret, methods=["GET", "POST"]),
         Route("/api/ret/history", ret_history),
         Route("/api/ret/fair", ret_fair),

@@ -32,6 +32,9 @@ whose values the copy follows where it was not typed), and so is "Elle değer".
 Kept with the account until it is closed (×) - the store's key / value table, ``copies.<user>``: a page switch, a reload
 and a restart keep it.  Closing throws its values away and takes it off the user's launchpads and drawer.  At most
 ``MAX_PER_TABLE`` copies of a table and ``MAX_PER_USER`` in all, per user.
+
+A number of decimals set in a copy (right click: "Ondalık …", decimals.py) is the copy's own; in its other cells the copy
+shows the table's; closing the copy drops its own.
 """
 from __future__ import annotations
 
@@ -375,6 +378,9 @@ class Copies(object):
             items = [c for c in self._load(user) if c.id != cp.id]
             self._save(user, items)
         self.drop(user, cp.id)
+        dec = getattr(self.svc, "decimals", None)
+        if dec is not None:
+            dec.drop_copy(user, cp.id)                       # (the decimals set in it go with it: decimals.py)
         # what showed it elsewhere goes with it: the user's launchpads and drawer
         removed = 0
         with self.svc._layout_lock:
