@@ -1597,7 +1597,7 @@ desk typed another code:
 
 **Choices made while building it** (said in README and under the table; ask the desk before changing):
 - **One typed value per column.** A price or forward that would land on a column holding a typed value that stays there
-  - a TRY % or ON typed in that column, or a price of a contract that did not move - goes; the column's own stands. This
+  (a TRY % or ON typed in that column, or a price of a contract that did not move) goes; the column's own stands. This
   is the rule of every move of typed values here: a value moved never replaces one typed where it lands. On an expiry it
   is the case of a rate typed in one column and a price typed for the next contract in the column to its right.
 - **Every member keeps what is typed in a store** (`EK_XAU!B67:E72`, the hidden helper table XAU6, the contracts in its

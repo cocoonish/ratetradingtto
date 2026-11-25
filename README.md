@@ -3421,8 +3421,8 @@ kodu hücresine formül yazılmaz (kodu yazın ya da silin).
 **VİOP'un sütunları kontratın yeridir ("1. kontrat", "2. kontrat" …), kontratın kendisi değil.** Kontratlar dönünce bir
 sütuna bağlı olan her şey sıradaki kontratın olur: kişisel girdiler - Interest 2 SP hesaplayıcılarının tarih, spot ve
 faizleri (`VIOP!M32:M37`, `P32:P37`, `S32:S37`), altın hesaplayıcısının sütunlarına yazılan tarih, spot ve faizler
-(`EK_XAU!B40:E48`, yazılan TRY % ve ON karşılık; fiyatlar aşağıda), geçmiş
-grafiklerinde çizilen kontratlar (`EK_VIOP!B3:G3`) -, launchpad'deki sütun seçimleri, gizlenen ve sıralanan sütunlar,
+(`EK_XAU!B40:E48`, yazılan TRY % ve ON karşılık; fiyatlar aşağıda), geçmiş grafiklerinde çizilen kontratlar
+(`EK_VIOP!B3:G3`) -, launchpad'deki sütun seçimleri, gizlenen ve sıralanan sütunlar,
 kontrat sütunlarına başvuran girdi formülleri ve hesap tablosu hücreleri, "Elle değer"ler, hücre adresi içeren izleme
 ifadeleri (her hesapta adresten yeniden okunur). "İlk 4 kontrat" hazır grubu da sırayladır: dönüşte seviye ve
 "kurulduğundan" alarmları sıçrar, kapanışları iki kontratı karıştırır. Bir hücreye kurulan izleme ve alarm ise
