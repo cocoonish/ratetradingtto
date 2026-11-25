@@ -278,7 +278,7 @@ async function clipAfter(page, action) {
     check('copy gives one line per row', lines.length === 5, lines.length);
     check('copy is tab separated', lines.every((l) => l.split('\t').length === 4), copied);
     check('copy keeps the header text', lines[0] === 'Eğri\tTRY bid %\tTRY mid %\tTRY ask %', lines[0]);
-    check('copied numbers use the Turkish decimal comma', /^RET\t\d+,\d{4}\t\d+,\d{4}\t\d+,\d{4}$/.test(lines[4]), lines[4]);
+    check('copied numbers use the Turkish decimal comma (the TRY rates as shown: two decimals)', /^RET\t\d+,\d{2}\t\d+,\d{2}\t\d+,\d{2}$/.test(lines[4]), lines[4]);
     check('status bar shows the selected range', /EK_FWD!A46:D50/.test(await page.textContent('#sb-addr')));
     check('status bar sums the numbers', /Toplam/.test(await page.textContent('#sb-stat')));
 
@@ -288,6 +288,20 @@ async function clipAfter(page, action) {
     await page.waitForTimeout(200);
     const full = await page.evaluate(() => navigator.clipboard.readText());
     check('full precision copy has more digits', full.replace(/[^0-9]/g, '').length >= 10, full);
+    // a TRY rate shown with two decimals (the desk, 25.11.2026: "try faizleri ... 2 decimala alalım") copies every digit -
+    // the cell's menu, "Tam hassasiyetle kopyala" (a mark on the clipboard first: what lands there is this copy's)
+    const tryShown = (await cellText(page, 'EK_FWD!B47')).trim();
+    await (await cellHandle(page, 'EK_FWD!B47')).click();
+    const tryFull = await clipAfter(page, async () => {
+      await (await cellHandle(page, 'EK_FWD!B47')).click({ button: 'right' });
+      await page.waitForSelector('.menu');
+      await page.click('.menu button:has-text("Tam hassasiyetle kopyala")');
+    });
+    const tryV = (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent('EK_FWD!B47'))).json.cell.v;
+    const tryV15 = Number(tryV.toPrecision(15));
+    check('... a TRY rate shown with two decimals: "Tam hassasiyetle kopyala" copies its value, every digit',
+      /^\d+,\d{2}$/.test(tryShown) && Number(tryFull.replace(',', '.')) === tryV15 && Math.abs(trNumber(tryShown) - tryV) < 0.0051
+      && (tryV15 === Math.round(tryV15 * 100) / 100 || tryFull.length > tryShown.length), { tryShown, tryFull, tryV });
 
     // ------------------------------------------------------------------ paste RET from Excel
     await page.evaluate(() => navigator.clipboard.writeText('35,10%\t35,30%\r\n35,20%\t35,40%\r\n34,50%\t34,70%\r\n'));
@@ -309,15 +323,20 @@ async function clipAfter(page, action) {
       onFwd.join(' ') === 'B1 FR1 FR2 FR3 FR4 B16 B18', onFwd);
     check('the USDTRY table shows the TRY mid and the daily swap points', (await cellText(page, 'EK_FWD!C46')) === 'TRY mid %'
       && (await cellText(page, 'EK_FWD!L46')) === 'P/gün mid' && trNumber(await cellText(page, 'EK_FWD!L50')) > 0);
-    // "Elle": a curve from the list, then a spread to its mid
+    // the TRY rates with two decimals (the desk, 25.11.2026); the outrights and the USD rates of the value date as before
+    const fwdDec = {};
+    for (const ref of ['B47', 'C48', 'D50', 'B59', 'E47', 'H45', 'L45']) fwdDec[ref] = (await cellText(page, 'EK_FWD!' + ref)).trim();
+    check('Forward fiyatları: the TRY bid / mid / ask % read with two decimals (USDTRY and EURTRY); the outright and the USD rates as before',
+      ['B47', 'C48', 'D50', 'B59'].every((r) => /^\d+,\d{2}$/.test(fwdDec[r])) && ['E47', 'H45', 'L45'].every((r) => /^\d+,\d{4}$/.test(fwdDec[r])), fwdDec);
+    // "Elle": a curve from the list, then a spread to its mid (both shown with two decimals)
     const oisMid = trNumber(await cellText(page, 'EK_FWD!C48'));
     await (await cellHandle(page, 'EK_FWD!B52')).click();
     await page.keyboard.press('Enter');
     await page.click('.menu button:text-is("OIS")');
     await waitCell(page, 'EK_FWD!B52', "t.trim() === 'OIS'");
     await typeInto(page, 'EK_FWD!F52', '25');
-    await waitCell(page, 'EK_FWD!C51', 'Math.abs(Number(t.replace(".", "").replace(",", ".")) - ' + (oisMid + 0.25) + ') < 0.00011');
-    check('"Elle" prices the chosen curve plus a spread - the EURTRY table too', Math.abs(trNumber(await cellText(page, 'EK_FWD!C62')) - (oisMid + 0.25)) < 0.00011,
+    await waitCell(page, 'EK_FWD!C51', 'Math.abs(Number(t.replace(".", "").replace(",", ".")) - ' + (oisMid + 0.25) + ') < 0.0051');
+    check('"Elle" prices the chosen curve plus a spread - the EURTRY table too', Math.abs(trNumber(await cellText(page, 'EK_FWD!C62')) - (oisMid + 0.25)) < 0.0051,
       [await cellText(page, 'EK_FWD!C62'), oisMid]);
     // the free forward list: an end date is enough - spot and both rates come from the curves; the next row opens
     check('the free forward list shows its first empty rows only', await page.evaluate(() => {
@@ -335,7 +354,7 @@ async function clipAfter(page, action) {
     for (const c of ['J68', 'K68', 'L68', 'M68']) curves68.push(trNumber(await cellText(page, 'EK_FWD!' + c)));
     check('the four TRY curves stand beside it at its end date', curves68.every((x) => x > 0), curves68);
     await typeInto(page, 'EK_FWD!G68', '30');
-    await waitCell(page, 'EK_FWD!G68', "t.trim() === '30,0000'");
+    await waitCell(page, 'EK_FWD!G68', "t.trim() === '30,00'");
     const days68 = trNumber(await cellText(page, 'EK_FWD!D68'));
     const major68 = trNumber(await cellText(page, 'EK_FWD!F68'));
     await waitCell(page, 'EK_FWD!I68', 'Math.abs(Number(t.replace(".", "").replace(",", ".")) - ' +
@@ -2391,9 +2410,9 @@ async function clipAfter(page, action) {
     const asPrice = { rate: await cellV('VIOP!Q332'), far: await cellV('VIOP!S332'), text: (await cellText(page, 'VIOP!Q332')).trim(),
       shown: (await cellText(page, 'VIOP!P332')).trim(), tip: await titleOf('VIOP!Q332'), curve: (await cellText(page, 'VIOP!Z332')).trim() };
     check('VİOP Target: type "Fiyat" and the row\'s own far limit price - the implied TRY rate is the row\'s rate (1e-9), the far limit the price, '
-      + 'and it says so', Math.abs(asPrice.rate - asFra.rate) < 1e-9 && asPrice.text === asFra.text && Math.abs(asPrice.far - asFra.far) < 1e-9
-      && /^\d\d,\d{4,}/.test(asPrice.shown) && asPrice.curve === '' && asPrice.tip.split('\n').pop().startsWith('Hedef faiz = uzak kontrat fiyatı '),
-      { asFra, asPrice, typedFar });
+      + 'and it says so; the price reads with the far limit\'s four decimals', Math.abs(asPrice.rate - asFra.rate) < 1e-9 && asPrice.text === asFra.text
+      && Math.abs(asPrice.far - asFra.far) < 1e-9 && /^\d\d,\d{4}$/.test(asPrice.shown) && asPrice.curve === ''
+      && asPrice.tip.split('\n').pop().startsWith('Hedef faiz = uzak kontrat fiyatı '), { asFra, asPrice, typedFar });
     // VİOP Target two-way (24.11.2026): the far limit typed in its own column on an FRA+bp row - the rate it implies is the
     // row's (the same as the Fiyat type gave), Hedef değer its bp over OIS FRA (the type stays), the far limit marked (✎)
     await pick('VIOP!O332', 'FRA+bp');
@@ -2410,6 +2429,16 @@ async function clipAfter(page, action) {
       && /Hesaplanan: bu satırda yazılan değer Uzak limit · S332/.test(vtTwFar.worked) && /yazılan uzak limit fiyatı/.test(vtTwFar.tip), vtTwFar);
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!L332', 'VIOP!M332', 'VIOP!N332', 'VIOP!O332', 'VIOP!P332'] });
     await waitCell(page, 'VIOP!Q332', 't.trim() === ""');
+    // a "Faiz %" row's Hedef değer is a rate: two decimals (the desk, 25.11.2026: "faiz seçtiğim durumda decimalsiz yazıyor")
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'VIOP!L333', value: 'Spot' },
+      { ref: 'VIOP!M333', value: '31.12.2026' }, { ref: 'VIOP!N333', value: 'LONG' }, { ref: 'VIOP!O333', value: 'Faiz %' },
+      { ref: 'VIOP!P333', value: '45' }] });
+    await waitCell(page, 'VIOP!Q333', 't.trim() !== ""');
+    const vtRate = { shown: (await cellText(page, 'VIOP!P333')).trim(), v: await cellV('VIOP!P333'), rate: (await cellText(page, 'VIOP!Q333')).trim() };
+    check('VİOP Target: a "Faiz %" row\'s Hedef değer reads as a rate with two decimals (45 → 45,00), its value as typed; Hedef faiz 45,00%',
+      vtRate.shown === '45,00' && vtRate.v === 45 && vtRate.rate === '45,00%', vtRate);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['VIOP!L333', 'VIOP!M333', 'VIOP!N333', 'VIOP!O333', 'VIOP!P333'] });
+    await waitCell(page, 'VIOP!Q333', 't.trim() === ""');
 
     // ------------------------------------------------------------------ the ways back of 24.11 (items 1, 8, 12)
     console.log('ways back (24.11): a broken-date quote -> its spread over the curves');
@@ -3591,9 +3620,14 @@ async function clipAfter(page, action) {
     await waitCell(page, 'EK_BULK!U6', 't.trim() !== ""');
     const bulkBack = {};
     for (const c of ['G5', 'G6', 'S5', 'S6', 'U5', 'U6']) bulkBack[c] = trNumber(await cellText(page, 'EK_BULK!' + c));
+    // (the rates shown with two decimals - the desk, 25.11.2026 -: the same rate to one step of the last digit)
+    const bulkDec = {};
+    for (const c of ['D5', 'G5', 'S5', 'U5', 'J5']) bulkDec[c] = (await cellText(page, 'EK_BULK!' + c)).trim();
     check('Toplu fiyatlama: two outrights pasted (the table\'s own USDTRY and EURTRY forwards) read back their implied TRY rate - the RET mid they were priced with',
-      [5, 6].every((r) => Math.abs(bulkBack['S' + r] - bulkBack['G' + r]) < 0.01 && Math.abs(bulkBack['U' + r] - bulkBack['G' + r]) < 0.01)
+      [5, 6].every((r) => Math.abs(bulkBack['S' + r] - bulkBack['G' + r]) < 0.011 && Math.abs(bulkBack['U' + r] - bulkBack['G' + r]) < 0.011)
       && bulkN.every((t) => /\d,\d{4}$/.test(t)), { bulkN, bulkP, bulkBack });
+    check('... its TRY rates (offshore / OIS / RET, İma TRY %) read with two decimals, the outrights with four, USD % as before',
+      ['D5', 'G5', 'S5', 'U5'].every((c) => /^\d+,\d{2}$/.test(bulkDec[c])) && /^\d+,\d{3}$/.test(bulkDec.J5), bulkDec);
     // TOPLU FORWARD → işlem (the desk, 24.11.2026: "3 ekle"): a right click on a row's EURTRY fwd fills Günlük İşlemler's
     // form - EURTRY (the column's own pair), the row's valör, the outright clicked; no side, no amount
     await (await cellHandle(page, 'EK_BULK!P6')).click({ button: 'right' });

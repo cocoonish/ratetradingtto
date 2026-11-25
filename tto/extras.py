@@ -58,6 +58,11 @@ NUM2 = "#,##0.00"
 NUM4 = "#,##0.0000"
 INT0 = "#,##0"
 DATE = "dd.mm.yyyy"
+#: a TRY rate (%) of the Forward page's pricing tables and VİOP Target's "Faiz %" value, two decimals (the desk, 25.11.2026:
+#: "Forward fiyatlama kısımlarında try faizleri 4 decimal'i çok yoruyor gözü. Bunları 2 decimala alalım") - how it reads
+#: only: the value, what is typed and Ctrl+Shift+C keep every digit.  The USD / EUR rates beside them and the hidden helper
+#: columns (the rate a typed value gives) keep theirs.
+TRY_PCT = "0.00"
 INPUT_FILL = "FFF2CC"            # the workbook's own colour for cells the trader types into
 HEAD_FILL = "1F3864"
 NOTE_COLOR = "7F7F7F"
@@ -151,6 +156,19 @@ class SheetBuilder(object):
     def list_from(self, addr: str, source: str) -> None:
         """A list validation whose items are the cells of a range (``"EK_VFRA!$A$3:$A$6"``): whatever they hold now."""
         self.sheet.validations.append({"sqref": addr, "type": "list", "formula1": source})
+
+    def number_format_if(self, rng: str, condition: str, fmt: str) -> None:
+        """A number format that follows another cell, as Excel's conditional format with a number format: where
+        ``condition`` (a formula written for the range's first cell, ``'$O331="Faiz %"'``) holds, the cell's number reads in
+        ``fmt`` in the page's tables (``Renderer.cell``) - the first such rule that holds, in the order they were added.
+        How it reads only: the value, what is typed (parsed by the cell's own format), Ctrl+Shift+C and the copies of the
+        value elsewhere keep the cell's own."""
+        r1, c1, _, _ = parse_range(rng)
+        self.model.dxfs.append({"fmt": fmt})
+        self.sheet.cf.append({"sqref": rng, "type": "expression", "op": None, "text": None, "stop": False,
+                              "priority": max([x.get("priority", 0) for x in self.sheet.cf] + [0]) + 1,
+                              "dxf": len(self.model.dxfs) - 1, "anchor": r1 * COLS + c1,
+                              "formulas": [to_template(condition.lstrip("="), r1, c1)]})
 
     def recorded(self, addr: str, value: Any) -> None:
         """The value Excel saved for this (add-in) cell: offline the cell is frozen at it, like every other
@@ -1461,7 +1479,7 @@ def _fr_side(b: "SheetBuilder", r: int, i: int, side: int, default: str) -> None
     typed = "$F$%(i)d+IF(ISBLANK($%(sp)s%(r)d),$%(sd)s%(r)d*$D$%(i)d,$%(sp)s%(r)d)/10000" % f        # spot + points typed
     back = implied_try("IF(ISBLANK($%s%d),%s,$%s%d)" % (sf, r, typed, sf, r), "$F$%d" % i, "$%s$%d" % (major, i), "$D$%d" % i)
     b.set("%s%d" % (hub, r), '=IF(%s,"",IFERROR(%s,NA()))' % (none, back), fmt="0.0000")
-    b.input("%s%d" % (rate, r), '=IF(%s,%s,IF(ISNUMBER($%s%d),$%s%d,""))' % (none, default.lstrip("="), hub, r, hub, r), fmt="0.0000")
+    b.input("%s%d" % (rate, r), '=IF(%s,%s,IF(ISNUMBER($%s%d),$%s%d,""))' % (none, default.lstrip("="), hub, r, hub, r), fmt=TRY_PCT)
     own = 'IFERROR($F$%(i)d*(1+$%(rate)s%(r)d/100/360*$D$%(i)d)/(1+$%(maj)s$%(i)d/100/360*$D$%(i)d),"")' % f
     b.set("%s%d" % (fwd, r), '=IF(ISBLANK($%s%d),IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,IFERROR(%s,"")),$%s%d)'
           % (sf, r, sp, r, sd, r, own, typed, sf, r), fmt=NUM4, bold=True)
@@ -1490,7 +1508,7 @@ def _tto_fwd_rates(model: Model) -> None:
     value date (``Forward!D2``) changes, as a TRY rate typed always did: the others follow the new date's days.
     """
     b = SheetBuilder(model, FWD_SHEET)
-    pct = "0.0000"
+    pct = "0.0000"              # the USD / EUR rates and the helpers' rates; a TRY rate the page shows reads TRY_PCT
     usd_first = FR_USD + 3
     usd_last = usd_first + len(FR_CURVES) - 1
     usd_elle, usd_set = usd_last + 1, usd_last + 2
@@ -1534,7 +1552,7 @@ def _tto_fwd_rates(model: Model) -> None:
             f = {"r": r, "i": i}
             b.set("A%d" % r, name, bold=True, align="center")
             # the mids: of the two sides as they stand (typed or worked out), never typed themselves
-            b.set("C%d" % r, '=IFERROR(($B%(r)d+$D%(r)d)/2,"")' % f, fmt=pct)
+            b.set("C%d" % r, '=IFERROR(($B%(r)d+$D%(r)d)/2,"")' % f, fmt=TRY_PCT)
             b.set("F%d" % r, '=IFERROR(($E%(r)d+$G%(r)d)/2,"")' % f, fmt=NUM4)
             b.set("I%d" % r, '=IFERROR(($F%(r)d-$F$%(i)d)*10000,"")' % f, fmt=INT0)
             b.set("L%d" % r, '=IFERROR($I%(r)d/$D$%(i)d,"")' % f, fmt="#,##0.0")
@@ -1548,7 +1566,7 @@ def _tto_fwd_rates(model: Model) -> None:
             b.input("B%d" % s, "RET", align="center")
             b.dropdown("B%d" % s, FR_NAMES)
             b.set("C%d" % s, "Mid %", bold=True, align="right")
-            b.input("D%d" % s, None, fmt=pct)
+            b.input("D%d" % s, None, fmt=TRY_PCT)
             b.set("E%d" % s, "Spread bp", bold=True, align="right")
             b.input("F%d" % s, None, fmt="0.0")
             b.set("G%d" % s, "Genişlik bp", bold=True, align="right")
@@ -1596,7 +1614,7 @@ def _tto_fwd_rates(model: Model) -> None:
         b.set("%s%d" % (hub, r), '=IF(%s,"",IF(N($D%d)<=0,"",IFERROR(%s,NA())))'
               % (f["none"], r, implied_try(typed, "$E%d" % r, "$F%d" % r, "$D%d" % r)), fmt=pct)
         b.input("G%d" % r, '=IF(%s,%s,IF(ISNUMBER($%s%d),$%s%d,""))' % (f["none"], (period % dict(f, e="U", s="T"))[1:], hub, r, hub, r),
-                fmt=pct)
+                fmt=TRY_PCT)
         b.set("H%d" % r, ('=IF(ISBLANK($%(sw)s%(r)d),IFERROR(IF($I%(r)d="","",($I%(r)d-$E%(r)d)*10000),""),$%(sw)s%(r)d)') % f,
               fmt=INT0, bold=True)
         b.set("I%d" % r, ('=IF(ISBLANK($%(fw)s%(r)d),IF(ISBLANK($%(sw)s%(r)d),'
@@ -2170,15 +2188,15 @@ def _tto_bulk_forward(model: Model) -> None:
         b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,%s),NA())))'
               % (none, r, su, r, sp, r, implied_try(typed_eur, "Forward!$G$2", "$K%d" % r, eur),
                  implied_try(typed_usd, "Forward!$F$2", "$J%d" % r, usd)), fmt="0.0000")
-        b.input("L%d" % r, '=IF(%s,"",IF(ISNUMBER($%s%d),$%s%d,""))' % (none, BULK_TW_RATE, r, BULK_TW_RATE, r), fmt="0.0000")
+        b.input("L%d" % r, '=IF(%s,"",IF(ISNUMBER($%s%d),$%s%d,""))' % (none, BULK_TW_RATE, r, BULK_TW_RATE, r), fmt=TRY_PCT)
         for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0)):
             b.input("%s%d" % (col, r), None, fmt=fmt)
         b.input("R%d" % r, None, fmt=NUM4)
         b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, implied_try("$R%d" % r, "Forward!$F$2", "$J%d" % r, usd)),
-              fmt="0.0000", bold=True)
+              fmt=TRY_PCT, bold=True)
         b.input("T%d" % r, None, fmt=NUM4)
         b.set("U%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($T%d))),"",%s),"")' % (r, r, implied_try("$T%d" % r, "Forward!$G$2", "$K%d" % r, eur)),
-              fmt="0.0000", bold=True)
+              fmt=TRY_PCT, bold=True)
         for col in (BULK_PAIR, BULK_DIR, BULK_CPT):
             b.input("%s%d" % (col, r), None)
         b.input("%s%d" % (BULK_AMOUNT, r), None, fmt=INT0)
@@ -2190,7 +2208,8 @@ def _tto_bulk_forward(model: Model) -> None:
            "basın - Tutar'ı yazılı satırlar Günlük İşlemler'in Excel'den yapıştır penceresinde açılır; kaydedilen satırların Tutar'ı silinir.")
 
 
-_BULK_FMT = {"C": INT0, "D": "0.000", "E": "0.000", "F": "0.000", "G": "0.000", "H": "0.000", "J": "0.000", "K": "0.000",
+#: TOPLU FORWARD's formats: its TRY rates (offshore / OIS mid, RET bid / mid / ask) TRY_PCT, USD % / EUR % as they were
+_BULK_FMT = {"C": INT0, "D": TRY_PCT, "E": TRY_PCT, "F": TRY_PCT, "G": TRY_PCT, "H": TRY_PCT, "J": "0.000", "K": "0.000",
              "N": NUM4, "O": INT0, "P": NUM4, "Q": INT0}
 
 
@@ -2271,7 +2290,7 @@ def _tto_fwd_back(model: Model) -> None:
     for r in range(r1, r2 + 1):
         f = {"r": r}
         b.input("R%d" % r, None, fmt=NUM4)
-        b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, cross_rate("$R%d" % r, r)), fmt="0.0000", bold=True)
+        b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, cross_rate("$R%d" % r, r)), fmt=TRY_PCT, bold=True)
         b.set("T%d" % r, '=IFERROR(IF($S%(r)d="","",($S%(r)d-AVERAGE($D%(r)d,$E%(r)d))*100),"")' % f, fmt="0.0")
 
 
@@ -6099,6 +6118,10 @@ def _tto_viop_fra(model: Model) -> None:
 #: * every other member is the sheet's own formula of that rate - Hedef değer in the row's type: FRA+bp (Q − OIS FRA) ·
 #:   10000, FXswap+bp (Q − FX swap implied) · 10000, Faiz % Q · 100, Fiyat the far limit.
 #:
+#: Hedef değer reads in its type too (the desk, 25.11.2026): a Faiz % row's rate with two decimals (``TRY_PCT``), a Fiyat
+#: row's price as the far limit reads it, bp in the cell's own General - a number format chosen by the row's "Hedef tipi"
+#: (:meth:`SheetBuilder.number_format_if`); the desk strip (MASA!S121:S128) writes it the same way.
+#:
 #: "Hedef tipi" stays the user's: it says what Hedef değer means (the mechanism never writes another input - a type
 #: flipped by a typed price would make a later Hedef değer mean something else).  A row is priced while any of its five
 #: is typed (U, W, X, Y read that instead of "Hedef değer <> blank", which is worked out now); a contract that rolled off
@@ -6165,7 +6188,8 @@ def _viop_tw_check(model: Model) -> None:
 
 def _tto_viop_tw(model: Model) -> None:
     """The target table two-way: the stores, the rate from whichever member is typed, the members' formulas wrapped,
-    "Hedef değer" worked out in the row's type, the rows priced while any member is typed, the rate's tooltip."""
+    "Hedef değer" worked out in the row's type and read in it (:meth:`SheetBuilder.number_format_if`; the desk strip's
+    target text too), the rows priced while any member is typed, the rate's tooltip."""
     v = SheetBuilder(model, "VIOP")
     head = VFRA_ROWS[0] - 1
     for col, text in VT_HEADS.items():
@@ -6204,13 +6228,22 @@ def _tto_viop_tw(model: Model) -> None:
                 'IF(NOT(ISBLANK(%(V)s)),"Hedef faiz = piyasa ima ff (yön) "&TEXT($U%(r)d,"0.00%%")&" + yazılan hedef − piyasa "'
                 '&TEXT(%(V)s,"General")&" bp",') % dict(s, r=r)
         v.patch("AB%d" % r, "=" + bad + mine + tip[len(bad):-1] + "))))" + ")")
-    # the desk sheet's strip says a worked-out target to four decimals (a typed one as typed)
+    # Hedef değer reads in the row's type (the desk, 25.11.2026: "VİOP target kısmında da faiz seçtiğim durumda decimalsiz
+    # yazıyor"): a rate with the TRY rates' two decimals, a far price as the far limit reads (the contract's own four), bp in
+    # the cell's own General (as typed) - one format cannot read all three, so the row's type picks it
+    rows = "P%d:P%d" % VFRA_ROWS
+    v.number_format_if(rows, '$O%d="Faiz %%"' % VFRA_ROWS[0], TRY_PCT)
+    v.number_format_if(rows, '$O%d="%s"' % (VFRA_ROWS[0], VPRICE_TYPE), _numfmt(model, "VIOP", "S%d" % VFRA_ROWS[0]))
+    # the desk sheet's strip says the target the same way: a rate to two decimals, a price to four, bp as typed (a worked-out
+    # one to four decimals) - in the page's decimal comma
     for r, h, m in _vfra_rows():
         mf = 'VIOP!$O$%d&" "&VIOP!$P$%d' % (r, r)
         text = formula_of(model, "MASA", "S%d" % m)
         if text.count(mf) == 1:
-            SheetBuilder(model, "MASA").patch("S%d" % m, "=" + text.replace(mf, 'VIOP!$O$%d&" "&IF(ISBLANK(VIOP!$%s$%d),ROUND(VIOP!$P$%d,4),'
-                                                                              'VIOP!$P$%d)' % (r, VT_STORES["P"], r, r, r)))
+            shown = ('VIOP!$O$%(r)d&" "&IF(VIOP!$O$%(r)d="Faiz %%",TEXT(VIOP!$P$%(r)d,"%(pct)s"),IF(VIOP!$O$%(r)d="%(price)s",'
+                     'TEXT(VIOP!$P$%(r)d,"0.0000"),TEXT(IF(ISBLANK(VIOP!$%(s)s$%(r)d),ROUND(VIOP!$P$%(r)d,4),VIOP!$P$%(r)d),"General")))'
+                     % {"r": r, "pct": TRY_PCT, "price": VPRICE_TYPE, "s": VT_STORES["P"]})
+            SheetBuilder(model, "MASA").patch("S%d" % m, "=" + text.replace(mf, shown))
 
 
 # ---------------------------------------------------------------------------------------------- the fair RET's scenarios

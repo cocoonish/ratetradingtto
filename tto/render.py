@@ -307,6 +307,7 @@ class Renderer(object):
             out.pop("it", None)
         if xf[4] in ("center", "right", "left"):
             out["al"] = xf[4][0]
+        cf_fmt = None
         for i in cf_rules:
             st = self.cf(si).evaluate(i, calc, r, c, v, cf_cache if cf_cache is not None else {})
             if st is None:
@@ -318,6 +319,15 @@ class Renderer(object):
                 out["bar"] = st["bar"]
                 out["bc"] = tone(st.get("bar_color")) or "info"
                 continue
+            if st.get("fmt") and cf_fmt is None and tv is float:
+                # a conditional format's number format (the dashboard's own: extras.SheetBuilder.number_format_if): the
+                # number reads in it - the first rule that holds, Excel's order; the value ("v") and the input are untouched
+                cf_fmt = st["fmt"]
+                text, color = numfmt.render(v, cf_fmt, loc, general_digits=10)
+                out["t"] = text.strip()
+                out["k"] = "d" if numfmt.is_date_format(cf_fmt) else "n"
+                if color:
+                    tn = {"red": "neg", "green": "pos", "blue": "info"}.get(color, tn)
             if st.get("color"):
                 tn = tone(st["color"]) or tn
             if st.get("fill"):
