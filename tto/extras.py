@@ -7294,8 +7294,6 @@ NORM_WINDOWS = (("BD", "BE", "BF"), (84, 99))
 #: OIS_MAIN's cells that measure the PPK path from today's TLREF ($J$2): measured from REF (``NORM_REF_TEXT``) instead
 NORM_MEASURES = (["S9", "X9", "Y9", "Z9", "D5", "S3", "S4", "S5", "AU4"] + ["AN%d" % r for r in range(9, 15)]
                  + ["R%d" % r for r in range(10, 90)] + ["T%d" % r for r in range(10, 90)])
-NORM_SPOT_NOTE = ("Normalleşme açıkken (L2): normal TLREF (L4) - PPK adımları ve senaryolar buradan ölçülür; bugünkü TLREF "
-                  "(J2) kullanılan tarihe (L5) kadar sürer, o fark kotalara ayrıca eklenir.")
 #: Masa's "PPK · piyasa ima vs anket": İma PF = PF + (ima TLREF − REF)
 NORM_MASA = ["S%d" % r for r in range(157, 164)]
 _NORM_J2 = re.compile(r"(?<![A-Za-z0-9_!$.'])\$J\$2(?![0-9])")
@@ -7523,10 +7521,8 @@ def _tto_norm_ppk(model: Model) -> None:
             o.patch(addr, "=" + _norm_window(formula_of(model, "OIS_MAIN", addr)))
     for addr in NORM_MEASURES:
         o.patch(addr, "=" + _NORM_J2.sub(NORM_REF_TEXT, formula_of(model, "OIS_MAIN", addr)))
+    # (the Spot row says it is the normal TLREF while on: its label, read by Masa's copy of the path too)
     o.set("O9", '=IF($M$2=1,"Spot · normal","Spot")', like="O9")
-    sh = model.sheet("OIS_MAIN")
-    for addr in ("O9", "S9", "X9", "Y9", "Z9"):
-        sh.comments[parse_a1(addr)] = NORM_SPOT_NOTE
     masa = SheetBuilder(model, "MASA")
     for addr in NORM_MASA:
         masa.patch(addr, "=" + _NORM_J2.sub("IF(OIS_MAIN!$M$2=1,OIS_MAIN!$M$4,$J$2)", formula_of(model, "MASA", addr)))

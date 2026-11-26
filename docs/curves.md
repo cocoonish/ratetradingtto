@@ -222,7 +222,7 @@ to a path's ln G - exact while the normal path is L0 over the stretch; a meeting
   derivatives (`C`) as they are (E does not depend on the levels); r0's prior mean (`Motor!D4305`) = REF. So the solved
   levels are the normal path, and the quotes are fitted with the stretch.
 - **The paths start at REF:** the scenarios S1–S3 in the meeting table (`Motor!H4`, `N4`, `P4`), the page's Spot row
-  (`OIS_MAIN!X9:Z9`, `S9`; its label `O9` "Spot · normal", a note on them) and the fair RET's reference path
+  (`OIS_MAIN!X9:Z9`, `S9`; its label `O9` reads "Spot · normal" while on) and the fair RET's reference path
   (`EK_RET!D30`). The implied path ("MPC ima", `Motor!K`/`L`) is the solver's normal levels by itself.
 - **Every read of a PPK path's ln G at a day t + E(t):** `INDEX(<path>, MATCH(t, Motor!$C$4:$C$84, ·))` - İma `L`, S1 `I`,
   S2 `O`, S3 `Q` and RET's reference `EK_RET!E30:E110` - in Motor, OIS_MAIN, MASA, C & R, TM_OIS, EK_FWD, EK_TARIH,

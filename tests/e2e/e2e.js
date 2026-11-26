@@ -4056,6 +4056,38 @@ async function clipAfter(page, action) {
       && /Hesaplanan: bu satırda yazılan değer İma PPK adımı · L4/.test(ppkTw.g.tip) && /hangisini yazarsanız o kalır/.test(ppkTw.note), ppkTw);
     await ppkClear('EK_PPK!G4');
     await waitCell(page, 'EK_PPK!L4', 't.trim() === ""');
+    // TLREF normalleşmesi (the desk, 26.11.2026: "Ois ppk sayfasi ustunde yapmaliyiz yeni panel olmadan, normalizasyon ac
+    // kapat yapabilmeliyiz"): the switch in the pinned Parametreler - on with a date and a normal TLREF, the first meeting's
+    // Implied bps is measured from the normal TLREF; Kapalı again, the very text it had
+    const normPpkR10 = (await cellText(page, 'OIS_MAIN!R10')).trim();
+    const normPpkSpot = await cellV('OIS_MAIN!B2');
+    const normPpkDate = new Date(Date.UTC(1899, 11, 30) + (normPpkSpot + 20) * 86400000);
+    const normPpkDay = [normPpkDate.getUTCDate(), normPpkDate.getUTCMonth() + 1].map((x) => String(x).padStart(2, '0')).join('.')
+      + '.' + normPpkDate.getUTCFullYear();
+    await typeInto(page, 'OIS_MAIN!L3', normPpkDay);
+    await waitCell(page, 'OIS_MAIN!L3', 't.trim() === ' + JSON.stringify(normPpkDay));
+    await typeInto(page, 'OIS_MAIN!L4', '33');
+    await waitCell(page, 'OIS_MAIN!L4', 't.trim().startsWith("33")');
+    const normPpkPick = async (item) => {
+      await (await cellHandle(page, 'OIS_MAIN!L2')).click();          // (a drop-down cell: Enter opens its list)
+      await page.keyboard.press('Enter');
+      await page.click('.menu button:text-is("' + item + '")');
+      await waitCell(page, 'OIS_MAIN!L2', 't.trim() === ' + JSON.stringify(item));
+    };
+    await normPpkPick('Açık');
+    await waitCell(page, 'OIS_MAIN!R10', 't.trim() !== ' + JSON.stringify(normPpkR10), 30000).catch(() => {});
+    const normPpkOn = { r10: (await cellText(page, 'OIS_MAIN!R10')).trim(), status: (await cellText(page, 'OIS_MAIN!L6')).trim(),
+      spot: (await cellText(page, 'OIS_MAIN!O9')).trim(), used: (await cellText(page, 'OIS_MAIN!L5')).trim(), on: await cellV('OIS_MAIN!M2') };
+    await normPpkPick('Kapalı');
+    await waitCell(page, 'OIS_MAIN!R10', 't.trim() === ' + JSON.stringify(normPpkR10), 30000).catch(() => {});
+    const normPpkOff = { r10: (await cellText(page, 'OIS_MAIN!R10')).trim(), status: (await cellText(page, 'OIS_MAIN!L6')).trim() };
+    check('OIS · PPK: TLREF normalleşmesi - Normalleşme Açık with a date (spot + 20) and a normal TLREF (33 %) in the pinned '
+      + 'Parametreler: the first meeting\'s Implied bps is measured from the normal TLREF (another number), the Spot row reads '
+      + '"Spot · normal", Durum "Açık · 20 gün …"; Kapalı again: the very text it had',
+      normPpkOn.on === 1 && normPpkOn.r10 !== normPpkR10 && /^[+−-]?\d/.test(normPpkOn.r10) && normPpkOn.spot === 'Spot · normal'
+      && /^Açık · 20 gün · fark/.test(normPpkOn.status) && normPpkOn.used === normPpkDay
+      && normPpkOff.r10 === normPpkR10 && normPpkOff.status === 'Kapalı', { normPpkR10, normPpkOn, normPpkOff });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!L2', 'OIS_MAIN!L3', 'OIS_MAIN!L4'] });
     await tab(page, 'all');
     await page.evaluate(() => window.tto.state.page.items.get('B21').toggle(false));          // (it starts folded: open it)
     await waitCell(page, 'OIS_MAIN!S337', 't.trim() !== ""');
