@@ -282,8 +282,10 @@ def test_a_rows_quote_reads_its_spread_over_the_chosen_curve_and_bootstrap(svc):
 # ============================================================================== the page
 def test_the_table_sits_right_after_the_blocks_on_the_desk_page(svc):
     masa = next(v for v in load_views() if v["id"] == "masa")
-    rates = next(s for s in masa["sections"] if s["id"] == "rates")
-    assert rates["panels"][:3] == ["B9", "TAFS", "TAF"]                       # the block, its box (a quote's spreads), the table
+    # the block, the date-to-date forward on its dates (one tab since the desk's layout review, 27.11.2026), the block's box
+    # (a quote's spreads), the table
+    tarih = next(s for s in masa["sections"] if s["id"] == "tarih")
+    assert tarih["panels"] == ["B9", "B10", "TAFS", "TAF"]
     panels = {p["id"]: p for p in masa["panels"]}
     assert panels["TAF"]["sheet"] == ex.TARIH_SHEET and panels["TAF"]["range"] == "B1:P108" and not panels["TAF"]["hidden"]
     assert panels["TAF"]["grow"] == {"key": "B", "first": 5, "extra": 1, "last": 104}
@@ -302,7 +304,8 @@ def test_the_table_sits_right_after_the_blocks_on_the_desk_page(svc):
         table = next(p for p in page["panels"] if p["id"] == "TAF")
         data = table["data"]
         assert table["title"].startswith("TOPLU TARİH ARASI FAİZ") and table["grow"]["key"] == "B"
-        assert data["c"] == list("BCDEFGHIJKLMNOP") and data["r"][-1] == 108
+        # the inputs first: Başlangıç, Bitiş, Spread, (Gün,) Kote % and what it reads, then the curves (27.11.2026)
+        assert data["c"] == list("BCDENOPFGHIJKLM") and data["r"][-1] == 108
         cells = dict(zip(data["c"], data["rows"][data["r"].index(5)]))
         assert [cells[c].get("i") for c in "BCDN"] == ["u"] * 4 and not {"i"} & (set(cells["E"]) | set(cells["O"]) | set(cells["P"]))
         assert cells["B"]["t"] == "15.12.2026" and cells["F"]["t"].endswith("%") and cells["N"]["t"] == "38,50%"
@@ -315,7 +318,7 @@ def test_the_table_sits_right_after_the_blocks_on_the_desk_page(svc):
         assert strip["B"]["t"] == "Kote % (ACT/360)" and strip["C"].get("i") == "u" and strip["C"]["t"] == "38,50%"
         assert [c["t"] for c in rows[ex.TARIH_BACK + 2]] == ["Eğri"] + [cell(svc, "MASA!B%d" % k, u) for _, k in ex.TARIH_CURVES]
         assert all(c["t"] for c in rows[ex.TARIH_BACK + 4])                                  # a spread over every curve
-        assert next(s for s in page["sections"] if s["id"] == "rates")["panels"][:3] == ["B9", "TAFS", "TAF"]
+        assert next(s for s in page["sections"] if s["id"] == "tarih")["panels"] == ["B9", "B10", "TAFS", "TAF"]
     finally:
         svc.reset_inputs(u, "tto")
 

@@ -111,10 +111,12 @@ def test_a_merged_caption_keeps_its_span_when_an_empty_column_is_trimmed():
 def test_frozen_columns_are_reported_for_the_tables_that_contain_them(service):
     assert panel(service, "dibs", "B3")["data"]["fz"] == 3                      # A:C of the bond table
     assert panel(service, "dibs", "B3")["data"]["c"][:3] == ["A", "B", "C"]
-    fomc = panel(service, "usd", "fomc")["data"]
-    assert fomc["c"][0] == "A" and fomc["fz"] == 1
+    # (a table that names a "freeze" of its own - the desk's layout review, 27.11.2026 - is that option's: not looked at here)
+    own = {(v["id"], p["id"]) for v in service.views for p in v["panels"] if p.get("freeze")}
+    crv = panel(service, "usd", "crv")["data"]
+    assert crv["c"][0] == "A" and crv["fz"] == 1
     assert "fz" not in panel(service, "usd", "spr")["data"]                    # starts right of the frozen column
-    masa = [p["data"] for p in service.view(None, "masa")["panels"] if p["type"] == "table"]
+    masa = [p["data"] for p in service.view(None, "masa")["panels"] if p["type"] == "table" and ("masa", p["id"]) not in own]
     assert masa and not any("fz" in d for d in masa)                           # rows only: header rows are sticky anyway
 
 
@@ -432,7 +434,8 @@ def test_captions_and_remarks_kept_in_cells_reach_their_panels(service):
     assert masa["chart0"]["title"] == "Oranlar (360 basit)" and not masa["chart0"]["note"]                           # the chart's own title
     dv01 = {p["id"]: p for p in service.view(None, "dv01")["panels"]}
     assert dv01["B18"]["note"].startswith("Birinci derece; büyük hareketli günlerde konveksite")                     # DV01_RISK!B145
-    usd = service.view(None, "usd")["panels"][0]
+    # (the USD page's caption row: a helper since the layout review of 27.11.2026 - it repeated the page's title)
+    usd = next(p for p in service.view(None, "usd", True)["panels"] if p["id"] == "cap")
     assert usd["type"] == "notes" and [c["t"] for c in usd["data"]["rows"][0] if c.get("t")] == [
         "USD OIS · FOMC ima patikası ve işlem seçici", "Bootstrap forward (WIRP mantığı) · senaryo görüşü → işlem önerisi"]
 

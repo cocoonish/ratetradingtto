@@ -118,7 +118,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "DİBS RV iki yönlü", "DİBS RV switch iki yönlü", "Manuel Tahvil iki yönlü",
                                                    "Tüm Kâğıtlar ON karşılık", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri",
-                                                   "VİOP ON karşılık", "EK_IHALE",
+                                                   "VİOP ON karşılık", extras.LOOK_NAME, "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
                                                    "VİOP kontratları", "Tahvil carry fiyattan repo", "Implied move hareketten vol",
                                                    "Tek OIS spread'i", "Forward hesaplayıcıları iki yönlü", "EK_TARIH", "TARİH ARASI iki yönlü",

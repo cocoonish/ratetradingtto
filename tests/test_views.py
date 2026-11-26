@@ -132,7 +132,8 @@ def test_panels_and_inputs_point_at_real_cells(models, view):
             if p.get(key):
                 ref = p[key] if "!" in p[key] else "%s!%s" % (sheet.name, p[key])
                 si, rc = model.cell_ref(ref)
-                assert isinstance(model.sheets[si].consts.get(rc), str), (view["id"], p["id"], key)
+                # (or a formula that writes one: the forward summary's legend of the curves names the user's scenarios)
+                assert isinstance(model.sheets[si].consts.get(rc), str) or rc in model.sheets[si].fml, (view["id"], p["id"], key)
     for inp in view["inputs"]:
         assert inp.get("scope", "user") in ("user", "shared")
         ref = inp["range"]
@@ -367,9 +368,12 @@ def test_each_calculator_has_one_home():
     ekse = panel("masa", "EKSE")
     assert ekse["borrowed"] and ekse["sheet"] == "EK_FWD" and ekse["range"] == "A101:AW113" and ekse["cols"] == eks["cols"]
     assert "EURTRY" in ekse["title"] and "EURTRY" not in eks["title"]
-    # the date-to-date forward's dates and spread right above it: the row of the desk sheet's date-to-date inputs
-    assert panel("masa", "B10D")["range"] == "B60:N60" and not panel("masa", "B10D").get("hidden")
-    assert next(s for s in by["masa"]["sections"] if s["id"] == "fwd")["panels"] == ["EKS", "EKSE", "B10D", "B10", "B22"]
+    # the date-to-date forward on one tab with the date-to-date rate, whose first row (the desk sheet's date-to-date
+    # inputs) it reads: the strip of that row once above it (B10D) is a helper now - a temporary copy's own dates (the
+    # desk's layout review, 27.11.2026)
+    assert panel("masa", "B10D")["range"] == "B60:N60" and panel("masa", "B10D")["hidden"]
+    assert next(s for s in by["masa"]["sections"] if s["id"] == "fwd")["panels"] == ["EKS", "EKSE", "B22"]
+    assert next(s for s in by["masa"]["sections"] if s["id"] == "tarih")["panels"] == ["B9", "B10", "TAFS", "TAF"]
     assert not any(i["range"].startswith("EK_FWD!") for i in by["masa"]["inputs"])
     assert {"EK_FWD!B2", "EK_FWD!D4:E4", "EK_FWD!D20:E29", "EK_FWD!D119:E128"} <= {i["range"] for i in by["forward"]["inputs"]}
     # the hidden limit table of the Calculators sheet takes no input any more
@@ -423,10 +427,11 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
         assert cell(service, "EK_FWD!K104", user) > cell(service, "EK_FWD!G104", user) > 0      # an EURTRY forward above its spot
     finally:
         service.set_inputs(user, "tto", [{"ref": "EK_FWD!E104", "value": ""}])
-    # the date-to-date forward's inputs: start, end and spread are the desk sheet's (C60, E60, I60), typed above it
-    strip = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "B10D")
+    # the date-to-date forward's inputs: start, end and spread are the desk sheet's (C60, E60, I60), typed in the first
+    # row of the date-to-date rate beside it (its tab's)
+    strip = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "B9")
     d = strip["data"]
-    assert d["r"] == [60] and [col for col, c in zip(d["c"], d["rows"][0]) if c.get("i")] == ["C", "E", "I"]
+    assert d["r"][0] == 60 and [col for col, c in zip(d["c"], d["rows"][0]) if c.get("i")] == ["C", "E", "I"]
     before = cell(service, "MASA!T62", user)                            # B10: the forward at the end date (MPC ima)
     service.set_inputs(user, "tto", [{"ref": "MASA!C60", "value": "01.12.2026"}, {"ref": "MASA!E60", "value": "01.03.2027"}])
     try:
@@ -449,9 +454,10 @@ def test_inputs_typed_beside_a_table_are_its_own(service):
     from conftest import cell
     user = service.login("girdi yanında")["user"]
     page = service.view(user, "masa")
-    tabs = {s["id"]: s["panels"] for s in page["sections"]}
+    # (a strip and its table may stand as one column of the tab: its ids in order)
+    tabs = {s["id"]: [x for p in s["panels"] for x in (p if isinstance(p, list) else [p])] for s in page["sections"]}
     assert tabs["viop"] == ["B15", "B16D", "B16", "B17D", "B17"]
-    assert tabs["sig"] == ["B18D", "B18", "B19D", "B19", "B23D", "B23"]
+    assert tabs["sig"] == ["B18D", "B18", "B19D", "B19", "B23D", "B23", "B20"]          # (Makro in Sinyaller, 27.11.2026)
     strips = {p["id"]: p["data"] for p in page["panels"] if p.get("id") in ("B16D", "B17D", "B19D", "B23D")}
     assert strips["B16D"]["r"] == [321] and [c.get("i") for c in strips["B16D"]["rows"][0]] == [None, "u"]
     assert strips["B17D"]["c"] == ["L", "M", "N", "O", "Z", "P"] and strips["B17D"]["r"] == list(range(330, 339))   # Z: FRA eğrisi
@@ -488,7 +494,9 @@ def test_inputs_typed_beside_a_table_are_its_own(service):
     on = {(r, col) for r, row in zip(carry["r"], carry["rows"]) for col, c in zip(carry["c"], row) if c.get("i")}
     assert {(2, "F"), (2, "H"), (3, "H"), (3, "J"), (4, "B"), (4, "D"), (4, "F")} <= on   # DV01, lot, C+R, horizons
     usd = {s["id"]: s["panels"] for s in service.view(user, "usd")["sections"]}
-    assert "inp" in usd["top"] and all(usd[t][0] == "inp" for t in ("fomc", "curve", "trades"))
+    # (the main table first, Girdiler right after it - beside the chart -; on İşlemler last: the desk's layout review)
+    assert "inp" in usd["top"] and usd["fomc"][:2] == ["fomc", "inp"] and usd["curve"][:2] == ["crv", "inp"]
+    assert "inp" in usd["trades"]
 
 
 # ------------------------------------------------------------------------------- inputs beside their tables
@@ -666,7 +674,9 @@ def test_a_table_away_from_its_inputs_is_found(service):
     its curve; a tab whose note no longer names where the pasted position is; the RET curve once it is no reference."""
     import copy
     masa = copy.deepcopy(service.view_index["masa"])
-    next(s for s in masa["sections"] if s["id"] == "fwd")["panels"].remove("B10D")
+    # (the date-to-date forward back on the forward tab, away from the date-to-date rate whose first row holds its dates)
+    next(s for s in masa["sections"] if s["id"] == "tarih")["panels"].remove("B10")
+    next(s for s in masa["sections"] if s["id"] == "fwd")["panels"].append("B10")
     next(p for p in masa["panels"] if p["id"] == "EKS")["range"] = "A3:AW14"
     assert _inputs_away_from_their_tables(service, [masa]) == {
         ("masa", "fwd", "B10"): ["MASA!C60", "MASA!E60", "MASA!I60"], ("masa", "fwd", "EKS"): ["EK_FWD!B2"]}
@@ -679,4 +689,4 @@ def test_a_table_away_from_its_inputs_is_found(service):
     assert away[("dv01", "risk", "B2")] == ["DV01_RISK!K%d" % r for r in sorted(range(6, 26), key=str)]
     no_ret = dict(REFERENCE, tto=[ref for ref in REFERENCE["tto"] if ref != "Forward!W33:X47"])
     away = _inputs_away_from_their_tables(service, [service.view_index["masa"]], no_ret)
-    assert "Forward!W33" in away[("masa", "over", "B8")] and ("masa", "fwd", "B10") in away
+    assert "Forward!W33" in away[("masa", "over", "B8")] and ("masa", "tarih", "B10") in away

@@ -474,12 +474,12 @@ def test_what_is_typed_for_a_window_moves_with_its_meeting(tmp_path):
 
 # ============================================================================== the page and the workbook
 def test_the_tables_sit_after_their_sources_and_their_inputs_are_new(service):
-    """MPC OIS → PPK ADIMI right after MPC OIS, MPC SPREAD → PPK ADIMI right after MPC SPREAD (PPK ima tab); the FRA list
-    and the FOMC table wider; each with a note saying what to type and what comes back.  The inputs are the user's own and
-    stand where no input ever stood (no other range, none retired)."""
+    """MPC OIS → PPK ADIMI right after MPC OIS, MPC SPREAD → PPK ADIMI right after MPC SPREAD (the MPC işlem tab - PPK ima
+    split in two on 27.11.2026); the FRA list and the FOMC table wider; each with a note saying what to type and what comes
+    back.  The inputs are the user's own and stand where no input ever stood (no other range, none retired)."""
     views = {v["id"]: v for v in load_views()}
     ois, usd = views["ois"], views["usd"]
-    mpc = next(s for s in ois["sections"] if s["id"] == "mpc")["panels"]
+    mpc = next(s for s in ois["sections"] if s["id"] == "mpcis")["panels"]
     assert mpc[mpc.index("B13") + 1] == "PPK1" and mpc[mpc.index("B15") + 1] == "PPK2"
     panels = {p["id"]: p for p in ois["panels"]}
     assert (panels["PPK1"]["sheet"], panels["PPK1"]["range"]) == (ex.PPK_SHEET, "A1:M%d" % (ex.PPK_FIRST + WINDOWS - 1))
