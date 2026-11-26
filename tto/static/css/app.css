@@ -1751,6 +1751,8 @@ table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }
 .page-tools .qcov:hover { text-decoration: underline; }
 .qpage table.grid td.qwrap { white-space: normal; min-width: 240px; max-width: 520px; }
 .qpage table.grid td.fz.pick { --fzt: var(--accent-soft); }
+/* (a panel's own sentence - DİBS switch's head line and record - off the panel's border) */
+.qpage > .panel > .qsentence { margin: 0; padding: 8px 12px 6px; }
 .qpage .qform.qcontract { padding-bottom: 0; }
 .qpage .qform.qcontract .seg { flex-wrap: wrap; }
 .qpage details.qlegsfold > summary { cursor: pointer; color: var(--ink-2); font-size: 12px; padding: 2px 0 4px; }
