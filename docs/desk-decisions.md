@@ -2352,8 +2352,8 @@ OIS-implied date; it is the date in use (`OIS_MAIN!L5`) when no date is typed (`
   squared misses; **the earliest on a tie**.
 - **When the ticked tenors cannot fix a date it says so, and gives none:** no more ticked tenors than unknown levels ("en
   az … vade seçin"); the best fit past the longest ticked tenor ("normalleşme seçili vadelerin sonrasında" - a longer
-  tenor is needed); and a tie - the levels after a meeting take up the gap, so every day from one on fits as well - is
-  said with the days it spans (the earliest taken).
+  tenor is needed). **A tie** - the levels after a meeting take up the gap, so every day from one on fits as well - gives
+  the earliest of those days and says the span they cover.
 - **The normal TLREF and the switch are the other builder's** (`OIS_MAIN!L2:L4`); the walk reads them by address.
 - Nothing of before changes while switched off (checked cell for cell: the workbook with and without the addition, and
   STUB İMA's panel against its old range).
