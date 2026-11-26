@@ -400,11 +400,20 @@ fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula (`ext
   (`Forward!J2`, `L2`, `OIS_MAIN!L2`). Three dates still use it, and no addition patches them: `VIOP!K3` (VİOP's
   implied rates), `ASW!C4` → `T65` (the ASW sheet's curve and the shift of ASW FX's 18M) and the gold spot date
   (`EK_XAU!B9`, when none is typed).
+- **VİOP's ON karşılık** (26.11.2026, [desk-decisions.md](desk-decisions.md), "VİOP: ON karşılık") counts the same
+  days: each contract's implied TRY rate (simple ACT/360 over VKGS = the expiry − `VIOP!K3`, rows 10 / 22) compounded
+  daily over those days on 360 - the VİOP sheet's own "TRY Repo" rows 17 / 29, `extras.on_equivalent`'s formula; the desk
+  page's VİOP summary shows them as ON bid / ON ask. A rate read from VİOP's prices, neither TRY OIS nor the offshore
+  curve - never TLREF's business-day O/N (`extras.overnight_bd`: TRY OIS windows only).
 - The cells counted from the USDTRY spot: `MASA!P94:P99`, `MASA!C171`, `Forward!B200:B205`, `Forward!K130:K134`.
 - The Forward page's two-way tables (24.11.2026) solve a typed outright's TRY rate (`extras.implied_try`, simple
   ACT/360) over the days each table counts: USDTRY from `Forward!I2`, EURTRY from `Forward!K2` (TOPLU FORWARD's and
   ÇAPRAZ's EURTRY, the EURTRY value-date table, FSS's EURTRY period `MAX(0, G168 − F168)`), the free list from its row's
   start. No curve is read for it: offshore and OIS are untouched.
+- Their ON karşılık (26.11.2026; FORWARD KOTASYON, the value-date tables, SERBEST FORWARD, FSS, ÇAPRAZ) is the Forward
+  calculators' ON Karşılık of each TRY rate over the days its table's forward formula applies it (the value date's days
+  from the pair's spot; FSS's far from `I2`, its fwd-fwd near → far `H167`; ÇAPRAZ's EUR from `K2`), on 360 every calendar
+  day (`extras.on_rate` / `on_rate_back`) - not TLREF's business-day O/N, and no curve read for it.
 - `fx_shift` (`ppkcurve.read`) = FX spot − OIS spot, in days. It puts the OIS side's MPC path on the offshore curve's
   days (`StepCurve.rebased`: the offshore PPK curve, and its bumps in Fiyatlama) and the offshore curve on Motor's
   quarterly calendar in the interpolation chart. ASW FX's 18M uses a shift of its own, `ASW!T65 − Forward!I2`
@@ -433,6 +442,10 @@ offshore side, ask the desk first.
 - The O/N: `borsaspread` (and `retfair` through it) uses offshore ICAP `Forward!AC123` and TLREF `Forward!AD123`
   (365 → 360); `tradevalue` uses offshore `AC123` and TLREF `OIS_MAIN!J2` (ACT/365).
 - Trades' USDTRY forward never takes TRY OIS.
+- Masa's ORANLAR and O/N EŞLENİKLERİ (`MASA!B4:AB21`): each curve's zero rate (360 simple) and O/N side by side, their
+  difference in bp. To 10Y since 26.11.2026 ([desk-decisions.md](desk-decisions.md#masa-offshore-2y-sonrası-zero-ve-on-26112026)):
+  offshore the XCCY bootstrap (`Forward!H127 …`, `E112 …`; days from the USDTRY spot), OIS Motor's node (`Motor!M102 …`,
+  `Forward!F112 …`; days from the OIS spot). A tenor without an XCCY node stays blank.
 
 ## Known differences - read before changing
 

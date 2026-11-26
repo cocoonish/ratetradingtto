@@ -2068,3 +2068,167 @@ with its file), `tto/recover.py` (`kurtar`: what each table does, RULES - table 
 [architecture.md](architecture.md#the-file-itself-one-dashboard-the-journal-mode-a-damaged-file)), `tto/__main__.py`
 (`cmd_run`, `cmd_restore`, `cmd_recover`), `tto/ops.py` (`check_folder`, `folder_status`), `tto/static/js/status.js`.
 Tests: `tests/test_datadir.py`, `tests/test_kurtar.py`, the browser test's "status window: the data folder …".
+
+### VİOP: ON karşılık (26.11.2026)
+
+> "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun gibi başka önerin olur mu"
+
+Among the proposals put to the desk: "VİOP USDTRY contracts: the ON of each contract's implied TRY rate (the gold
+calculator already has one)". The desk: **"Bunların da hepsini yap"**.
+
+**What the workbook already had.** The VİOP sheet's BID / ASK tables carry it: their **"TRY Repo"** rows (`VIOP!M17:X17`,
+`M29:X29`) are the "TRY" rows above them (13 / 25: the rate the contract's bid / ask price implies, simple ACT/360 over
+VKGS days, rows 10 / 22 = the expiry − `VIOP!K3`, Bloomberg's USDTRY spot date) compounded daily over those very days,
+`((1 + TRY/360·VKGS)^(1/VKGS) − 1)·360` - the Forward calculators' "ON Karşılık" (`Forward!AH14`, `extras.on_equivalent`),
+equal to the last bit on the replay data. Replay (03.11.2026's file), the 30.11.2026 contract (26 days): bid 33,58 % → ON
+33,20 %, ask 33,83 % → ON 33,44 %.
+
+**What changed:**
+- **VİOP page:** no row added - a second row of the same numbers would only be a duplicate - and the desk's label "TRY
+  Repo" stays; the note under VIOP BID and VIOP ASK says it is the ON karşılık (which price, which days and basis, the
+  formula, where the desk page shows it).
+- **Masa → VİOP**, "VİOP · kontratlar, ima TRY ve baz" (`MASA!B108:N122`), had the implied rates without it: **ON bid
+  (360)** beside İma bid (360) and **ON ask (360)** beside İma ask (360), each the contract's "TRY Repo" read the way the
+  summary reads the rates (`INDEX(VIOP!$M$17:$X$17, k)`). They sit in `MASA!A109:A121` and `O109:O121`, cells the
+  workbook leaves empty and no formula reads; the panel's `cols` puts each beside its rate. Two decimals (`0.00%`), as
+  the rates beside them (the desk's 25.11 rule).
+
+**Choices made while building it** (ask the desk before changing):
+- **The rate's own basis and days**: ACT/360 over the contract's VKGS days from `VIOP!K3` (Bloomberg's spot date, as
+  before). Not TLREF's business-day O/N (`extras.overnight_bd`), which is the TRY OIS windows' (OIS · PPK, EK_PPK) - a
+  VİOP rate is read from VİOP's prices, neither TRY OIS nor the offshore curve.
+- **Display only.** Neither table takes a typed value per contract, so nothing is kept and nothing moves on a roll:
+  every column is the contract's place, the ON beside its rate (tested on a roll: the day after the November expiry the
+  first row is December's, with its own rate, days and ON).
+- **The label "TRY Repo" is the desk's own** and stays; renaming the row "ON karşılık" on the page is a label change if
+  the desk wants it.
+- **Not done** (not in this request): the Quant · VİOP page's contract table (its alış / satış / orta implied rates)
+  shows no ON; the calendar-spread matrices' "ima TRY" are forward-forward rates between two expiries (their ON would be
+  over the period between them, another number); DEALS, Target and the gold calculator (which has its own two-way ON
+  karşılık) are untouched.
+- **Nothing typed, every number as before**: every value of the shared calculation of book tto (230 571 cells, 28
+  sheets, replay) compared cell for cell with 5ed4eab: none differs; the only new cells are the 26 above.
+- No new Bloomberg request.
+
+Code: `tto/extras.py` ("VİOP ON karşılık": `VIOP_ON_SIDES`, `viop_on_masa`, `_viop_on_check`, `_tto_viop_on`),
+`tto/views/10_masa.json` (B15: its range, `cols`, note), `tto/views/40_viop.json` (B5 / B7 notes). Tests:
+`tests/test_viop_on.py`, the browser test's check "VİOP: ON karşılık …".
+
+### Masa: offshore 2Y sonrası zero ve O/N (26.11.2026)
+
+> "Masa sayfasında offshore'un da 2y sonrasını zero ve on karşılıkta göstermemişiz"
+
+**What was missing.** Masa → Genel bakış, ORANLAR (`MASA!B4:N21`, "kota ve 360 basit karşılaştırma"): its 3Y / 5Y / 7Y /
+10Y rows held the workbook's `""` in ICAP (offshore) and OIS zero - the rows up to 2Y read the Forward sheet's comparison
+table (`Forward!AA122:AG137`), which ends at 2Y - so "ICAP − OIS (bp)" was blank there too. Its OIS kota already ran to 10Y.
+
+**What the rows show now** (`extras.MASA_OFF_NAME`; [curves.md](curves.md#where-ois-and-offshore-meet)), each curve's own
+zero rate, simple ACT/360 from the curve's own spot, as the 2Y row:
+- **ICAP** = the XCCY bootstrap's "Zero Rate" at the tenor, `Forward!H127 / H129 / H131 / H134` = (1/DF − 1)·360/days - the
+  column the 2Y row's ICAP comes from (`AC137 = J18/100`, `J18 = H126·100`). DF: the XCCY pars (annual ACT/360)
+  bootstrapped, `Forward!G127 …`; days: the XCCY ticker's `DAYS_TO_MTY` from the USDTRY spot `Forward!I2` (`G19`, `G21`;
+  6Y–10Y `K130:K134`, counted from `I2` on the TRY+USD calendar when Bloomberg has none).
+- **OIS zero** = Motor's "Zero simple 360" at its 36 / 60 / 84 / 120-month node, `Motor!M102 / M110 / M118 / M130` - the
+  cell the rows up to 2Y read through `Forward!P` → `AD` (2Y: `Motor!M98`). DF: Motor's bootstrap (`BOOT_GUN` /
+  `BOOT_LNDF`); days from the OIS spot `OIS_MAIN!B2` (TRY list). It follows the viewer's curve setting (Bootstrap / PPK
+  basamak) as the rows above do; ICAP, the XCCY bootstrap of the quotes, does not - as at 2Y.
+- **ICAP − OIS (bp)**: the row's own formula, (F − G)·10 000. RET bid / ask and VİOP stay blank (no quotes past 2Y), and
+  so do their differences.
+- **Never an OIS number on the offshore side.** A tenor whose XCCY node cannot be bootstrapped - its `TRYSAQ`, or one
+  before it, without a price - stays blank, and so does its difference (`IFERROR(…,"")`).
+- **O/N EŞLENİKLERİ** (`MASA!P4:AB21`) already read the offshore O/N at 3Y–10Y from the same discount factors over the same
+  days (`Forward!E112 / E114 / E116 / E119` = 360·((1/DF)^(1/days) − 1)): nothing changed there. On each curve a row's zero
+  and O/N are one DF: 1 + zero·d/360 = (1 + O/N/360)^d.
+
+**Replay is not the desk.** The replay file has `TRYSAQ6–10` as `#N/A`, so 7Y / 10Y offshore (ICAP, its bp, the offshore
+O/N) are blank in replay. A copy of the install's database (17.11.2026) has `TRYSAQ1–10` closes from both sources (ICPL,
+BGN) on every one of its 528 days since 07.11.2024, and that day's `DAYS_TO_MTY` answers of `TRYSAQ6–10`: on the desk 7Y and
+10Y show.
+
+**Choices made while building it** (ask the desk before changing):
+- **Each curve on its own days**, as at 2Y: offshore from the USDTRY spot (T+1, TRY+USD) to the XCCY ticker's maturity, OIS
+  from the OIS spot (T+1, TRY) to Motor's node - a day or two apart at some tenors (replay: 3Y one day, 2Y two).
+- **The chart "Oranlar (360 basit)" stays at 2Y on purpose** (`MASA!AF6:AK16`, the workbook's): 360-simple zero rates at
+  long tenors would squash its axis (the O/N chart runs to 10Y already).
+- **The table's own remark** (`MASA!B21`, the workbook's) is as it was; the panel's note says where 3Y–10Y come from.
+- No new Bloomberg request; no Bootstrap number moves. On MASA and Forward nothing else changed: every formula, constant
+  and format, and every value but these cells and what reads them (`L17:L18`, `AI17:AJ20`) - cell for cell against
+  5ed4eab, replay.
+
+Code: `tto/extras.py` (`MASA_OFF_ROWS`, `_masa_off_check` / `_masa_off`), `tto/views/10_masa.json` (B3's note). Tests:
+`tests/test_masa_offshore.py`, `tests/test_extras.py` (the additions' list), the browser test's check "ORANLAR past
+2Y …".
+
+### Forward tabloları: ON karşılık (26.11.2026)
+
+The desk:
+
+> "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun gibi başka önerin olur mu"
+
+Among the integrator's eight similar proposals was the same ON karşılık in every other pricing table of the Forward page
+(TOPLU FORWARD's own is a section of its own). The desk: **"Bunların da hepsini yap"**.
+
+**What was built** - an ON karşılık % right beside each TRY rate:
+- **FORWARD KOTASYON** (USDTRY `EK_FWD!A1:W16`, EURTRY `A100:W115`): **ON bid / ask %** beside TRY bid / ask % (`AV:AW`).
+  Masa's two summaries show them too: Spread · TRY % · ON % per side.
+- **USDTRY / EURTRY FORWARD** (the value-date tables, the Elle rows too): **ON bid / mid / ask %** beside TRY bid / mid /
+  ask % (`V:X`).
+- **SERBEST FORWARD**: **Minor ON %** beside the minor % (`N`).
+- **FORWARD STARTING SWAP**: on every row (the curves, Manuel, the "Elle puan → faiz" rows) **ON far %** (of the far TRY
+  %) beside the far TRY % and **ON fwd-fwd %** (of the TRY fwd-fwd %: the period's forward ON) beside it (`Forward!S:T`).
+- **ÇAPRAZ FORWARD**: **Manuel ON %** (of the Manuel TRY %) and **İma ON %** (of the İma TRY % the elle forward gives)
+  (`Forward!X:Y`).
+
+**The convention: the Forward calculators' own "ON Karşılık"** - `Forward!AH14 = 360·((1 + TRY·g/360)^(1/g) − 1)`
+(`extras.on_equivalent`, its inverse `on_simple`; in % `extras.on_rate` / `on_rate_back`): every calendar day compounded on
+360, over the days the table's own forward formula applies that TRY rate over (each formula read):
+- FORWARD KOTASYON: the value date's days from the pair's spot (`C`: USDTRY `Forward!I2`, EURTRY `Forward!K2`). Its TRY % is
+  OIS + spread, the OIS rate read over the days from the OIS spot, but the forward applies the TRY % as simple ACT/360 over
+  `C` (`spot·(1 + TRY·C/360)/(1 + USD·C/360)`), so the ON is over `C`;
+- the value-date tables: the table's days (`D45` = `Forward!U27`, USDTRY; `D56` = `Forward!AA27` = `D2 − K2`, EURTRY);
+- the free list: the row's start → end (`D`);
+- FORWARD STARTING SWAP: the far TRY % over spot → far (`G167`), the TRY fwd-fwd % over near → far (`H167`) - `D179`'s own
+  formula composes them so. The EURTRY far leg applies the same fwd-fwd % over its own period (`MAX(0, G168 − F168)`), which
+  is `H167` unless the near date is before the EURTRY spot date: the ON is the period's, over `H167`;
+- ÇAPRAZ FORWARD: USD and any other currency (its USDTRY leg) from the USDTRY spot (`C`), EUR from the EURTRY spot (`B − K2`),
+  as its manual forward `Q` counts (`extras.cross_days`).
+TLREF's business-day O/N (`extras.overnight_bd`, the 25.11 decision for the OIS meeting windows) is not used: these rates are
+FX implied. No curve is read: offshore and OIS are untouched.
+
+**Two-way** - in every table that is, the ON is a new member of its group (`tto/twoway.py`; the 24.11 rule: the one typed
+last stands, Delete → default, a computed value typed back gives the same row, 1e-9): an ON typed gives the TRY rate,
+`((1 + ON/360)^g − 1)·360/g` over the same days, and the rest of the row follows. Typeable: FORWARD KOTASYON's ON bid / ask
+(kept in `AX:AY`), the value-date tables' ON bid / ask (`Y:Z`), the free list's Minor ON (`AC`), FSS's Manuel row ON far /
+ON fwd-fwd (`Forward!AB179:AC179`), ÇAPRAZ's Manuel ON (`Forward!W`). Shown only: the value-date tables' ON mid (the mids are
+not typed), FSS's other rows, ÇAPRAZ's İma ON (the elle forward is the way back's, not a row value).
+
+**Choices made while building it** (ask the desk before changing):
+- **Beside the TRY rate**: the cells sit right of the tables' stores, where no input ever stood (`EK_FWD!AV:AY`, `V:Z`, `N` /
+  `AC`; `Forward!S:T`, `AB:AC`, `W:Y` - empty in the workbook, checked by `_fwd_twoway_check`), and the tables show their
+  columns in an order of their own (the view's `"cols"`). ÇAPRAZ's "Yöntem" row keeps its merged cells
+  (`Service._pick_columns` keeps a span whose columns still follow it).
+- **FSS's Manuel row**: an ON fwd-fwd typed gives the TRY fwd-fwd %; an ON far typed gives the far TRY %, and the TRY fwd-fwd %
+  `D179`'s formula solved for it, as a far TRY % typed. The row fills only with a valid near / far (Durum OK), as before -
+  otherwise only the ON typed shows.
+- **ÇAPRAZ's currency changed**: a Manuel ON typed **stays** - a TRY rate, as a Manuel TRY % typed does -, its Manuel TRY % then
+  over the new currency's days (EUR's from its own spot); a manual forward typed goes, as before.
+- **The EURTRY value-date table's TRY rates are the USDTRY table's**: an ON typed in the USDTRY table gives USDTRY's TRY rate
+  and EURTRY takes that rate - its ON is then that rate's over EURTRY's days (a day apart, so not the number typed); an ON
+  typed in the EURTRY table is EURTRY's own.
+- **The value date changed**: an ON typed stays as typed, the TRY rate is its inverse over the new days.
+- **The ON mid** is the ON of the TRY mid (not the mean of the two sides' ONs: they differ by a convexity of about 1e-6 %).
+- **Masa's FORWARD KOTASYON summaries show the ON too** (Spread · TRY % · ON % per side, typeable there: the same cells) - the
+  matrices' TRY rates read the ON's stores, and every input a table reads is in its tab (`test_views`).
+- **Two decimals** (`TRY_PCT`, the desk's 25.11 rule for the pricing tables' TRY rates); the value keeps every digit.
+- **Nothing booked differently**: an ON is no price - "İşlem gir" / *Kota mesajı* / *Kotasyon kopyala* take the rows' points,
+  outrights and TRY rates as before (with an ON typed, the ones the row shows).
+- No new Bloomberg request. With nothing typed every value is as before: checked cell for cell on `EK_FWD`, `Forward` and
+  `MASA` against 5ed4eab, the shared calculation and a user's with values typed the old way; only the notes under the tables
+  changed (`EK_FWD!A16`, `A53`, `A63`, `A78`, `A115`: the ON's formula).
+
+Code: `tto/extras.py` (`on_rate`, `on_rate_back`, `ON_NOTE`; `FWD_ON` / `FWD_TW_ON` in `_fwd_quote_cells`; `FR_ON` /
+`FR_TW_ON` in `_fr_side` and `_tto_fwd_rates`, `FR_LIST_ON` / `FR_LIST_TW_ON`; `FS_ON`, `FS_TW_ON`, `CROSS_ON`, `CROSS_TW_ON`,
+`cross_days` in `_tto_fwd_twoway`, its cells in `FS_CROSS_TW_CELLS`, checked empty by `_fwd_twoway_check`), `tto/service.py`
+(`_cross_typed_forwards`: the forward's store only; `_pick_columns`: spans), `tto/views/30_forward.json` (the groups' ON
+members, the tables' `"cols"`, the helper tables), `tto/views/10_masa.json` (EKS / EKSE). Tests: `tests/test_fwd_on.py`; the
+browser test's checks "… ON karşılık …".

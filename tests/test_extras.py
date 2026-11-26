@@ -116,14 +116,15 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "DİBS RV ASW / DM'den fiyat",
                                                    "DİBS RV switch seviyesinden fiyat", "Manuel Tahvil ISIN", "DİBS RV iki yönlü",
                                                    "DİBS RV switch iki yönlü", "Manuel Tahvil iki yönlü", "EK_CARRY",
-                                                   "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri", "EK_IHALE",
+                                                   "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri",
+                                                   "VİOP ON karşılık", "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
                                                    "VİOP kontratları", "Tahvil carry fiyattan repo", "Implied move hareketten vol",
                                                    "Tek OIS spread'i", "Forward hesaplayıcıları iki yönlü", "EK_TARIH", "TARİH ARASI iki yönlü",
                                                    "VİOP hedef fiyatı", "EK_VFRA"] + [
                                                    # (two-way: each calculator by itself, the VİOP target)
                                                    t.name for t in extras.TW_HUBS] + [extras.VT_NAME,
-                                                   "EK_RET", "Eğri interpolasyonu"]
+                                                   "EK_RET", "Eğri interpolasyonu", "Masa offshore 2Y sonrası"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
@@ -326,8 +327,9 @@ def test_matrix_panels_are_on_the_forward_page_with_their_inputs(svc):
     assert head[:11] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask",
                          "Fwd bid", "Fwd ask"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    # curve, spread source, general, dates, per date - and the two-way TRY %, puan and fwd (test_fwd_twoway.py)
-    assert len(inputs) == 1 + 1 + 2 + 10 + 20 + 60 and all(i == "u" for i, _ in inputs)
+    # curve, spread source, general, dates, per date - and the two-way TRY %, puan and fwd (test_fwd_twoway.py), the ON
+    # karşılık of 26.11.2026 (test_fwd_on.py)
+    assert len(inputs) == 1 + 1 + 2 + 10 + 20 + 60 + 20 and all(i == "u" for i, _ in inputs)
     assert inputs[0][1] == list(extras.FWD_CURVES)                                       # the curve is a drop-down
     assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "forward", True)["panels"]}
 
@@ -591,11 +593,12 @@ def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
     assert panels["EKF5"]["title"].startswith("FORWARD KOTASYON  ·  EURTRY, OIS + spread")
     assert panels["EKF6"]["title"].startswith("PUAN → OIS SPREAD  ·  EURTRY")
     rows = panels["EKF5"]["data"]["rows"]
-    assert [c.get("t") for c in rows[1]][:15] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid",
-                                                  "Puan ask", "Fwd bid", "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "EUR %"]
+    assert [c.get("t") for c in rows[1]][:17] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid",
+                                                  "Puan ask", "Fwd bid", "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "ON bid %",
+                                                  "ON ask %", "EUR %"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    # curve, spread source, spreads and spot, dates, per date - and the two-way TRY %, puan and fwd
-    assert len(inputs) == 1 + 1 + 4 + 10 + 20 + 60 and all(i == "u" for i, _ in inputs)
+    # curve, spread source, spreads and spot, dates, per date - and the two-way TRY %, puan and fwd, the ON karşılık
+    assert len(inputs) == 1 + 1 + 4 + 10 + 20 + 60 + 20 and all(i == "u" for i, _ in inputs)
     assert inputs[0][1] == list(extras.FWD_CURVES)
     assert len([c for row in panels["EKF6"]["data"]["rows"] for c in row if c.get("i")]) == 20
     # each way back by a rate, right after its way back by points: 20 inputs (TRY bid / ask % of the 10 dates)

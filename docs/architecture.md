@@ -157,9 +157,11 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   "Elle değer" inputs at the start (`_declare_saved_cells`).
 - **Tables on it** (desk-decisions): FORWARD KOTASYON; the Forward page's TOPLU FORWARD, value-date tables, SERBEST
   FORWARD, FORWARD STARTING SWAP's Manuel row and ÇAPRAZ FORWARD
-  ([desk-decisions.md](desk-decisions.md#forward-sayfasının-tabloları-iki-yönlü-24112026)). A typed value stays through
-  any other input's change; the one exception is a table's own rule in the service: ÇAPRAZ FORWARD's typed forwards go
-  when its currency (`Forward!C197`) changes (`Service._cross_typed_forwards`, from `_set_inputs` / `_reset_inputs`).
+  ([desk-decisions.md](desk-decisions.md#forward-sayfasının-tabloları-iki-yönlü-24112026)); in each but TOPLU FORWARD the ON
+  karşılık of 26.11.2026 is the group's last member ([desk-decisions.md](desk-decisions.md#forward-tabloları-on-karşılık-26112026)).
+  A typed value stays through any other input's change; the one exception is a table's own rule in the service: ÇAPRAZ
+  FORWARD's typed forwards go when its currency (`Forward!C197`) changes (`Service._cross_typed_forwards`, from
+  `_set_inputs` / `_reset_inputs`) - only the forward's store: a Manuel TRY % or Manuel ON typed stays.
 - **Adopting it** (the module's docstring has the full list): the builder writes the stores and the members' formulas
   (the table's inverse formulas: one implementation, as `extras.fwd_outright` / `fwd_rate`); the view declares the group;
   the tests cover each member typed -> the others, exact round trips, the last typed wins, Delete, a paste, a scenario,
@@ -307,7 +309,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | Sheet | Book | What |
 |---|---|---|
 | EK_TATIL | tto, borsa | USD (Fed) / EUR (TARGET2) holiday lists beside the TRY copy; joint FX calendars |
-| EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders); the value-date tables and the free forward list two-way (typed values in `N:U` / `Z:AB` of their rows) |
+| EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders); the value-date tables and the free forward list two-way (typed values in `N:U` / `Z:AB` of their rows). The ON karşılık beside each TRY rate (26.11.2026; `extras.on_rate`): the matrices' ON bid / ask `AV:AW` (typed: `AX:AY`), the value-date tables' ON bid / mid / ask `V:X` (typed: `Y:Z`), the free list's minor ON `N` (typed: `AC`) - the pages show them next to the TRY % (`"cols"`) |
 | EK_XAU | tto | gold forwards, VİOP gold calculator (two-way: typed values in `B67:E72`, a contract each column - on a roll a typed price or forward follows its contract, `rowkeys.RowKeys.roll`) |
 | EK_VIOP | tto | VİOP contract history for charts |
 | EK_KAYNAK | tto | pricing-source order for OIS / offshore / XCCY (see [market-data.md](market-data.md#pricing-sources)) |
@@ -331,7 +333,10 @@ with its helper block `AL17:AM36` and the inputs' defaults it gives; [desk-decis
 Forward page's calculators two-way (`_tto_fwd_calc_tw`: Interest 2 SP … Repo, Forward DV01, TRY OIS w/Spread - their
 stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores in `X:Z`), the bonds' tables two-way
 (the same day: their stores in hidden columns of the rows - `DİBS RV!YF:YP`, `AB:AJ` of the switch rows, `ASW!Z:AB`,
-`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own) and others.
+`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own), the desk page's VİOP summary's
+ON karşılık (26.11.2026, "VİOP ON karşılık", `_tto_viop_on`: `MASA!A109:A121` ON bid and `O109:O121` ON ask, cells the
+workbook leaves empty - the panel's `cols` puts each beside its implied rate -, each the VİOP sheet's own "TRY Repo" of the
+contract, `VIOP!M17:X17` / `M29:X29`; display only, nothing kept) and others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 ## Module map
@@ -488,6 +493,12 @@ file is shared memory) and does not work over a network filesystem.
 Two kinds of panel key add the dashboard's own columns:
 - the `ppk` key: PPK columns beside Bootstrap (`_fra_ppk_columns`, `_broken_ppk_columns`);
 - the `append` keys (aswfx, rvfair, borsaspread, dibs_live, universe …): see `Service._panel`.
+
+A table's `"cols"` shows only the columns it names, in its order (`Service._pick_columns`; every cell keeps its column
+letter): Masa's forward summaries, and the Forward page's pricing tables whose ON karşılık (26.11.2026) sits right of their
+stores but shows beside the TRY rate (FORWARD KOTASYON, the value-date tables, SERBEST FORWARD, FORWARD STARTING SWAP,
+ÇAPRAZ FORWARD). A merged cell keeps the columns it covered that still follow it, in order (ÇAPRAZ FORWARD's "Yöntem" row);
+a covered cell it no longer reaches is an empty cell of its own, so a row keeps every column.
 
 ### The top bar's own panels
 

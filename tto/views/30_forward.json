@@ -1131,7 +1131,7 @@
    "id": "ekfwd-quote",
    "sheet": "EK_FWD",
    "label": "FORWARD KOTASYON · USDTRY",
-   "note": "İki yönlü: spread, TRY %, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner).",
+   "note": "İki yönlü: spread, TRY %, ON karşılık, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner).",
    "members": [
     {"name": "Spread", "range": "D5:E14"},
     {"name": "TRY %", "range": "M5:N14", "store": "AN5:AO14",
@@ -1139,14 +1139,16 @@
     {"name": "Puan", "range": "H5:I14", "store": "AP5:AQ14",
      "label": "Puan bid / ask typed in the USDTRY forward quote matrix (two-way: its fwd, TRY % and spread follow)"},
     {"name": "Fwd", "range": "J5:K14", "store": "AR5:AS14",
-     "label": "Fwd bid / ask typed in the USDTRY forward quote matrix (two-way: its puan, TRY % and spread follow)"}
+     "label": "Fwd bid / ask typed in the USDTRY forward quote matrix (two-way: its puan, TRY % and spread follow)"},
+    {"name": "ON %", "range": "AV5:AW14", "store": "AX5:AY14",
+     "label": "ON karşılık bid / ask % typed in the USDTRY forward quote matrix (two-way: TRY = ((1 + ON/360)^g − 1)·360/g over the date's days; its spread, puan and fwd follow)"}
    ]
   },
   {
    "id": "ekfwd-eur-quote",
    "sheet": "EK_FWD",
    "label": "FORWARD KOTASYON · EURTRY",
-   "note": "İki yönlü: spread, TRY %, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner).",
+   "note": "İki yönlü: spread, TRY %, ON karşılık, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner).",
    "members": [
     {"name": "Spread", "range": "D104:E113"},
     {"name": "TRY %", "range": "M104:N113", "store": "AN104:AO113",
@@ -1154,7 +1156,9 @@
     {"name": "Puan", "range": "H104:I113", "store": "AP104:AQ113",
      "label": "Puan bid / ask typed in the EURTRY forward quote matrix (two-way: its fwd, TRY % and spread follow)"},
     {"name": "Fwd", "range": "J104:K113", "store": "AR104:AS113",
-     "label": "Fwd bid / ask typed in the EURTRY forward quote matrix (two-way: its puan, TRY % and spread follow)"}
+     "label": "Fwd bid / ask typed in the EURTRY forward quote matrix (two-way: its puan, TRY % and spread follow)"},
+    {"name": "ON %", "range": "AV104:AW113", "store": "AX104:AY113",
+     "label": "ON karşılık bid / ask % typed in the EURTRY forward quote matrix (two-way: TRY = ((1 + ON/360)^g − 1)·360/g over the date's days from the EURTRY spot; its spread, puan and fwd follow)"}
    ]
   },
   {
@@ -1362,7 +1366,7 @@
    "id": "fwdrate-usd-bid",
    "sheet": "EK_FWD",
    "label": "USDTRY FORWARD · bid",
-   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır. EURTRY tablosunun TRY faizleri bu tablonunkilerdir: burada yazılan değer EURTRY'yi de değiştirir (orada kendisininki yazılmadıkça).",
+   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, ON karşılık, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır. EURTRY tablosunun TRY faizleri bu tablonunkilerdir: burada yazılan değer EURTRY'yi de değiştirir (orada kendisininki yazılmadıkça).",
    "members": [
     {"name": "TRY bid %", "range": "B47:B51"},
     {"name": "USDTRY bid", "range": "E47:E51", "store": "N47:N51",
@@ -1370,14 +1374,16 @@
     {"name": "Puan bid", "range": "H47:H51", "store": "O47:O51",
      "label": "USDTRY bid points typed in the value-date table (two-way: fwd = spot + puan / 10000; TRY bid % and P/gün follow)"},
     {"name": "P/gün bid", "range": "K47:K51", "store": "P47:P51",
-     "label": "USDTRY bid points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY bid % follow)"}
+     "label": "USDTRY bid points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY bid % follow)"},
+    {"name": "ON bid %", "range": "V47:V51", "store": "Y47:Y51",
+     "label": "USDTRY bid ON karşılık % typed in the value-date table (two-way: TRY bid % = ((1 + ON/360)^g − 1)·360/g over the table's days; fwd, puan and P/gün follow)"}
    ]
   },
   {
    "id": "fwdrate-usd-ask",
    "sheet": "EK_FWD",
    "label": "USDTRY FORWARD · ask",
-   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır. EURTRY tablosunun TRY faizleri bu tablonunkilerdir: burada yazılan değer EURTRY'yi de değiştirir (orada kendisininki yazılmadıkça).",
+   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, ON karşılık, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır. EURTRY tablosunun TRY faizleri bu tablonunkilerdir: burada yazılan değer EURTRY'yi de değiştirir (orada kendisininki yazılmadıkça).",
    "members": [
     {"name": "TRY ask %", "range": "D47:D51"},
     {"name": "USDTRY ask", "range": "G47:G51", "store": "Q47:Q51",
@@ -1385,14 +1391,16 @@
     {"name": "Puan ask", "range": "J47:J51", "store": "R47:R51",
      "label": "USDTRY ask points typed in the value-date table (two-way: fwd = spot + puan / 10000; TRY ask % and P/gün follow)"},
     {"name": "P/gün ask", "range": "M47:M51", "store": "S47:S51",
-     "label": "USDTRY ask points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY ask % follow)"}
+     "label": "USDTRY ask points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY ask % follow)"},
+    {"name": "ON ask %", "range": "X47:X51", "store": "Z47:Z51",
+     "label": "USDTRY ask ON karşılık % typed in the value-date table (two-way: TRY ask % = ((1 + ON/360)^g − 1)·360/g over the table's days; fwd, puan and P/gün follow)"}
    ]
   },
   {
    "id": "fwdrate-eur-bid",
    "sheet": "EK_FWD",
    "label": "EURTRY FORWARD · bid",
-   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır.",
+   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, ON karşılık, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır.",
    "members": [
     {"name": "TRY bid %", "range": "B58:B62"},
     {"name": "EURTRY bid", "range": "E58:E62", "store": "N58:N62",
@@ -1400,14 +1408,16 @@
     {"name": "Puan bid", "range": "H58:H62", "store": "O58:O62",
      "label": "EURTRY bid points typed in the value-date table (two-way: fwd = spot + puan / 10000; TRY bid % and P/gün follow)"},
     {"name": "P/gün bid", "range": "K58:K62", "store": "P58:P62",
-     "label": "EURTRY bid points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY bid % follow)"}
+     "label": "EURTRY bid points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY bid % follow)"},
+    {"name": "ON bid %", "range": "V58:V62", "store": "Y58:Y62",
+     "label": "EURTRY bid ON karşılık % typed in the value-date table (two-way: TRY bid % = ((1 + ON/360)^g − 1)·360/g over the table's days; fwd, puan and P/gün follow)"}
    ]
   },
   {
    "id": "fwdrate-eur-ask",
    "sheet": "EK_FWD",
    "label": "EURTRY FORWARD · ask",
-   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır.",
+   "note": "İki yönlü: her satırın bid'inde ve ask'inde TRY %, ON karşılık, forward, puan ya da P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır eğriye döner). Valör tarihi değişince yazılan değer kalır, diğerleri yeni günle hesaplanır.",
    "members": [
     {"name": "TRY ask %", "range": "D58:D62"},
     {"name": "EURTRY ask", "range": "G58:G62", "store": "Q58:Q62",
@@ -1415,27 +1425,31 @@
     {"name": "Puan ask", "range": "J58:J62", "store": "R58:R62",
      "label": "EURTRY ask points typed in the value-date table (two-way: fwd = spot + puan / 10000; TRY ask % and P/gün follow)"},
     {"name": "P/gün ask", "range": "M58:M62", "store": "S58:S62",
-     "label": "EURTRY ask points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY ask % follow)"}
+     "label": "EURTRY ask points per day typed in the value-date table (two-way: puan = P/gün · days; fwd and TRY ask % follow)"},
+    {"name": "ON ask %", "range": "X58:X62", "store": "Z58:Z62",
+     "label": "EURTRY ask ON karşılık % typed in the value-date table (two-way: TRY ask % = ((1 + ON/360)^g − 1)·360/g over the table's days; fwd, puan and P/gün follow)"}
    ]
   },
   {
    "id": "fwdfree",
    "sheet": "EK_FWD",
    "label": "SERBEST FORWARD",
-   "note": "İki yönlü: minor %, swap ya da forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (satırın spot'u, major %'si ve günüyle; ✎ yazılan değer; silince eğriye döner).",
+   "note": "İki yönlü: minor %, minor ON %, swap ya da forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (satırın spot'u, major %'si ve günüyle; ✎ yazılan değer; silince eğriye döner).",
    "members": [
     {"name": "Minor %", "range": "G68:G77"},
     {"name": "Swap", "range": "H68:H77", "store": "Z68:Z77",
      "label": "free forward list: swap points typed (two-way: forward = spot + swap / 10000; the minor % follows)"},
     {"name": "Forward", "range": "I68:I77", "store": "AA68:AA77",
-     "label": "free forward list: forward typed (two-way: its swap and minor % follow)"}
+     "label": "free forward list: forward typed (two-way: its swap and minor % follow)"},
+    {"name": "Minor ON %", "range": "N68:N77", "store": "AC68:AC77",
+     "label": "free forward list: the minor's ON karşılık % typed (two-way: minor % = ((1 + ON/360)^g − 1)·360/g over the row's days; swap and forward follow)"}
    ]
   },
   {
    "id": "fss-manuel",
    "sheet": "Forward",
    "label": "FORWARD STARTING SWAP · Manuel",
-   "note": "İki yönlü (Manuel satırı): TRY fwd-fwd % (C169), TRY far %, far outright, FS puan, günlük puan, EURTRY far ya da EURTRY puan - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır boşalır). Tek TRY fwd-fwd % iki paritenin far bacağını fiyatlar: USDTRY değeri yazınca EURTRY'ninkiler de değişir, tersi de. Satır near / far valörü geçerliyken (Durum OK) dolar; EURTRY değerinin faizi EURTRY dönemi 0'dan uzunken çıkar.",
+   "note": "İki yönlü (Manuel satırı): TRY fwd-fwd % (C169), TRY far %, ikisinin ON karşılığı, far outright, FS puan, günlük puan, EURTRY far ya da EURTRY puan - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır boşalır). Tek TRY fwd-fwd % iki paritenin far bacağını fiyatlar: USDTRY değeri yazınca EURTRY'ninkiler de değişir, tersi de. Satır near / far valörü geçerliyken (Durum OK) dolar; EURTRY değerinin faizi EURTRY dönemi 0'dan uzunken çıkar.",
    "members": [
     {"name": "TRY fwd-fwd %", "range": "C169"},
     {"name": "TRY far %", "range": "D179", "store": "U179",
@@ -1449,18 +1463,24 @@
     {"name": "EURTRY far", "range": "N179", "store": "Y179",
      "label": "FSS Manuel row: EURTRY far outright typed (two-way: the TRY fwd-fwd % and USDTRY follow)"},
     {"name": "EURTRY puan", "range": "O179", "store": "Z179",
-     "label": "FSS Manuel row: EURTRY FS points typed (two-way: far = near + puan / 10000; the TRY fwd-fwd % follows)"}
+     "label": "FSS Manuel row: EURTRY FS points typed (two-way: far = near + puan / 10000; the TRY fwd-fwd % follows)"},
+    {"name": "ON far %", "range": "S179", "store": "AB179",
+     "label": "FSS Manuel row: the far TRY %'s ON karşılık typed (two-way: far TRY % = ((1 + ON/360)^g − 1)·360/g over spot → far; the TRY fwd-fwd % and the far legs follow)"},
+    {"name": "ON fwd-fwd %", "range": "T179", "store": "AC179",
+     "label": "FSS Manuel row: the TRY fwd-fwd %'s ON karşılık typed (two-way: TRY fwd-fwd % = ((1 + ON/360)^g − 1)·360/g over near → far; the far legs follow)"}
    ]
   },
   {
    "id": "capraz-forward",
    "sheet": "Forward",
    "label": "ÇAPRAZ FORWARD",
-   "note": "İki yönlü: Manuel TRY % ya da manuel forward - hangisini yazarsanız o kalır, diğeri ondan hesaplanır (✎ yazılan değer; silince boşalır). Yazılan forward yazıldığı dövizindir: Döviz (C197) değişince silinir; yazılan TRY % kalır.",
+   "note": "İki yönlü: Manuel TRY %, Manuel ON % ya da manuel forward - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince boşalır). Yazılan forward yazıldığı dövizindir: Döviz (C197) değişince silinir; yazılan TRY % ve ON kalır.",
    "members": [
     {"name": "Manuel TRY %", "range": "F200:F214"},
     {"name": "Fwd (manuel)", "range": "Q200:Q214", "store": "U200:U214",
-     "label": "ÇAPRAZ manual XXXTRY forward typed (two-way: the Manuel TRY % follows, the foreign leg held; cleared when the currency C197 changes)"}
+     "label": "ÇAPRAZ manual XXXTRY forward typed (two-way: the Manuel TRY % follows, the foreign leg held; cleared when the currency C197 changes)"},
+    {"name": "Manuel ON %", "range": "X200:X214", "store": "W200:W214",
+     "label": "ÇAPRAZ: the Manuel TRY %'s ON karşılık typed (two-way: Manuel TRY % = ((1 + ON/360)^g − 1)·360/g over the row's days - EUR from its spot date; the forward follows; a TRY rate: it stays when the currency C197 changes)"}
    ]
   }
  ],
@@ -1486,7 +1506,8 @@
    "id": "FR1",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A44:M52",
+   "range": "A44:X52",
+   "cols": ["A", "B", "C", "D", "V", "W", "X", "E", "F", "G", "H", "I", "J", "K", "L", "M"],
    "hidden": false,
    "wide": true,
    "title": "USDTRY FORWARD  ·  valör faizleriyle bid / mid / ask",
@@ -1580,7 +1601,8 @@
    "id": "FR2",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A55:M62",
+   "range": "A55:X62",
+   "cols": ["A", "B", "C", "D", "V", "W", "X", "E", "F", "G", "H", "I", "J", "K", "L", "M"],
    "hidden": false,
    "wide": true,
    "title": "EURTRY FORWARD  ·  valör faizleriyle bid / mid / ask",
@@ -1674,7 +1696,8 @@
    "id": "FR3",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A65:M77",
+   "range": "A65:N77",
+   "cols": ["A", "B", "C", "D", "E", "F", "G", "N", "H", "I", "J", "K", "L", "M"],
    "hidden": false,
    "wide": true,
    "title": "SERBEST FORWARD",
@@ -1720,7 +1743,8 @@
    "id": "EKF1",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A1:W16",
+   "range": "A1:AW16",
+   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "AV", "AW", "O", "P", "Q", "R", "S", "T", "U", "V", "W"],
    "hidden": false,
    "wide": true,
    "title": "FORWARD KOTASYON  ·  USDTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)",
@@ -1826,7 +1850,8 @@
    "id": "EKF5",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A100:W115",
+   "range": "A100:AW115",
+   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "AV", "AW", "O", "P", "Q", "R", "S", "T", "U", "V", "W"],
    "hidden": false,
    "wide": true,
    "title": "FORWARD KOTASYON  ·  EURTRY, OIS + spread  (bid ve ask spread'i ayrı; sarı hücreler girdi)",
@@ -1932,7 +1957,7 @@
    "id": "EKF3",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "X2:AU14",
+   "range": "X2:AY14",
    "hidden": true,
    "title": "Yardımcı · forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi; iki yönlü hücrelerin yazılan değerleri",
    "keep_title": true
@@ -1941,7 +1966,7 @@
    "id": "EKF7",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "X101:AU113",
+   "range": "X101:AY113",
    "hidden": true,
    "title": "Yardımcı · EURTRY forward kotasyon matrisi: eğrilerin iskonto faktörü ve basit faizi; iki yönlü hücrelerin yazılan değerleri",
    "keep_title": true
@@ -1950,7 +1975,7 @@
    "id": "EKF4",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A44:AB96",
+   "range": "A44:AC96",
    "hidden": true,
    "title": "Yardımcı · Forward fiyatları sekmesinin tabloları (USDTRY · EURTRY · serbest forward · vadelere göre TRY faizleri), yanlarıyla; iki yönlü hücrelerin yazılan değerleri",
    "keep_title": true
@@ -2108,14 +2133,15 @@
    "copyable": true,
    "type": "table",
    "title": "FORWARD STARTING SWAP",
-   "range": "B166:R182",
+   "range": "B166:T182",
+   "cols": ["B", "C", "D", "S", "E", "T", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R"],
    "hidden": false,
    "note": "Elle puan → faiz: bir broker'ın ya da müşterinin verdiği FS swap puanını yazın (USDTRY: I181, EURTRY: O182) - ima ettiği TRY fwd-fwd %, Manuel satırının formülünün tersiyle (aynı near / far valör, near outright RET mid'den, aynı USD / EUR fwd-fwd %: C170 / C171 ya da eğri); yanında OIS mid, offshore mid ve RET mid'e göre bp."
   },
   {
    "id": "B34y",
    "type": "table",
-   "range": "U178:AA179",
+   "range": "U178:AC179",
    "hidden": true,
    "title": "Yardımcı · FORWARD STARTING SWAP: Manuel satırına yazılanlar ve verdikleri TRY fwd-fwd %",
    "keep_title": true
@@ -2124,16 +2150,17 @@
    "id": "B36",
    "type": "table",
    "title": "ÇAPRAZ FORWARD",
-   "range": "B196:T217",
+   "range": "B196:Y217",
+   "cols": ["B", "C", "D", "E", "F", "X", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "Y", "T"],
    "hidden": false,
    "note": "XXXTRY fwd (elle): bir forward yazın - ima ettiği TRY faizi, döviz bacağı sabit tutularak (manuel forward'ın formülünün tersi: USD / EUR'da o dövizin OIS faizi ve günü; başka dövizde Bloomberg'in USDXXX forward'ının ortası); yanında RET mid'e göre bp."
   },
   {
    "id": "B36y",
    "type": "table",
-   "range": "U199:V214",
+   "range": "U199:W214",
    "hidden": true,
-   "title": "Yardımcı · ÇAPRAZ FORWARD: yazılan manuel forward'lar ve verdikleri TRY %",
+   "title": "Yardımcı · ÇAPRAZ FORWARD: yazılan manuel forward'lar, verdikleri TRY % ve yazılan manuel ON %",
    "keep_title": true
   },
   {

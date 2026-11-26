@@ -438,6 +438,7 @@
    "title": "ORANLAR  ·  kota ve 360 basit karşılaştırma",
    "range": "B4:N21",
    "hidden": false,
+   "note": "3Y–10Y: ICAP = XCCY (TRYSAQ) bootstrap'ının zero'su, USDTRY spot'undan kotanın vadesine; OIS zero = OIS bootstrap'ının (Motor) zero'su, OIS spot'undan - 2Y gibi 360 basit. Fiyatı olmayan XCCY vadesi boş kalır, OIS'ten doldurulmaz.",
    "trade": {"pair": "USDTRY", "first": 8, "last": 20, "tenor_col": "B", "cells": {"C": "ois", "D": "ret bid", "E": "ret ask"}}
   },
   {
@@ -568,8 +569,8 @@
    "id": "EKS",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A2:N14",
-   "cols": ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"],
+   "range": "A2:AW14",
+   "cols": ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
    "wide": true,
    "borrowed": true,
@@ -585,8 +586,8 @@
    "id": "EKSE",
    "type": "table",
    "sheet": "EK_FWD",
-   "range": "A101:N113",
-   "cols": ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"],
+   "range": "A101:AW113",
+   "cols": ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
    "wide": true,
    "borrowed": true,
@@ -610,8 +611,10 @@
    "id": "B15",
    "type": "table",
    "title": "VİOP  ·  kontratlar, ima TRY ve baz",
-   "range": "B108:N122",
+   "range": "A108:O122",
+   "cols": ["B", "C", "D", "E", "F", "A", "G", "O", "H", "I", "J", "K", "L", "M", "N"],
    "hidden": false,
+   "note": "ON bid / ON ask: ima faizin ON karşılığı, 360·((1 + ima·gün/360)^(1/gün) − 1) - aynı gün ve 360 bazında, günlük bileşik (VİOP sayfasındaki VIOP BID / ASK tablolarının TRY Repo satırı, VIOP!M17:X17 / M29:X29).",
    "trade": {"first": 110, "last": 121, "why": "VİOP kontratı – Günlük İşlemler'de VİOP yok", "cells": {"D": "none", "E": "none"}}
   },
   {
