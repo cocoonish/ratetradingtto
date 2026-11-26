@@ -2231,6 +2231,10 @@ class Service(object):
                                 name=p["add"].get("name") or v["id"])     # another page's list: by its name
         if p.get("grow"):
             entry["grow"] = p["grow"]               # more rows than in use: the page shows the filled ones and one more
+        if p.get("limit"):
+            entry["limit"] = p["limit"]             # its first rows only; "Tümü (N)" shows the rest (view.js)
+        if p.get("fit"):
+            entry["fit"] = True                     # as wide as its table, never stretched (.panel.fit)
         if p.get("full"):
             entry["full"] = True                    # the page's whole width (a wide chart with a table under it)
         if p.get("card"):
@@ -2274,10 +2278,13 @@ class Service(object):
                 entry["data"] = R.table(calc, sheet, rng, loc, overlay, show_hidden=show_hidden)
                 self._mark_formulas(entry["data"], book, sheet, user if overlay else None)
                 if book.twoway:
-                    # a two-way table (twoway.py): what its cells do, said under it
-                    tw_note = self.twoway.note_for(book, sheet, p["range"])
+                    # a two-way table (twoway.py): what its cells do, said under it - each group's note in ``tw`` as well:
+                    # the page shows one that a table above it says already only once (view.js)
+                    tw_notes = self.twoway.notes_for(book, sheet, p["range"])
+                    tw_note = " ".join(tw_notes)
                     if tw_note and tw_note not in (entry.get("note") or ""):
                         entry["note"] = (entry["note"] + " " if entry.get("note") else "") + tw_note
+                        entry["tw"] = tw_notes
                 if p.get("tips"):
                     _cell_tips(entry["data"], book, calc, sheet, p["tips"])
                 if p.get("lift", True):
@@ -2313,6 +2320,11 @@ class Service(object):
                 if p.get("bonds"):
                     # a list of bonds: its rows without a bond left out, the bonds in the trading list's order (display only)
                     self._bond_rows(book, calc, sheet, p["bonds"], entry["data"])
+                if p.get("freeze") is not None:
+                    # the view's own frozen columns, in place of the workbook's: counted as the panel shows them
+                    sh = book.model.sheets[book.model.sheet_index[sheet]]
+                    _freeze_columns(entry["data"], p["freeze"],
+                                    (lambda c: sh.col_hidden(col_to_index(c))) if show_hidden and sh.hidden_cols else None)
                 hint = th.client(p.get("trade"), v["id"], p.get("id"))
                 if hint:
                     entry["data"]["trade"] = hint   # its prices: right click, "İşlem gir" (trade_prefill)
@@ -2357,6 +2369,8 @@ class Service(object):
                     entry["data"] = self._tape_table(user, loc)
                 elif p.get("source") == "dibs_trading":
                     entry["data"] = self._trading_table(user, loc)
+                if p.get("freeze") is not None:
+                    _freeze_columns(entry.get("data"), p["freeze"])      # (its first columns stay in view)
             if p.get("title_ref"):
                 # the caption the workbook keeps in a cell above the chart / table
                 tsi, trc = book.cell(p["title_ref"] if "!" in p["title_ref"] else "%s!%s" % (sheet, p["title_ref"]))
@@ -9711,6 +9725,30 @@ def _lift_title(data: Dict[str, Any]) -> Optional[str]:
     del rows[0]
     del data["r"][0]
     return title or None
+
+
+def _freeze_columns(data: Optional[Dict[str, Any]], n: Any, hidden: Optional[Callable[[str], bool]] = None) -> None:
+    """A view's ``"freeze": n`` on its table: the first n columns as the panel shows them stay in view while it scrolls
+    sideways (``fz``, grid.js) - in place of the workbook's frozen panes; ``0``: none (the desk, 27.11.2026: the name or
+    ISIN of a wide table in sight).  ``hidden``: whether a column of the sheet is one Excel hides - shown as well
+    ("Yardımcı tablolar"), it is not counted, so that n names the same columns either way.  Nothing to scroll past (n
+    reaches the last column): none."""
+    if not isinstance(data, dict) or not data.get("rows") or isinstance(n, bool) or not isinstance(n, int):
+        return
+    data.pop("fz", None)
+    width = len(data["rows"][0])
+    cols = data.get("c") or []
+    k = seen = 0
+    while k < width and seen < n:
+        letter = cols[k] if k < len(cols) else None
+        if not (hidden is not None and isinstance(letter, str) and _COL_LETTERS.match(letter) and hidden(letter)):
+            seen += 1
+        k += 1
+    if 0 < k < width:
+        data["fz"] = k
+
+
+_COL_LETTERS = re.compile(r"^[A-Z]{1,3}$")
 
 
 def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:

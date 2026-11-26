@@ -554,6 +554,21 @@ class TwoWay(object):
                     notes.append(g.note)
         return " ".join(dict.fromkeys(notes)) or None
 
+    def notes_for(self, book, sheet: str, rng: str) -> List[str]:
+        """:meth:`note_for`'s notes one by one, each once (what it joins): a page says a group's note that a table above
+        it on screen says already only once (``Service._panel``'s ``tw``, ``view.js``; the desk, 27.11.2026)."""
+        try:
+            r1, c1, r2, c2 = parse_range(rng)
+        except Exception:  # noqa: BLE001 - a range that cannot be read shows no note
+            return []
+        notes = []
+        for g in self.groups.values():
+            if g.book is book and g.sheet == sheet and g.note:
+                a, b, c, d = g.box
+                if not (a > r2 or c < r1 or b > c2 or d < c1):
+                    notes.append(g.note)
+        return list(dict.fromkeys(notes))
+
 
 def mark(book, h: Hit, overlay: Optional[Dict[Cell, Any]], shared: Any, out: Dict[str, Any]) -> None:
     """The page's marks of a member's cell (tto/render.py): ``an`` - the row-side's anchor, the names of the members
