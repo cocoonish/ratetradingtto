@@ -1,4 +1,4 @@
-"""Masa → Genel bakış: ORANLAR and O/N EŞLENİKLERİ past 2Y (``tto/extras.py``: ``MASA_OFF_NAME``, ``MASA_CHART_NAME``).
+"""Masa → Genel bakış: ORANLAR and O/N EŞLENİKLERİ past 2Y (``tto/extras.py``: ``MASA_OFF_NAME``).
 
 The desk, 26.11.2026: "Masa sayfasında offshore'un da 2y sonrasını zero ve on karşılıkta göstermemişiz".  ORANLAR's 3Y /
 5Y / 7Y / 10Y rows held the workbook's "" in ICAP (offshore) and OIS zero.  They read each curve's own zero rate now, as
@@ -11,7 +11,9 @@ the 2Y row does through the Forward sheet's comparison table (Forward!AC137 / AD
 
 O/N EŞLENİKLERİ reads the offshore O/N of the same discount factors (Forward!E112 / E114 / E116 / E119) and did so
 already.  A node the XCCY curve lacks stays blank - never an OIS number.  The replay file has TRYSAQ6-10 as #N/A (its 7Y /
-10Y offshore are blank there); a user's own values over those quotes stand for the desk, whose history has them.
+10Y offshore are blank there); a user's own values over those quotes stand for the desk, whose history has them.  The
+chart "Oranlar (360 basit)" stays at 2Y on purpose (360-simple zero rates at long tenors would squash its axis); the O/N
+chart runs to 10Y.
 """
 import math
 import os
@@ -129,9 +131,8 @@ def test_the_desks_case_every_xccy_tenor_priced(svc):
         assert g == masa(svc, "G", r) and masa(svc, "Q", r, user) == masa(svc, "Q", r)     # (OIS: nothing to do with it)
         if tenor in ("3Y", "5Y"):
             assert f == masa(svc, "F", r)                            # (the nodes before 6Y are as they were)
-    # the charts draw them: ICAP and the offshore O/N to 10Y
-    icap, on_off = series(chart(svc, "chart0", user))["ICAP"], series(chart(svc, "chart1", user))["Offshore O/N"]
-    assert icap[11:] == [masa(svc, "F", r, user) for r in (17, 18, 19, 20)]
+    # the O/N chart draws the offshore O/N to 10Y
+    on_off = series(chart(svc, "chart1", user))["Offshore O/N"]
     assert on_off[11:] == [masa(svc, "R", r, user) for r in (17, 18, 19, 20)]
 
 
@@ -144,8 +145,8 @@ def test_a_missing_xccy_node_stays_blank_never_ois(svc):
         assert [masa(svc, c, r, user) for c in "FLRV"] == ["", "", "", ""], tenor
         assert masa(svc, "G", r, user) == masa(svc, "G", r) and masa(svc, "Q", r, user) == masa(svc, "Q", r)
     assert masa(svc, "F", 16, user) == masa(svc, "F", 16) and num(masa(svc, "F", 16, user))
-    icap = series(chart(svc, "chart0", user))["ICAP"]
-    assert icap[10] == masa(svc, "F", 16) and icap[11:] == ["c"] * 4     # (#N/A: the line ends at 2Y)
+    on_off = series(chart(svc, "chart1", user))["Offshore O/N"]
+    assert on_off[10] == masa(svc, "R", 16) and on_off[11:] == ["c"] * 4  # (#N/A: the O/N chart's line ends at 2Y)
 
 
 def test_on_ppk_basamak_ois_zero_follows_the_viewers_curve_as_2y_does(svc):
@@ -167,32 +168,9 @@ def test_on_ppk_basamak_ois_zero_follows_the_viewers_curve_as_2y_does(svc):
         svc.set_interp(user, "boot")
 
 
-def test_the_rates_chart_runs_to_10y(svc):
-    """Masa's "Oranlar (360 basit)" chart ran to 2Y: it runs to 10Y now, as its chart data (MASA!AF17:AK20) and the O/N
-    chart beside it do - ICAP where the XCCY curve has a node, OIS zero at every tenor; RET and VİOP end where their quotes
-    do (#N/A: passed over).  The model file stays the workbook's (a pure import); the O/N chart is as it was."""
-    tenors = ["ON", "TN", "1W", "2W", "1M", "2M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y"]
-    rates, on = chart(svc, "chart0"), chart(svc, "chart1")
-    assert rates["title"] == ex.MASA_CHART_TITLE and rates["cats"] == tenors and on["cats"] == tenors
-    s = series(rates)
-    assert list(s) == ["RET bid", "RET ask", "ICAP", "OIS zero", "VİOP"]
-    assert s["ICAP"][11:] == [masa(svc, "F", 17), masa(svc, "F", 18), "c", "c"]
-    assert s["OIS zero"][11:] == [masa(svc, "G", r) for r in (17, 18, 19, 20)]
-    assert all(s[name][11:] == ["c"] * 4 for name in ("RET bid", "RET ask", "VİOP"))
-    assert s["ICAP"][:11] == [masa(svc, "F", r) for r in range(6, 17)]
-    assert series(on)["Offshore O/N"][11:] == [masa(svc, "R", 17), masa(svc, "R", 18), "c", "c"]
-    raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz")).sheet("MASA").charts[0]
-    served = svc.books["tto"].model.sheet("MASA").charts[0]
-    assert [x["val"] for x in raw["series"]] == ["MASA!$A%s$6:$A%s$16" % (c, c) for c in "GHIJK"]
-    assert [x["val"] for x in served["series"]] == ["MASA!$A%s$6:$A%s$20" % (c, c) for c in "GHIJK"]
-    assert all(x["cat"] == "MASA!$AF$6:$AF$20" for x in served["series"])
-    assert {k: v for k, v in served.items() if k != "series"} == {k: v for k, v in raw.items() if k != "series"}
-    assert [dict(x, cat=None, val=None) for x in served["series"]] == [dict(x, cat=None, val=None) for x in raw["series"]]
-
-
 def _models():
-    """The TRY workbook's model with the dashboard's additions, and with them but these two."""
-    mine = (ex.MASA_OFF_NAME, ex.MASA_CHART_NAME)
+    """The TRY workbook's model with the dashboard's additions, and with them but this one."""
+    mine = (ex.MASA_OFF_NAME,)
     path = os.path.join(ROOT, "models", "tto.json.gz")
     new, old = Model.load(path), Model.load(path)
     assert ex.apply("tto", new) == []
@@ -206,8 +184,8 @@ def _models():
 
 
 def test_nothing_else_changes_in_the_workbook():
-    """The two additions change MASA!F17:G20's formulas and the rates chart's ranges - every other cell of every sheet
-    (formula, constant, look) and every other chart is as the other additions leave it."""
+    """The addition changes MASA!F17:G20's formulas - every other cell of every sheet (formula, constant, look) and every
+    chart is as the other additions leave it: the rates chart stays at 2Y, the workbook's, on purpose."""
     old, new = _models()
     assert [s.name for s in old.sheets] == [s.name for s in new.sheets]
     changed = []
@@ -220,10 +198,8 @@ def test_nothing_else_changes_in_the_workbook():
                     or so.styles.get(rc) != sn.styles.get(rc):
                 r, c = divmod(rc, COLS)
                 changed.append("%s!%s%d" % (sn.name, index_to_col(c), r))
-        if sn.name == "MASA":
-            assert sn.charts[1:] == so.charts[1:] and sn.charts[0] != so.charts[0]
-        else:
-            assert sn.charts == so.charts
+        assert sn.charts == so.charts, sn.name
+    assert [s["val"] for s in new.sheet("MASA").charts[0]["series"]] == ["MASA!$A%s$6:$A%s$16" % (c, c) for c in "GHIJK"]
     assert sorted(changed) == sorted("MASA!%s%d" % (c, r) for c in "FG" for r in (17, 18, 19, 20))
     masa_new = new.sheet("MASA")
     for r, _, zero, m in ROWS:
@@ -235,22 +211,19 @@ def test_nothing_else_changes_in_the_workbook():
 
 
 def test_a_workbook_that_changed_there_is_left_as_it_is():
-    """Each addition checks what the workbook holds before it writes: a file whose 7Y ICAP is a formula of its own (not
-    its "") keeps its table as it is, a chart over other rows keeps its rows - each left out and said so."""
+    """The addition checks what the workbook holds before it writes: a file whose 7Y ICAP is a formula of its own (not its
+    "") keeps its table as it is - the addition left out and said so."""
     model = Model.load(os.path.join(ROOT, "models", "tto.json.gz"))
     ex.SheetBuilder(model, "MASA").patch("F19", "=Forward!$H$131")
-    masa_sheet = model.sheet("MASA")
-    rates = masa_sheet.charts[0]
-    masa_sheet.charts[0] = dict(rates, series=[dict(s, val=s["val"].replace("$16", "$15")) for s in rates["series"]])
     problems = ex.apply("tto", model)
-    assert [p.split(":")[0] for p in problems] == [ex.MASA_OFF_NAME, ex.MASA_CHART_NAME]
+    assert [p.split(":")[0] for p in problems] == [ex.MASA_OFF_NAME]
     assert ex.formula_of(model, "MASA", "F19") == "Forward!$H$131" and ex.formula_of(model, "MASA", "F17") == '""'
-    assert [s["val"] for s in model.sheet("MASA").charts[0]["series"]] == ["MASA!$A%s$6:$A%s$15" % (c, c) for c in "GHIJK"]
 
 
 def test_nothing_else_moves_on_masa_and_forward(svc):
     """Every value of MASA and Forward is what it was with the workbook's blanks at MASA!F17:G20 (a calculation of its own
-    on top of the desk's, the blanks put back), but these cells and what reads them: ICAP − OIS and the chart data."""
+    on top of the desk's, the blanks put back), but these cells and what reads them: ICAP − OIS and the chart data rows
+    (MASA!AI17:AJ20, which no chart draws: the rates chart stays at 2Y)."""
     book = svc.books["tto"]
     si = book.model.sheet_index["MASA"]
     blanks = {(si, parse_a1("%s%d" % (c, r))): "" for c in "FG" for r in (17, 18, 19, 20)}

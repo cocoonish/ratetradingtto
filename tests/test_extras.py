@@ -123,8 +123,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "VİOP hedef fiyatı", "EK_VFRA"] + [
                                                    # (two-way: each calculator by itself, the VİOP target)
                                                    t.name for t in extras.TW_HUBS] + [extras.VT_NAME,
-                                                   "EK_RET", "Eğri interpolasyonu",
-                                                   "Masa offshore 2Y sonrası", "Masa oranlar grafiği 10Y'ye"]
+                                                   "EK_RET", "Eğri interpolasyonu", "Masa offshore 2Y sonrası"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")

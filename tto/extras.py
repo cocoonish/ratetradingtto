@@ -6652,16 +6652,12 @@ def _asw_interp(model: Model) -> None:
 #: RET and VİOP stay blank there (no quotes).  O/N EŞLENİKLERİ (MASA!P4:AB21) reads the offshore O/N of the same XCCY
 #: discount factors over the same days at 3Y–10Y already (Forward!E112 / E114 / E116 / E119): nothing changes there.  (The
 #: replay file has TRYSAQ6–10 as #N/A - its 7Y / 10Y offshore stay blank in replay -; the desk's history has them every
-#: day.)
+#: day.)  Masa's chart "Oranlar (360 basit)" stays at 2Y on purpose (its series run over MASA!AF6:AK16, the workbook's):
+#: 360-simple zero rates at long tenors would squash its axis, and the desk reads its short end.  Its chart data
+#: AF17:AK20 reads the new rows as it reads the others; no chart draws those rows.  The O/N chart runs to 10Y already.
 MASA_OFF_NAME = "Masa offshore 2Y sonrası"
 #: (MASA's row, tenor, the XCCY bootstrap's zero rate on the Forward sheet, Motor's row of the node)
 MASA_OFF_ROWS = ((17, "3Y", "H127", 102), (18, "5Y", "H129", 110), (19, "7Y", "H131", 118), (20, "10Y", "H134", 130))
-#: Masa's first chart, "Oranlar (360 basit)" (the table's RET bid / ask, ICAP, OIS zero, VİOP): its series ran over the
-#: chart data's rows up to 2Y (MASA!AF6:AK16) - to 10Y now, the rows that chart data has (AF17:AK20 read the table's) and
-#: the O/N chart beside it draws.  (first row, the workbook's last: 2Y, the last now: 10Y)
-MASA_CHART_NAME = "Masa oranlar grafiği 10Y'ye"
-MASA_CHART_TITLE = "Oranlar (360 basit)"
-MASA_CHART_ROWS = (6, 16, 20)
 
 
 def _masa_off_check(model: Model) -> None:
@@ -6692,35 +6688,6 @@ def _masa_off(model: Model) -> None:
     for r, _, zero, m in MASA_OFF_ROWS:
         b.patch("F%d" % r, '=IFERROR(Forward!$%s$%s,"")' % (zero[0], zero[1:]))
         b.patch("G%d" % r, '=IFERROR(Motor!$M$%d,"")' % m)
-
-
-def _masa_chart_check(model: Model) -> None:
-    """MASA's first chart is "Oranlar (360 basit)", every series over the chart data's rows up to 2Y, and the chart data
-    reads the table's 3Y-10Y rows as it reads the rows above."""
-    _need_sheets(model, "MASA")
-    charts = model.sheet("MASA").charts
-    first, last, _ = MASA_CHART_ROWS
-    if not charts or charts[0].get("title") != MASA_CHART_TITLE:
-        raise ValueError("MASA'nın ilk grafiği '%s' değil" % MASA_CHART_TITLE)
-    for s in charts[0]["series"]:
-        for key in ("cat", "val"):
-            if not re.fullmatch(r"MASA!\$A[F-K]\$%d:\$A[F-K]\$%d" % (first, last), s.get(key) or ""):
-                raise ValueError("MASA grafiğinin serisi beklenen aralıkta değil (%s)" % s.get(key))
-    for r, _, _, _ in MASA_OFF_ROWS:
-        _need_formula(model, "MASA", "AF%d" % r, "B%d" % r)
-        for col, src in zip("GHIJK", "DEFGH"):
-            _need_formula(model, "MASA", "A%s%d" % (col, r), "IF(ISNUMBER(%s%d),%s%d,NA())" % (src, r, src, r))
-
-
-def _masa_chart(model: Model) -> None:
-    """The chart's series (categories and values) to 10Y: a copy of its definition - the RET and VİOP series' rows past
-    2Y are #N/A, which the chart passes over (nothing drawn after their last point)."""
-    sh = model.sheet("MASA")
-    _, last, now = MASA_CHART_ROWS
-    end = re.compile(r"\$%d$" % last)
-    chart = sh.charts[0]
-    sh.charts[0] = dict(chart, series=[dict(s, cat=end.sub("$%d" % now, s["cat"]), val=end.sub("$%d" % now, s["val"]))
-                                       for s in chart["series"]])
 
 
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
@@ -6771,8 +6738,8 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # the implied move, whose formulas they keep; the VİOP target after its types and the FRA's curve)
             *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp),
-            # (Masa's ORANLAR past 2Y: the XCCY bootstrap's and Motor's zero rates, and its chart to 10Y)
-            (MASA_OFF_NAME, _masa_off_check, _masa_off), (MASA_CHART_NAME, _masa_chart_check, _masa_chart)),
+            # (Masa's ORANLAR past 2Y: the XCCY bootstrap's and Motor's zero rates)
+            (MASA_OFF_NAME, _masa_off_check, _masa_off)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }
 

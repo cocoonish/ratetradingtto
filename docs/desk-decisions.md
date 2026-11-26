@@ -1982,8 +1982,6 @@ zero rate, simple ACT/360 from the curve's own spot, as the 2Y row:
 - **O/N EŞLENİKLERİ** (`MASA!P4:AB21`) already read the offshore O/N at 3Y–10Y from the same discount factors over the same
   days (`Forward!E112 / E114 / E116 / E119` = 360·((1/DF)^(1/days) − 1)): nothing changed there. On each curve a row's zero
   and O/N are one DF: 1 + zero·d/360 = (1 + O/N/360)^d.
-- **The chart "Oranlar (360 basit)"** (chart0) ran to 2Y (`MASA!AF6:AK16`): it runs to 10Y now (`extras.MASA_CHART_NAME`),
-  as its chart data (`AF17:AK20`) and the O/N chart beside it do; RET and VİOP end at their last quote.
 
 **Replay is not the desk.** The replay file has `TRYSAQ6–10` as `#N/A`, so 7Y / 10Y offshore (ICAP, its bp, the offshore
 O/N) are blank in replay. A copy of the install's database (17.11.2026) has `TRYSAQ1–10` closes from both sources (ICPL,
@@ -1993,14 +1991,13 @@ BGN) on every one of its 528 days since 07.11.2024, and that day's `DAYS_TO_MTY`
 **Choices made while building it** (ask the desk before changing):
 - **Each curve on its own days**, as at 2Y: offshore from the USDTRY spot (T+1, TRY+USD) to the XCCY ticker's maturity, OIS
   from the OIS spot (T+1, TRY) to Motor's node - a day or two apart at some tenors (replay: 3Y one day, 2Y two).
-- **The chart's scale.** A 360-simple zero rate grows with maturity far faster than the short end's: with 10Y on it the
-  chart's value axis reaches the long end, and the part up to 2Y - RET, VİOP, the short ICAP / OIS - reads smaller than
-  before. Taking `MASA_CHART_NAME` out of `_BUILDERS` brings the chart back to 2Y; the table stays.
+- **The chart "Oranlar (360 basit)" stays at 2Y on purpose** (`MASA!AF6:AK16`, the workbook's): 360-simple zero rates at
+  long tenors would squash its axis (the O/N chart runs to 10Y already).
 - **The table's own remark** (`MASA!B21`, the workbook's) is as it was; the panel's note says where 3Y–10Y come from.
 - No new Bloomberg request; no Bootstrap number moves. On MASA and Forward nothing else changed: every formula, constant
   and format, and every value but these cells and what reads them (`L17:L18`, `AI17:AJ20`) - cell for cell against
   5ed4eab, replay.
 
-Code: `tto/extras.py` (`MASA_OFF_ROWS`, `_masa_off_check` / `_masa_off`, `_masa_chart_check` / `_masa_chart`),
-`tto/views/10_masa.json` (B3's note). Tests: `tests/test_masa_offshore.py`, `tests/test_extras.py` (the additions'
-list), the browser test's checks "ORANLAR past 2Y …" and "… runs to 10Y, as the O/N chart beside it does".
+Code: `tto/extras.py` (`MASA_OFF_ROWS`, `_masa_off_check` / `_masa_off`), `tto/views/10_masa.json` (B3's note). Tests:
+`tests/test_masa_offshore.py`, `tests/test_extras.py` (the additions' list), the browser test's check "ORANLAR past
+2Y …".
