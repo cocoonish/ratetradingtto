@@ -92,8 +92,14 @@ function heatStyle(hex) {
   return a < 0.03 ? '' : 'rgba(' + r + ',' + g + ',' + b + ',' + a.toFixed(3) + ')';
 }
 
+/** An input of kind "check" (tto/views/__init__.py): a tick box - 1 ticked, 0 not - written through the input path as a
+ *  value typed ("1" / "0"); Delete takes it back to its default.  The server offers one only while it reads a value. */
+const isTick = (cell) => !!cell && !!cell.i && cell.ik === 'check';
+const ticked = (cell) => typeof cell.v === 'number' && cell.v !== 0;
+
 function cellClass(cell) {
   let cls = cell.k || '';
+  if (isTick(cell)) cls += ' check';
   if (cell.b) cls += ' b';
   if (cell.it) cls += ' it';
   if (cell.c) cls += ' c-' + cell.c;
@@ -158,6 +164,32 @@ function typedNote(grid, i, j, cell) {
   if (cell.v === t.date || String(cell.t || '').trim() === t.text) t.fresh = false;
   else if (!t.fresh) { typedDates.delete(key); return ''; }           // typed over since: the note goes
   return 'Kısayol: ' + t.typed + ' → ' + t.text;
+}
+
+/** What a table cell shows: its text - or, for a tick box, the box (kept when the cell is drawn again: its state set). */
+function fillCell(grid, td, cell) {
+  if (!isTick(cell)) {
+    td.textContent = cell ? (cell.t || '') : '';
+    return;
+  }
+  let box = td.querySelector('input.tick');
+  if (!box) {
+    clear(td);
+    box = h('input', { type: 'checkbox', class: 'tick', title: 'Seçmek / kaldırmak için tıklayın (Delete: varsayılan)' });
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('dblclick', (e) => e.stopPropagation());
+    box.addEventListener('change', () => applyValue(grid, td.__i, td.__j, box.checked ? '1' : '0'));
+    td.appendChild(box);
+  }
+  box.checked = ticked(cell);
+}
+
+/** A tick box's cell toggled from the keyboard (Enter, F2, Space) or a double click on the cell around the box. */
+function toggleTick(grid, i, j) {
+  const cell = grid.cell(i, j);
+  const box = grid.tds[i] && grid.tds[i][j] && grid.tds[i][j].querySelector('input.tick');
+  if (box) box.checked = !ticked(cell);              // (as it will read; the refresh brings the cell)
+  applyValue(grid, i, j, ticked(cell) ? '0' : '1');
 }
 
 /** A cell's tooltip: its own (tipOf) and, for a date typed as a shortcut, what was typed. */
@@ -485,7 +517,9 @@ export class Grid {
           b.addEventListener('change', () => cell.chk.fn(b.checked));
           td.appendChild(b);
         } else {
-          td.textContent = cell.t || '';
+          td.__i = i;
+          td.__j = j;
+          fillCell(this, td, cell);                          // (its text - or an input's tick box)
         }
         if (cell.rs) td.rowSpan = cell.rs;
         if (cell.cs) td.colSpan = cell.cs;
@@ -604,7 +638,7 @@ export class Grid {
         if (cell.act || cell.chk) continue;
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '')
           + (keepPt ? ' pt' : '');
-        td.textContent = cell.t || '';
+        fillCell(this, td, cell);
         // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with
         // it; a date typed as a shortcut: what was typed; a two-way table's row typed into or back to its default)
         if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size
@@ -642,7 +676,7 @@ export class Grid {
 
   _mouseDown(e) {
     if (e.button !== 0) return;
-    if (e.target.closest && e.target.closest('button')) return;
+    if (e.target.closest && e.target.closest('button, input.tick')) return;     // (a tick box: its own click)
     const td = this._tdOf(e);
     if (!td) return;
     if (editing) {
@@ -1072,6 +1106,10 @@ export function startEdit(grid, i, j, typed) {
   if (!cell || !td || td.hidden || !grid.opts.editable || !grid.book) return false;
   if (!cell.i && !grid.opts.adhoc) return false;
   if (editing) commitEdit();
+  if (isTick(cell) && (typed === null || typed === ' ')) {
+    toggleTick(grid, i, j);                             // (a tick box: Enter, F2, Space, a double click tick it or not)
+    return true;
+  }
   if (cell.o && cell.o.length && typed === null) {
     const r = td.getBoundingClientRect();
     menu(r.left, r.bottom + 2, cell.o.map((o) => ({ label: o, action: () => applyValue(grid, i, j, o) })));
@@ -1117,7 +1155,7 @@ function finishEdit() {
   const cell = ed.grid.cell(ed.i, ed.j);
   if (ed.input.parentNode) ed.input.parentNode.removeChild(ed.input);
   dockBar(null);
-  ed.td.textContent = cell ? (cell.t || '') : '';
+  fillCell(ed.grid, ed.td, cell);
   return ed;
 }
 
@@ -1132,7 +1170,8 @@ function commitEdit(how = 'away') {
   const ed = finishEdit();
   const cell = ed.grid.cell(ed.i, ed.j);
   if (value === editText(cell)) return;                 // nothing typed
-  if (!isFormula(value)) ed.td.textContent = value;     // optimistic until the refresh arrives (a formula: its value then)
+  // optimistic until the refresh arrives (a formula: its value then; a tick box: as it was until then)
+  if (!isFormula(value) && !isTick(cell)) ed.td.textContent = value;
   applyValue(ed.grid, ed.i, ed.j, value, how);
 }
 
@@ -1150,7 +1189,7 @@ async function applyValue(grid, i, j, value, how = 'away') {
   const back = () => {
     const td = grid.tds[i] && grid.tds[i][j];
     const cell = grid.cell(i, j);
-    if (td && cell && !(editing && editing.td === td)) td.textContent = cell.t || '';
+    if (td && cell && !(editing && editing.td === td)) fillCell(grid, td, cell);     // (a tick box: as the cell reads)
   };
   // where the commit itself leaves the selection (Enter moves it down): taken once its handler is done
   const seen = touches;

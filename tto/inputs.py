@@ -132,6 +132,32 @@ def _fold(text: str) -> str:
     return text.casefold().replace("\u0307", "").replace("\u0131", "i")
 
 
+#: what a tick box (``"kind": "check"``) takes besides 1 and 0: the words for ticked / not ticked (folded, as typed or pasted)
+CHECK_WORDS = {_fold(w): 1.0 for w in ("evet", "doğru", "true", "x", "✓", "✔")}
+CHECK_WORDS.update({_fold(w): 0.0 for w in ("hayır", "yanlış", "false")})
+CHECK_REFUSED = "tik kutusu: 1 (seçili) ya da 0 (seçili değil)"
+
+
+def parse_check(raw: Any, lang: str = "tr") -> Optional[float]:
+    """A tick box's value: 1.0 ticked, 0.0 not - a click writes "1" / "0"; typed or pasted also "evet" / "hayır", TRUE /
+    FALSE, "x" / "✓".  Empty text is ``None`` (the cell back to its default); anything else is refused."""
+    if isinstance(raw, bool):
+        return 1.0 if raw else 0.0
+    if isinstance(raw, (int, float)):
+        if raw in (0, 1):
+            return float(raw)
+        raise InputError(CHECK_REFUSED)
+    s = str(raw).strip()
+    if s == "":
+        return None
+    n = parse_number(s, lang)
+    if n in (0.0, 1.0):
+        return float(n)
+    if _fold(s) in CHECK_WORDS:
+        return CHECK_WORDS[_fold(s)]
+    raise InputError("%s: %r" % (CHECK_REFUSED, s))
+
+
 def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, kind: str = "auto",
                 options: Optional[List[str]] = None, lang: str = "tr", aliases: Optional[Dict[str, str]] = None) -> Any:
     """Convert user text to the value stored in the cell.
@@ -147,10 +173,13 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
       cell's start and calendar: tto/shortcuts.py); here it is not a date
     * list cells (``kind="list"``) take one of their ``options`` (or a word ``aliases`` maps to one: "Sat" is "S") and
       nothing else - a cell whose formulas test for one item would otherwise take any other text for the other
+    * tick boxes (``kind="check"``) take 1 or 0 (:func:`parse_check`) and nothing else
     * anything that is not a number stays text
     """
     if raw is None:
         return None
+    if kind == "check":
+        return parse_check(raw, lang)
     if isinstance(raw, bool):
         return raw
     if isinstance(raw, (int, float)):
