@@ -292,7 +292,12 @@ function impliedTip(q) {
       + 'toplantıdan önceki dönemin MPC OIS bootstrap seviyesinin ON karşılığı (' + isoToTr(m.prev_from) + ' → ' + isoToTr(m.prev_to) + ': '
       + num(m.prev, 2, false) + ' % → ON ' + num(m.prev_on, 2, false) + ' %). Model: bootstrap\'ın kendi dönem seviyesi '
       + (typeof m.model_level === 'number' ? num(m.model_level, 2, false) + ' % → adım ' + num(m.model, 0, false) + ' bp' : 'yok')
-      + '. PPK Fiyatlama Geçmişi\'ndeki adım MPC çözücüsünündür; burada piyasa bootstrap\'ı kullanılır.';
+      + '. PPK Fiyatlama Geçmişi\'ndeki adım MPC çözücüsünündür; burada piyasa bootstrap\'ı kullanılır.'
+      // (TLREF's normalization on - the user's switch on OIS · PPK: measured on the normal path, as MPC OIS → PPK ADIMI)
+      + (m.norm ? ' TLREF normalleşmesi açık (OIS · PPK): her seviye önce normal patikaya çekilir - döneminin normalleşme '
+        + 'tarihi (' + isoToTr(m.norm.date) + ') öncesindeki TLREF fazlası (' + num(m.norm.gap, 0, false) + ' bp) ln G\'den '
+        + 'çıkarılır' + (m.norm.base_ref ? '; ilk toplantının tabanı normal TLREF (' + num(m.norm.ref, 2, false) + ' %), '
+          + 'stub\'ın ON\'u değil.' : '; önceki dönemin seviyesi de normal patikada.') : '');
   }
   if (m.kind === 'switch') {
     const legs = (m.legs || []).map((l) => l.label + ' getiri ' + num(l.yield, 2, false) + '%' + (typeof l.rv === 'number' ? ', eğriye göre ' + num(l.rv, 1, false) + ' bp' : ''));

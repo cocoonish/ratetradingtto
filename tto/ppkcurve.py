@@ -125,24 +125,79 @@ def growth(on: float, days: float, term: float) -> float:
     return days * math.log(1.0 + x) - term * x * x
 
 
-def window_rate(on: float, days: float, term: float) -> float:
+def window_rate(on: float, days: float, term: float, extra: float = 0.0) -> float:
     """The simple ACT/365 rate of a window at the overnight rate ``on``: (G − 1)·365 / days - the model's window rate
-    (OIS_MAIN!BJ's formula on Motor's TLREF)."""
-    return (math.exp(growth(on, days, term)) - 1.0) * BASIS / days
+    (OIS_MAIN!BJ's formula on Motor's TLREF).  ``extra``: what TLREF's normalization stretch adds to the window's ln G
+    (:meth:`Norm.stretch`: the rate is then the actual window's, ``on`` the normal path's; 0 - off - adds an exact 0)."""
+    return (math.exp(growth(on, days, term) + extra) - 1.0) * BASIS / days
 
 
-def window_overnight(rate: float, days: float, term: float) -> float:
+def window_overnight(rate: float, days: float, term: float, extra: float = 0.0) -> float:
     """The overnight rate that, compounded on business days over the window, gives its simple ACT/365 rate ``rate`` -
     :func:`window_rate`'s inverse: ln(1 + x) = (ln(1 + R·days/365) + term·x²) / days, solved in ``ON_STEPS`` steps from
     the rate compounded every day (term 0; each step a few hundred times closer at TRY's rates, so the last ones leave
-    nothing - the sheet's formula takes the same steps).  ValueError without a window or below −365/days."""
+    nothing - the sheet's formula takes the same steps).  ``extra``: the normalization stretch's part of the window's ln
+    G, taken off first (the rate's O/N on the normal path; 0 - off - takes an exact 0 off).  ValueError without a window
+    or below −365/days."""
     if not days > 0:
         raise ValueError("dönem yok")
-    lr = math.log(1.0 + rate * days / BASIS)
+    lr = math.log(1.0 + rate * days / BASIS) - extra
     x = math.exp(lr / days) - 1.0
     for _ in range(ON_STEPS - 1):
         x = math.exp((lr + term * (x * x)) / days) - 1.0
     return BASIS * x
+
+
+# ================================================================================================== TLREF's normalization
+# The desk, 26.11.2026 (docs/desk-decisions.md, "TLREF normalleşmesi"): TCMB paused its one-week repo auctions, so TLREF
+# sits a few hundred bp over its normal level until a normalization date N - "Burada tlref'e geri gelecek gibi hesap
+# yapacagiz".  The switch is on OIS · PPK (OIS_MAIN!K2:L5, each user's own); everybody reads it from four cells
+# (OIS_MAIN!M2:M5): ON (1: on, with a date and a normal TLREF in use; else 0), n (days from the OIS spot to N), REF (the
+# normal TLREF L0 when on, today's TLREF otherwise) and gap · ON (H − L0, H today's TLREF OIS_MAIN!J2).  While it is on,
+# TLREF is the normal path + the gap before N; the PPK model solves the normal path, and the stretch adds to ln G from the
+# OIS spot to a day t, m = min(t, n), as the model compounds TLREF (Pcum: Motor's daily calendar term):
+#
+#     E(m) = m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²].
+#
+# A window's rate is taken to the normal path by taking its stretch part E(min(end, n)) − E(min(start, n)) off its ln G
+# (:func:`window_overnight`'s ``extra``; EK_PPK's AG column the same, OIS_MAIN!BJ adds it back: the model's actual rate).
+#: the switch's cells (sheet, row, column): ON, n, REF, gap · ON - and H, today's TLREF
+NORM_ON, NORM_DAYS, NORM_REF, NORM_GAP = ("OIS_MAIN", 2, 13), ("OIS_MAIN", 3, 13), ("OIS_MAIN", 4, 13), ("OIS_MAIN", 5, 13)
+TLREF_TODAY = ("OIS_MAIN", 2, 10)
+#: Motor's daily calendar ends at day ``PCUM_LAST`` (its readers take MIN(t, 3700))
+PCUM_LAST = PCUM_ROWS[1] - PCUM_ROWS[0]
+
+
+class Norm(NamedTuple):
+    """TLREF's normalization while the switch is on: ``days`` n (≥ 0), ``ref`` the normal TLREF L0, ``gap`` H − L0 (as
+    the switch's cell has it), ``dl`` / ``dq`` - E's two factors, ln(1 + H/365) − ln(1 + L0/365) and (H/365)² −
+    (L0/365)², in the sheet's order of operations (EK_PPK's helper cells), so the page and Broker Chat agree to the bit."""
+    days: float
+    ref: float
+    gap: float
+    dl: float
+    dq: float
+
+    def extra(self, t: float, pcum: Callable[[float], float]) -> float:
+        """E(min(t, n)): what the stretch adds to ln G from the OIS spot to day ``t`` - ``pcum(m)`` Motor's Pcum at day
+        m (its daily calendar, MIN(m, 3700))."""
+        m = min(t, self.days)
+        return m * self.dl - pcum(m) * self.dq
+
+    def stretch(self, a: float, b: float, pcum: Callable[[float], float]) -> float:
+        """The stretch's part of the window from day ``a`` to day ``b`` (days from the OIS spot): E at b − E at a."""
+        return self.extra(b, pcum) - self.extra(a, pcum)
+
+
+def norm(get: Callable[[str, int, int], Any]) -> Optional[Norm]:
+    """The switch as a calculation has it (``get(sheet, row, column)``): ``None`` when off (ON not 1, or a value missing) -
+    nothing then reads more than ON.  n below 0 (a date before the OIS spot) is 0: no stretch."""
+    if _num(get(*NORM_ON)) != 1.0:
+        return None
+    n, ref, gap, h = (_num(get(*at)) for at in (NORM_DAYS, NORM_REF, NORM_GAP, TLREF_TODAY))
+    if n is None or ref is None or gap is None or h is None or not (h > -365.0 and ref > -365.0):
+        return None
+    return Norm(max(n, 0.0), ref, gap, math.log(1 + h / 365) - math.log(1 + ref / 365), (h / 365) ** 2 - (ref / 365) ** 2)
 
 
 class StepCurve(object):
@@ -229,6 +284,13 @@ class StepCurve(object):
         out.knots, out.rates, out.pcum = self.knots, self.rates, self.pcum
         out._build(shifts, upto)
         return out
+
+    def with_stretch(self, end: float, add: float) -> "StepCurve":
+        """The path (without its shifts) with ``add`` on top of it before day ``end`` - a knot there: TLREF while its
+        normalization is on, the model's normal path + the gap up to the normalization date (``end`` = n).  A meeting
+        inside the stretch moves both (the gap rides on the path)."""
+        knots = sorted(set(self.knots) | {float(end)})
+        return StepCurve(knots, [self._path_rate(k) + (add if k < end else 0.0) for k in knots], self.pcum)
 
     def rebased(self, origin: float) -> "StepCurve":
         """The path (without its shifts) seen from day ``origin`` as its spot: another curve's spot (the FX spot of the
@@ -762,7 +824,9 @@ def read(get: Callable[[str, int, int], Any], points: Optional[Dict[str, Optiona
     inputs count).  Keys, each ``None`` where the workbook gives too little (``errors`` says why):
 
     * ``boot`` - the bootstrap (:class:`LogLinear` on Motor's nodes), as the sheet has it;
-    * ``shape`` - MPC ima (:class:`StepCurve`: Motor's meeting table and calendar term);
+    * ``shape`` - MPC ima (:class:`StepCurve`: Motor's meeting table and calendar term); with TLREF's normalization on
+      (``norm``: :func:`norm`, the user's switch - ``None`` off) the model's normal path + the gap before the
+      normalization date (:meth:`StepCurve.with_stretch`), what both PPK curves are calibrated from;
     * ``quotes``, ``ppk``, ``report`` - the OIS quotes, the PPK step curve calibrated to them and :func:`calibrate`'s
       report;
     * ``grid`` - Motor's quarterly calendar (:class:`Grid`);
@@ -777,7 +841,7 @@ def read(get: Callable[[str, int, int], Any], points: Optional[Dict[str, Optiona
     def col(sheet: str, rows: Tuple[int, int], c: int) -> List[Any]:
         return [get(sheet, r, c) for r in range(rows[0], rows[1] + 1)]
 
-    out: Dict[str, Any] = {k: None for k in ("boot", "shape", "quotes", "ppk", "report", "grid", "fx_shift",
+    out: Dict[str, Any] = {k: None for k in ("boot", "shape", "norm", "quotes", "ppk", "report", "grid", "fx_shift",
                                               "off_quotes", "off_ppk", "off_report")}
     errors: List[str] = []
     out["errors"] = errors
@@ -803,6 +867,11 @@ def read(get: Callable[[str, int, int], Any], points: Optional[Dict[str, Optiona
         pcum = [_num(x) for x in col("Motor", PCUM_ROWS, PCUM_COL)]
         pcum = pcum[:pcum.index(None)] if None in pcum else pcum
         shape = StepCurve(col("Motor", PATH_ROWS, PATH_DAY), col("Motor", PATH_ROWS, PATH_RATE), pcum)
+        # TLREF's normalization on (the user's switch, OIS · PPK): Motor's path is the normal one - TLREF is it + the gap
+        # up to the normalization date (a knot there).  Off, or no gap, or a date not after the spot: the path as it is.
+        out["norm"] = nm = norm(get)
+        if nm is not None and nm.gap != 0.0 and nm.days > 0.0:
+            shape = shape.with_stretch(nm.days, nm.gap)
         out["shape"] = shape
     except ValueError as exc:
         errors.append("MPC ima: %s" % exc)

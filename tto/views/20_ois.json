@@ -535,7 +535,7 @@
    "title": "MPC OIS → PPK ADIMI",
    "hidden": false,
    "wide": true,
-   "note": "Bir toplantı döneminin (MPC OIS'teki satırı) swap faizini \"MPC OIS (elle)\" sütununa yazın: fiyatladığı PPK adımı (bp) = faizin O/N eşdeğeri − önceki dönemin piyasa faizininki (MPC OIS'in bir önceki satırının \"Piyasa (bootstrap)\"ı; ilk dönemde OIS spot'tan ilk toplantıya stub). O/N eşdeğeri TLREF gibi yalnız iş günlerinde bileşiktir (masanın TRY tatil listesi): Cuma'nın faizi hafta sonu boyunca üç gün tek adımda işler, tatilde aradaki günler kadar; ACT/365 - MPC ima modelinin bileşiği. Broker Chat'in toplantı swap'ı satırlarındaki ima adımla aynı hesap, aynı sayı. Piyasa Bootstrap (Murex'in MTM'i); Ayarlar'da PPK basamak seçtiyseniz sizin eğriniz. Yazdığınız faiz toplantısıyla gider."
+   "note": "Bir toplantı döneminin (MPC OIS'teki satırı) swap faizini \"MPC OIS (elle)\" sütununa yazın: fiyatladığı PPK adımı (bp) = faizin O/N eşdeğeri − önceki dönemin piyasa faizininki (MPC OIS'in bir önceki satırının \"Piyasa (bootstrap)\"ı; ilk dönemde OIS spot'tan ilk toplantıya stub). O/N eşdeğeri TLREF gibi yalnız iş günlerinde bileşiktir (masanın TRY tatil listesi): Cuma'nın faizi hafta sonu boyunca üç gün tek adımda işler, tatilde aradaki günler kadar; ACT/365 - MPC ima modelinin bileşiği. Broker Chat'in toplantı swap'ı satırlarındaki ima adımla aynı hesap, aynı sayı. Piyasa Bootstrap (Murex'in MTM'i); Ayarlar'da PPK basamak seçtiyseniz sizin eğriniz. Yazdığınız faiz toplantısıyla gider. TLREF normalleşmesi açıksa (Parametreler'deki anahtar) her faiz önce normal patikaya çekilir - dönemin normalleşme tarihi öncesindeki TLREF fazlası çıkarılır - ve ilk dönemin tabanı normal TLREF'tir; İma oran (model) da modelin gerçek dönem faizidir."
   },
   {
    "id": "B14",
@@ -558,7 +558,7 @@
    "range": "P1:W17",
    "title": "MPC SPREAD → PPK ADIMI",
    "hidden": false,
-   "note": "Bir MPC spread'ini (sonraki dönem − önceki dönem, bp; MPC SPREAD'deki gibi) \"Elle spread\" sütununa yazın: sonraki dönemin faizi = önceki dönemin piyasa faizi (MPC OIS'in \"Piyasa (bootstrap)\"ı) + spread ve bu faizin sonraki dönemin toplantısında fiyatladığı PPK adımı (bp) - MPC OIS → PPK ADIMI'yla aynı hesap, aynı taban (önceki dönemin piyasa faizinin O/N eşdeğeri), Broker Chat'inkiyle aynı. Yazdığınız spread satırın ilk döneminin toplantısıyla gider."
+   "note": "Bir MPC spread'ini (sonraki dönem − önceki dönem, bp; MPC SPREAD'deki gibi) \"Elle spread\" sütununa yazın: sonraki dönemin faizi = önceki dönemin piyasa faizi (MPC OIS'in \"Piyasa (bootstrap)\"ı) + spread ve bu faizin sonraki dönemin toplantısında fiyatladığı PPK adımı (bp) - MPC OIS → PPK ADIMI'yla aynı hesap, aynı taban (önceki dönemin piyasa faizinin O/N eşdeğeri), Broker Chat'inkiyle aynı. Yazdığınız spread satırın ilk döneminin toplantısıyla gider. TLREF normalleşmesi açıksa adım normal patikada ölçülür (MPC OIS → PPK ADIMI gibi)."
   },
   {
    "id": "PPKY",
@@ -568,6 +568,15 @@
    "hidden": true,
    "keep_title": true,
    "title": "Yardımcı · MPC OIS / MPC SPREAD → PPK ADIMI: iki yönlü hücrelerin yazılan değerleri"
+  },
+  {
+   "id": "PPKN",
+   "type": "table",
+   "sheet": "EK_PPK",
+   "range": "AE1:AJ18",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · MPC OIS → PPK ADIMI: TLREF normalleşmesi - pencerelerin N öncesi payı ve anahtarın değerleri"
   },
   {
    "id": "B16",

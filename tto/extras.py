@@ -331,6 +331,21 @@ def overnight_bd_back(on: str, days: str, term: str) -> str:
     return "(EXP(%s)-1)*365/%s" % (growth_bd(on, days, term), days)
 
 
+def overnight_bd_norm(rate: str, days: str, term: str, extra: str) -> str:
+    """:func:`overnight_bd` on the normal path - TLREF's normalization on (:class:`tto.ppkcurve.Norm`): the window's
+    stretch part ``extra`` (E at its end − E at its start) taken off its ln G first, then the same steps
+    (:func:`tto.ppkcurve.window_overnight` with ``extra``, one for one: the page and Broker Chat agree to the bit)."""
+    x = _bd_steps("(LN(1+%s*%s/365)-%s)" % (rate, days, extra), days, term)
+    return 'IF(AND(ISNUMBER(%(r)s),ISNUMBER(%(d)s),N(%(d)s)>0),365*%(x)s,"")' % {"r": rate, "d": days, "x": x}
+
+
+def overnight_bd_back_norm(on: str, days: str, term: str, extra: str) -> str:
+    """:func:`overnight_bd_norm`'s exact inverse (no guard: the caller's): the actual window's simple ACT/365 rate at the
+    normal path's overnight rate ``on`` - its stretch part ``extra`` added back to ln G (:func:`tto.ppkcurve.window_rate`
+    with ``extra``; OIS_MAIN!BJ's while the normalization is on)."""
+    return "(EXP(%s+%s)-1)*365/%s" % (growth_bd(on, days, term), extra, days)
+
+
 # ---------------------------------------------------------------------------------------------- Borsa swap
 def _borsa_check(model: Model) -> None:
     _need_sheets(model, "bu")
@@ -2728,6 +2743,15 @@ def _tto_fwd_twoway(model: Model) -> None:
 #: S = (T − F)·10000 (' : the later window's row).  The rate and the spread are kept where they always were (G, S: their
 #: old values keep their meaning); K / L typed are kept in ``PPK_TW_WINDOW``, T / U / V in ``PPK_TW_PAIR`` of the same row
 #: - with the meeting, as G and S (``meetings.TCMB``).
+#:
+#: **TLREF's normalization** (the desk, 26.11.2026: "Burada tlref'e geri gelecek gibi hesap yapacagiz"; the user's switch
+#: on OIS · PPK, read from OIS_MAIN!M2:M5 - :class:`tto.ppkcurve.Norm`): while it is on, every rate is first taken to the
+#: normal path - its window's stretch part of ln G (``PPK_NORM`` AG: E at the window's end − E at its start, E(m) =
+#: m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²], m = min(day, n)) taken off before the O/N steps,
+#: added back on the way back (:func:`overnight_bd_norm` / :func:`overnight_bd_back_norm`) - and the first window's base is
+#: REF, the normal TLREF, instead of the stub's O/N; a later window's base is the window before's market rate taken to the
+#: normal path the same way.  Broker Chat does the same (``Service._mpc_implied``).  Off, every cell reads its formula of
+#: before (``IF(ON, …, the formula of before)``: the same number, bit for bit).
 PPK_SHEET = "EK_PPK"
 PPK_FIRST = 3
 PPK_WINDOWS = (84, 99)             # OIS_MAIN's 'MPC OIS' rows (16 windows) ...
@@ -2737,6 +2761,13 @@ PPK_RATE, PPK_SPREAD = "G", "S"    # what is typed: a window's rate (%), a pair'
 PPK_COMPUTED = tuple("ABCDEFHIJKLM") + tuple("PQRTUVW")
 PPK_TW_WINDOW = ("Y", "Z")         # a window's O/N equivalent (K) / step (L) typed (two-way: kept here)
 PPK_TW_PAIR = ("AA", "AB", "AC")   # a pair's later window's rate (T) / its O/N (U) / its step (V) typed
+#: TLREF's normalization, per row: E at the window's start / end (Motor!C of its two meeting slots) and the window's
+#: stretch part, their difference ...
+PPK_NORM = ("AE", "AF", "AG")
+#: ... and the switch as the sheet reads it (AJ3:AJ8, labels in AI): ON (1/0 - an error is 0), n (≥ 0), H (today's
+#: TLREF), REF, E's two factors (0 off)
+PPK_NORM_ON, PPK_NORM_DAYS, PPK_NORM_H, PPK_NORM_REF, PPK_NORM_DL, PPK_NORM_DQ = (
+    "$AJ$3", "$AJ$4", "$AJ$5", "$AJ$6", "$AJ$7", "$AJ$8")
 PCT3 = "0.000%"
 
 
@@ -2776,14 +2807,54 @@ def _ppk_back_check(model: Model) -> None:
         _need_formula(model, "OIS_MAIN", "B%d" % r, "ROUND((D%d-D%d)*10000,2)" % (w + 1, w))
 
 
+def _norm_if(on: str, off: str, flag: str = PPK_NORM_ON) -> str:
+    """``on`` while TLREF's normalization is on (EK_PPK's ``PPK_NORM_ON``; ``flag``: the same cell named from another
+    sheet), else ``off`` - the formula of before, read as it was (IF is lazy: off, the cell computes what it did, bit for
+    bit)."""
+    return "IF(%s=1,%s,%s)" % (flag, on, off)
+
+
+def _ppk_norm_cells(b: SheetBuilder) -> None:
+    """EK_PPK's helper block of TLREF's normalization: the switch as the sheet reads it (AJ3:AJ8) and, per row, E at the
+    window's start and end (Motor!C of meeting slots k and k + 1, days from the OIS spot) and the window's stretch part of
+    ln G (``PPK_NORM``) - :class:`tto.ppkcurve.Norm`'s ``extra`` / ``stretch``, in the same order of operations."""
+    e0, e1, part = PPK_NORM
+    on, n, h, ref, dl, dq = PPK_NORM_ON, PPK_NORM_DAYS, PPK_NORM_H, PPK_NORM_REF, PPK_NORM_DL, PPK_NORM_DQ
+    b.note("%s1" % e0, "TLREF normalleşmesi (OIS · PPK'daki anahtar, OIS_MAIN!M2:M5): açıkken her faiz önce normal patikaya "
+                       "çekilir - penceresinin N öncesi payı (E bitiş − E başlangıç) ln G'den çıkarılır; ilk dönemin tabanı "
+                       "normal TLREF (REF). Kapalıyken (AJ3 = 0) tablolar yalnız AJ3'ü okur: sayılar eskisi gibi.")
+    b.head("%s2" % e0, ["E başlangıç", "E bitiş", "N öncesi pay (ln G)"])
+    for addr, label in (("AI3", "Normalleşme açık (1/0)"), ("AI4", "n: OIS spot → N (gün)"), ("AI5", "H: TLREF bugün"),
+                        ("AI6", "REF: normal TLREF (L0)"), ("AI7", "ln(1 + H/365) − ln(1 + L0/365)"),
+                        ("AI8", "(H/365)² − (L0/365)²")):
+        b.set(addr, label, bold=True)
+    # ON: the switch's 1, with n, REF, gap and H numbers (anything else - an error too - is off, as tto.ppkcurve.norm)
+    b.set(on.replace("$", ""), '=IFERROR(IF(OIS_MAIN!$M$2=1,IF(AND(ISNUMBER(OIS_MAIN!$M$3),ISNUMBER(OIS_MAIN!$M$4),'
+                               'ISNUMBER(OIS_MAIN!$M$5),ISNUMBER(OIS_MAIN!$J$2)),1,0),0),0)', fmt="0", align="center")
+    b.set(n.replace("$", ""), "=IF(%s=1,MAX(OIS_MAIN!$M$3,0),0)" % on, fmt=INT0)
+    b.set(h.replace("$", ""), "=IF(%s=1,OIS_MAIN!$J$2,0)" % on, fmt=PCT3)
+    b.set(ref.replace("$", ""), "=IF(%s=1,OIS_MAIN!$M$4,0)" % on, fmt=PCT3)
+    b.set(dl.replace("$", ""), "=IF(%s=1,LN(1+%s/365)-LN(1+%s/365),0)" % (on, h, ref), fmt="0.000000000")
+    b.set(dq.replace("$", ""), "=IF(%s=1,(%s/365)^2-(%s/365)^2,0)" % (on, h, ref), fmt="0.000000000000")
+    for k in range(PPK_WINDOWS[1] - PPK_WINDOWS[0] + 1):
+        r = PPK_FIRST + k
+        for col, slot in ((e0, 5 + k), (e1, 6 + k)):
+            m = "MIN(Motor!$C$%d,%s)" % (slot, n)
+            b.set("%s%d" % (col, r), "=IF(%s=1,%s*%s-INDEX(Motor!$F$528:$F$4228,MIN(%s,3700)+1)*%s,0)" % (on, m, dl, m, dq),
+                  fmt="0.000000000")
+        b.set("%s%d" % (part, r), "=$%s%d-$%s%d" % (e1, r, e0, r), fmt="0.000000000")
+
+
 def _tto_ppk_back(model: Model) -> None:
     """``EK_PPK``: the windows of 'MPC OIS' with a rate typed -> its PPK step (A:M), the pairs of 'MPC SPREAD' with a spread
     typed -> the later window's rate and its step (P:W) - two-way: a window's O/N or step, a pair's later rate, its O/N or
-    its step typed gives the rate / the spread (the typed ones kept in ``PPK_TW_WINDOW`` / ``PPK_TW_PAIR``)."""
+    its step typed gives the rate / the spread (the typed ones kept in ``PPK_TW_WINDOW`` / ``PPK_TW_PAIR``).  With TLREF's
+    normalization on, measured on the normal path (``PPK_NORM``)."""
     b = SheetBuilder(model, PPK_SHEET)
     w0, p0 = PPK_WINDOWS[0], PPK_PAIRS[0]
     kon, kstep = PPK_TW_WINDOW
     tlater, ton, tstep = PPK_TW_PAIR
+    part = PPK_NORM[2]
     b.title("A1", "MPC OIS → PPK ADIMI")
     b.head("A2", ["Dönem", "Toplantı", "Başlangıç", "Bitiş", "Gün", "Piyasa (bootstrap)", "MPC OIS (elle)", "Önceki dönem",
                   "Önceki gün", "Önceki O/N", "O/N eşdeğeri", "İma PPK adımı (bp)", "Piyasanın adımı (bp)"])
@@ -2791,10 +2862,12 @@ def _tto_ppk_back(model: Model) -> None:
     b.set("%s1" % kon, "İki yönlü: yazılan değerler (boş: yazılan yok; faiz ve spread kendi sütunlarında)", color=NOTE_COLOR)
     b.head("%s2" % kon, ["Yazılan O/N eşdeğeri", "Yazılan PPK adımı (bp)", "Yazılan MPCk+1 faizi", "Yazılan O/N eşdeğeri (k+1)",
                          "Yazılan PPK adımı k+1 (bp)"])
+    _ppk_norm_cells(b)
     for k in range(PPK_WINDOWS[1] - w0 + 1):
         r = PPK_FIRST + k
         f = {"r": r, "w": w0 + k, "p": w0 + k - 1, "m": 10 + k, "x": PPK_RATE, "kon": kon, "kstep": kstep}   # m: meeting slot k's row of OIS_MAIN
         term, before = ppk_term(k), ppk_term(k - 1)        # the window's weekend / holiday term, the period before's
+        mine = "$%s%d" % (part, r)                         # the window's stretch part (normalization on)
         b.set("A%d" % r, "=OIS_MAIN!$A%(w)d" % f)
         b.set("B%d" % r, '=IF(ISNUMBER(OIS_MAIN!$P%(m)d),OIS_MAIN!$P%(m)d,"")' % f, fmt=DATE)
         b.set("C%d" % r, "=OIS_MAIN!$B%(w)d" % f, fmt=DATE)
@@ -2802,26 +2875,35 @@ def _tto_ppk_back(model: Model) -> None:
         b.set("E%d" % r, '=IFERROR($D%(r)d-$C%(r)d,"")' % f, fmt=INT0)
         b.set("F%d" % r, "=OIS_MAIN!$D%(w)d" % f, fmt=PCT3)
         # the rate typed (where it always was); with an O/N or a step typed instead, the rate that gives it: the step on
-        # the period before's O/N, back to the window's simple ACT/365 rate (overnight_bd's inverse)
+        # the period before's O/N, back to the window's simple ACT/365 rate (overnight_bd's inverse; normalization on:
+        # the actual window's, its stretch part added back)
         on = "IF(ISBLANK($%(kon)s%(r)d),$J%(r)d+$%(kstep)s%(r)d/10000,$%(kon)s%(r)d)" % f
+        back = _norm_if(overnight_bd_back_norm(on, "$E%d" % r, term, mine), overnight_bd_back(on, "$E%d" % r, term))
         b.input("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(kon)s%(r)d),ISBLANK($%(kstep)s%(r)d)),"",IFERROR(IF(N($E%(r)d)>0,'
-                                   % f) + overnight_bd_back(on, "$E%d" % r, term) + ',""),""))', fmt=PCT3)
+                                   % f) + back + ',""),""))', fmt=PCT3)
         b.input("%(kon)s%(r)d" % f, None, fmt=PCT3)
         b.input("%(kstep)s%(r)d" % f, None, fmt="0.0")
         if k == 0:
             # the period before the first meeting: the bootstrap's stub from the OIS spot (ln DF 0 there)
             b.set("H%d" % r, '=IFERROR((EXP(-OIS_MAIN!$BK$%(w)d)-1)*365/(OIS_MAIN!$B$%(w)d-OIS_MAIN!$B$2),"")' % f, fmt=PCT3)
             b.set("I%d" % r, '=IFERROR(OIS_MAIN!$B$%(w)d-OIS_MAIN!$B$2,"")' % f, fmt=INT0)
+            # (normalization on: the normal TLREF itself, REF - not the stub's O/N)
+            base = _norm_if(PPK_NORM_REF, overnight_bd("$H%d" % r, "$I%d" % r, before))
         else:
-            # ... and before any other: the window before it, at its market rate
+            # ... and before any other: the window before it, at its market rate (normalization on: on the normal path)
             b.set("H%d" % r, "=OIS_MAIN!$D%(p)d" % f, fmt=PCT3)
             b.set("I%d" % r, '=IFERROR(OIS_MAIN!$C%(p)d-OIS_MAIN!$B%(p)d,"")' % f, fmt=INT0)
-        b.set("J%d" % r, "=" + overnight_bd("$H%d" % r, "$I%d" % r, before), fmt=PCT3)
+            base = _norm_if(overnight_bd_norm("$H%d" % r, "$I%d" % r, before, "$%s%d" % (part, r - 1)),
+                            overnight_bd("$H%d" % r, "$I%d" % r, before))
+        b.set("J%d" % r, "=" + base, fmt=PCT3)
         # (two-way: what is typed in a column stands, else it is worked out from the rate - typed or given by the others)
-        b.set("K%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (kon, r, overnight_bd("$%(x)s%(r)d" % f, "$E%d" % r, term), kon, r),
+        rate = "$%(x)s%(r)d" % f
+        b.set("K%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (
+            kon, r, _norm_if(overnight_bd_norm(rate, "$E%d" % r, term, mine), overnight_bd(rate, "$E%d" % r, term)), kon, r),
               fmt=PCT3)
         b.set("L%d" % r, '=IF(ISBLANK($%(kstep)s%(r)d),IFERROR(($K%(r)d-$J%(r)d)*10000,""),$%(kstep)s%(r)d)' % f, fmt="0.0", bold=True)
-        b.set("M%d" % r, '=IFERROR((%s-$J%d)*10000,"")' % (overnight_bd("$F%d" % r, "$E%d" % r, term), r), fmt="0.0")
+        mkt = _norm_if(overnight_bd_norm("$F%d" % r, "$E%d" % r, term, mine), overnight_bd("$F%d" % r, "$E%d" % r, term))
+        b.set("M%d" % r, '=IFERROR((%s-$J%d)*10000,"")' % (mkt, r), fmt="0.0")
     b.title("P1", "MPC SPREAD → PPK ADIMI")
     b.head("P2", ["Spread", "Adımın toplantısı", "Piyasa (bp)", "Elle spread (bp)", "MPCk+1 dönemi (ima)", "O/N eşdeğeri",
                   "İma PPK adımı (bp)", "Piyasanın adımı (bp)"])
@@ -2830,24 +2912,66 @@ def _tto_ppk_back(model: Model) -> None:
         r = PPK_FIRST + k
         f = {"r": r, "n": r + 1, "s": p0 + k, "x": PPK_SPREAD, "tl": tlater, "to": ton, "ts": tstep}
         term = ppk_term(k + 1)                             # the later window's weekend / holiday term
+        later_part = "$%s%d" % (part, r + 1)               # ... and its stretch part (normalization on)
         b.set("P%d" % r, "=OIS_MAIN!$A%(s)d" % f)
         b.set("Q%d" % r, "=$B%(n)d" % f, fmt=DATE)
         b.set("R%d" % r, "=OIS_MAIN!$B%(s)d" % f, fmt="0.0")
         # the spread typed (where it always was); with the later window's rate, its O/N or its step typed instead, the
-        # spread that gives it: the step on the later window's period before (J'), back to its simple rate, less the
-        # earlier window's market rate
+        # spread that gives it: the step on the later window's period before (J'), back to its simple rate (normalization
+        # on: the actual window's), less the earlier window's market rate
         on = "IF(ISBLANK($%(to)s%(r)d),$J%(n)d+$%(ts)s%(r)d/10000,$%(to)s%(r)d)" % f
-        later = "IF(ISBLANK($%s%d),%s,$%s%d)" % (tlater, r, overnight_bd_back(on, "$E%d" % (r + 1), term), tlater, r)
+        back = _norm_if(overnight_bd_back_norm(on, "$E%d" % (r + 1), term, later_part),
+                        overnight_bd_back(on, "$E%d" % (r + 1), term))
+        later = "IF(ISBLANK($%s%d),%s,$%s%d)" % (tlater, r, back, tlater, r)
         b.input("%(x)s%(r)d" % f, ('=IF(AND(ISBLANK($%(tl)s%(r)d),ISBLANK($%(to)s%(r)d),ISBLANK($%(ts)s%(r)d)),"",IFERROR(('
                                    % f) + later + '-$F%d)*10000,""))' % r, fmt="0.0")
         for col, fmt in ((tlater, PCT3), (ton, PCT3), (tstep, "0.0")):
             b.input("%s%d" % (col, r), None, fmt=fmt)
         b.set("T%d" % r, '=IF(ISBLANK($%(tl)s%(r)d),IFERROR(IF(ISNUMBER($%(x)s%(r)d),$F%(r)d+$%(x)s%(r)d/10000,""),""),$%(tl)s%(r)d)' % f,
               fmt=PCT3)
-        b.set("U%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (ton, r, overnight_bd("$T%d" % r, "$E%d" % (r + 1), term), ton, r),
-              fmt=PCT3)
+        later_on = _norm_if(overnight_bd_norm("$T%d" % r, "$E%d" % (r + 1), term, later_part),
+                            overnight_bd("$T%d" % r, "$E%d" % (r + 1), term))
+        b.set("U%d" % r, "=IF(ISBLANK($%s%d),%s,$%s%d)" % (ton, r, later_on, ton, r), fmt=PCT3)
         b.set("V%d" % r, '=IF(ISBLANK($%(ts)s%(r)d),IFERROR(($U%(r)d-$J%(n)d)*10000,""),$%(ts)s%(r)d)' % f, fmt="0.0", bold=True)
         b.set("W%d" % r, "=$M%(n)d" % f, fmt="0.0")
+
+
+# ---------------------------------------------------------------------------------------------- OIS · PPK: İma oran (model)
+#: 'MPC OIS''s "İma oran (model)" (OIS_MAIN!BJ84:BJ99): the window's rate at the MPC ima model's TLREF (Motor!K of the
+#: window's meeting row), compounded the model's way - (EXP(d·LN(1 + K/365) − W·(K/365)²) − 1)·365/d.  With TLREF's
+#: normalization on, Motor solves the normal path (its K the normal TLREF), so the model's window rate is the actual one:
+#: the normal path's growth + the window's stretch part (EK_PPK's ``PPK_NORM`` AG - E at its end − E at its start) - typed
+#: back into MPC OIS → PPK ADIMI it gives the model's TLREF as its O/N (that table takes the same part off).  "Boot − İma"
+#: (M) compares the market with it.  Off, its formula of before (``IF``: the same number, bit for bit).
+NORM_BJ_NAME = "İma oran (model) normalleşmesi"
+
+
+def _bj_text(r: int, k: int) -> str:
+    """OIS_MAIN!BJ of 'MPC OIS''s row ``r`` (window ``k``: Motor's meeting slots k and k + 1) as the workbook has it."""
+    return ("(EXP((((C{r}-B{r}))*LN(1+(Motor!$K${s})/365)-((INDEX(Motor!$F$528:$F$4228,MIN(Motor!$C${e},3700)+1)-"
+            "INDEX(Motor!$F$528:$F$4228,MIN(Motor!$C${s},3700)+1)))*((Motor!$K${s})/365)^2))-1)*365/(C{r}-B{r})"
+            ).format(r=r, s=5 + k, e=6 + k)
+
+
+def _norm_bj_check(model: Model) -> None:
+    """Every window's "İma oran (model)" is the model's window rate written as above (the growth it adds the stretch part
+    to), and EK_PPK - whose helper cells it reads - is there."""
+    _need_sheets(model, "OIS_MAIN", "Motor", PPK_SHEET)
+    _need_captions(model, (("OIS_MAIN", "BJ83", "İma oran (model)"),))
+    for k, r in enumerate(range(PPK_WINDOWS[0], PPK_WINDOWS[1] + 1)):
+        if _need_formula(model, "OIS_MAIN", "BJ%d" % r) != _bj_text(r, k):
+            raise ValueError("OIS_MAIN!BJ%d beklenen formül değil (%s değil)" % (r, _bj_text(r, k)))
+
+
+def _tto_norm_bj(model: Model) -> None:
+    """OIS_MAIN!BJ84:BJ99 with TLREF's normalization on: the model's actual window rate (its stretch part added)."""
+    b = SheetBuilder(model, "OIS_MAIN")
+    head, tail = "(EXP(", ")-1)*365/(C%d-B%d)"
+    for k, r in enumerate(range(PPK_WINDOWS[0], PPK_WINDOWS[1] + 1)):
+        old = _bj_text(r, k)
+        growth = old[len(head):-len(tail % (r, r))]
+        on = "%s%s+%s!$%s$%d%s" % (head, growth, PPK_SHEET, PPK_NORM[2], PPK_FIRST + k, tail % (r, r))
+        b.patch("BJ%d" % r, "=" + _norm_if(on, old, flag="%s!%s" % (PPK_SHEET, PPK_NORM_ON)))
 
 
 # ---------------------------------------------------------------------------------------------- OIS · PPK: an FRA's other leg
@@ -7032,11 +7156,15 @@ def _tto_interp(model: Model) -> None:
     b.dropdown(INTERP_MODE, list(INTERP_CHOICES))
     b.set(INTERP_ON, interp_flag("$C$%d:$C$%d" % (k0, k1), nodes), fmt="0", align="center")
     b.set(INTERP_OFF_ON, interp_flag("$I$%d:$I$%d" % (INTERP_OFF_FIRST, INTERP_OFF_LAST), INTERP_OFF_ROWS), fmt="0", align="center")
+    # (TLREF's normalization on - the user's switch on OIS · PPK, OIS_MAIN!M2:M5 -: their PPK basamak path is the PPK
+    # model's normal path + the gap up to the normalization date, tto/ppkcurve.py; off, "" - the text of before)
+    norm = ('IFERROR(IF(OIS_MAIN!$M$2=1," · normalleşme açık: TLREF normalleşme tarihi "&TEXT(OIS_MAIN!$B$2+OIS_MAIN!$M$3,'
+            '"dd.mm.yyyy")&" öncesinde normal patika + "&TEXT(OIS_MAIN!$M$5*10000,"0")&" bp",""),"")')
     b.set(INTERP_STATUS, '=IF($B$3=1,"PPK basamak: TLREF toplantılar arasında sabit, kotalara aynen oturur"&IF($B$4=1,"",'
-                         '" (offshore eğri kurulamadı: offshore Bootstrap)"),IF($B$2="%s","PPK basamak seçili ama PPK eğrisi '
+                         '" (offshore eğri kurulamadı: offshore Bootstrap)")&%s,IF($B$2="%s","PPK basamak seçili ama PPK eğrisi '
                          'kurulamadı (kota ya da MPC ima yok): Bootstrap kullanılıyor","%s: bugünkü eğri, Murex\'in MTM\'i"))'
                          '&IF(OR(%s=1,%s=1)," · eğri noktaları masanın listesinden (Ayarlar → Eğri noktaları)","")'
-                         % (INTERP_PPK, INTERP_BOOT, _fixed(LIST_OIS_ON), _fixed(LIST_OFF_ON)), bold=True, color=NOTE_COLOR)
+                         % (norm, INTERP_PPK, INTERP_BOOT, _fixed(LIST_OIS_ON), _fixed(LIST_OFF_ON)), bold=True, color=NOTE_COLOR)
     b.set("A3", "OIS düğümleri PPK'da (1/0)", bold=True)
     b.set("A4", "Offshore düğümleri PPK'da (1/0)", bold=True)
     b.note("A5", "Bootstrap: her okuyucu bugünkü gibi - düğümlerde Motor'un bootstrap'ı, aralarında ln DF günlere göre doğrusal. "
@@ -7243,7 +7371,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (BULK_SHEET, _bulk_forward_check, _tto_bulk_forward),
             ("Forward puandan faize", _fwd_back_check, _tto_fwd_back),
             (FS_CROSS_TW_NAME, _fwd_twoway_check, _tto_fwd_twoway),
-            (PPK_SHEET, _ppk_back_check, _tto_ppk_back), (FRA_LEG_NAME, _fra_leg_check, _tto_fra_leg),
+            (PPK_SHEET, _ppk_back_check, _tto_ppk_back),
+            (NORM_BJ_NAME, _norm_bj_check, _tto_norm_bj),
+            (FRA_LEG_NAME, _fra_leg_check, _tto_fra_leg),
             (TMOIS_NAME, _tmois_check, _tto_tmois),
             ("DİBS RV canlı kota", _rv_quotes_check, _tto_rv_quotes), (LIVE_SHEET, _dibs_live_check, _tto_dibs_live),
             (UNI_SHEET, _universe_check, _tto_universe), ("Tüm Kâğıtlar canlı kota", _universe_quotes_check, _tto_universe_quotes),

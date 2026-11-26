@@ -119,6 +119,55 @@ def test_a_path_seen_from_another_spot():
         assert later.lng(t) == pytest.approx(c.lng(t + 2.0) - c.lng(2.0), abs=1e-14)
 
 
+def test_tlref_normalization_the_stretch_and_the_normal_path():
+    """TLREF's normalization (26.11.2026, tests/test_normallesme_adim.py on the workbook): E(m) = m·[ln(1 + H/365) −
+    ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²], m = min(t, n) - exactly the growth the gap adds over the stretch
+    while the normal path is flat at L0 (the model's own compounding); a window's rate taken to the normal path and back
+    exactly; extra 0 the conversion of before, bit for bit; the switch off: nothing read past ON; the path + the gap
+    before N, a meeting inside the stretch moving both."""
+    pc = calendar(400)
+    h, l0, n = 0.358, 0.3335, 60.0
+    nm = pk.Norm(n, l0, h - l0, math.log(1 + h / 365) - math.log(1 + l0 / 365), (h / 365) ** 2 - (l0 / 365) ** 2)
+    at = lambda m: pc[int(min(m, 3700))]                                                    # noqa: E731
+    for t in (0.0, 3.0, 37.0, 59.0, 60.0, 61.0, 200.0):
+        m = min(t, n)
+        assert nm.extra(t, at) == m * nm.dl - pc[int(m)] * nm.dq
+        assert nm.extra(t, at) == pytest.approx(pk.growth(h, m, pc[int(m)]) - pk.growth(l0, m, pc[int(m)]), abs=1e-15)
+    assert nm.extra(0.0, at) == 0.0 and nm.stretch(70.0, 90.0, at) == 0.0
+    assert nm.stretch(37.0, 79.0, at) == nm.extra(79.0, at) - nm.extra(37.0, at) > 0
+    # a window's rate on the normal path: its part taken off ln G; back, added - the same rate; extra 0: as before
+    for rate, d, w in ((0.355, 42.0, 18.0), (0.34, 56.0, 30.0)):
+        x = nm.stretch(37.0, 37.0 + d, at)
+        on = pk.window_overnight(rate, d, w, x)
+        assert pk.growth(on, d, w) == pytest.approx(math.log(1 + rate * d / 365) - x, abs=1e-14)
+        assert pk.window_rate(on, d, w, x) == pytest.approx(rate, rel=0, abs=1e-13)        # (as with no part: 1e-9 bp)
+        assert pk.window_overnight(rate, d, w, 0.0) == pk.window_overnight(rate, d, w)
+        assert pk.window_rate(on, d, w, 0.0) == pk.window_rate(on, d, w)
+    # the switch as its cells have it: off unless ON is 1 and every value a number; n before the spot is 0
+    cells = {pk.NORM_ON: 1.0, pk.NORM_DAYS: n, pk.NORM_REF: l0, pk.NORM_GAP: h - l0, pk.TLREF_TODAY: h}
+    assert pk.norm(lambda *at_: cells.get(at_)) == nm
+    read = []
+    assert pk.norm(lambda *at_: read.append(at_) or (0.0 if at_ == pk.NORM_ON else 1.0)) is None and read == [pk.NORM_ON]
+    assert pk.norm(lambda *at_: XlError("#N/A") if at_ == pk.NORM_ON else cells.get(at_)) is None
+    assert pk.norm(lambda *at_: "" if at_ == pk.NORM_REF else cells.get(at_)) is None
+    assert pk.norm(lambda *at_: -5.0 if at_ == pk.NORM_DAYS else cells.get(at_)).days == 0.0
+    # the path: + the gap before N (a knot there), its meetings inside the stretch moving both; after N as it was
+    c = pk.StepCurve([0.0, 37.0, 79.0], [0.36, 0.35, 0.34], pc)
+    s = c.with_stretch(n, 0.025)
+    assert s.knots == [0.0, 37.0, 60.0, 79.0] and s.pcum == c.pcum
+    assert [s.overnight(t) for t in (0.0, 36.0, 37.0, 59.0, 60.0, 78.0, 79.0)] == [0.36 + 0.025] * 2 + [0.35 + 0.025] * 2 + [0.35, 0.35, 0.34]
+    for t in (0.0, 30.0, 37.0, 60.0, 100.0, 300.0):
+        x = 0.025
+        want = (pk.growth(0.36 + x, min(t, 37.0), pc[int(min(t, 37.0))])
+                + (pk.growth(0.35 + x, min(t, 60.0) - 37.0, pc[int(min(t, 60.0))] - pc[37]) if t > 37.0 else 0.0)
+                + (pk.growth(0.35, min(t, 79.0) - 60.0, pc[int(min(t, 79.0))] - pc[60]) if t > 60.0 else 0.0)
+                + (pk.growth(0.34, t - 79.0, pc[int(t)] - pc[79]) if t > 79.0 else 0.0))
+        assert s.lng(t) == pytest.approx(want, abs=1e-15), t
+    assert c.with_stretch(37.0, 0.01).overnight(36.0) == 0.36 + 0.01 and c.with_stretch(37.0, 0.01).overnight(37.0) == 0.35
+    # (seen from another spot as the offshore twin sees it: the knot moves with it)
+    assert 58.0 in s.rebased(2.0).knots
+
+
 def test_log_linear_between_nodes_and_the_end_segment_beyond():
     c = pk.LogLinear([0.0, 100.0, 200.0, XlError("#N/A")], [0.0, -0.1, -0.15, -0.2])
     assert c.days == [0.0, 100.0, 200.0]
