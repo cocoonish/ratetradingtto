@@ -397,6 +397,10 @@ fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula (`ext
   ACT/360) over the days each table counts: USDTRY from `Forward!I2`, EURTRY from `Forward!K2` (TOPLU FORWARD's and
   ÇAPRAZ's EURTRY, the EURTRY value-date table, FSS's EURTRY period `MAX(0, G168 − F168)`), the free list from its row's
   start. No curve is read for it: offshore and OIS are untouched.
+- Their ON karşılık (26.11.2026; FORWARD KOTASYON, the value-date tables, SERBEST FORWARD, FSS, ÇAPRAZ) is the Forward
+  calculators' ON Karşılık of each TRY rate over the days its table's forward formula applies it (the value date's days
+  from the pair's spot; FSS's far from `I2`, its fwd-fwd near → far `H167`; ÇAPRAZ's EUR from `K2`), on 360 every calendar
+  day (`extras.on_rate` / `on_rate_back`) - not TLREF's business-day O/N, and no curve read for it.
 - `fx_shift` (`ppkcurve.read`) = FX spot − OIS spot, in days. It puts the OIS side's MPC path on the offshore curve's
   days (`StepCurve.rebased`: the offshore PPK curve, and its bumps in Fiyatlama) and the offshore curve on Motor's
   quarterly calendar in the interpolation chart. ASW FX's 18M uses a shift of its own, `ASW!T65 − Forward!I2`
