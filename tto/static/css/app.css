@@ -1729,17 +1729,20 @@ table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }
 .qpage > .panel.fit { min-width: min(100%, 440px); }
 /* (a panel as wide as its table: its title, its read line and its note wrap inside it) */
 .qpage > .panel.fit > header, .qpage > .panel.fit > .qread, .qpage > .panel.fit > .qnote { width: 0; min-width: 100%; box-sizing: border-box; }
-.qpage .panel > header .grow { flex: 1; }
 .qpage .panel > header .seg button { padding: 3px 9px; font-size: 12px; }
 .qpage .qcontract .qtools { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .qpage > .panel.qcardp > .body { max-height: none; }
 .qpage > .panel.qempty > .qread, .qpage > .panel.qempty > .qnote { display: none; }
-.qpage > .panel.qempty > .body > .empty { text-align: left; padding: 8px 12px; }
+.qpage > .panel.qempty > .body > .empty, .qpage > .panel > .qbasket > .empty { text-align: left; padding: 8px 12px; }
+.qpage > .panel.qempty .seriesview > .empty { text-align: left; padding: 0; }
 /* (an empty table under a sentence that already says why - a basket's card, DİBS switch's head line: the reason once) */
 .qpage > .panel.qempty.qsaid > .body { display: none; }
 .qpage > .panel.collapsed > :not(header) { display: none; }
 .qpage > .panel.collapsed > header { cursor: pointer; border-bottom: 0; }
 .qpage > .panel.collapsed > header h2::before { content: '▸ '; color: var(--ink-3); }
+/* (a folded panel is its whole title; the tools it cannot use out of the way) */
+.qpage > .panel.fit.collapsed > header { width: auto; }
+.qpage > .panel.collapsed > header .tools > :not(.qfold) { display: none; }
 .qjump { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: -4px 0 10px; }
 .qjump a { display: inline-block; padding: 1px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2);
   font-size: 11.5px; line-height: 18px; text-decoration: none; background: var(--surface); white-space: nowrap; }

@@ -240,14 +240,18 @@ export function showPanel(el) {
 /** A long page's panels as links above them: a click opens the panel (folded ones say ▸) and brings it into view. */
 export function jumpBar(page, id) {
   const bar = h('nav', { class: 'qjump', id: id || null, 'aria-label': 'Bu sayfadaki tablolar' });
-  for (const el of page.querySelectorAll(':scope > section.panel')) {
-    const name = ((el.querySelector(':scope > header h2') || {}).textContent || el.id).split(' · ')[0];
+  const panels = [...page.querySelectorAll(':scope > section.panel')];
+  const titles = panels.map((el) => ((el.querySelector(':scope > header h2') || {}).textContent || el.id).split(' · '));
+  const first = titles.map((t) => t[0]);
+  panels.forEach((el, i) => {
+    // (a title's first part; two panels starting alike - "Sinyal kaydı · …" - with their second part too)
+    const name = first.indexOf(first[i]) !== first.lastIndexOf(first[i]) ? titles[i].slice(0, 2).join(' · ') : first[i];
     const a = h('a', { href: '#', title: 'Tabloya git' + (el.classList.contains('collapsed') ? ' (açılır)' : '') },
       name + (el.classList.contains('collapsed') ? ' ▸' : ''));
     a.dataset.panel = el.id;
     a.addEventListener('click', (e) => { e.preventDefault(); showPanel(el); a.textContent = name; });
     bar.appendChild(a);
-  }
+  });
   return bar;
 }
 

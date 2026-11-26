@@ -162,7 +162,7 @@ class SignalsPage extends QuantPage {
       { t: isNum(f.hit_rate) ? pct(f.hit_rate) : '', v: f.hit_rate, k: 'n', b: 1 }, N(f.avg_pnl_sigma, 2, { sign: true }), N(f.avg_held, 1)]);
     this.boxes.hits.set(['Aile', 'Kayıt', 'Açık', 'Hedef', 'Stop', 'Süre doldu', 'Kapanan', 'İsabet', 'Ort. K/Z σ', 'Ort. gün'], hitRows, null,
       'Henüz kayıt yok: bir sinyal giriş eşiğini geçince burada izlenmeye başlar.');
-    this.firstPick(sig, (this.group ? this.group + ' grubunda' : 'Şu an') + ' sinyal yok: geri test, kayıt ya da bir satır seçilince burada çizilir.');
+    this.firstPick(sig, (this.group ? this.group + ' grubunda' : 'Şu an') + ' sinyal yok: kayıttan bir satıra tıklayınca serisi burada çizilir.');
     this.loadLog().catch(() => {});
     this.loadBacktest().catch(() => {});
   }
