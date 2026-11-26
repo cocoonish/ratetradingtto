@@ -1981,8 +1981,10 @@ and, on the integrator's list of five more TOPLU FORWARD additions the same day 
   side by side as % rates, and MASA's own "O/N EŞLENİKLERİ · 360 bazında" (`MASA!P4:AB21`) compares OIS, offshore and
   RET O/N on 360 as well (its offshore O/N `Forward!E101` = 360·((1 + r·g/36000)^(1/g) − 1), the same formula). Replay
   (72 days): 32,85 / 34,97 / 33,51 / 33,75 / 33,98 %.
-- **Gün 0** (a valör at the USDTRY spot): the ON karşılık and every new ON and period column blank (`#DIV/0!` before
-  this); a P/gün there blank too (puan / 0).
+- **No period after the spot, no ON**: at Gün 0 (a valör at the USDTRY spot; `#DIV/0!` before this) - and before the
+  spot - the ON karşılık and every ON column blank, as every Forward table's ON (`extras.on_rate`, the helper of the
+  Forward tables' ON of the same day - one implementation for the page; a rate that is an error gives a blank ON too);
+  the period columns blank there too, and a P/gün at Gün 0 (puan / 0).
 - **İşleme al**: a USDTRY P/gün typed books like a USDTRY puan typed - Forward kur = the row's USDTRY fwd -, note
   `TOPLU FORWARD · USDTRY P/gün`; an EURTRY P/gün typed like an EURTRY puan typed (EURTRY at its EURTRY fwd, USDTRY at the
   TRY rate it gives), `· EURTRY P/gün`; a Spread typed: the TRY rate it gives, `· Spread (bp)`; a row with nothing typed
@@ -2004,7 +2006,8 @@ and, on the integrator's list of five more TOPLU FORWARD additions the same day 
 
 Code: `tto/extras.py` (`BULK_ON`, `BULK_TW_ON`, `BULK_SPREAD`, `BULK_SPREAD_ALL`, `BULK_TW_SPREAD`, `BULK_TW_*_PPD`,
 `BULK_RATE`, `BULK_PREV_*`, `BULK_HIDDEN`, `BULK_ON_RET`, `BULK_TERM_*`, `BULK_*_PPD`, `BULK_ON_OF`, `BULK_RET_ON`,
-`_bulk_twoway`, `_tto_bulk_forward`; `on_equivalent`, `on_simple`, `implied_try`), `tto/views/30_forward.json` (the
+`_bulk_twoway`, `_tto_bulk_forward`; `on_rate`, `on_rate_back` over `on_equivalent` / `on_simple`, `implied_try`),
+`tto/views/30_forward.json` (the
 group `toplu-forward`, its note; the general spread's input; BK1, BK2), `tto/entry.py` (`BULK_FWD_SOURCES`,
 `BULK_FWD_SPREAD_ALL`, `bulk_forward_price`), `tto/service.py` (`_bulk_from_forward`: the row's rate and the general
 spread). Tests: `tests/test_fwd_iki_yon.py`, `tests/test_toplu_islem.py`, `tests/test_ondalik.py`,

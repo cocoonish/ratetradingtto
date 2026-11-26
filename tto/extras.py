@@ -2265,8 +2265,8 @@ def _tto_bulk_forward(model: Model) -> None:
     moves the row's EURTRY fwd, and the other way round.  The "elle" columns (R..U) stay as they were.
 
     ON karşılık % (``BULK_ON``; the desk, 26.11.2026): the O/N equivalent of the row's TRY rate, the Forward calculators'
-    (:func:`on_equivalent` on 360 over the row's Gün; rates in % here, decimals there) - a member of the group too: an ON
-    typed gives the row's TRY rate by :func:`on_simple`, the other members follow from it.
+    (:func:`on_equivalent` on 360 over the row's Gün) as every Forward table writes it (:func:`on_rate`) - a member of the
+    group too: an ON typed gives the row's TRY rate by :func:`on_rate_back`, the other members follow from it.
 
     And (26.11.2026, "Bunların da hepsini yap"): Spread (bp) over RET mid and both pairs' P/gün, members of the group (a
     spread typed: RET mid + spread / 100; a P/gün typed: puan = P/gün · the pair's days, then the rate the outright
@@ -2274,7 +2274,8 @@ def _tto_bulk_forward(model: Model) -> None:
     at RET mid as before - the row's rate is the helper ``BULK_RATE``, which N / P read where the workbook's formula
     chose between Manuel TRY % and RET mid); display only: ON − RET ON mid (bp), the period's TRY rate and its ON from the
     nearest filled row above (its Gün and rate carried down the hidden ``BULK_PREV_*``: one cell each per row), and the
-    ON of the offshore / OIS / RET rates - every ON and period column blank at Gün 0 (valör at spot)."""
+    ON of the offshore / OIS / RET rates - every ON blank without a period after the spot (Gün 0: valör at spot), as
+    :func:`on_rate` has it, and so the period columns."""
     from .xl.tokenizer import col_to_index
     b = SheetBuilder(model, BULK_SHEET)
     b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid + genel spread)")
@@ -2328,15 +2329,6 @@ def _tto_bulk_forward(model: Model) -> None:
         b.input("B%d" % r, None, fmt=DATE)
         usd, eur = "$C%d" % r, "($B%d-Forward!$K$2)" % r           # the days of USDTRY and of EURTRY (from its spot date)
         rate = "$%s%d" % (BULK_RATE, r)
-
-        def at_days(expr: str) -> str:
-            """``expr`` on a row with a valör after the spot: blank without one and at Gün 0 (no period to compound)."""
-            return 'IF($C%d="","",IF($C%d=0,"",%s))' % (r, r, expr)
-
-        def on_of(pct: str, days: str = usd) -> str:
-            """The calculators' ON of a rate in % over ``days``, in % (their rates are decimals)."""
-            return "%s*100" % on_equivalent("%s/100" % pct, days)
-
         for col in BULK_COLS:
             body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
             b.set("%s%d" % (col, r), "=" + _bulk_twoway(col, r, body), like=None, fmt=_BULK_FMT.get(col, NUM4))
@@ -2352,7 +2344,7 @@ def _tto_bulk_forward(model: Model) -> None:
                              (BULK_TW_USD_PPD, implied_try("(Forward!$F$2+$%s%d*%s/10000)" % (BULK_TW_USD_PPD, r, usd), "Forward!$F$2",
                                                            "$J%d" % r, usd)),
                              (BULK_TW_SPREAD, "$G%d+$%s%d/100" % (r, BULK_TW_SPREAD, r)),
-                             (BULK_TW_ON, "%s*100" % on_simple("$%s%d/100" % (BULK_TW_ON, r), usd))):
+                             (BULK_TW_ON, on_rate_back("$%s%d" % (BULK_TW_ON, r), usd))):
             back = "IF(ISBLANK($%s%d),%s,%s)" % (store, r, back, gives)
         b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(%s,NA())))' % (none, r, back), fmt="0.0000")
         b.input("L%d" % r, '=IF(%s,"",IF(ISNUMBER($%s%d),$%s%d,""))' % (none, BULK_TW_RATE, r, BULK_TW_RATE, r), fmt=TRY_PCT)
@@ -2363,8 +2355,9 @@ def _tto_bulk_forward(model: Model) -> None:
         # Spread (bp): the row's rate over RET mid, or the spread typed
         b.set("%s%d" % (BULK_SPREAD, r), '=IF(ISBLANK($%s%d),IF($C%d="","",(%s-$G%d)*100),$%s%d)'
               % (BULK_TW_SPREAD, r, r, rate, r, BULK_TW_SPREAD, r), fmt=_BULK_BP)
-        # ON karşılık %: the O/N equivalent of the TRY rate that prices the row, or the ON typed
-        b.set("%s%d" % (BULK_ON, r), '=IF(ISBLANK($%s%d),%s,$%s%d)' % (BULK_TW_ON, r, at_days(on_of(rate)), BULK_TW_ON, r),
+        # ON karşılık %: the O/N equivalent of the TRY rate that prices the row (the Forward tables' own :func:`on_rate` -
+        # blank without a period after the spot: Gün 0), or the ON typed
+        b.set("%s%d" % (BULK_ON, r), '=IF(ISBLANK($%s%d),%s,$%s%d)' % (BULK_TW_ON, r, on_rate(rate, usd), BULK_TW_ON, r),
               fmt=TRY_PCT)
         # ... less today's RET ON mid, in bp
         b.set("%s%d" % (BULK_ON_RET, r), '=IF(ISNUMBER($%s%d),($%s%d-%s*100)*100,"")' % (BULK_ON, r, BULK_ON, r, BULK_RET_ON),
@@ -2385,8 +2378,7 @@ def _tto_bulk_forward(model: Model) -> None:
         b.set("%s%d" % (BULK_PREV_DAYS, r), '=IF(ISNUMBER($C%d),$C%d,%s)' % (r, r, prev_d), fmt=INT0)
         b.set("%s%d" % (BULK_PREV_RATE, r), '=IF(ISNUMBER($C%d),%s,%s)' % (r, rate, prev_r), fmt="0.0000")
         b.set("%s%d" % (BULK_TERM_RATE, r), "=" + term, fmt=TRY_PCT)
-        b.set("%s%d" % (BULK_TERM_ON, r), '=IF(ISNUMBER($%s%d),%s,"")' % (BULK_TERM_RATE, r, on_of("$%s%d" % (BULK_TERM_RATE, r), length)),
-              fmt=TRY_PCT)
+        b.set("%s%d" % (BULK_TERM_ON, r), "=" + on_rate("$%s%d" % (BULK_TERM_RATE, r), length), fmt=TRY_PCT)
         # P/gün of both pairs, or the one typed (the value-date tables' own: puan / the pair's days)
         b.set("%s%d" % (BULK_USD_PPD, r), '=IF(ISBLANK($%s%d),IF($C%d="","",IFERROR($O%d/%s,"")),$%s%d)'
               % (BULK_TW_USD_PPD, r, r, r, usd, BULK_TW_USD_PPD, r), fmt=_BULK_PPD)
@@ -2395,7 +2387,7 @@ def _tto_bulk_forward(model: Model) -> None:
         # the ON of each rate column (OIS mid too: the same 360 formula - the table compares them as % rates side by
         # side, as MASA's "O/N EŞLENİKLERİ · 360 bazında" does; TLREF's business-day O/N is OIS · PPK's)
         for col, src, _ in BULK_ON_OF:
-            b.set("%s%d" % (col, r), "=" + at_days(on_of("$%s%d" % (src, r))), fmt=TRY_PCT)
+            b.set("%s%d" % (col, r), "=" + on_rate("$%s%d" % (src, r), usd), fmt=TRY_PCT)
         for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0), (BULK_TW_ON, "0.0000"), (BULK_TW_SPREAD, _BULK_BP),
                          (BULK_TW_USD_PPD, _BULK_PPD), (BULK_TW_EUR_PPD, _BULK_PPD)):
             b.input("%s%d" % (col, r), None, fmt=fmt)

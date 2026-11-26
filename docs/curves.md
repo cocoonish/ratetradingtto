@@ -358,8 +358,9 @@ The ways back of 24.11.2026 ([desk-decisions.md](desk-decisions.md#ways-back-rat
   a rate typed stays the rate - only what is worked out from them moves).
 - **Not the Forward page's O/N.** Its FX-implied TRY rates take the calculators' calendar-day ACT/360 O/N equivalent,
   360·((1 + r·g/360)^(1/g) − 1) (`Forward!AH14`'s "ON Karşılık", `extras.on_equivalent` / `on_simple`): the
-  calculators, VİOP's gold calculator and TOPLU FORWARD's ON karşılık % (`EK_BULK!M`, g = the row's Gün; 26.11.2026).
-  TLREF's business-day one above is TRY OIS's (EK_PPK, Broker Chat); the two are never mixed.
+  calculators, VİOP's gold calculator, TOPLU FORWARD's ON karşılık % (`EK_BULK!M`, g = the row's Gün) and every other
+  Forward table's ON (26.11.2026; the tables' own `extras.on_rate` / `on_rate_back`: blank without a period after the
+  spot). TLREF's business-day one above is TRY OIS's (EK_PPK, Broker Chat); the two are never mixed.
 - **Rates compared side by side as % rates: every one on 360.** TOPLU FORWARD's ON · columns (`EK_BULK!AQ:AU`, 26.11.2026)
   take the offshore, OIS and RET mid / bid / ask rates of a row through that same 360 formula - OIS mid too, not
   TLREF's business-day O/N -, as MASA's own "O/N EŞLENİKLERİ · 360 bazında" (`MASA!P4:AB21`) compares OIS, offshore and

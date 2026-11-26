@@ -1652,7 +1652,8 @@ ON'u yazılmış satır USDTRY'de satırın gösterdiği TRY faiziyle (Manuel TR
 * **ON · Offshore mid % / OIS mid % / RET bid % / RET mid % / RET ask %**: her faizin aynı 360 formülüyle ON'u. OIS de 360
   bazında - tablo bu faizleri yan yana % olarak gösterir, Masa'nın "O/N EŞLENİKLERİ · 360 bazında" tablosu da OIS'i ve
   offshore'u 360'la karşılaştırır; TLREF'in iş günlerinde bileşiği OIS · PPK'nın ve Broker Chat'indir.
-* Gün 0'da (valör spot günü) ON, dönem ve P/gün sütunları boş.
+* Valör spot günüyse (Gün 0) ya da spottan önceyse ON ve dönem sütunları boş - Forward'ın öbür tablolarındaki ON'lar
+  gibi; P/gün de Gün 0'da boş.
 * **İşleme al**: USDTRY P/gün yazılmışsa USDTRY puanı yazılmış gibi (*Forward kur* = satırın USDTRY fwd'si), EURTRY P/gün
   EURTRY puanı gibi; spread yazılmışsa satırın TRY faizi; genel spread'le fiyatlanan satır USDTRY'de RET mid + genel
   spread faiziyle, EURTRY'de EURTRY fwd'siyle girilir. Not: `· USDTRY P/gün`, `· EURTRY P/gün`, `· Spread (bp)`,

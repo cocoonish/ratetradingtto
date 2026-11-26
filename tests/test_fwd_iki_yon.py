@@ -307,8 +307,11 @@ def test_bulk_on_is_the_forward_calculators_on_of_the_rate_that_prices_the_row(s
         assert [cell(svc, "EK_BULK!%s10" % c, u) for c in ["M", "AM", "AN", "AO"] + [x for x, _, _ in ex.BULK_ON_OF]] == [""] * 9
         put(svc, u, {"EK_BULK!M10": "33"})
         assert cell(svc, "EK_BULK!M10", u) == 33.0 and cell(svc, "EK_BULK!L10", u) == ""
+        # (a valör before the spot: no period either - every Forward table's ON is blank there, extras.on_rate)
+        put(svc, u, {"EK_BULK!B11": cell(svc, "Forward!I2", u) - 3})
+        assert cell(svc, "EK_BULK!C11", u) == -3.0 and [cell(svc, "EK_BULK!%s11" % c, u) for c in ("M", "AM", "AQ", "AU")] == [""] * 4
     finally:
-        svc.reset_inputs(u, "tto", ["Forward!AH5:AH10", "EK_BULK!B8:AP10"])
+        svc.reset_inputs(u, "tto", ["Forward!AH5:AH10", "EK_BULK!B8:AP11"])
 
 
 @pytest.mark.parametrize("kind", BULK)
