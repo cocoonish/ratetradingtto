@@ -69,13 +69,14 @@ def panel(svc, user, view, pid):
 
 # ---------------------------------------------------------------------------------------------- the declaration
 def test_the_matrices_are_two_way_groups_on_cells_no_input_ever_stood_on(svc):
-    """Both matrices are groups of four members (spread in place - its old inputs D:E -, TRY % / puan / fwd kept in AN:AS
-    of the same rows); the stores are personal number inputs on cells no layout ever had an input on."""
+    """Both matrices are groups of five members (spread in place - its old inputs D:E -, TRY % / puan / fwd kept in AN:AS
+    of the same rows, the ON karşılık of 26.11.2026 in AX:AY: test_fwd_on.py); the stores are personal number inputs on
+    cells no layout ever had an input on."""
     assert svc.twoway.problems == {}
     book = svc.books["tto"]
     for gid, (r1, r2) in (("ekfwd-quote", extras.FWD_ROWS), ("ekfwd-eur-quote", extras.FWD_EUR_ROWS)):
         g = svc.twoway.groups[gid]
-        assert [m.name for m in g.members] == ["Spread", "TRY %", "Puan", "Fwd"] and g.shape == (r2 - r1 + 1, 2)
+        assert [m.name for m in g.members] == ["Spread", "TRY %", "Puan", "Fwd", "ON %"] and g.shape == (r2 - r1 + 1, 2)
         assert g.members[0].own and g.members[0].cells == book.cells_of("EK_FWD!D%d:E%d" % (r1, r2))
         for m, cols, store in zip(g.members[1:], ("M:N", "H:I", "J:K"), ("AN:AO", "AP:AQ", "AR:AS")):
             a, b = cols.split(":")
@@ -93,7 +94,7 @@ def test_the_matrices_are_two_way_groups_on_cells_no_input_ever_stood_on(svc):
     declared = set()
     for i in view["inputs"]:
         declared.update(book.cells_of(i["range"], "Forward"))
-    assert not stores & retired and not stores & declared and len(stores) == 120
+    assert not stores & retired and not stores & declared and len(stores) == 160
 
 
 # ---------------------------------------------------------------------------------------------- each kind typed
@@ -185,7 +186,7 @@ def test_a_spread_typed_before_reads_exactly_as_before(svc):
         got = quote(svc, u, r, side)
         assert got[0] == s and got[1] == ois + s / 100 and got == pytest.approx(from_rate(svc, u, r, side, ois + s / 100), abs=1e-9)
     _, m = panel(svc, u, "forward", "EKF1")
-    assert m["D6"]["an"] == "TRY %, Puan, Fwd" and m["D6"]["m"] == 1 and m["M6"]["ao"] == "Spread · D6"
+    assert m["D6"]["an"] == "TRY %, Puan, Fwd, ON %" and m["D6"]["m"] == 1 and m["M6"]["ao"] == "Spread · D6"
     assert "an" not in m["E6"] and "ao" not in m["E6"]                             # (its ask side: nothing typed)
 
 
@@ -238,21 +239,21 @@ def test_formulas_on_the_matrix(svc):
     put(svc, u, {"E%d" % r: -40})                                                    # the ask moves: the bid follows
     assert cell(svc, "EK_FWD!M%d" % r, u) == pytest.approx(cell(svc, "EK_FWD!L%d" % r, u) - 0.40 - 0.25, abs=1e-12)
     _, m = panel(svc, u, "forward", "EKF1")
-    assert m["M%d" % r]["ff"] == "=EK_FWD!N%d-0.25" % r and m["M%d" % r]["an"] == "Spread, Puan, Fwd"
+    assert m["M%d" % r]["ff"] == "=EK_FWD!N%d-0.25" % r and m["M%d" % r]["an"] == "Spread, Puan, Fwd, ON %"
     res = svc.set_inputs(u, "tto", [{"ref": "EK_FWD!J%d" % r, "value": "=EK_FWD!D%d/100+50" % r}])
     assert len(res["errors"]) == 1 and "döngüsel başvuru" in res["errors"][0] and "EK_FWD!AR" not in res["errors"][0]
     assert res["errors"][0].startswith("EK_FWD!J%d:" % r) and "EK_FWD!D%d" % r in res["errors"][0]
 
 
 def test_the_pages_marks_note_and_the_desks_summary(svc):
-    """The page: all four pairs typeable (the matrices' inputs: 94 / 96), the typed value marked, the others worked out
+    """The page: all five pairs typeable (the matrices' inputs: 114 / 116), the typed value marked, the others worked out
     from it, the note under both matrices; Masa's summary is two-way as well (a TRY rate typed there moves the spread);
     "İşlem gir" on a typed rate prices it."""
     u = svc.login("çy sayfa")["user"]
     page = svc.view(u, "forward")
     panels = {p["id"]: p for p in page["panels"]}
-    want = "İki yönlü: spread, TRY %, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır"
-    for pid, n in (("EKF1", 94), ("EKF5", 96)):
+    want = "İki yönlü: spread, TRY %, ON karşılık, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır"
+    for pid, n in (("EKF1", 114), ("EKF5", 116)):
         assert panels[pid]["note"].startswith(want)
         assert len([c for row in panels[pid]["data"]["rows"] for c in row if c.get("i")]) == n
     assert "note" not in panels["EKF2"] or not (panels["EKF2"]["note"] or "").startswith(want)
@@ -261,7 +262,7 @@ def test_the_pages_marks_note_and_the_desks_summary(svc):
     ois = cell(svc, "EK_FWD!L7", u)
     put(svc, u, {"N7": round(ois + 0.42, 2)})                                       # typed on Masa's summary
     _, m = panel(svc, u, "masa", "EKS")
-    assert m["N7"]["an"] == "Spread, Puan, Fwd" and m["E7"]["ao"] == "TRY % · N7" and m["E7"]["t"] == "42"
+    assert m["N7"]["an"] == "Spread, Puan, Fwd, ON %" and m["E7"]["ao"] == "TRY % · N7" and m["E7"]["t"] == "42"
     _, f = panel(svc, u, "forward", "EKF1")
     assert f["N7"]["an"] and f["K7"]["ao"] == "TRY % · N7" and f["I7"]["ao"] == "TRY % · N7"
     spec = svc.trade_prefill(u, {"view": "forward", "panel": "EKF1", "row": 7, "col": "N", "text": f["N7"]["t"], "label": ""})["spec"]

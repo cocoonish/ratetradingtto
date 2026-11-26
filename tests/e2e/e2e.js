@@ -328,6 +328,21 @@ async function clipAfter(page, action) {
     for (const ref of ['B47', 'C48', 'D50', 'B59', 'E47', 'H45', 'L45']) fwdDec[ref] = (await cellText(page, 'EK_FWD!' + ref)).trim();
     check('Forward fiyatları: the TRY bid / mid / ask % read with two decimals (USDTRY and EURTRY); the outright and the USD rates as before',
       ['B47', 'C48', 'D50', 'B59'].every((r) => /^\d+,\d{2}$/.test(fwdDec[r])) && ['E47', 'H45', 'L45'].every((r) => /^\d+,\d{4}$/.test(fwdDec[r])), fwdDec);
+    // the ON karşılık beside the TRY rates (the desk, 26.11.2026: "Toplu forward fiyatlama kısımlarında ON karşılıklarını da
+    // görmek istiyorum ... Bunların da hepsini yap"): ON bid / mid / ask, the Forward calculators' ON Karşılık of each TRY rate
+    // over the table's days, 360·((1 + TRY·g/360)^(1/g) − 1), with two decimals
+    const frOnV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
+    const frOnHead = await page.$$eval('#content .panel[data-panel="FR1"] tr', (trs) => {
+      const head = trs.find((tr) => /TRY mid %/.test(tr.textContent || ''));
+      return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
+    }).catch(() => []);
+    const frOn = { days: await frOnV('EK_FWD!D45'), b: await frOnV('EK_FWD!B48'), c: await frOnV('EK_FWD!C48'), v: await frOnV('EK_FWD!V48'),
+      w: await frOnV('EK_FWD!W48'), t: (await cellText(page, 'EK_FWD!V48')).trim() };
+    const frOnOf = (r) => 360 * (Math.pow(1 + r / 100 * frOn.days / 360, 1 / frOn.days) - 1) * 100;
+    const frOnAt = frOnHead.indexOf('TRY bid %');
+    check('Forward fiyatları: the ON karşılık bid / mid / ask beside the TRY bid / mid / ask % - the calculators\' ON Karşılık of each over the table\'s days, two decimals',
+      frOnAt > 0 && frOnHead.slice(frOnAt, frOnAt + 6).join(' | ') === 'TRY bid % | TRY mid % | TRY ask % | ON bid % | ON mid % | ON ask %'
+      && Math.abs(frOn.v - frOnOf(frOn.b)) < 1e-9 && Math.abs(frOn.w - frOnOf(frOn.c)) < 1e-9 && /^\d+,\d{2}$/.test(frOn.t), { frOnHead, frOn });
     // "Elle": a curve from the list, then a spread to its mid (both shown with two decimals)
     const oisMid = trNumber(await cellText(page, 'EK_FWD!C48'));
     await (await cellHandle(page, 'EK_FWD!B52')).click();
@@ -1804,18 +1819,20 @@ async function clipAfter(page, action) {
     await tab(page, 'fwd');
     check('the desk page keeps a summary of the USDTRY and the EURTRY quote matrix (the matrices live on the Forward page), the date-to-date forward\'s inputs above it',
       (await panelsOnPage(page)).join(' ') === 'EKS EKSE B10D B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
-    // each spread with the TRY rate it makes beside it: Spread bid | TRY bid % | Spread ask | TRY ask % (OIS + spread)
+    // each spread with the TRY rate it makes beside it, and that rate's ON karşılık (26.11.2026): Spread bid | TRY bid % |
+    // ON bid % | Spread ask | TRY ask % | ON ask % (OIS + spread)
     const headOf = (id) => page.$$eval('#content .panel[data-panel="' + id + '"] tr', (trs) => {
       const head = trs.find((tr) => /Spread bid/.test(tr.textContent || ''));
       return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
     }).catch(() => []);
     const spreadsAndRates = (head) => head.indexOf('Spread bid') >= 0
-      && head.slice(head.indexOf('Spread bid'), head.indexOf('Spread bid') + 4).join(' | ') === 'Spread bid | TRY bid % | Spread ask | TRY ask %';
+      && head.slice(head.indexOf('Spread bid'), head.indexOf('Spread bid') + 6).join(' | ')
+        === 'Spread bid | TRY bid % | ON bid % | Spread ask | TRY ask % | ON ask %';
     const eksHead = await headOf('EKS');
     const ekseHead = await headOf('EKSE');
     const tryBidDesk = trNumber(await cellText(page, 'EK_FWD!M5'));
     const tryBidDeskEur = trNumber(await cellText(page, 'EK_FWD!M104'));
-    check('the desk\'s forward summary shows each spread\'s TRY rate beside it: Spread bid | TRY bid % | Spread ask | TRY ask %',
+    check('the desk\'s forward summary shows each spread\'s TRY rate beside it, and its ON karşılık: Spread bid | TRY bid % | ON bid % | Spread ask | TRY ask % | ON ask %',
       spreadsAndRates(eksHead), { head: eksHead });
     check('... EURTRY\'s too, its 1M from the EURTRY spot date with an EURTRY forward above its spot', spreadsAndRates(ekseHead)
       && (await cellText(page, 'EK_FWD!A104')).trim() === '1M' && trNumber(await cellText(page, 'EK_FWD!K104')) > trNumber(await cellText(page, 'EK_FWD!G104')),
@@ -2161,6 +2178,31 @@ async function clipAfter(page, action) {
     const twD = await twOf();
     check('... Delete on any cell of the row (here the spread, worked out from the puan): back to the general spread, nothing marked',
       twD.d.t === '-300' && !twD.h.anchor && !twD.d.anchor && !twD.m.anchor && Math.abs(trNumber(twD.m.t) - (ois2m - 3)) < 0.011, twD);
+    // the ON karşılık beside the TRY rate (the desk, 26.11.2026: "... ON karşılıklarını da görmek istiyorum"): the calculators'
+    // ON Karşılık of the TRY % over the date's days; an ON typed gives the TRY % (its exact inverse), marked (✎); Delete: back
+    const kotOnV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
+    const kotOnHead = await page.$$eval('#content .panel[data-panel="EKF1"] tr', (trs) => {
+      const head = trs.find((tr) => /TRY bid %/.test(tr.textContent || ''));
+      return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
+    }).catch(() => []);
+    const kotOn0 = { days: await kotOnV('EK_FWD!C6'), rate: await kotOnV('EK_FWD!M6'), on: await kotOnV('EK_FWD!AV6'),
+      t: (await cellText(page, 'EK_FWD!AV6')).trim() };
+    const kotOnAt = kotOnHead.indexOf('TRY bid %');
+    check('FORWARD KOTASYON: the ON karşılık beside the TRY rate (TRY bid % | TRY ask % | ON bid % | ON ask %) - the calculators\' ON Karşılık of the TRY % over the date\'s days, two decimals',
+      kotOnAt > 0 && kotOnHead.slice(kotOnAt, kotOnAt + 4).join(' | ') === 'TRY bid % | TRY ask % | ON bid % | ON ask %'
+      && Math.abs(kotOn0.on - 360 * (Math.pow(1 + kotOn0.rate / 100 * kotOn0.days / 360, 1 / kotOn0.days) - 1) * 100) < 1e-9
+      && /^\d+,\d{2}$/.test(kotOn0.t), { kotOnHead, kotOn0 });
+    await typeInto(page, 'EK_FWD!AV6', '39,5');
+    await waitCell(page, 'EK_FWD!AV6', 't.trim() === "39,50"');
+    await page.waitForFunction(() => window.tto.findCell('EK_FWD!AV6').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const kotOnA = { m: await kotOnV('EK_FWD!M6'), anchor: await page.evaluate(() => window.tto.findCell('EK_FWD!AV6').classList.contains('anchor')),
+      tip: await page.evaluate(() => window.tto.findCell('EK_FWD!M6').title || '') };
+    check('... an ON typed (39,50) stays and gives the TRY % - its exact inverse over the days, ((1 + ON/360)^g − 1)·360/g -, the ON marked (✎), the TRY % worked out from it',
+      Math.abs(kotOnA.m - (Math.pow(1 + 0.395 / 360, kotOn0.days) - 1) * 360 / kotOn0.days * 100) < 1e-9 && kotOnA.anchor
+      && /Hesaplanan: bu satırda yazılan değer ON % · AV6/.test(kotOnA.tip), kotOnA);
+    await (await cellHandle(page, 'EK_FWD!AV6')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_FWD!AV6', 't.trim() === ' + JSON.stringify(kotOn0.t));
     await shot(page, '10-forward-quotes');
 
     await open(page, 'viop');
@@ -3828,6 +3870,42 @@ async function clipAfter(page, action) {
     check('ÇAPRAZ FORWARD is two-way: a manual forward typed stays (✎), its Manuel TRY % follows (above the 41 % it was priced at); the currency changed, the forward typed goes - the row empty again',
       ftC.q.t === ftCross && ftC.q.anchor && !ftC.f.anchor && trNumber(ftC.f.t) > 41 && !ftC2.q.anchor && ftC2.q.t === '' && ftC2.f.t === '',
       { ftC, ftC2, ftCross });
+    // their ON karşılık (the desk, 26.11.2026: "... ON karşılıklarını da görmek istiyorum"): FORWARD STARTING SWAP's ON fwd-fwd
+    // beside the TRY fwd-fwd % - typed, the TRY fwd-fwd % is its inverse over near → far; ÇAPRAZ's Manuel ON typed stays when the
+    // currency changes (a TRY rate), its Manuel TRY % then over the new currency's days
+    const onApiV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
+    const onBackOf = (on, days) => (Math.pow(1 + on / 100 / 360, days) - 1) * 360 / days * 100;
+    const fsOnHead = await page.$$eval('#content .panel[data-panel="B34"] tr', (trs) => {
+      const head = trs.find((tr) => /TRY fwd-fwd %/.test(tr.textContent || ''));
+      return head ? [...head.children].map((td) => (td.textContent || '').trim()) : [];
+    }).catch(() => []);
+    const fsOnDays = await onApiV('Forward!H167');
+    const fsOn0 = { t179: await onApiV('Forward!T179'), c169: await onApiV('Forward!C169') };
+    await typeInto(page, 'Forward!T179', '38');
+    await waitCell(page, 'Forward!T179', 't.trim() === "38,00"');
+    await page.waitForFunction(() => window.tto.findCell('Forward!T179').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const fsOn = { c169: await onApiV('Forward!C169'), anchor: await page.evaluate(() => window.tto.findCell('Forward!T179').classList.contains('anchor')) };
+    await typeInto(page, 'Forward!X200', '39');                      // (ÇAPRAZ is on EUR now)
+    await waitCell(page, 'Forward!X200', 't.trim() === "39,00"');
+    await waitCell(page, 'Forward!F200', 't.trim() !== ""');
+    const crOnEur = { f: await onApiV('Forward!F200'), days: (await onApiV('Forward!B200')) - (await onApiV('Forward!K2')),
+      t: (await cellText(page, 'Forward!F200')).trim() };
+    await (await cellHandle(page, 'Forward!C197')).click();          // (a drop-down cell: Enter opens its list)
+    await page.keyboard.press('Enter');
+    await page.click('.menu button:text-is("USD")');
+    await waitCell(page, 'Forward!C197', 't.trim() === "USD"');
+    await page.waitForFunction((d) => { const td = window.tto.findCell('Forward!F200'); return td && td.textContent.trim() !== '' && td.textContent.trim() !== d; },
+      crOnEur.t, { timeout: 20000 }).catch(() => {});
+    const crOnUsd = { x: (await cellText(page, 'Forward!X200')).trim(), f: await onApiV('Forward!F200'), days: await onApiV('Forward!C200') };
+    check('... their ON karşılık: FORWARD STARTING SWAP\'s ON fwd-fwd beside the TRY fwd-fwd % (the calculators\' ON of 40,5 % over near → far) - typed (38,00) it gives the TRY fwd-fwd %; '
+      + 'ÇAPRAZ\'s Manuel ON typed gives the Manuel TRY % (EUR: from its spot date) and stays when the currency changes - USD\'s days',
+      fsOnHead.slice(fsOnHead.indexOf('TRY far %'), fsOnHead.indexOf('TRY far %') + 4).join(' | ') === 'TRY far % | ON far % | TRY fwd-fwd % | ON fwd-fwd %'
+      && Math.abs(fsOn0.t179 - 360 * (Math.pow(1 + fsOn0.c169 / 100 * fsOnDays / 360, 1 / fsOnDays) - 1) * 100) < 1e-9
+      && Math.abs(fsOn.c169 - onBackOf(38, fsOnDays)) < 1e-9 && fsOn.anchor
+      && Math.abs(crOnEur.f - onBackOf(39, crOnEur.days)) < 1e-9 && crOnUsd.x === '39,00' && Math.abs(crOnUsd.f - onBackOf(39, crOnUsd.days)) < 1e-9
+      && crOnUsd.days !== crOnEur.days, { fsOnHead, fsOnDays, fsOn0, fsOn, crOnEur, crOnUsd });
+    await typeInto(page, 'Forward!C169', '40,5');                      // (the Manuel row as it was)
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!X200'] });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!C197', 'Forward!F200:F214', 'Forward!R200'] });
     // OIS · PPK and USD · FOMC, the ways back (the desk, 24.11.2026: items 2, 3 and 13): a meeting window's market rate
     // typed reads the market's own PPK step; an MPC spread typed reads the later window's rate (the earlier's market +

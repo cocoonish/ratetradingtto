@@ -4676,12 +4676,12 @@ class Service(object):
 
     def _cross_typed_forwards(self, user: str, book: Book, calc: Optional[Calc], written: Dict[Tuple[int, int], Any],
                               cleared: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """ÇAPRAZ FORWARD's manual forwards typed (its two-way group's stores, ``extras.CROSS_TW_ID``) that a write of its
-        currency (``Forward!C197``) takes away: a forward typed is a forward of the currency it was typed in - another
-        currency would read it as its own.  Only when the currency changes (``written`` / ``cleared``: the user's values
-        of the write and the cells it takes back to their default; ``calc``: the user's calculation before it, None: made
-        here); a forward typed in the same write stays, and so does a Manuel TRY % typed: a TRY rate means the same in any
-        currency."""
+        """ÇAPRAZ FORWARD's manual forwards typed (its two-way group's forward store, ``extras.CROSS_TW_STORE`` of
+        ``extras.CROSS_TW_ID``) that a write of its currency (``Forward!C197``) takes away: a forward typed is a forward of
+        the currency it was typed in - another currency would read it as its own.  Only when the currency changes
+        (``written`` / ``cleared``: the user's values of the write and the cells it takes back to their default; ``calc``:
+        the user's calculation before it, None: made here); a forward typed in the same write stays, and so does a Manuel
+        TRY % typed or a Manuel ON typed (26.11.2026): a TRY rate means the same in any currency."""
         g = self.twoway.groups.get(ex.CROSS_TW_ID)
         if g is None or g.book is not book:
             return []
@@ -4698,7 +4698,9 @@ class Service(object):
         if ex.cross_currency(calc.get(si, r, c)) == ex.cross_currency(new):
             return []
         ov = self._overlay(user, book)
-        return [cell for m in g.members if not m.own for cell in m.store if ov.get(cell) is not None and cell not in written]
+        fwd = col_to_index(ex.CROSS_TW_STORE)
+        return [cell for m in g.members if not m.own for cell in m.store
+                if cell[1] % COLS == fwd and ov.get(cell) is not None and cell not in written]
 
     # ================================================================== what Bloomberg does not know
     #: what a ticker of a known shape is, when Bloomberg does not know it
@@ -9697,16 +9699,32 @@ def _lift_title(data: Dict[str, Any]) -> Optional[str]:
 def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:
     """A table's columns in the order a page wants them (``["A", "B", "D", "M", ...]`` by column letter; one the
     table does not have - left out as empty, hidden - is skipped, one not named is not shown).  Every cell keeps its
-    column letter, so an input is still typed into its own cell; a span across columns is not kept."""
+    column letter, so an input is still typed into its own cell.  A span across columns (a merged cell: ÇAPRAZ FORWARD's
+    "Yöntem" row) keeps the columns it covered that still follow it, in their order; a cell it covered that it no longer
+    reaches is a cell of its own again (empty) - so a row keeps all of its columns."""
     have = data.get("c") or []
     order = [have.index(c) for c in cols if c in have]
     if not order or order == list(range(len(have))):
         return
-    data["rows"] = [[row[j] for j in order] for row in data["rows"]]
-    for row in data["rows"]:
-        for cell in row:
-            if isinstance(cell, dict):
+    at = {j: k for k, j in enumerate(order)}            # a column of the table -> its place in the order asked for
+    rows = data["rows"]
+    for i, row in enumerate(rows):
+        for j, cell in enumerate(row):
+            cs = cell.get("cs", 1) if isinstance(cell, dict) else 1
+            if cs <= 1 or cell.get("sk"):
+                continue
+            n = 1                                         # the columns of the span that still follow the cell, itself first
+            while j in at and n < cs and at.get(j + n) == at[j] + n:
+                n += 1
+            if n > 1:
+                cell["cs"] = n
+            else:
                 cell.pop("cs", None)
+            for ii in range(i, min(i + cell.get("rs", 1), len(rows))):
+                for jj in range(j + n, min(j + cs, len(rows[ii]))):
+                    if isinstance(rows[ii][jj], dict):
+                        rows[ii][jj].pop("sk", None)
+    data["rows"] = [[row[j] for j in order] for row in rows]
     data["c"] = [have[j] for j in order]
     data.pop("fz", None)                         # (frozen columns counted the sheet's order)
 

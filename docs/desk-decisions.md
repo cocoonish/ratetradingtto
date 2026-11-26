@@ -2046,3 +2046,77 @@ BGN) on every one of its 528 days since 07.11.2024, and that day's `DAYS_TO_MTY`
 Code: `tto/extras.py` (`MASA_OFF_ROWS`, `_masa_off_check` / `_masa_off`), `tto/views/10_masa.json` (B3's note). Tests:
 `tests/test_masa_offshore.py`, `tests/test_extras.py` (the additions' list), the browser test's check "ORANLAR past
 2Y …".
+
+### Forward tabloları: ON karşılık (26.11.2026)
+
+The desk:
+
+> "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun gibi başka önerin olur mu"
+
+Among the integrator's eight similar proposals was the same ON karşılık in every other pricing table of the Forward page
+(TOPLU FORWARD's own is a section of its own). The desk: **"Bunların da hepsini yap"**.
+
+**What was built** - an ON karşılık % right beside each TRY rate:
+- **FORWARD KOTASYON** (USDTRY `EK_FWD!A1:W16`, EURTRY `A100:W115`): **ON bid / ask %** beside TRY bid / ask % (`AV:AW`).
+  Masa's two summaries show them too: Spread · TRY % · ON % per side.
+- **USDTRY / EURTRY FORWARD** (the value-date tables, the Elle rows too): **ON bid / mid / ask %** beside TRY bid / mid /
+  ask % (`V:X`).
+- **SERBEST FORWARD**: **Minor ON %** beside the minor % (`N`).
+- **FORWARD STARTING SWAP**: on every row (the curves, Manuel, the "Elle puan → faiz" rows) **ON far %** (of the far TRY
+  %) beside the far TRY % and **ON fwd-fwd %** (of the TRY fwd-fwd %: the period's forward ON) beside it (`Forward!S:T`).
+- **ÇAPRAZ FORWARD**: **Manuel ON %** (of the Manuel TRY %) and **İma ON %** (of the İma TRY % the elle forward gives)
+  (`Forward!X:Y`).
+
+**The convention: the Forward calculators' own "ON Karşılık"** - `Forward!AH14 = 360·((1 + TRY·g/360)^(1/g) − 1)`
+(`extras.on_equivalent`, its inverse `on_simple`; in % `extras.on_rate` / `on_rate_back`): every calendar day compounded on
+360, over the days the table's own forward formula applies that TRY rate over (each formula read):
+- FORWARD KOTASYON: the value date's days from the pair's spot (`C`: USDTRY `Forward!I2`, EURTRY `Forward!K2`). Its TRY % is
+  OIS + spread, the OIS rate read over the days from the OIS spot, but the forward applies the TRY % as simple ACT/360 over
+  `C` (`spot·(1 + TRY·C/360)/(1 + USD·C/360)`), so the ON is over `C`;
+- the value-date tables: the table's days (`D45` = `Forward!U27`, USDTRY; `D56` = `Forward!AA27` = `D2 − K2`, EURTRY);
+- the free list: the row's start → end (`D`);
+- FORWARD STARTING SWAP: the far TRY % over spot → far (`G167`), the TRY fwd-fwd % over near → far (`H167`) - `D179`'s own
+  formula composes them so. The EURTRY far leg applies the same fwd-fwd % over its own period (`MAX(0, G168 − F168)`), which
+  is `H167` unless the near date is before the EURTRY spot date: the ON is the period's, over `H167`;
+- ÇAPRAZ FORWARD: USD and any other currency (its USDTRY leg) from the USDTRY spot (`C`), EUR from the EURTRY spot (`B − K2`),
+  as its manual forward `Q` counts (`extras.cross_days`).
+TLREF's business-day O/N (`extras.overnight_bd`, the 25.11 decision for the OIS meeting windows) is not used: these rates are
+FX implied. No curve is read: offshore and OIS are untouched.
+
+**Two-way** - in every table that is, the ON is a new member of its group (`tto/twoway.py`; the 24.11 rule: the one typed
+last stands, Delete → default, a computed value typed back gives the same row, 1e-9): an ON typed gives the TRY rate,
+`((1 + ON/360)^g − 1)·360/g` over the same days, and the rest of the row follows. Typeable: FORWARD KOTASYON's ON bid / ask
+(kept in `AX:AY`), the value-date tables' ON bid / ask (`Y:Z`), the free list's Minor ON (`AC`), FSS's Manuel row ON far /
+ON fwd-fwd (`Forward!AB179:AC179`), ÇAPRAZ's Manuel ON (`Forward!W`). Shown only: the value-date tables' ON mid (the mids are
+not typed), FSS's other rows, ÇAPRAZ's İma ON (the elle forward is the way back's, not a row value).
+
+**Choices made while building it** (ask the desk before changing):
+- **Beside the TRY rate**: the cells sit right of the tables' stores, where no input ever stood (`EK_FWD!AV:AY`, `V:Z`, `N` /
+  `AC`; `Forward!S:T`, `AB:AC`, `W:Y` - empty in the workbook, checked by `_fwd_twoway_check`), and the tables show their
+  columns in an order of their own (the view's `"cols"`). ÇAPRAZ's "Yöntem" row keeps its merged cells
+  (`Service._pick_columns` keeps a span whose columns still follow it).
+- **FSS's Manuel row**: an ON fwd-fwd typed gives the TRY fwd-fwd %; an ON far typed gives the far TRY %, and the TRY fwd-fwd %
+  `D179`'s formula solved for it, as a far TRY % typed. The row fills only with a valid near / far (Durum OK), as before -
+  otherwise only the ON typed shows.
+- **ÇAPRAZ's currency changed**: a Manuel ON typed **stays** - a TRY rate, as a Manuel TRY % typed does -, its Manuel TRY % then
+  over the new currency's days (EUR's from its own spot); a manual forward typed goes, as before.
+- **The EURTRY value-date table's TRY rates are the USDTRY table's**: an ON typed in the USDTRY table gives USDTRY's TRY rate
+  and EURTRY takes that rate - its ON is then that rate's over EURTRY's days (a day apart, so not the number typed); an ON
+  typed in the EURTRY table is EURTRY's own.
+- **The value date changed**: an ON typed stays as typed, the TRY rate is its inverse over the new days.
+- **The ON mid** is the ON of the TRY mid (not the mean of the two sides' ONs: they differ by a convexity of about 1e-6 %).
+- **Masa's FORWARD KOTASYON summaries show the ON too** (Spread · TRY % · ON % per side, typeable there: the same cells) - the
+  matrices' TRY rates read the ON's stores, and every input a table reads is in its tab (`test_views`).
+- **Two decimals** (`TRY_PCT`, the desk's 25.11 rule for the pricing tables' TRY rates); the value keeps every digit.
+- **Nothing booked differently**: an ON is no price - "İşlem gir" / *Kota mesajı* / *Kotasyon kopyala* take the rows' points,
+  outrights and TRY rates as before (with an ON typed, the ones the row shows).
+- No new Bloomberg request. With nothing typed every value is as before: checked cell for cell on `EK_FWD`, `Forward` and
+  `MASA` against 5ed4eab, the shared calculation and a user's with values typed the old way; only the notes under the tables
+  changed (`EK_FWD!A16`, `A53`, `A63`, `A78`, `A115`: the ON's formula).
+
+Code: `tto/extras.py` (`on_rate`, `on_rate_back`, `ON_NOTE`; `FWD_ON` / `FWD_TW_ON` in `_fwd_quote_cells`; `FR_ON` /
+`FR_TW_ON` in `_fr_side` and `_tto_fwd_rates`, `FR_LIST_ON` / `FR_LIST_TW_ON`; `FS_ON`, `FS_TW_ON`, `CROSS_ON`, `CROSS_TW_ON`,
+`cross_days` in `_tto_fwd_twoway`, its cells in `FS_CROSS_TW_CELLS`, checked empty by `_fwd_twoway_check`), `tto/service.py`
+(`_cross_typed_forwards`: the forward's store only; `_pick_columns`: spans), `tto/views/30_forward.json` (the groups' ON
+members, the tables' `"cols"`, the helper tables), `tto/views/10_masa.json` (EKS / EKSE). Tests: `tests/test_fwd_on.py`; the
+browser test's checks "… ON karşılık …".

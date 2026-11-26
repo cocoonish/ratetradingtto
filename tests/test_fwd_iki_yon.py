@@ -33,19 +33,26 @@ GROUPS = {
     "toplu-forward": ("EK_BULK", [("Manuel TRY %", "L5:L104", None), ("USDTRY fwd", "N5:N104", "Z5:Z104"),
                                   ("USDTRY puan", "O5:O104", "AA5:AA104"), ("EURTRY fwd", "P5:P104", "AB5:AB104"),
                                   ("EURTRY puan", "Q5:Q104", "AC5:AC104")]),
+    # (the ON karşılık of 26.11.2026: the last member of each but TOPLU FORWARD's - test_fwd_on.py)
     "fwdrate-usd-bid": ("EK_FWD", [("TRY bid %", "B47:B51", None), ("USDTRY bid", "E47:E51", "N47:N51"),
-                                   ("Puan bid", "H47:H51", "O47:O51"), ("P/gün bid", "K47:K51", "P47:P51")]),
+                                   ("Puan bid", "H47:H51", "O47:O51"), ("P/gün bid", "K47:K51", "P47:P51"),
+                                   ("ON bid %", "V47:V51", "Y47:Y51")]),
     "fwdrate-usd-ask": ("EK_FWD", [("TRY ask %", "D47:D51", None), ("USDTRY ask", "G47:G51", "Q47:Q51"),
-                                   ("Puan ask", "J47:J51", "R47:R51"), ("P/gün ask", "M47:M51", "S47:S51")]),
+                                   ("Puan ask", "J47:J51", "R47:R51"), ("P/gün ask", "M47:M51", "S47:S51"),
+                                   ("ON ask %", "X47:X51", "Z47:Z51")]),
     "fwdrate-eur-bid": ("EK_FWD", [("TRY bid %", "B58:B62", None), ("EURTRY bid", "E58:E62", "N58:N62"),
-                                   ("Puan bid", "H58:H62", "O58:O62"), ("P/gün bid", "K58:K62", "P58:P62")]),
+                                   ("Puan bid", "H58:H62", "O58:O62"), ("P/gün bid", "K58:K62", "P58:P62"),
+                                   ("ON bid %", "V58:V62", "Y58:Y62")]),
     "fwdrate-eur-ask": ("EK_FWD", [("TRY ask %", "D58:D62", None), ("EURTRY ask", "G58:G62", "Q58:Q62"),
-                                   ("Puan ask", "J58:J62", "R58:R62"), ("P/gün ask", "M58:M62", "S58:S62")]),
-    "fwdfree": ("EK_FWD", [("Minor %", "G68:G77", None), ("Swap", "H68:H77", "Z68:Z77"), ("Forward", "I68:I77", "AA68:AA77")]),
+                                   ("Puan ask", "J58:J62", "R58:R62"), ("P/gün ask", "M58:M62", "S58:S62"),
+                                   ("ON ask %", "X58:X62", "Z58:Z62")]),
+    "fwdfree": ("EK_FWD", [("Minor %", "G68:G77", None), ("Swap", "H68:H77", "Z68:Z77"), ("Forward", "I68:I77", "AA68:AA77"),
+                           ("Minor ON %", "N68:N77", "AC68:AC77")]),
     "fss-manuel": ("Forward", [("TRY fwd-fwd %", "C169", None), ("TRY far %", "D179", "U179"), ("Far outright", "H179", "V179"),
                                ("FS puan", "I179", "W179"), ("Günlük puan", "J179", "X179"), ("EURTRY far", "N179", "Y179"),
-                               ("EURTRY puan", "O179", "Z179")]),
-    "capraz-forward": ("Forward", [("Manuel TRY %", "F200:F214", None), ("Fwd (manuel)", "Q200:Q214", "U200:U214")]),
+                               ("EURTRY puan", "O179", "Z179"), ("ON far %", "S179", "AB179"), ("ON fwd-fwd %", "T179", "AC179")]),
+    "capraz-forward": ("Forward", [("Manuel TRY %", "F200:F214", None), ("Fwd (manuel)", "Q200:Q214", "U200:U214"),
+                                   ("Manuel ON %", "X200:X214", "W200:W214")]),
 }
 #: the hidden helper table of the page each group's stores are in
 HELPERS = {"toplu-forward": "BK2", "fwdrate-usd-bid": "EKF4", "fwdrate-usd-ask": "EKF4", "fwdrate-eur-bid": "EKF4",
@@ -427,10 +434,10 @@ def test_the_value_date_tables_marks_and_values_typed_before(svc):
     days, spot, major = fr_market(svc, u, USD, 1)
     assert fr(svc, u, 49, 1) == pytest.approx(fr_from_rate(svc, u, USD, 1, implied(49.75, spot, major, days)), abs=1e-9)
     p, m = panel(svc, u, "FR1")
-    assert p["note"].count("İki yönlü: her satırın bid'inde ve ask'inde TRY %, forward, puan ya da P/gün - hangisini yazarsanız "
+    assert p["note"].count("İki yönlü: her satırın bid'inde ve ask'inde TRY %, ON karşılık, forward, puan ya da P/gün - hangisini yazarsanız "
                            "o kalır, diğerleri ondan hesaplanır") == 1
-    assert m["B48"]["an"] == "USDTRY bid, Puan bid, P/gün bid" and m["E48"]["ao"] == "TRY bid % · B48"
-    assert m["G49"]["an"] == "TRY ask %, Puan ask, P/gün ask" and m["D49"]["ao"] == "USDTRY ask · G49" and m["M49"]["i"] == "u"
+    assert m["B48"]["an"] == "USDTRY bid, Puan bid, P/gün bid, ON bid %" and m["E48"]["ao"] == "TRY bid % · B48"
+    assert m["G49"]["an"] == "TRY ask %, Puan ask, P/gün ask, ON ask %" and m["D49"]["ao"] == "USDTRY ask · G49" and m["M49"]["i"] == "u"
     assert not any(k in m["E49"] for k in ("an", "ao", "m"))                        # (the bid side of that row: nothing typed)
     p2, m2 = panel(svc, u, "FR2")
     assert "İki yönlü" in p2["note"] and "an" not in m2["B59"] and m2["B59"]["i"] == "u"
@@ -691,7 +698,7 @@ def test_cross_marks_and_a_rolling_date(svc):
     put(svc, u, {"Forward!C197": "USD"})
     put(svc, u, {"Forward!Q%d" % r1: 44.0})
     p, m = panel(svc, u, "B36")
-    assert m["Q%d" % r1]["an"] == "Manuel TRY %" and m["F%d" % r1]["ao"] == "Fwd (manuel) · Q%d" % r1
+    assert m["Q%d" % r1]["an"] == "Manuel TRY %, Manuel ON %" and m["F%d" % r1]["ao"] == "Fwd (manuel) · Q%d" % r1
     assert "Yazılan forward yazıldığı dövizindir" in p["note"]
     put(svc, u, {"Forward!B%d" % r1: cell(svc, "Forward!B%d" % r1, u) + 1})         # the date a day later
     assert cell(svc, "Forward!Q%d" % r1, u) == 44.0

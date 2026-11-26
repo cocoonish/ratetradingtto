@@ -358,13 +358,14 @@ def test_each_calculator_has_one_home():
     assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF8", "EKF6", "EKF9"]
     assert not any(p.get("sheet") == "EK_FWD" and not p.get("borrowed") for p in by["masa"]["panels"])
     eks = panel("masa", "EKS")
-    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A2:N14"       # (row 2: the matrix's curve)
-    # each spread with the TRY rate it makes beside it (M / N: OIS + spread), the rest as the sheet has them
-    assert eks["cols"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
+    assert eks["borrowed"] and eks["sheet"] == "EK_FWD" and eks["range"] == "A2:AW14"      # (row 2: the matrix's curve; to AW: its ON)
+    # each spread with the TRY rate it makes beside it (M / N: OIS + spread) and that rate's ON karşılık (AV / AW, 26.11.2026),
+    # the rest as the sheet has them
+    assert eks["cols"] == ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"]
     # EURTRY's summary below it: the same columns of the EURTRY matrix (curve row 101, header 102, "Tümü" 103, dates
     # 104-113)
     ekse = panel("masa", "EKSE")
-    assert ekse["borrowed"] and ekse["sheet"] == "EK_FWD" and ekse["range"] == "A101:N113" and ekse["cols"] == eks["cols"]
+    assert ekse["borrowed"] and ekse["sheet"] == "EK_FWD" and ekse["range"] == "A101:AW113" and ekse["cols"] == eks["cols"]
     assert "EURTRY" in ekse["title"] and "EURTRY" not in eks["title"]
     # the date-to-date forward's dates and spread right above it: the row of the desk sheet's date-to-date inputs
     assert panel("masa", "B10D")["range"] == "B60:N60" and not panel("masa", "B10D").get("hidden")
@@ -376,7 +377,8 @@ def test_each_calculator_has_one_home():
 
 
 def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service):
-    """Masa's forward quote summary: Spread bid, TRY bid %, Spread ask, TRY ask % side by side - the spreads still
+    """Masa's forward quote summary: Spread bid, TRY bid %, ON bid %, Spread ask, TRY ask %, ON ask % side by side (the ON
+    karşılık of 26.11.2026: test_fwd_on.py) - the spreads still
     the sheet's own inputs (a spread typed on Masa moves the TRY rate beside it: OIS + spread); the TRY rates, points and
     forwards typeable too (two-way: test_fwd_twoway.py)."""
     from conftest import cell
@@ -384,10 +386,11 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     user = service.login("forward özeti")["user"]
     eks = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKS")
     d = eks["data"]
-    assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
-    assert [c.get("t") for c in d["rows"][d["r"].index(3)]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    assert d["c"] == ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"]
+    assert [c.get("t") for c in d["rows"][d["r"].index(3)]][3:9] == ["Spread bid", "TRY bid %", "ON bid %", "Spread ask", "TRY ask %",
+                                                                 "ON ask %"]
     one = d["rows"][d["r"].index(5)]                                     # 1M
-    assert [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "M", "E", "N", "H", "I", "J", "K"]
+    assert [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "M", "AV", "E", "N", "AW", "H", "I", "J", "K"]
     # the curve the TRY rates are read from (MPC ima, a scenario, bootstrap ...): the matrix's own input, above it
     curve = d["rows"][0]
     assert d["r"][0] == 2 and curve[0]["t"] == "Eğri" and curve[1]["i"] == "u" and curve[1]["t"] == "MPC ima"
@@ -404,11 +407,13 @@ def test_the_desks_forward_summary_shows_each_spreads_try_rate_beside_it(service
     # EURTRY: the same columns from its own matrix; a spread typed on Masa goes into the EURTRY matrix's cell
     ekse = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKSE")
     d = ekse["data"]
-    assert d["c"] == ["A", "B", "C", "D", "M", "E", "N", "F", "G", "H", "I", "J", "K"]
-    assert [c.get("t") for c in d["rows"][d["r"].index(102)]][3:7] == ["Spread bid", "TRY bid %", "Spread ask", "TRY ask %"]
+    assert d["c"] == ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"]
+    assert [c.get("t") for c in d["rows"][d["r"].index(102)]][3:9] == ["Spread bid", "TRY bid %", "ON bid %", "Spread ask", "TRY ask %",
+                                                                   "ON ask %"]
     assert d["r"][0] == 101 and d["rows"][0][0]["t"] == "Eğri" and d["rows"][0][1]["i"] == "u"        # its own curve
     one = d["rows"][d["r"].index(104)]                                   # 1M
-    assert one[0]["t"] == "1M" and [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "M", "E", "N", "H", "I", "J", "K"]
+    assert one[0]["t"] == "1M" and [col for col, c in zip(d["c"], one) if "i" in c] == ["B", "D", "M", "AV", "E", "N", "AW", "H", "I",
+                                                                                     "J", "K"]
     service.set_inputs(user, "tto", [{"ref": "EK_FWD!E104", "value": "-40"}])    # 1M ask spread: 40 bp under OIS
     try:
         ekse = next(p for p in service.view(user, "masa")["panels"] if p.get("id") == "EKSE")
@@ -662,7 +667,7 @@ def test_a_table_away_from_its_inputs_is_found(service):
     import copy
     masa = copy.deepcopy(service.view_index["masa"])
     next(s for s in masa["sections"] if s["id"] == "fwd")["panels"].remove("B10D")
-    next(p for p in masa["panels"] if p["id"] == "EKS")["range"] = "A3:N14"
+    next(p for p in masa["panels"] if p["id"] == "EKS")["range"] = "A3:AW14"
     assert _inputs_away_from_their_tables(service, [masa]) == {
         ("masa", "fwd", "B10"): ["MASA!C60", "MASA!E60", "MASA!I60"], ("masa", "fwd", "EKS"): ["EK_FWD!B2"]}
     dv01 = copy.deepcopy(service.view_index["dv01"])
