@@ -506,6 +506,52 @@ stores but shows beside the TRY rate (FORWARD KOTASYON, the value-date tables, S
 ÇAPRAZ FORWARD). A merged cell keeps the columns it covered that still follow it, in order (ÇAPRAZ FORWARD's "Yöntem" row);
 a covered cell it no longer reaches is an empty cell of its own, so a row keeps every column.
 
+### Layout of a page
+
+The desk's "Düzen: sayfalar tek tek" (27.11.2026, [desk-decisions.md](desk-decisions.md#düzen-sayfalar-tek-tek-27112026))
+put these in one place for every page; the pages' own JSON and modules use them.
+
+- **A view's options** (schema and the loader in `tto/views/__init__.py`; `check_view` says what is malformed - the views'
+  test runs it on every page):
+  - `"freeze": n` (a table, a `"generated"` one too): its first n columns as the panel shows them (after `"cols"`) stay in
+    view while it scrolls sideways - `Service._panel` → `_freeze_columns` sets the data's `fz` in place of the
+    workbook's frozen panes (`render.py`: `fz` from `sheet.freeze`); `0`: none. With the columns Excel hides shown
+    ("Yardımcı tablolar") n counts the others. A user's own column order keeps the frozen columns still at the left
+    (`grid.js` `ordered`).
+  - `"limit": {"rows": n}` (a table): the entry carries it; `view.js` `limitable` hides the rows past the first n under the
+    captions (`tr.limit-hidden`), "Tümü (N)" / "İlk n" in the header, kept per browser (`tto.limit.<view>.<panel>`, as
+    `tto.grow.*`).
+  - `"fit": true`: the entry's `fit` → `section.panel.fit`.
+  - **A column of panels in a tab**: an element of `sections[].panels` (or of `pinned`) may be a list of panel ids. The
+    loader (`normalize`) flattens it - `panels` is the ids in order, as every reader of a tab knows them (the menu's
+    search, a launchpad item's tab, the tests) - and keeps the columns in `stacks` / `pinned_stacks`; `layout()` sends
+    each column's panels that are sent (a temporary copy with its table), two or more, in the answer's tab. `view.js`
+    `layout` puts them in a `div.stack` at the place of the column's first panel (`.stack.wide` when one of them is wide).
+- **A table the page builds itself** (`grid.js`): `plainData(header, rows, {freeze: n})` sets its `fz`; the Grid's own
+  options `freeze` (every data it is given), `wrap` (default true: `prepare` makes a run-over text of `WRAP_AT` = 70
+  characters or more a wrapping note, `ovw` - its text in a `div.ovt` of `width: 440px; min-width: 100%`, so it gives the
+  table no width of its own; false for a notes panel) and `onBuild` (the table drawn anew: `view.js` hides again the rows
+  "+ Satır" / "Tümü" hid).
+- **The panel's header** (`view.js` `panel`; `app.css` `.vhead`): `button.fold` (▾ / ▸, `it.toggle`, kept as
+  `tto.col.*`), `div.ttl` (the title - two lines at most -, the sheet's range, the hover `div.tools` positioned over the
+  title's end), then the header's buttons. `header.vhead` (and `.panel.fit > header`) is `width: 0; min-width: 100%`: the
+  panel is as wide as its body, never its header; `.panels > .panel` is at least `min(320px, 100%)`; a folded one is as
+  wide as its header. The columns' "Gizlediğiniz N sütun" chip is moved onto the header's line (columns.js puts it
+  before the tools). The Kopyala button stays the first `.tools .iconbtn`.
+- **Notes**: `ui.js` `foldNote` (two lines, "devamı" / "kısalt", `.note.clamp` / `.long` / `.open`; a folded panel hides
+  its note). A two-way group's note: `Service._panel` sends the note whole and `tw` (the groups' notes in it, one by one -
+  `TwoWay.notes_for`); `view.js` `setNote` puts each in a `span.tw` and `dedupeNotes` (after every layout and fold) hides
+  one an earlier panel on screen says (`.tw.dup`; a note left with nothing is `.empty`). A launchpad box shows a table
+  alone: its note whole.
+- **One body height**: `--body-max` (`max(72vh, calc(100vh - 210px))`) for every `.panel .body` and the pages' own
+  (Günlük İşlemler, Broker Chat, Realized Vol, Bugün); a chart's body is never capped (its "Tablo" view is, `.body.tbl`).
+- **The top bar**: one row from 1100 px (`flex-wrap: nowrap`; the title, the favourites and "Hesap" shrink); the number
+  format, the flashing and the theme are check items of the user's menu (`main.js`: ids `btn-lang`, `btn-flash`,
+  `btn-theme` while it is open); below 1500 px the search is an icon (`.findbox`, widened on focus / Ctrl+K) and the
+  valuation date's word goes (`#asof .lbl`). A row of chips on one line: `ui.js` `fitOneLine` ("+N"; the favourites,
+  KISAYOLLAR - `#shortcuts-more`, opened kept as `tto.kisayol.open`) and `watchWidth`. The cell colours' legend: `#legend-chip`
+  opens a `menu` with the legend node (`menu`'s `{node}` items).
+
 ### The top bar's own panels
 
 The top bar (`#top` in `tto/static/index.html`) is the same on every page; besides the page's title it carries popovers
