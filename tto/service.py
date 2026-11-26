@@ -4660,7 +4660,8 @@ class Service(object):
         si = book.model.sheet_index[ex.BULK_SHEET]
         cols = {"date": "B", "ret_mid": "G", "manual": "L", "usd_fwd": "N", "eur_fwd": "P", "usd_typed": "R", "eur_typed": "T",
                 "pair": ex.BULK_PAIR, "dir": ex.BULK_DIR, "amount": ex.BULK_AMOUNT, "cpt": ex.BULK_CPT}
-        # the row's typed value (its two-way group, twoway.py): which of Manuel TRY % / USDTRY fwd, puan / EURTRY fwd, puan
+        # the row's typed value (its two-way group, twoway.py): which of Manuel TRY % / ON karşılık % / USDTRY fwd, puan /
+        # EURTRY fwd, puan
         group = self.twoway.groups.get(ex.BULK_TW_ID)
         overlay = self._overlay(user, book)
         rows = []

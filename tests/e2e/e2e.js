@@ -3764,6 +3764,31 @@ async function clipAfter(page, action) {
       ftBulk.n.t === ftFwd && ftBulk.n.anchor && /Yazdığınız değer/.test(ftBulk.n.tip) && !ftBulk.l.anchor && /Hesaplanan/.test(ftBulk.l.tip)
       && trNumber(ftBulk.l.t) > trNumber(ftBulk.g) && ftBulk.p.t !== ftP5 && /tek TRY faiziyle/.test(ftNote)
       && ftBack.n.t === ftN5 && !ftBack.n.anchor && ftBack.p === ftP5, { ftBulk, ftN5, ftP5, ftNote, ftBack });
+    // TOPLU FORWARD's ON karşılık % (the desk, 26.11.2026: "Toplu forward fiyatlama kısımlarında ON karşılıklarını da
+    // görmek istiyorum"): the O/N equivalent of the rate that prices the row - the Forward calculators' ON Karşılık,
+    // 360·((1 + r·g/360)^(1/g) − 1) over the row's Gün -; an ON typed stays (✎), the Manuel TRY % is the rate it gives
+    // (the exact inverse) and the USDTRY fwd follows; Delete on it: the row back to RET mid
+    const onOf = (r, g) => 36000 * ((1 + r / 100 * g / 360) ** (1 / g) - 1);
+    const rateOfOn = (on, g) => ((1 + on / 36000) ** g - 1) * 36000 / g;
+    const onDays = trNumber(await cellText(page, 'EK_BULK!C5'));
+    const onG = trNumber(await cellText(page, 'EK_BULK!G5'));
+    const onShown = (await cellText(page, 'EK_BULK!M5')).trim();
+    const onHead = String((await cellText(page, 'EK_BULK!M4')) || '').trim();
+    const onTyped = (trNumber(onShown) + 0.75).toFixed(2).replace('.', ',');
+    await typeInto(page, 'EK_BULK!M5', onTyped);
+    await waitCell(page, 'EK_BULK!L5', 't.trim() !== ""');
+    await page.waitForFunction(() => window.tto.findCell('EK_BULK!M5').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const onRow = { m: await ftOne('EK_BULK!M5'), l: await ftOne('EK_BULK!L5'), n: (await cellText(page, 'EK_BULK!N5')).trim() };
+    await (await cellHandle(page, 'EK_BULK!M5')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_BULK!L5', 't.trim() === ""');
+    const onBack = { m: await ftOne('EK_BULK!M5'), n: (await cellText(page, 'EK_BULK!N5')).trim() };
+    check('TOPLU FORWARD: ON karşılık % - the row\'s RET mid\'s O/N (the calculators\' ON Karşılık over its Gün), two decimals; an ON typed stays (✎), the Manuel TRY % is the rate it gives and the USDTRY fwd follows; Delete on it: the row back to RET mid',
+      onHead === 'ON karşılık %' && /^\d+,\d{2}$/.test(onShown) && Math.abs(trNumber(onShown) - onOf(onG, onDays)) < 0.011
+      && onRow.m.t === onTyped && onRow.m.anchor && /Yazdığınız değer/.test(onRow.m.tip) && !onRow.l.anchor && /Hesaplanan/.test(onRow.l.tip)
+      && Math.abs(trNumber(onRow.l.t) - rateOfOn(trNumber(onTyped), onDays)) < 0.006 && onRow.n !== ftN5
+      && !onBack.m.anchor && onBack.m.t === onShown && onBack.n === ftN5,
+      { onDays, onG, onShown, onHead, onTyped, onRow, onBack, ftN5 });
     const ftQ = trNumber(await cellText(page, 'Forward!Q200'));
     const ftCross = (ftQ + 0.1).toFixed(4).replace('.', ',');
     await typeInto(page, 'Forward!Q200', ftCross);

@@ -2085,6 +2085,13 @@ BULK_PAIR, BULK_DIR, BULK_AMOUNT, BULK_CPT = "V", "W", "X", "Y"
 BULK_TW_ID = "toplu-forward"
 BULK_TW_STORES = ("Z", "AA", "AB", "AC")          # USDTRY fwd, USDTRY puan, EURTRY fwd, EURTRY puan typed
 BULK_TW_RATE = "AD"
+#: a row's ON karşılık % (the desk, 26.11.2026: "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek
+#: istiyorum"): the O/N equivalent of the TRY rate that prices the row - Manuel TRY % else RET mid, as N / P choose -, the
+#: Forward calculators' own "ON Karşılık" (Forward!AH14: :func:`on_equivalent`, calendar days on 360 - an FX-implied
+#: rate's, not TLREF's business days of :func:`overnight_bd`, which are OIS's) over the row's Gün (C); a member of the
+#: two-way group too, an ON typed kept in BULK_TW_ON, the TRY rate it gives (:func:`on_simple`) in BULK_TW_RATE.  Both
+#: columns on cells no input ever stood on (M: the workbook's own header Forward!M143 is blank)
+BULK_ON, BULK_TW_ON = "M", "AE"
 _ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_!$.':])\$[A-Z]{1,3}\$\d+(?::\$[A-Z]{1,3}\$\d+)?(?![A-Za-z0-9_(])")
 
 
@@ -2131,8 +2138,8 @@ def _bulk_forward_check(model: Model) -> None:
 def _bulk_twoway(col: str, r: int, body: str) -> str:
     """A TOPLU FORWARD cell of row ``r`` as the two-way table has it (without "="): the USDTRY / EURTRY fwd and puan show
     what is typed into them (``BULK_TW_STORES``) - a puan typed gives fwd = spot + puan / 10000 -, else the sheet's own
-    formula (``body``) off the row's TRY rate: Manuel TRY % - typed, or the one a fwd / puan typed gives - else RET mid.
-    Every other column as it is."""
+    formula (``body``) off the row's TRY rate: Manuel TRY % - typed, or the one a fwd / puan / ON typed gives - else RET
+    mid.  Every other column as it is."""
     su, sp, se, sq = BULK_TW_STORES
     f = {"r": r, "body": body, "su": su, "sp": sp, "se": se, "sq": sq}
     if col == "N":
@@ -2155,11 +2162,16 @@ def _tto_bulk_forward(model: Model) -> None:
     Two-way (tto/twoway.py; the desk, 24.11.2026): a row's Manuel TRY %, USDTRY fwd / puan and EURTRY fwd / puan - the
     one typed last stands, the others are worked out from it (:func:`_bulk_twoway`; the TRY rate a fwd / puan typed gives:
     :func:`implied_try` on the row's spot, USD / EUR % and days).  One TRY rate prices both pairs: a USDTRY fwd typed
-    moves the row's EURTRY fwd, and the other way round.  The "elle" columns (R..U) stay as they were."""
+    moves the row's EURTRY fwd, and the other way round.  The "elle" columns (R..U) stay as they were.
+
+    ON karşılık % (``BULK_ON``; the desk, 26.11.2026): the O/N equivalent of the row's TRY rate, the Forward calculators'
+    (:func:`on_equivalent` on 360 over the row's Gün; rates in % here, decimals there) - a member of the group too: an ON
+    typed gives the row's TRY rate by :func:`on_simple`, the other members follow from it."""
     b = SheetBuilder(model, BULK_SHEET)
     b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid)")
     heads = [model.sheet("Forward").consts.get(parse_a1("%s143" % c)) for c in "BCDEFGHIJKLMNOPQ"]
     b.head("B4", [h if isinstance(h, str) else None for h in heads])
+    b.head(BULK_ON + "4", ["ON karşılık %"])           # (the workbook's own header of this column is blank)
     templates = {}
     for col in BULK_COLS:
         text = formula_of(model, "Forward", "%s144" % col)
@@ -2172,6 +2184,7 @@ def _tto_bulk_forward(model: Model) -> None:
     b.head(BULK_PAIR + "4", ["Parite", "Yön", "Tutar", "Karşı taraf"])
     b.head(BULK_TW_STORES[0] + "4", ["Yazılan USDTRY fwd", "Yazılan USDTRY puan", "Yazılan EURTRY fwd", "Yazılan EURTRY puan",
                                      "Yazılandan TRY %"])
+    b.head(BULK_TW_ON + "4", ["Yazılan ON karşılık %"])
     for k in range(BULK_ROWS):
         r = BULK_FIRST + k
         b.input("B%d" % r, None, fmt=DATE)
@@ -2179,17 +2192,23 @@ def _tto_bulk_forward(model: Model) -> None:
         for col in BULK_COLS:
             body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
             b.set("%s%d" % (col, r), "=" + _bulk_twoway(col, r, body), like=None, fmt=_BULK_FMT.get(col, NUM4))
-        # two-way: the Manuel TRY % where it always was (in place) - its default the TRY rate a fwd / puan typed gives
+        # two-way: the Manuel TRY % where it always was (in place) - its default the TRY rate a fwd / puan / ON typed gives
         su, sp, se, sq = BULK_TW_STORES
-        f = {"r": r, "su": su, "sp": sp, "se": se, "sq": sq, "hub": BULK_TW_RATE}
-        none = "AND(ISBLANK($%(su)s%(r)d),ISBLANK($%(sp)s%(r)d),ISBLANK($%(se)s%(r)d),ISBLANK($%(sq)s%(r)d))" % f
+        f = {"r": r, "su": su, "sp": sp, "se": se, "sq": sq, "so": BULK_TW_ON, "hub": BULK_TW_RATE}
+        none = ("AND(ISBLANK($%(su)s%(r)d),ISBLANK($%(sp)s%(r)d),ISBLANK($%(se)s%(r)d),ISBLANK($%(sq)s%(r)d),"
+                "ISBLANK($%(so)s%(r)d))" % f)
         typed_usd = "IF(ISBLANK($%(su)s%(r)d),Forward!$F$2+$%(sp)s%(r)d/10000,$%(su)s%(r)d)" % f
         typed_eur = "IF(ISBLANK($%(se)s%(r)d),Forward!$G$2+$%(sq)s%(r)d/10000,$%(se)s%(r)d)" % f
-        b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,%s),NA())))'
-              % (none, r, su, r, sp, r, implied_try(typed_eur, "Forward!$G$2", "$K%d" % r, eur),
-                 implied_try(typed_usd, "Forward!$F$2", "$J%d" % r, usd)), fmt="0.0000")
+        typed_on = "%s*100" % on_simple("$%(so)s%(r)d/100" % f, usd)          # (the calculators' rates are decimals)
+        b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(IF(ISBLANK($%s%d),IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,%s),%s),NA())))'
+              % (none, r, BULK_TW_ON, r, su, r, sp, r, implied_try(typed_eur, "Forward!$G$2", "$K%d" % r, eur),
+                 implied_try(typed_usd, "Forward!$F$2", "$J%d" % r, usd), typed_on), fmt="0.0000")
         b.input("L%d" % r, '=IF(%s,"",IF(ISNUMBER($%s%d),$%s%d,""))' % (none, BULK_TW_RATE, r, BULK_TW_RATE, r), fmt=TRY_PCT)
-        for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0)):
+        # ON karşılık %: the O/N equivalent of the TRY rate that prices the row - N / P's own choice -, or the ON typed
+        rate = "IF(ISNUMBER($L%d),$L%d,$G%d)" % (r, r, r)
+        b.set("%s%d" % (BULK_ON, r), '=IF(ISBLANK($%s%d),IF($C%d="","",%s),$%s%d)'
+              % (BULK_TW_ON, r, r, "%s*100" % on_equivalent("%s/100" % rate, usd), BULK_TW_ON, r), fmt=TRY_PCT)
+        for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0), (BULK_TW_ON, "0.0000")):
             b.input("%s%d" % (col, r), None, fmt=fmt)
         b.input("R%d" % r, None, fmt=NUM4)
         b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, implied_try("$R%d" % r, "Forward!$F$2", "$J%d" % r, usd)),
@@ -2204,7 +2223,9 @@ def _tto_bulk_forward(model: Model) -> None:
            "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. "
            "Valör ve manuel TRY faizi boş başlar; yazdıklarınız sizin kalır (Excel'den bir sütun da yapıştırabilirsiniz). "
            "Elle forward (USDTRY / EURTRY) yazın ya da yapıştırın: yanındaki İma TRY %, USDTRY / EURTRY fwd'nin tersi - aynı spot, USD / EUR "
-           "faizi ve gün. İşlem: satıra Parite (boş = USDTRY), Yön (AL / SAT) ve Tutar (paritenin ilk dövizinde: 10m) yazıp \"İşleme al\"a "
+           "faizi ve gün. ON karşılık %: satırı fiyatlayan TRY faizinin (Manuel TRY %, boşsa RET mid) günlük bileşik karşılığı - Forward "
+           "hesaplayıcılarının ON Karşılık'ı, 360·((1 + faiz·Gün/360)^(1/Gün) − 1), takvim günleriyle. "
+           "İşlem: satıra Parite (boş = USDTRY), Yön (AL / SAT) ve Tutar (paritenin ilk dövizinde: 10m) yazıp \"İşleme al\"a "
            "basın - Tutar'ı yazılı satırlar Günlük İşlemler'in Excel'den yapıştır penceresinde açılır; kaydedilen satırların Tutar'ı silinir.")
 
 

@@ -419,9 +419,9 @@ def _ois_row(vals: Dict[str, str]) -> Dict[str, Any]:
 BULK_FWD_HEAD = ("Satır", "Parite", "Yön", "Tutar", "Valör", "TRY faizi", "Forward kur", "Karşı taraf", "Not")
 BULK_FWD_NOTE = "TOPLU FORWARD"
 #: where a row's TRY rate comes from, by the column of its typed value (the table is two-way: extras.BULK_TW_ID) - none
-#: typed: RET mid
-BULK_FWD_SOURCES = {None: "RET mid %", "L": "Manuel TRY %", "N": "USDTRY fwd", "O": "USDTRY puan", "P": "EURTRY fwd",
-                    "Q": "EURTRY puan"}
+#: typed: RET mid; an ON karşılık % typed (M, 26.11.2026): the Manuel TRY % it gives, booked as the TRY rate
+BULK_FWD_SOURCES = {None: "RET mid %", "L": "Manuel TRY %", "M": "ON karşılık %", "N": "USDTRY fwd", "O": "USDTRY puan",
+                    "P": "EURTRY fwd", "Q": "EURTRY puan"}
 
 
 def _plain(x: float, lang: str) -> str:
@@ -453,8 +453,8 @@ def bulk_forward_price(row: Dict[str, Any]) -> Tuple[str, Optional[float], str]:
     * else USDTRY whose USDTRY fwd or puan is the row's typed value (the table is two-way): *Forward kur* = the row's
       USDTRY fwd - the one typed, or spot + the puan typed / 10000;
     * else USDTRY: *TRY faizi* = the rate the row priced with - its Manuel TRY %, typed or worked out from the EURTRY fwd /
-      puan typed, else RET mid % (the blotter's TRY-rate pricing is this very row's formula, the workbook's own bulk row
-      ``Forward!N163``: the same forward);
+      puan or the ON karşılık % typed, else RET mid % (the blotter's TRY-rate pricing is this very row's formula, the
+      workbook's own bulk row ``Forward!N163``: the same forward; an ON is no booking price - the TRY rate it gives is);
     * else EURTRY: *Forward kur* = the row's EURTRY fwd.  (The blotter's EURTRY TRY-rate pricing takes the EUR rate as the
       middle of the interpolated EUR bid and ask, ``Forward!AD27``; the row takes Bloomberg's interpolated EUR MID: the
       same forward only while every MID is the exact middle of its bid and ask - the row's outright is booked instead.)
@@ -462,7 +462,7 @@ def bulk_forward_price(row: Dict[str, Any]) -> Tuple[str, Optional[float], str]:
     The source says where the row's TRY rate comes from (``BULK_FWD_SOURCES``).  ``value`` None: the row has no such price
     (no valör, no curve): the dialog says why.  ``row``: the table's cells - ``pair`` (V), ``manual`` (L), ``ret_mid``
     (G), ``usd_fwd`` (N), ``eur_fwd`` (P), ``usd_typed`` (R), ``eur_typed`` (T) - and ``anchor``, the column of the row's
-    typed value (L, N, O, P, Q; None: none - a row without it: L when its Manuel TRY % is a number)."""
+    typed value (L, M, N, O, P, Q; None: none - a row without it: L when its Manuel TRY % is a number)."""
     pair = _row_pair(row)
     typed = _number(row.get({"USDTRY": "usd_typed", "EURTRY": "eur_typed"}.get(pair, "")))
     if typed is not None:

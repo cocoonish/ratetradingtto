@@ -936,7 +936,7 @@
    "scope": "user",
    "group": "bulk100-try",
    "kind": "number",
-   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; boş başlar; two-way: or the TRY % a USDTRY / EURTRY fwd or puan typed gives)"
+   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; boş başlar; two-way: or the TRY % a USDTRY / EURTRY fwd or puan or an ON karşılık % typed gives)"
   },
   {
    "range": "EK_BULK!R5:R104",
@@ -1330,9 +1330,11 @@
    "id": "toplu-forward",
    "sheet": "EK_BULK",
    "label": "TOPLU FORWARD",
-   "note": "İki yönlü: Manuel TRY %, USDTRY fwd / puan ya da EURTRY fwd / puan - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner). Satırın iki paritesi tek TRY faiziyle fiyatlanır: USDTRY forward'ını yazınca EURTRY forward'ı da değişir, tersi de. Elle fwd sütunları ayrıca durur.",
+   "note": "İki yönlü: Manuel TRY %, ON karşılık %, USDTRY fwd / puan ya da EURTRY fwd / puan - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner). Satırın iki paritesi tek TRY faiziyle fiyatlanır: USDTRY forward'ını yazınca EURTRY forward'ı da değişir, tersi de. ON karşılık % o faizin günlük bileşik karşılığıdır (Forward hesaplayıcılarının ON Karşılık'ı, 360 gün bazı, satırın Gün'ü): yazılan ON'dan TRY faizi tersiyle bulunur. Elle fwd sütunları ayrıca durur.",
    "members": [
     {"name": "Manuel TRY %", "range": "L5:L104"},
+    {"name": "ON karşılık %", "range": "M5:M104", "store": "AE5:AE104",
+     "label": "toplu forward 'ON karşılık %' typed (two-way: the TRY rate it gives - the Forward calculators' ON on 360 over the row's Gün, inverted - is the Manuel TRY %; the USDTRY / EURTRY fwd and puan follow)"},
     {"name": "USDTRY fwd", "range": "N5:N104", "store": "Z5:Z104",
      "label": "toplu forward 'USDTRY fwd' typed (two-way: its puan, Manuel TRY % and the EURTRY fwd / puan follow)"},
     {"name": "USDTRY puan", "range": "O5:O104", "store": "AA5:AA104",
@@ -2075,9 +2077,9 @@
    "id": "BK2",
    "type": "table",
    "sheet": "EK_BULK",
-   "range": "Z4:AD104",
+   "range": "Z4:AE104",
    "hidden": true,
-   "title": "Yardımcı · TOPLU FORWARD: iki yönlü hücrelere yazılanlar (USDTRY / EURTRY fwd ve puan) ve verdikleri TRY %",
+   "title": "Yardımcı · TOPLU FORWARD: iki yönlü hücrelere yazılanlar (USDTRY / EURTRY fwd ve puan, ON karşılık %) ve verdikleri TRY %",
    "keep_title": true
   },
   {

@@ -311,7 +311,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | EK_XAU | tto | gold forwards, VİOP gold calculator (two-way: typed values in `B67:E72`, a contract each column - on a roll a typed price or forward follows its contract, `rowkeys.RowKeys.roll`) |
 | EK_VIOP | tto | VİOP contract history for charts |
 | EK_KAYNAK | tto | pricing-source order for OIS / offshore / XCCY (see [market-data.md](market-data.md#pricing-sources)) |
-| EK_BULK | tto | 100-row bulk forward table, two-way (Manuel TRY % / USDTRY fwd, puan / EURTRY fwd, puan; typed values in `Z:AC`, their rate `AD`); each row's Parite / Yön / Tutar / Karşı taraf (V..Y) for "İşleme al" (below, *Prices and rows as trades*) |
+| EK_BULK | tto | 100-row bulk forward table, two-way (Manuel TRY % / ON karşılık % (M: the row's TRY rate's O/N equivalent, the Forward calculators' ACT/360 one) / USDTRY fwd, puan / EURTRY fwd, puan; typed values in `Z:AC` and `AE` (the ON), their rate `AD`); each row's Parite / Yön / Tutar / Karşı taraf (V..Y) for "İşleme al" (below, *Prices and rows as trades*) |
 | EK_DIBS | tto | DİBS Trading: live T0/T1/T2 quotes, repo, "FX swap'a göre" fair values |
 | EK_EVREN | tto | Tüm Kâğıtlar (the service writes its rows) |
 | EK_CARRY | tto | carry along a chosen TLREF path |
@@ -523,8 +523,9 @@ Günlük İşlemler's entry is filled from other pages; nothing below saves a tr
   the header button (`"action": "toplu-islem"`, `view.js` → `blotterentry.js` `bookBulkForward`) → `GET
   /api/blotter/bulk/toplu-forward` (`Service.bulk_from_forward`: the user's EK_BULK rows read on the engine thread →
   `entry.bulk_forward_paste`: a tab-separated paste, a line per row with a Tutar, its price to the last digit - a USDTRY
-  fwd / puan typed in the two-way row: the outright (`bulk_forward_price`, the row's typed value its `anchor`) -, and a
-  "Satır" column the dialog does not read) → `openBulk(page, from)`: "Excel'den yapıştır" with its own preview
+  fwd / puan typed in the two-way row: the outright; an ON karşılık % typed: the TRY rate it gives (`bulk_forward_price`,
+  the row's typed value its `anchor`) -, and a "Satır" column the dialog does not read) → `openBulk(page, from)`:
+  "Excel'den yapıştır" with its own preview
   (`/api/blotter/bulk/preview`) and save (`/api/blotter/bulk`, one transaction) → the browser then resets the kept rows'
   Tutar cells (`/api/reset`, found by "Satır").
 

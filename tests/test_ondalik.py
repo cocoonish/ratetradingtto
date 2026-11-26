@@ -3,8 +3,9 @@ gözü. Bunları 2 decimala alalım. VİOP target kısmında da faiz seçtiğim 
 
 * the Forward page's pricing tables show their TRY rates with two decimals (``extras.TRY_PCT``): USDTRY / EURTRY FORWARD's
   TRY bid / mid / ask % and "Elle ayarı" mid, SERBEST FORWARD's minor %, TOPLU FORWARD's offshore / OIS / RET rates,
-  Manuel TRY % and İma TRY %, ÇAPRAZ FORWARD's İma TRY %.  How they read only: the value ("v", what Ctrl+Shift+C copies),
-  what is typed and every calculation keep every digit; the USD / EUR rates beside them keep theirs;
+  Manuel TRY %, ON karşılık % (26.11.2026) and İma TRY %, ÇAPRAZ FORWARD's İma TRY %.  How they read only: the value
+  ("v", what Ctrl+Shift+C copies), what is typed and every calculation keep every digit; the USD / EUR rates beside them
+  keep theirs;
 * VİOP Target's "Hedef değer" reads in the row's "Hedef tipi" - a rate with two decimals, a far price as the far limit
   reads (four), bp with one, typed or worked out - a number format chosen by another cell
   (``SheetBuilder.number_format_if``, drawn by ``Renderer.cell``); the desk strip (MASA!S121:S128) writes it the same way.
@@ -119,24 +120,27 @@ def test_a_try_rate_typed_keeps_every_digit(service):
 
 def test_free_forward_bulk_and_cross_show_their_try_rates_with_two_decimals(service):
     """SERBEST FORWARD's minor % (its major % - USD / EUR - as before), TOPLU FORWARD's offshore / OIS / RET rates, Manuel
-    TRY % (typed: every digit kept) and İma TRY % (its USD / EUR % as before), ÇAPRAZ FORWARD's İma TRY %."""
+    TRY % (typed: every digit kept), ON karşılık % (26.11.2026; worked out or typed) and İma TRY % (its USD / EUR % as
+    before), ÇAPRAZ FORWARD's İma TRY %."""
     u = service.login("ondalık toplu")["user"]
     try:
         put(service, u, {"EK_FWD!C68": "15.12.2026", "EK_BULK!B5": "15.01.2027", "EK_BULK!B6": "15.04.2027", "EK_BULK!L6": "36,1234",
-                         "Forward!C197": "USD"})
+                         "EK_BULK!B7": "15.06.2027", "Forward!C197": "USD"})
         put(service, u, {"EK_BULK!R5": typed(cell(service, "EK_BULK!N5", u) + 0.0123456),
-                         "Forward!R200": typed(cell(service, "Forward!I200", u) + 0.0123456)})
+                         "Forward!R200": typed(cell(service, "Forward!I200", u) + 0.0123456), "EK_BULK!M7": "33,123456"})
         free = rows_of(service, u, "forward", "FR3")
         reads(free, "G68", TWO)
         reads(free, "F68", FOUR)
         bulk = rows_of(service, u, "forward", "BK1")
-        for c in "DEFGHS":
+        for c in "DEFGHMS":
             x = reads(bulk, "%s5" % c, TWO)
             assert x["v"] == cell(service, "EK_BULK!%s5" % c, u)
         for c in "JK":
             assert re.match(r"^\d+,\d{3}$", bulk[(5, c)]["t"]), bulk[(5, c)]                # USD / EUR %: as they were
         l6 = reads(bulk, "L6", TWO)
         assert l6["t"] == "36,12" and l6["v"] == 36.1234
+        m7, l7 = reads(bulk, "M7", TWO), reads(bulk, "L7", TWO)                # (an ON typed; the rate it gives)
+        assert m7["t"] == "33,12" and m7["v"] == 33.123456 and l7["v"] != round(l7["v"], 2)
         cross = rows_of(service, u, "forward", "B36")
         s200 = reads(cross, "S200", TWO)
         assert s200["v"] == cell(service, "Forward!S200", u) and s200["v"] != round(s200["v"], 2)

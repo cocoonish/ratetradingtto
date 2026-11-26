@@ -356,6 +356,10 @@ The ways back of 24.11.2026 ([desk-decisions.md](desk-decisions.md#ways-back-rat
   for the same rate that O/N is 1.3–2.5 bp below TLREF's on the replay windows (the model's window rates read 1.3–2.5 bp
   under the model's TLREF). The market's step moved by −0.87 … +0.95 bp (replay, 03.11.2026; a step typed stays the step,
   a rate typed stays the rate - only what is worked out from them moves).
+- **Not the Forward page's O/N.** Its FX-implied TRY rates take the calculators' calendar-day ACT/360 O/N equivalent,
+  360·((1 + r·g/360)^(1/g) − 1) (`Forward!AH14`'s "ON Karşılık", `extras.on_equivalent` / `on_simple`): the
+  calculators, VİOP's gold calculator and TOPLU FORWARD's ON karşılık % (`EK_BULK!M`, g = the row's Gün; 26.11.2026).
+  TLREF's business-day one above is TRY OIS's (EK_PPK, Broker Chat); the two are never mixed.
 
 **USD (SOFR / FF OIS) - a FOMC window's rate → the step** (`SOFR_FOMC!AA:AE`): the window from a meeting's effective day
 to the next active meeting's (`F:H`); its rate simple **ACT/360** (İşlem 1's `E` = (exp(ln DF start − ln DF end) − 1)·36000 /

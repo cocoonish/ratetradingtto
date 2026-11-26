@@ -1658,7 +1658,8 @@ After FORWARD KOTASYON (above) the desk asked the same of every table:
 way back, `extras.implied_try`, shared with the tables' "elle" columns; the in-place member is the table's input from
 before, so what users typed there keeps its meaning):
 - **TOPLU FORWARD** (`EK_BULK` rows 5–104): Manuel TRY % (L, in place), USDTRY fwd / puan (N / O), EURTRY fwd / puan
-  (P / Q). Typed values in `Z:AC`, the TRY rate they give in `AD`.
+  (P / Q). Typed values in `Z:AC`, the TRY rate they give in `AD`. (Since 26.11.2026 also ON karşılık %, M, typed in
+  `AE`: *TOPLU FORWARD: ON karşılık* below.)
 - **USDTRY / EURTRY FORWARD**, the value-date tables (`EK_FWD` rows 47–51 / 58–62, the Elle rows too): per row and side
   the TRY % (B / D, in place), outright (E / G), puan (H / J) and P/gün (K / M). Typed values in `N:S`, rates in `T:U`.
 - **SERBEST FORWARD** (`EK_FWD` rows 68–77): minor % (G, in place), swap (H), forward (I). Typed in `Z:AA`, rate `AB`.
@@ -1898,6 +1899,55 @@ Code: `tto/decimals.py` (kept in `decimals.<user>`; put on each answer of a page
 `ui.js` (`menu`'s row of buttons), `pages/view.js` / `boxes.js` (the tables that offer it; another tab's panels whole after
 a change), `main.js` (the refresh, the word to the other tabs). Tests: `tests/test_decimals.py`, `tests/test_numfmt.py`,
 the browser test's "decimals: …".
+
+### TOPLU FORWARD: ON karşılık (26.11.2026)
+
+The desk:
+
+> "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum"
+
+**What was built** (TOPLU FORWARD FİYATLAMA, `EK_BULK` rows 5–104; the design settled by the integrator):
+- **A column "ON karşılık %"** in `M`, between Manuel TRY % (L) and USDTRY fwd (N) - the workbook's own header
+  `Forward!M143` is blank, and no input ever stood on `M5:M104` (the column was empty, so the page did not even draw it).
+  Per row it shows the O/N equivalent of **the TRY rate that prices the row**: `IF(ISNUMBER(L), L, G)` - Manuel TRY %
+  (typed, or the one a typed fwd / puan gives) else RET mid %, exactly the choice N's and P's formulas make.
+- **The formula is the Forward calculators' own "ON Karşılık"** (`Forward!AH14` = 360·((1 + AH10·AH7/360)^(1/AH7) − 1);
+  `extras.on_equivalent`, its inverse `on_simple`): ON = 360·((1 + TRY·g/360)^(1/g) − 1), **g = the row's Gün** (`C`:
+  value date − USDTRY spot `Forward!I2`; the calculator's VKGS counts the same days). The table's rates are in % (35,30),
+  the helpers work on decimals: /100 in, ×100 out. Check values: 120 days at 35,30 % → 33,3884 %; at 35,0135 % →
+  33,1317 %. Blank without a valör, as the row's other columns; a valör at the spot (Gün 0) has no ON - Excel's
+  `#DIV/0!`, as in the calculators.
+- **The Forward page's convention, not TLREF's.** The table's rates are FX-implied (offshore, RET, a forward's), so their
+  ON is the calculators' calendar-day ACT/360 one - not the business-day compounding of TLREF (`extras.overnight_bd`,
+  the MPC ima model's: OIS, EK_PPK, Broker Chat). The two are not mixed ([curves.md](curves.md#meeting-steps-from-a-rate)).
+- **Two decimals** (`TRY_PCT`, the 25.11 rule for the pricing tables' TRY rates); the value keeps every digit.
+- **Two-way** (the standing rule since 24.11.2026: "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay
+  çalışmamız için"): M is a member of the table's group `toplu-forward`, its typed value kept in a new hidden column `AE`
+  (`extras.BULK_TW_ON`, "Yazılan ON karşılık %"; the helper table BK2 is now `Z4:AE104`); `AD` stays the hub
+  ("Yazılandan TRY %"). An ON typed gives the row's TRY rate = ((1 + ON/360)^g − 1)·360/g into `AD`, so Manuel TRY %
+  (the in-place member) shows it and USDTRY fwd / puan and EURTRY fwd / puan follow - EURTRY on its own days: one TRY
+  rate prices both pairs, as before. The one typed last stands; Delete on any of the row's six members takes it back to
+  RET mid; typed back, a computed ON gives the same row (1e-9; the puan, 20 000–85 000 points, to 1e-11 relative - the
+  inverse raises (1 + ON/360) to the row's days, and that power rounds its last bits); a pasted column of ON rates is
+  each row's typed value.
+- **"İşleme al": an ON is no booking price.** A row whose typed value is its ON books, for USDTRY, the TRY rate the row
+  shows (L; the blotter prices the row's own USDTRY fwd from it, to the last bits), for EURTRY its EURTRY fwd as before;
+  the note says `TOPLU FORWARD · ON karşılık %` (`entry.BULK_FWD_SOURCES`). **M is not in BK1's `"trade"` `"cells"`**: a
+  right click on it offers no İşlem gir (the prefill refuses it, "fiyat değil", as RET mid %) - an O/N rate is no
+  forward's price, and the form's TRY rate is the period's simple rate.
+- **Nothing typed, every value as before.** Every value of `EK_BULK`, `Forward` and `EK_FWD` was compared cell for cell
+  with the commit before (5ed4eab), for the shared calculation and for a user with values typed the old way (valörs, a
+  Manuel TRY %, a USDTRY / EURTRY fwd and puan typed, both elle forwards, Parite / Yön / Tutar / Karşı taraf, an "Elle
+  değer" over N adopted): the only differences are the new column (`M4:M104`), the helper's header (`AE4`) and the
+  table's note (`B106`, one sentence on ON karşılık %). L's and AD's formulas name the new store, their values are
+  unchanged. No new Bloomberg request. The rows are the users' own valörs: no PPK / VİOP row move applies.
+- (A value an administrator typed over the empty `M` with "Elle değer" in the sheet explorer before - nothing read it -
+  would now be that row's typed ON, moved to `AE` once: the two-way tables' rule for a value kept at a member's cell.)
+
+Code: `tto/extras.py` (`BULK_ON`, `BULK_TW_ON`, `_tto_bulk_forward`; `on_equivalent`, `on_simple`),
+`tto/views/30_forward.json` (the group `toplu-forward`, its note; BK2), `tto/entry.py` (`BULK_FWD_SOURCES`). Tests:
+`tests/test_fwd_iki_yon.py`, `tests/test_toplu_islem.py`, `tests/test_ondalik.py`, `tests/test_tradehint.py`, the
+browser test's check "TOPLU FORWARD: ON karşılık % …".
 
 ## Process
 
