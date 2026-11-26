@@ -114,8 +114,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Forward iki yönlü tablolar", "EK_PPK", "FRA ikinci bacak",
                                                    "OIS · Nakit Akışı iki yönlü", "DİBS RV canlı kota", "EK_DIBS", "EK_EVREN",
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "DİBS RV ASW / DM'den fiyat",
-                                                   "DİBS RV switch seviyesinden fiyat", "Manuel Tahvil ISIN", "DİBS RV iki yönlü",
-                                                   "DİBS RV switch iki yönlü", "Manuel Tahvil iki yönlü", "EK_CARRY",
+                                                   "DİBS RV switch seviyesinden fiyat", "Manuel Tahvil ISIN", "TRY iş günü terimi",
+                                                   "DİBS RV iki yönlü", "DİBS RV switch iki yönlü", "Manuel Tahvil iki yönlü",
+                                                   "Tüm Kâğıtlar ON karşılık", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri",
                                                    "VİOP ON karşılık", "EK_IHALE",
                                                    "Boş başlayan girdiler", "Hesaplayıcıların piyasa varsayılanları",
@@ -126,7 +127,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    t.name for t in extras.TW_HUBS] + [extras.VT_NAME,
                                                    "EK_RET", "Eğri interpolasyonu", "Masa offshore 2Y sonrası"]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
-                                              "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK"} & set(sofr.sheet_index)
+                                              "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK", "EK_ISGUNU"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
     # the ASW sheet's curve laid out otherwise: EK_FX reads its node days and ln discount factors by their place
     asw = Model.load(os.path.join(root, "models", "asw.json.gz"))

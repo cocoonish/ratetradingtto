@@ -3615,6 +3615,35 @@ async function clipAfter(page, action) {
         && /^bayat · BGC · 3\d dk$/.test(rvStale.text[3]) && rvStale.text[4] === 'bayat' && rvStale.text[5] === '', rvStale);
       // (the limit stays the desk's 10 minutes: what follows reads the levels, a stale one shows its level too, greyed)
     }
+    // DİBS: getirinin ON karşılığı (the desk, 26.11.2026: "Bunların da hepsini yap") - a fixed coupon bond's or a bill's yield
+    // also as its O/N on TLREF's convention, right of the yield; at the price in use two-way
+    await fresh(page);
+    const onHead = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
+      const head = rows.find((r) => r.includes('BIST bileşik getiri')) || [];
+      return ['BIST bileşik getiri', 'Alış getiri (basit)', 'Satış getiri (basit)'].map((x) => head[head.indexOf(x) + 1]);
+    });
+    const onBill = await ktRow('tto', 'DİBS RV!A', 5, 'TRB100227T13');
+    const onB = { v: await ktV('tto', 'DİBS RV!BO' + onBill), t: (await cellText(page, 'DİBS RV!BO' + onBill)).trim(),
+      tlref: (await cellText(page, 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT090130T12'))).trim() };
+    check('DİBS RV: "ON karşılık %" right of the compound yield, "Alış ON %" / "Satış ON %" right of the bid / ask yields - a bill\'s '
+      + 'yield as its O/N on TLREF\'s convention (99 days, W 45: 29,88 %), none for a TLREF floater', onHead.join('|') === 'ON karşılık %|Alış ON %|Satış ON %'
+      && Math.abs(onB.v - 0.298844634) < 1e-8 && onB.t === '29,88%' && onB.tlref === '', { onHead, onB });
+    const onR = await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24');
+    const onMkt = { o: await ktV('tto', 'DİBS RV!O' + onR), s: (await cellText(page, 'DİBS RV!S' + onR)).trim() };
+    await typeInto(page, 'DİBS RV!BO' + onR, '34');
+    await twMarked('DİBS RV!BO' + onR);
+    await waitCell(page, 'DİBS RV!J' + onR, 't.trim() === "ON karşılığından (yazılan)"').catch(() => {});
+    const onTw = { bo: await twOne('DİBS RV!BO' + onR), v: await ktV('tto', 'DİBS RV!BO' + onR), n: await ktV('tto', 'DİBS RV!N' + onR),
+      j: (await cellText(page, 'DİBS RV!J' + onR)).trim(), mkt: onMkt };
+    await (await cellHandle(page, 'DİBS RV!S' + onR)).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'DİBS RV!S' + onR, 't.trim() === ' + JSON.stringify(onMkt.s)).catch(() => {});
+    onTw.after = { bo: await twOne('DİBS RV!BO' + onR), o: await ktV('tto', 'DİBS RV!O' + onR) };
+    check('DİBS RV: "ON karşılık %" is two-way - 34 typed stays (✎, 0,34), the manual clean price is the one it gives (below the market\'s: '
+      + 'a higher O/N), "Fiyat durumu" says so; Delete on the yield worked out from it: the market again',
+      onTw.bo.anchor && onTw.bo.t === '34,00%' && onTw.v === 0.34 && typeof onTw.n === 'number' && onTw.n < onMkt.o
+      && onTw.j === 'ON karşılığından (yazılan)' && !onTw.after.bo.anchor && onTw.after.o === onMkt.o, onTw);
     // a bond added from the catalog of the desk's list
     const rvIsins = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent).filter((t) => /^TR/.test(t || '')));
     const rvBefore = await rvIsins();
@@ -4033,6 +4062,8 @@ async function clipAfter(page, action) {
       /15\.03\.28 · TRT150328T24/.test(cardText) && /Sabit · kupon %36,80 · vade 15\.03\.2028/.test(cardText) && /T1 · ISL1/.test(cardText)
       && /Broker Chat · bugün/.test(cardText) && /BIST bileşik getiri/.test(cardText) && /Sinyal/.test(cardText) && /Bid boyutu/.test(cardText),
       cardText.slice(0, 300));
+    check('... the yield\'s O/N on TLREF\'s convention right after the compound yield (DİBS: getirinin ON karşılığı)',
+      /BIST bileşik getiri\d+,\d\d%ON karşılık %\d+,\d\d%/.test(cardText), cardText.slice(0, 600));
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
     await open(page, 'dibs');
@@ -4050,6 +4081,16 @@ async function clipAfter(page, action) {
     });
     check('Tüm Kâğıtlar: the 77 bonds of the desk\'s list kind by kind (TLREF and FRN apart), the ones on the trading list starred',
       uni.bonds === 77 && uni.captions.length === 6 && uni.captions.includes('FRN · 9 kâğıt') && uni.stars >= 19 && uni.stars + uni.open === 77, uni);
+    const uniOn = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
+      const head = rows.find((r) => r.includes('Getiri % (RV)')) || [];
+      const at = head.indexOf('Getiri % (RV)');
+      const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
+      return { next: head[at + 1], on: bond[at + 1], off: (rows.find((r) => r[0] === 'TRT280432T14') || [])[at + 1] };
+    });
+    uniOn.rv = await ktT('tto', 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24'));
+    check('Tüm Kâğıtlar: "ON karşılık % (RV)" right of "Getiri % (RV)" - DİBS RV\'s O/N of a trading list bond, none off the list',
+      uniOn.next === 'ON karşılık % (RV)' && /^\d+,\d\d%$/.test(uniOn.on) && uniOn.on === uniOn.rv && uniOn.off === '', uniOn);
     const flagOf = (panel, isin) => '.panel[data-panel="' + panel + '"] table.grid td.flag[title$="' + isin + '"]';
     await page.click(flagOf('U1', 'TRT130127T11'));
     await page.waitForFunction((sel) => { const td = document.querySelector(sel); return td && td.classList.contains('on'); }, flagOf('U1', 'TRT130127T11'), { timeout: 20000 });
@@ -4078,6 +4119,11 @@ async function clipAfter(page, action) {
     const fairTip = await page.evaluate((i) => { const tr = [...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
       .find((x) => x.children[2] && x.children[2].textContent === 'TRT150328T24'); return tr ? tr.children[i].title : ''; }, fairAt);
     check('... a fair value says how it is made', /OIS ASW eğrisi/.test(fairTip) && /annuity/.test(fairTip), fairTip);
+    const onAt = capRow.indexOf('ON karşılık %');
+    const onRv = await ktT('tto', 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24'));
+    check('DİBS Trading: "ON karşılık %" right of "Getiri %" in "OIS\'e göre" - DİBS RV\'s O/N of the bond\'s yield (DİBS: getirinin ON karşılığı)',
+      onAt > 0 && onAt === capRow.indexOf('Getiri %') + 1 && /^\d+,\d\d%$/.test(mar28[onAt]) && mar28[onAt] === onRv,
+      { onAt, caps: capRow.slice(9, 14), mar28: mar28[onAt], onRv });
     // "+ ISIN ekle" on DİBS Trading: the bond goes onto the DİBS ASW list too (the toast says so); ★ takes it off both
     await page.click('.panel[data-panel="L1"] button[data-action="add-isin"]');
     await page.fill('#isin-text', 'TRT190128T14');
@@ -4139,6 +4185,15 @@ async function clipAfter(page, action) {
       && genelSeen.yieldPt <= gData.chart.series[0].x.length
       && genelSeen.oisMk === dgMarks(mirrors.panels.asw_ois.entry.data) && genelSeen.fxMk === dgMarks(mirrors.panels.asw_fx.entry.data) && genelSeen.fxMk > 10,
     { genelSeen, want: [dgMarks(gData.chart), dgMarks(mirrors.panels.asw_ois.entry.data), dgMarks(mirrors.panels.asw_fx.entry.data)] });
+    const genelOn = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('#dg-grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
+      const head = rows.find((r) => r.includes('Basit %')) || [];
+      const bond = rows.find((r) => r[1] === 'TRT150328T24') || [];
+      return { next: head[head.indexOf('Basit %') + 1], on: bond[head.indexOf('ON karşılık %')] };
+    });
+    genelOn.rv = await ktT('tto', 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24'));
+    check('... its "Getiri" group: the yield\'s O/N on TLREF\'s convention after the compound and the simple yield (DİBS: getirinin ON karşılığı)',
+      genelOn.next === 'ON karşılık %' && /^\d+,\d\d%$/.test(genelOn.on) && genelOn.on === genelOn.rv, genelOn);
     // a setting shown on Genel opens in the RV hesap tablosu, its cell selected; a tab of the entry opens the sheet's page
     const selectedRef = () => page.evaluate(() => { const td = document.querySelector('#content table.grid td.cur'); const g = td && td.closest('table').__grid;
       return g ? g.ref(td.__i, td.__j) : null; });

@@ -138,14 +138,15 @@
    "id": "dibs-rv",
    "sheet": "DİBS RV",
    "label": "DİBS göreli değer",
-   "note": "İki yönlü: Manuel temiz, BIST basit / bileşik getiri, getiri − OIS, ASW / DM ve Z-spread - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; DİBS RV'nin TRY OIS eğrisiyle: ASW sabit kuponlu ve bonoda, DM TLREF'lide; silince satır piyasaya döner). Yazılan getiri ya da spread kâğıda varsayımsal bir temiz fiyat verir: eğri oynadıkça o fiyat da oynar, yazılan değer aynen kalır - ve hesabınızda kâğıdın fiyatını okuyan her yer onu kullanır (eğri uyumu ve sinyaller, switch bacakları, DİBS Trading, Manuel Tahvil'in ISIN fiyatı, Kâğıt Fiyatlama, DİBS RV · Genel). Fiyatı olmayan kâğıtta da çalışır; kâğıdın olmayan bir değeri (TLREF'lide getiri, TÜFE'lide ASW, FRN'de spread) fiyat vermez - Fiyat durumu söyler. Repo ile carry de iki yönlüdür: carry yazılınca gereken repo hesaplanır. Kişiseldir; kâğıt listede yer değiştirince kâğıdıyla gider.",
+   "note": "İki yönlü: Manuel temiz, BIST basit / bileşik getiri, getiri − OIS, ASW / DM, Z-spread ve ON karşılık - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; DİBS RV'nin TRY OIS eğrisiyle: ASW sabit kuponlu ve bonoda, DM TLREF'lide; ON karşılık TLREF'in kuralıyla - iş günlerinde bileşik, valörden vadeye -, getiriye geri çevrilir; silince satır piyasaya döner). Yazılan getiri ya da spread kâğıda varsayımsal bir temiz fiyat verir: eğri oynadıkça o fiyat da oynar, yazılan değer aynen kalır - ve hesabınızda kâğıdın fiyatını okuyan her yer onu kullanır (eğri uyumu ve sinyaller, switch bacakları, DİBS Trading, Manuel Tahvil'in ISIN fiyatı, Kâğıt Fiyatlama, DİBS RV · Genel). Fiyatı olmayan kâğıtta da çalışır; kâğıdın olmayan bir değeri (TLREF'lide getiri ya da ON, TÜFE'lide ASW ya da ON, FRN'de spread) fiyat vermez - Fiyat durumu söyler. Repo ile carry de iki yönlüdür: carry yazılınca gereken repo hesaplanır. Kişiseldir; kâğıt listede yer değiştirince kâğıdıyla gider.",
    "members": [
     {"name": "Manuel temiz", "range": "N5:N54"},
     {"name": "BIST basit getiri", "range": "S5:S54", "store": "YF5:YF54"},
     {"name": "BIST bileşik getiri", "range": "T5:T54", "store": "YG5:YG54"},
     {"name": "Getiri − OIS", "range": "Y5:Y54", "store": "YH5:YH54"},
     {"name": "ASW / DM", "range": "Z5:Z54", "store": "YI5:YI54"},
-    {"name": "Z-spread", "range": "AF5:AF54", "store": "YJ5:YJ54"}
+    {"name": "Z-spread", "range": "AF5:AF54", "store": "YJ5:YJ54"},
+    {"name": "ON karşılık", "range": "BO5:BO54", "store": "YQ5:YQ54"}
    ]
   },
   {
@@ -204,9 +205,12 @@
    "id": "B3",
    "type": "table",
    "title": "DİBS göreli değer tablosu",
-   "range": "A4:BJ54",
+   "range": "A4:BQ54",
+   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "BO", "U", "BP", "V", "BQ",
+            "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR",
+            "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH", "BI", "BJ"],
    "hidden": false,
-   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ.",
+   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ. ON karşılık % (getirinin yanında; Alış / Satış ON % alış / satış getirisinin yanında): getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde bileşik (ACT/365; hafta sonu ya da tatilde son iş gününün faizi aradaki günler için tek adımda), TLREF ve repoyla doğrudan karşılaştırılır. Getiri önce kendi kuralıyla pencerenin büyümesine çevrilir (bono: basit ACT/365, 100 / fiyat; sabit kuponlu: BIST getirisi, yılda kupon sayısı kadar bileşik, vadeye kalan dönem kadar), sonra o büyümeyi veren ON'a. Sabit kuponlu ve bonoda; TLREF'li, FRN ve TÜFE'lide boş.",
    "action": "add-isin",
    "add": {
     "list": "A5:A54",
@@ -346,6 +350,23 @@
    "type": "table",
    "title": "Yardımcı · iki yönlü: satırda yazılan getiri, spread ve carry, satırın fiyatını veren, elle fiyattaki Z-spread ve getiri",
    "range": "YF3:YP54",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "on",
+   "type": "table",
+   "title": "Yardımcı · ON karşılık: yazılan ON, pencerenin günü, kuponlunun dönemi, hafta sonu / tatil terimi W, getirilerin ln G'si",
+   "range": "YQ3:YW54",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "isg",
+   "type": "table",
+   "sheet": "EK_ISGUNU",
+   "title": "Yardımcı · TRY iş günü terimi: Motor'un günlük takviminin ötesindeki vadeler için TRY tatil listesinin parçaları (ON karşılık)",
+   "range": "A1:C167",
    "hidden": true,
    "keep_title": true
   }

@@ -5389,9 +5389,10 @@ class Service(object):
 
     def _universe_quote_marks(self, book, calc, si: int, rows, rnums, cols: List[str], loc) -> None:
         """Tüm Kâğıtlar: each bond's bid / ask ("–" where no order stands, the size of a live one in the tip) and,
-        for a bond on the trading list whose price there is no live quote, DİBS RV's yield, ASW and signal soft."""
+        for a bond on the trading list whose price there is no live quote, DİBS RV's yield, its O/N equivalent, ASW and signal
+        soft."""
         rv = book.model.sheet_index.get("DİBS RV")
-        soft = [index_to_col(ex._col("N") + k) for k, (col, _, _) in enumerate(ex.UNI_RV) if col != "AI"]     # not DV01
+        soft = [index_to_col(ex._col("N") + k) for k, (col, _, _) in enumerate(ex.UNI_RV) if col != "AI"] + [ex.UNI_ON[0]]   # not DV01
         sides = [(vis, size, raw, side) for vis, size, raw, side in (("I", ex.UNI_SIZE[0], "V", "bid"), ("J", ex.UNI_SIZE[1], "W", "ask"))
                  if vis in cols]
         for i, r in enumerate(rnums):
@@ -5450,6 +5451,8 @@ class Service(object):
     USD_DV01 = 1000.0
     USD_DV01_STEP = 5e6
     USD_DV01_HEAD = "1.000$ DV01 nominal"
+    #: the trading summary's column of the yield's O/N equivalent (DİBS RV's BO; the desk, 26.11.2026), beside the yield
+    ON_HEAD = "ON karşılık %"
 
     @staticmethod
     def _usdtry_mid(book: Book, calc) -> Optional[float]:
@@ -5481,7 +5484,7 @@ class Service(object):
         from . import rvfair
         board = len(self._BOARD_HEADS)
         old = {k: index_to_col(k + 1) for k in range(19 + board + 1)}          # A .. S, the board, Kart
-        new = [index_to_col(20 + board + 1 + k) for k in range(7)]
+        new = [index_to_col(20 + board + 1 + k) for k in range(8)]             # (the yield's O/N equivalent the 8th: 26.11.2026)
         fair = ("Kâğıdın ASW'si DİBS RV'nin %s ASW eğrisinde (a + b·t + c·t², sabit kuponlulara uydurulan) dursaydı %s: kirli "
                 "@spot = PV@%s − eğri ASW × annuity / 100, valöre fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi "
                 "BIST bileşik. Bono eğriye girmez: eğrinin kâğıdın vadesindeki değeri. TLREF / FRN / TÜFE: yok (nedeni üzerinde)")
@@ -5499,6 +5502,9 @@ class Service(object):
                        ("Son işlem", old[8], "Son işlem fiyatı (DİBS RV)"),
                        ("Ne zaman", old[9], "Son işlemin günü; canlıda dashboard'un işlemi gördüğü saat")]),
             ("OIS'e göre", [("Getiri %", old[10], "DİBS RV: BIST bileşik getiri (kullanılan temiz fiyattan)"),
+                            (self.ON_HEAD, new[7], "DİBS RV: getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş "
+                                                   "günlerinde bileşik (ACT/365; hafta sonu / tatilde son iş gününün faizi aradaki "
+                                                   "günler için tek adımda), TLREF ve repoyla karşılaştırılır · sabit kuponlu ve bono"),
                             ("ASW / DM", old[11], "DİBS RV: TLREF OIS eğrisine göre ASW (bp; sabit kuponlu, bono) · TLREF'e endeksli kâğıtta DM"),
                             ("Adil getiri %", new[0], fair % ("OIS", "getirisi", "OIS")),
                             ("Adil fiyat", new[1], fair % ("OIS", "valördeki temiz fiyatı", "OIS")),
@@ -5666,7 +5672,7 @@ class Service(object):
             # quote stands behind it
             f = rvfair.fair(calc, si, r, fits, fx)
             fx_own, _, fx_rich, fx_signal = self._fx_cells(f["fx"], threshold, loc)
-            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"))}
+            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"), ("on", ex.RV_ON[0][0]))}
             priced.update({"fx": fx_own, "fx_rich": fx_rich, "fx_signal": fx_signal})
             priced["N"] = dict(priced["N"], b=1)
             if q["stale"]:
@@ -5683,9 +5689,10 @@ class Service(object):
                   "O": cell("AG", r), "P": cell("AI", r),
                   "Q": self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
                   "R": cell("AO", r), "S": self._repo_cell(cell, live, r)}
-            ois_keys = [key for _, key, _ in groups[2][1]]
+            ois_keys = {cap: key for cap, key, _ in groups[2][1]}
             fx_keys = [key for _, key, _ in groups[3][1]]
-            by.update({ois_keys[2]: ois_y, ois_keys[3]: ois_p, fx_keys[0]: priced["fx"], fx_keys[1]: fx_y, fx_keys[2]: fx_p,
+            by.update({ois_keys[self.ON_HEAD]: priced["on"], ois_keys["Adil getiri %"]: ois_y, ois_keys["Adil fiyat"]: ois_p,
+                       fx_keys[0]: priced["fx"], fx_keys[1]: fx_y, fx_keys[2]: fx_p,
                        fx_keys[3]: priced["fx_rich"], fx_keys[4]: priced["fx_signal"]})
             board = self._bond_cells(said.get(code), loc)
             for (_, key, _), c in zip(groups[6][1], board):
@@ -7125,8 +7132,9 @@ class Service(object):
 
     # ================================================================== live quotes: the sizes of the orders
     #: DİBS RV's columns worked out of the clean price in use (their headers start so): soft while no live quote
-    #: stands behind that price
-    _RV_PRICED = ("BIST basit getiri", "BIST bileşik getiri", "Getiri − OIS", "ASW (S/B)", "Pahalı/ucuz", "Sinyal", "ASW FX")
+    #: stands behind that price (the yield's O/N equivalent too, 26.11.2026)
+    _RV_PRICED = ("BIST basit getiri", "BIST bileşik getiri", "Getiri − OIS", "ASW (S/B)", "Pahalı/ucuz", "Sinyal", "ASW FX",
+                  "ON karşılık")
 
     @staticmethod
     def _rv_quote(calc, si: int, r: int) -> Dict[str, Any]:
@@ -7346,7 +7354,8 @@ class Service(object):
                 sh = book.model.sheets[si]
                 want = ("Tip", "Kupon", "Fiyat durumu", "Kullanılan temiz", "Valör", "Kirli", "BIST bileşik getiri", "Alış−satış",
                         "Getiri − OIS", "ASW (S/B)", "Uydurulmuş ASW (bp)", "Pahalı/ucuz (bp", "Sinyal",
-                        "Mod. süre", "DV01 TL", "C+R (bp)", "Son işlem tarihi", "Son işlem fiyatı", "Bugün düşük", "Bugün yüksek")
+                        "Mod. süre", "DV01 TL", "C+R (bp)", "Son işlem tarihi", "Son işlem fiyatı", "Bugün düşük", "Bugün yüksek",
+                        "ON karşılık")
                 # (DİBS RV's own FX columns are on the offshore ICAP curve: the card's FX swap figures are DİBS ASW's, below)
                 rv_fx = ("ASW FX", "Uydurulmuş ASW FX", "Pahalı/ucuz FX", "Sinyal FX")
                 q = self._rv_quote(calc, si, info["row"])
@@ -7359,6 +7368,12 @@ class Service(object):
                             if q["stale"] and cap.strip().startswith(self._RV_PRICED):      # worked out of no live quote
                                 item.update(soft=True, tip=q["tip"])
                             out["rv"].append(item)
+                # (the yield's O/N equivalent - a column of its own right of the table - beside the yield, as the page shows it)
+                on = next((x for x in out["rv"] if x["name"].startswith("ON karşılık")), None)
+                if on is not None:
+                    out["rv"].remove(on)
+                    at = next((k + 1 for k, x in enumerate(out["rv"]) if x["name"].startswith("BIST bileşik getiri")), len(out["rv"]))
+                    out["rv"].insert(at, on)
                 # the fair yield and price on each fitted ASW curve and the bond's FX swap figures (DİBS ASW, on the FX swap
                 # implied curve) - as the trading summary has them - after the OIS curve's own figures
                 from . import rvfair
@@ -9701,7 +9716,9 @@ def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:
     table does not have - left out as empty, hidden - is skipped, one not named is not shown).  Every cell keeps its
     column letter, so an input is still typed into its own cell.  A span across columns (a merged cell: ÇAPRAZ FORWARD's
     "Yöntem" row) keeps the columns it covered that still follow it, in their order; a cell it covered that it no longer
-    reaches is a cell of its own again (empty) - so a row keeps all of its columns."""
+    reaches is a cell of its own again (empty) - so a row keeps all of its columns.  The columns Excel keeps in view
+    (``fz``) stay so when the order keeps them all first, in their place (DİBS RV's ISIN, source and name with its O/N
+    columns beside the yields); otherwise none."""
     have = data.get("c") or []
     order = [have.index(c) for c in cols if c in have]
     if not order or order == list(range(len(have))):
@@ -9726,7 +9743,9 @@ def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:
                         rows[ii][jj].pop("sk", None)
     data["rows"] = [[row[j] for j in order] for row in rows]
     data["c"] = [have[j] for j in order]
-    data.pop("fz", None)                         # (frozen columns counted the sheet's order)
+    fz = data.pop("fz", None)                    # (frozen columns counted the sheet's order)
+    if fz and order[:fz] == list(range(fz)) and fz < len(order):
+        data["fz"] = fz
 
 
 _ASCII_TR = str.maketrans("çğıöşüÇĞİÖŞÜâîû", "cgiosuCGIOSUaiu")

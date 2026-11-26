@@ -292,23 +292,43 @@ def overnight_back(on: str, days: str, basis: int = 360) -> str:
     return "((1+%(o)s/%(b)d)^%(d)s-1)*%(b)d/%(d)s" % {"o": on, "d": days, "b": basis}
 
 
+def _bd_steps(lng: str, days: str, term: str) -> str:
+    """x = O/N / 365 of a window whose growth G (what 1 grows to over it) has the log ``lng``, TLREF compounding on
+    business days: ln(1 + x) = (ln G + term·x²) / days in :data:`tto.ppkcurve.ON_STEPS` steps from the calendar day's
+    answer (term 0) - :func:`tto.ppkcurve.window_overnight`'s, one for one."""
+    x = "(EXP(%s/%s)-1)" % (lng, days)
+    for _ in range(pk.ON_STEPS - 1):
+        x = "(EXP((%s+%s*%s^2)/%s)-1)" % (lng, term, x, days)
+    return x
+
+
 def overnight_bd(rate: str, days: str, term: str) -> str:
     """The overnight rate of a TRY OIS window's simple ACT/365 rate ``rate`` as TLREF compounds - on business days, the
     window's weekend / holiday term ``term`` (Motor's Pcum at its end − at its start) - the MPC ima model's convention
     (:mod:`tto.ppkcurve`, "TLREF over a window"): :func:`tto.ppkcurve.window_overnight`'s steps, one for one, so the page
     and Broker Chat (which calls that function) give the same number."""
-    lr = "LN(1+%s*%s/365)" % (rate, days)
-    x = "(EXP(%s/%s)-1)" % (lr, days)
-    for _ in range(pk.ON_STEPS - 1):
-        x = "(EXP((%s+%s*%s^2)/%s)-1)" % (lr, term, x, days)
+    x = _bd_steps("LN(1+%s*%s/365)" % (rate, days), days, term)
     return 'IF(AND(ISNUMBER(%(r)s),ISNUMBER(%(d)s),N(%(d)s)>0),365*%(x)s,"")' % {"r": rate, "d": days, "x": x}
+
+
+def overnight_bd_growth(lng: str, days: str, term: str) -> str:
+    """The overnight rate (a fraction, ACT/365) that, compounded as TLREF compounds over a window of ``days`` calendar days
+    with the weekend / holiday term ``term``, grows 1 to EXP(``lng``) - :func:`overnight_bd` for a growth given in any
+    convention (a bond's yield: :func:`bond_growth`); no guard: the caller's."""
+    return "365*" + _bd_steps(lng, days, term)
+
+
+def growth_bd(on: str, days: str, term: str) -> str:
+    """ln G of a window at the overnight rate ``on`` compounded on business days: d·LN(1 + on/365) − term·(on/365)²
+    (:func:`tto.ppkcurve.growth`) - :func:`overnight_bd_growth`'s exact inverse."""
+    return "%(d)s*LN(1+%(o)s/365)-%(t)s*(%(o)s/365)^2" % {"o": on, "d": days, "t": term}
 
 
 def overnight_bd_back(on: str, days: str, term: str) -> str:
     """:func:`overnight_bd`'s exact inverse (no guard: the caller's): the window's simple ACT/365 rate at the overnight
     rate ``on`` - (EXP(d·LN(1 + on/365) − term·(on/365)²) − 1)·365/d, OIS_MAIN!BJ's formula
     (:func:`tto.ppkcurve.window_rate`)."""
-    return "(EXP(%(d)s*LN(1+%(o)s/365)-%(t)s*(%(o)s/365)^2)-1)*365/%(d)s" % {"o": on, "d": days, "t": term}
+    return "(EXP(%s)-1)*365/%s" % (growth_bd(on, days, term), days)
 
 
 # ---------------------------------------------------------------------------------------------- Borsa swap
@@ -3818,6 +3838,175 @@ def _manuel_isin(model: Model) -> None:
               like="H%d" % r)
 
 
+# ---------------------------------------------------------------------------------------------- a bond's yield as an O/N rate
+# The desk, 26.11.2026 - asked "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun
+# gibi başka önerin olur mu", then of the list of such additions (among them: each DİBS yield also as its ON equivalent on
+# TLREF's convention, so it compares directly with TLREF and repo): "Bunların da hepsini yap".  A fixed coupon bond's or
+# a bill's yield is turned into the growth of its window - valör to maturity - in the yield's own convention (a bill's
+# simple ACT/365, 100 / P; a coupon bond's BIST yield compounded CU times a year over the periods its own sum counts to
+# the maturity), then into the overnight rate that grows 1 the same over that window as TLREF compounds (the desk's "B"
+# of 25.11.2026: on business days, ACT/365, the window's weekend / holiday term W - :func:`overnight_bd_growth`).
+
+#: Motor's daily calendar: day 0 (the OIS spot, OIS_MAIN!B2) … PCUM_DAYS, its Pcum (Σ of p, the days since the last
+#: business day) in F528:F4228 - the MPC ima model's term (Motor!J reads it at the meetings)
+PCUM_DAYS = pk.PCUM_ROWS[1] - pk.PCUM_ROWS[0]
+PCUM = "Motor!$F$%d:$F$%d" % pk.PCUM_ROWS
+#: EK_ISGUNU: the TRY holiday list's own pieces of the term, for the days past Motor's calendar (a bond maturing more
+#: than PCUM_DAYS days after the OIS spot): each row of the list (Motor!A361:A523) - a week-day holiday, listed for the
+#: first time; its p (the days since the business day before it); that p again where it is a Friday (the Saturday and
+#: the Sunday after it add it to their own 1 and 2)
+ISG_SHEET = "EK_ISGUNU"
+ISG_NAME = "TRY iş günü terimi"
+ISG_FIRST = 5
+ISG_LAST = ISG_FIRST + TRY_HOLIDAY_ROWS[1] - TRY_HOLIDAY_ROWS[0]
+ISG_COLS = ("A", "B", "C")
+
+
+def _isg(col: str) -> str:
+    return "%s!$%s$%d:$%s$%d" % (ISG_SHEET, col, ISG_FIRST, col, ISG_LAST)
+
+
+def try_term(a: str, t: str) -> str:
+    """A formula's text: TLREF's weekend / holiday term W = Σ g(g − 1)/2 of the window from day ``a`` to day ``t`` (date
+    serials; ``a`` no later than the OIS spot - a settlement: today or the spot) on the desk's TRY list - Σ of p(u) over
+    its days u, p the days since the last business day:
+
+    * from the OIS spot (OIS_MAIN!B2, Motor's day 0) on: Motor's daily calendar, its Pcum at ``t`` − at ``a`` - the term the
+      MPC ima model reads (``ppk_term``, Motor!J);
+    * before the spot (a T+0 valör: ``a`` is today): the days from ``a`` to the spot are no business days but ``a`` itself
+      (the spot is the next one), so (spot − a)·p(a) + (spot − a)(spot − a − 1)/2, p(a) = a − its last business day;
+    * past the calendar's last day E (spot + PCUM_DAYS): from the TRY list itself (EK_ISGUNU) - Saturdays (serial ≡ 0
+      mod 7) count 1, Sundays 2, a week-day holiday its own p, a Friday holiday's p once more on the Saturday and the
+      Sunday after it: #Sat + 2·#Sun + Σ p(holiday) + Σ p(Friday holiday) twice, over the days of [E, t)."""
+    hol = TRY_HOLIDAYS
+    f = {"a": a, "t": t, "sp": "OIS_MAIN!$B$2", "F": PCUM, "n": PCUM_DAYS, "hol": hol,
+         "h": _isg(ISG_COLS[0]), "p": _isg(ISG_COLS[1]), "fr": _isg(ISG_COLS[2])}
+    f["e"] = "({sp}+{n})".format(**f)
+    pre = "IF({a}<{sp},({sp}-{a})*({a}-WORKDAY({a}+1,-1,{hol}))+({sp}-{a})*({sp}-{a}-1)/2,0)".format(**f)
+    core = "INDEX({F},MIN(MAX({t}-{sp},0),{n})+1)-INDEX({F},MIN(MAX({a}-{sp},0),{n})+1)".format(**f)
+    past = ('IF({t}>{e},INT(({t}-1)/7)-INT(({e}-1)/7)+2*(INT(({t}-2)/7)-INT(({e}-2)/7))+SUMIFS({p},{h},">="&{e},{h},"<"&{t})'
+            '+SUMIFS({fr},{h},">="&({e}-1),{h},"<"&({t}-1))+SUMIFS({fr},{h},">="&({e}-2),{h},"<"&({t}-2)),0)').format(**f)
+    return "(%s+%s+%s)" % (pre, core, past)
+
+
+def _isg_check(model: Model) -> None:
+    """Motor's daily calendar as the term reads it (day 0 the OIS spot, Pcum 0 there, a day's Pcum the one before + its p,
+    PCUM_DAYS its last day) and the TRY list the holidays come from."""
+    _need_sheets(model, "Motor", "OIS_MAIN")
+    sh = model.sheet("Motor")
+    h1, h2 = TRY_HOLIDAY_ROWS
+    if not any(type(sh.consts.get(parse_a1("A%d" % r))) is float for r in range(h1, h2 + 1)):
+        raise ValueError("Motor!A%d:A%d tatil listesi değil" % (h1, h2))
+    r0, r1 = pk.PCUM_ROWS
+    if sh.consts.get(parse_a1("F%d" % r0)) != 0.0 or sh.consts.get(parse_a1("A%d" % r1)) != float(PCUM_DAYS):
+        raise ValueError("Motor!F%d / A%d günlük takvim değil" % (r0, r1))
+    for r in (r0 + 1, r1):
+        _need_exact(model, "Motor", "F%d" % r, "F%d+E%d" % (r - 1, r - 1))
+    _need_exact(model, "Motor", "B%d" % r0, "OIS_MAIN!$B$2+A%d" % r0)
+    if ISG_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % ISG_SHEET)
+
+
+def _tto_isgunu(model: Model) -> None:
+    """``EK_ISGUNU``: the TRY holiday list's pieces of TLREF's weekend / holiday term, for the windows longer than Motor's
+    daily calendar (:func:`try_term`)."""
+    b = SheetBuilder(model, ISG_SHEET)
+    t1, _ = TRY_HOLIDAY_ROWS
+    b.title("A1", "TRY İŞ GÜNÜ TERİMİ  ·  TLREF iş günlerinde bileşik: pencerenin hafta sonu / tatil terimi W = Σ g(g−1)/2")
+    b.note("A2", "Motor'un günlük takvimi (OIS spot + %d gün) içinde W oradan (Pcum) okunur; daha uzun bir pencerenin takvimin ötesi "
+                 "TRY tatil listesinden (Motor!A361:A523): cumartesi 1, pazar 2, hafta içi bir tatil kendi p'si (son iş gününden gün), "
+                 "cuma tatilinin p'si cumartesi ve pazara bir kez daha." % PCUM_DAYS)
+    b.head("A4", ["Tatil (hafta içi, listede ilk kez)", "p (son iş gününden gün)", "Cuma ise p (cumartesi ve pazara)"])
+    h, p, fr = ISG_COLS
+    for k in range(ISG_LAST - ISG_FIRST + 1):
+        r, m = ISG_FIRST + k, "Motor!$A$%d" % (t1 + k)
+        b.set("%s%d" % (h, r), '=IF(AND(ISNUMBER({m}),WEEKDAY({m},2)<=5,COUNTIF(Motor!$A${t1}:$A${mr},{m})=1),{m},"")'.format(
+            m=m, t1=t1, mr=t1 + k), fmt=DATE)
+        b.set("%s%d" % (p, r), "=IF(ISNUMBER(${h}{r}),${h}{r}-WORKDAY(${h}{r},-1,{hol}),0)".format(h=h, r=r, hol=TRY_HOLIDAYS),
+              fmt=INT0)
+        b.set("%s%d" % (fr, r), "=IF(AND(ISNUMBER(${h}{r}),WEEKDAY(${h}{r},2)=5),${p}{r},0)".format(h=h, p=p, r=r), fmt=INT0)
+
+
+#: DİBS RV: the O/N equivalents beside the yields - (column, its yield, caption): of the price in use (beside S / T; a
+#: member of the bonds' two-way table, kept in RV_ON_STORE when typed), of the bid and of the ask (beside U / V)
+RV_ON = (("BO", "S", "ON karşılık %"), ("BP", "U", "Alış ON %"), ("BQ", "V", "Satış ON %"))
+RV_ON_STORE = "YQ"
+#: their helpers on the row: the days valör -> maturity, a coupon bond's periods to the maturity in its yield's own sum,
+#: the window's weekend / holiday term W, ln G of each yield (RV_ON's order)
+RV_ON_DAYS, RV_ON_PERIODS, RV_ON_TERM = "YR", "YS", "YT"
+RV_ON_GROWTH = ("YU", "YV", "YW")
+
+
+def bond_growth(y: str, r: int) -> str:
+    """A formula's text: ln G of DİBS RV row ``r``'s window, valör (DC) to maturity (CT), at the BIST simple yield ``y``
+    in the yield's own convention - a bill's / zero coupon bond's simple ACT/365, LN(1 + y · days / 365) (its 100 / P);
+    a fixed coupon bond's compounded CU times a year, periods · LN(1 + y / CU), the periods its maturity's in the
+    yield's own sum Σ CF · (1 + y / f)^−x (LV:MS: the current period's fraction left, then whole periods)."""
+    return 'IF(CR{r}="B",LN(1+({y})*${d}{r}/365),${n}{r}*LN(1+({y})/CU{r}))'.format(y=y, r=r, d=RV_ON_DAYS, n=RV_ON_PERIODS)
+
+
+def bond_yield(g: str, r: int) -> str:
+    """:func:`bond_growth`'s exact inverse: the BIST simple yield of row ``r`` whose window grows by EXP(``g``)."""
+    return 'IF(CR{r}="B",(EXP({g})-1)*365/${d}{r},CU{r}*(EXP(({g})/${n}{r})-1))'.format(g=g, r=r, d=RV_ON_DAYS, n=RV_ON_PERIODS)
+
+
+def _rv_on_check(model: Model) -> None:
+    """The cells the O/N equivalents take on DİBS RV are free, the term's sheet is there; what they read is the yields'
+    (S, U, V), the valör, the maturity and the yield's sum (DX's LV:MS, DO)."""
+    _need_sheets(model, ISG_SHEET)
+    _need_captions(model, (("DİBS RV", "S4", "BIST basit getiri"), ("DİBS RV", "U4", "Alış getiri (basit)"),
+                           ("DİBS RV", "V4", "Satış getiri (basit)"), ("DİBS RV", "P4", "Valör"), ("DİBS RV", "E4", "Vade")))
+    for r in (RV_LIST[0], RV_LIST[1]):
+        for col, text in (("U", "FJ{r}"), ("V", "FL{r}"), ("P", "DC{r}"), ("E", "CT{r}"), ("LV", "0+DS{r}"),
+                          ("DC", 'IF(BS{r}="ISL0",TODAY(),WORKDAY(TODAY(),1,Motor!$A$361:$A$523))')):
+            _need_formula(model, "DİBS RV", "%s%d" % (col, r), text.format(r=r))
+    _need_empty(model, "DİBS RV", "%s1:%s%d" % (RV_ON[0][0], RV_ON[-1][0], RV_LIST[1] + 6))
+    _need_empty(model, "DİBS RV", "%s3:%s%d" % (RV_ON_STORE, RV_ON_GROWTH[-1], RV_LIST[1]))
+
+
+def _rv_on(b: SheetBuilder, r: int) -> None:
+    """DİBS RV row ``r``'s O/N equivalents (RV_ON) and their helpers; the one of the price in use is the two-way table's
+    member (:func:`_rv_tw`: typed, it is kept in RV_ON_STORE and prices the row)."""
+    days, term = ("$%s%d" % (c, r) for c in (RV_ON_DAYS, RV_ON_TERM))
+    # a fixed coupon bond or a bill with a price (or a level typed that prices it): the window, its periods, its term
+    b.set("%s%d" % (RV_ON_DAYS, r), '=IF(AND(DG{r},OR(CR{r}="S",CR{r}="B")),CT{r}-DC{r},"")'.format(r=r), fmt=INT0)
+    b.set("%s%d" % (RV_ON_PERIODS, r), '=IF(AND(N({d})>0,CR{r}="S"),INDEX($LV{r}:$MS{r},DO{r}),"")'.format(d=days, r=r),
+          fmt="0.000000")
+    b.set("%s%d" % (RV_ON_TERM, r), '=IF(N({d})>0,{w},"")'.format(d=days, w=try_term("DC%d" % r, "CT%d" % r)), fmt=INT0)
+    store = "$%s%d" % (RV_ON_STORE, r)
+    for (col, y, _), g in zip(RV_ON, RV_ON_GROWTH):
+        lng = "$%s%d" % (g, r)
+        b.set("%s%d" % (g, r), '=IF(AND(N({d})>0,ISNUMBER(${y}{r})),{lng},"")'.format(d=days, y=y, r=r,
+                                                                                         lng=bond_growth("$%s%d" % (y, r), r)),
+              fmt="0.0000000000")
+        on = 'IF(ISNUMBER({g}),{on},"")'.format(g=lng, on=overnight_bd_growth(lng, days, term))
+        b.set("%s%d" % (col, r), "=IF(ISBLANK(%s),%s,%s)" % (store, on, store) if col == RV_ON[0][0] else "=" + on,
+              like="%s%d" % (y, r))
+
+
+UNI_ON_NAME = "Tüm Kâğıtlar ON karşılık"
+#: Tüm Kâğıtlar: a trading list bond's O/N equivalent as DİBS RV has it (its price in use), the page shows it beside its
+#: yield (N; ``views/58_kagitlar.json``'s ``cols``) - (column, caption)
+UNI_ON = ("S", "ON karşılık % (RV)")
+
+
+def _universe_on_check(model: Model) -> None:
+    _need_sheets(model, UNI_SHEET)
+    _need_formula(model, "DİBS RV", "%s%d" % (RV_ON[0][0], RV_LIST[0]), RV_ON_STORE)
+    _need_formula(model, UNI_SHEET, "T%d" % UNI_FIRST, "MATCH($A%d,'DİBS RV'!$A$5:$A$54,0)" % UNI_FIRST)
+    _need_empty(model, UNI_SHEET, "%s1:%s%d" % (UNI_ON[0], UNI_ON[0], UNI_LAST + 2))
+
+
+def _tto_universe_on(model: Model) -> None:
+    """Tüm Kâğıtlar: the O/N equivalent DİBS RV gives a bond of the trading list (its row there: T), beside its yield."""
+    b = SheetBuilder(model, UNI_SHEET)
+    col, cap = UNI_ON
+    b.head("%s4" % col, [cap])
+    on = "INDEX('DİBS RV'!$%s$%d:$%s$%d,$T{r})" % (RV_ON[0][0], RV_LIST[0], RV_ON[0][0], RV_LIST[1])
+    for r in range(UNI_FIRST, UNI_LAST + 1):
+        b.set("%s%d" % (col, r), ('=IF(ISNUMBER($T{r}),IF(ISNUMBER(%s),%s,""),"")' % (on, on)).format(r=r), fmt="0.00%")
+
+
 # ---------------------------------------------------------------------------------------------- the bonds' tables two-way
 # The desk, 24.11.2026, of FORWARD KOTASYON and then of every table: "hangisine ben girdiysem diğerini hesaplasın ...
 # Genel olarak tablolar bu şekilde olmalı karışıklık olmaması için", "Bu söylediklerin ve tüm tablolar bu şekilde
@@ -3840,8 +4029,8 @@ def _need_exact(model: Model, sheet: str, addr: str, text: str) -> None:
 RV_TW_NAME = "DİBS RV iki yönlü"
 #: DİBS RV's bond rows (RV_LIST): the members typed in place of the market's price, each kept in a column of its own row
 #: (member, store) - the manual clean price (N) keeps what is typed in its own cell, as it always did -, and which of them
-#: prices the row
-RV_TW = (("S", "YF"), ("T", "YG"), ("Y", "YH"), ("Z", "YI"), ("AF", "YJ"))
+#: prices the row.  The O/N equivalent of the yield (BO, 26.11.2026) is the last.
+RV_TW = (("S", "YF"), ("T", "YG"), ("Y", "YH"), ("Z", "YI"), ("AF", "YJ"), (RV_ON[0][0], RV_ON_STORE))
 RV_TW_BY = "YK"
 #: the carry (bp, AM) typed in place of the repo (AL, typed in its own cell): its store
 RV_TW_CARRY = ("AM", "YL")
@@ -3878,26 +4067,34 @@ def _rv_tw_check(model: Model) -> None:
         for col in ("N", "AL"):                     # (the inputs the members are typed in place of: no formula of their own)
             _need_empty(model, "DİBS RV", "%s%d:%s%d" % (col, r, col, r))
     _need_empty(model, "DİBS RV", "%s3:%s%d" % (RV_TW[0][1], RV_TW_Y[-1], RV_LIST[1]))
+    _rv_on_check(model)
 
 
 def _rv_tw(model: Model) -> None:
     """DİBS RV's bond rows two-way (``views/60_dibs.json``, "twoway"): the manual clean price (N, in place), the BIST
-    simple and compound yields (S, T), yield − OIS (Y), the ASW / DM (Z) and the Z-spread (AF) - the one typed last is
-    the row's, the others are worked out from the clean price it gives (:func:`rv_clean_from_yield`,
-    :func:`rv_clean_from_compound`, :func:`rv_clean_from_asw` / :func:`rv_clean_from_dm`, :func:`rv_clean_from_z`);
-    likewise the carry (AM) typed gives the repo (AL, in place) it needs.  A typed level that the bond has no such thing
-    for (a floater's yield, a CPI linker's ASW, an FRN's spreads) prices nothing: the row stays at its price, "Fiyat
-    durumu" says so.  On a row priced by hand (N typed, or a level) the yield − OIS, ASW / DM, Z-spread and carry are the
-    exact values (otherwise the sheet's 0.1 bp), so that each typed back gives the same row."""
+    simple and compound yields (S, T), yield − OIS (Y), the ASW / DM (Z), the Z-spread (AF) and the yield's O/N equivalent
+    (BO, 26.11.2026: :func:`_rv_on`) - the one typed last is the row's, the others are worked out from the clean price it
+    gives (:func:`rv_clean_from_yield`, :func:`rv_clean_from_compound`, :func:`rv_clean_from_asw` / :func:`rv_clean_from_dm`,
+    :func:`rv_clean_from_z`; the O/N's growth over the window back to the yield, :func:`bond_yield`); likewise the carry
+    (AM) typed gives the repo (AL, in place) it needs.  A typed level that the bond has no such thing for (a floater's
+    yield or O/N, a CPI linker's ASW or O/N, an FRN's spreads) prices nothing: the row stays at its price, "Fiyat durumu"
+    says so.  On a row priced by hand (N typed, or a level) the yield − OIS, ASW / DM, Z-spread and carry are the exact
+    values (otherwise the sheet's 0.1 bp), so that each typed back gives the same row."""
     b = SheetBuilder(model, "DİBS RV")
     store = dict(RV_TW)
     by, (carry, cst) = RV_TW_BY, RV_TW_CARRY
     first = RV_TW[0][1]
+    on_col = RV_ON[0][0]
     b.set("%s3" % first, "İki yönlü: satırda yazılan getiri, getiri − OIS, ASW / DM, Z-spread ve carry (yazılan Manuel temiz N'de, "
                          "repo AL'de) ve satırın fiyatını veren", color=NOTE_COLOR)
     b.head("%s4" % first, ["Yazılan BIST basit getiri", "Yazılan BIST bileşik getiri", "Yazılan getiri − OIS (bp)",
                            "Yazılan ASW / DM (bp)", "Yazılan Z-spread (bp)", "Fiyatı veren", "Yazılan carry (bp)",
                            "z4 (elle fiyatta)", "z5 (elle fiyatta)", "s5 (elle fiyatta)", "s6 (elle fiyatta)"])
+    b.row("%s4" % on_col, [cap for _, _, cap in RV_ON], like="S4")
+    b.set("%s3" % RV_ON_STORE, "ON karşılık (TLREF'in kuralı: iş günlerinde bileşik, ACT/365; valörden vadeye): yazılan ON, "
+                               "pencerenin günü, kuponlunun dönemi, hafta sonu / tatil terimi W, getirilerin ln G'si", color=NOTE_COLOR)
+    b.head("%s4" % RV_ON_STORE, ["Yazılan ON karşılık", "Gün (valör → vade)", "Dönem (vadeye, kuponlu)", "W (hafta sonu / tatil)",
+                                 "ln G (kullanılan)", "ln G (alış)", "ln G (satış)"])
     for r in range(RV_LIST[0], RV_LIST[1] + 1):
         at = rv_at(r)
         # the stores of the row (kS: the yield typed ...), which prices it (by), whether anything is typed (any), whether
@@ -3908,22 +4105,29 @@ def _rv_tw(model: Model) -> None:
         f["any"] = "OR(%s)" % ",".join("NOT(ISBLANK(%s))" % f["k" + m] for m, _ in RV_TW)
         f["can"] = 'AND($A{r}<>"",ISNUMBER(CT{r}),OR(N(CU{r})>0,CR{r}="B"),N(CT{r})>DC{r})'.format(r=r)
         f["yld"] = 'OR(CR{r}="S",CR{r}="B",CR{r}="E")'.format(r=r)
+        f["kON"] = f["k" + on_col]                  # (the O/N equivalent: a fixed coupon bond's or a bill's, not a real yield's)
+        f["on"] = 'OR(CR{r}="S",CR{r}="B")'.format(r=r)
         b.input("%s%d" % (store["S"], r), None, fmt="0.00%")
         b.input("%s%d" % (store["T"], r), None, fmt="0.00%")
         for m in ("Y", "Z", "AF"):
             b.input("%s%d" % (store[m], r), None, fmt="0.0")
+        b.input("%s%d" % (store[on_col], r), None, fmt="0.00%")
         b.input("%s%d" % (cst, r), None, fmt="0.0")
         # which typed level prices the row: one the bond has, on a row that can be worked out ("" none)
         b.set("%s%d" % (by, r), ('=IF({can},IF(NOT(ISBLANK({kS})),IF({yld},"S",""),IF(NOT(ISBLANK({kT})),IF({yld},"T",""),'
                                  'IF(NOT(ISBLANK({kY})),IF({yld},"Y",""),IF(NOT(ISBLANK({kZ})),IF(AND(NOT(YD{r}),OR(CR{r}="S",'
-                                 'CR{r}="B",CR{r}="T")),"Z",""),IF(AND(NOT(ISBLANK({kAF})),NOT(YD{r})),"AF",""))))),"")').format(**f),
+                                 'CR{r}="B",CR{r}="T")),"Z",""),IF(NOT(ISBLANK({kAF})),IF(NOT(YD{r}),"AF",""),'
+                                 'IF(AND(NOT(ISBLANK({kON})),{on}),"%s","")))))),"")' % on_col).format(**f),
               align="center")
-        # the manual clean price (in place): the one the typed level gives, else nothing - the market's (DB)
+        # the manual clean price (in place): the one the typed level gives, else nothing - the market's (DB); an O/N: its
+        # growth over the row's window as TLREF compounds (growth_bd), back to the yield in the yield's own convention
+        days, term = "$%s%d" % (RV_ON_DAYS, r), "$%s%d" % (RV_ON_TERM, r)
         b.patch("N%d" % r, ('=IF({by}="","",IF({by}="S",{ps},IF({by}="T",{pt},IF({by}="Y",{py},IF({by}="Z",IF(CR{r}="T",{pdm},'
-                            '{pasw}),{pz})))))').format(
+                            '{pasw}),IF({by}="AF",{pz},{pon}))))))').format(
             ps=rv_clean_from_yield(at, f["kS"]), pt=rv_clean_from_compound(at, f["kT"]),
             py=rv_clean_from_compound(at, "EP%d+%s/10000" % (r, f["kY"])), pdm=rv_clean_from_dm(at, f["kZ"]),
-            pasw=rv_clean_from_asw(at, f["kZ"]), pz=rv_clean_from_z(at, f["kAF"]), **f))
+            pasw=rv_clean_from_asw(at, f["kZ"]), pz=rv_clean_from_z(at, f["kAF"]),
+            pon=rv_clean_from_yield(at, bond_yield(growth_bd(f["kON"], days, term), r)), **f))
         # priced: by its price - or, while a typed level prices it, by the level (the price is the level's inverse)
         b.patch("DG%d" % r, '=AND(ISNUMBER(CT{r}),IF({by}<>"",TRUE,N(DB{r})>0),OR(N(CU{r})>0,CR{r}="B"),N(CT{r})>DC{r})'.format(**f))
         # the members: what is typed, else worked out from the price - exact on a row priced by hand: the yield two more
@@ -3949,11 +4153,15 @@ def _rv_tw(model: Model) -> None:
             z=z5, **f))
         # "Fiyat durumu": the level that prices the row - or why a typed one does not
         name = ('IF(NOT(ISBLANK({kS})),"basit getiri",IF(NOT(ISBLANK({kT})),"bileşik getiri",IF(NOT(ISBLANK({kY})),"getiri − OIS",'
-                'IF(NOT(ISBLANK({kZ})),IF(CR{r}="T","DM",IF(CR{r}="E","ASW","ASW / DM")),"Z-spread"))))').format(**f)
+                'IF(NOT(ISBLANK({kZ})),IF(CR{r}="T","DM",IF(CR{r}="E","ASW","ASW / DM")),IF(NOT(ISBLANK({kAF})),"Z-spread",'
+                '"ON karşılık")))))').format(**f)
         b.patch("J%d" % r, ('=IF({by}<>"",IF({by}="S","Basit getiriden",IF({by}="T","Bileşik getiriden",IF({by}="Y","Getiri − OIS\'ten",'
-                            'IF({by}="Z",IF(CR{r}="T","DM\'den","ASW\'den"),"Z-spread\'den"))))&" (yazılan)",IF(AND({any},$A{r}<>""),'
+                            'IF({by}="Z",IF(CR{r}="T","DM\'den","ASW\'den"),IF({by}="AF","Z-spread\'den","ON karşılığından")))))'
+                            '&" (yazılan)",IF(AND({any},$A{r}<>""),'
                             'IF({can},"Yazılan "&{name}&" bu kâğıtta yok: fiyat piyasadan · ","Yazılan değer fiyat vermez · "),"")&{old})'
                             ).format(name=name, old=formula_of(model, "DİBS RV", "J%d" % r), **f))
+        # the yields' O/N equivalents (BO the member, BP / BQ the bid's and the ask's) and their helpers
+        _rv_on(b, r)
         # the carry typed -> the repo it needs (in place: AL): the forward formulas (FB = EZ / DV01, EZ = EW · 10000, EW =
         # ET + EU − dirty · FP - a TLREF floater's its own way -, FP = 1 + repo / 100 · days / 365) solved for the repo
         b.patch("AL%d" % r, ('=IF(ISBLANK({c}),"",IF(AND(DG{r},NOT(YD{r}),$L$2>DC{r},N(DH{r})>0),(IF(CR{r}="T",EV{r}-({c}*ED{r}/10000-'
@@ -6895,8 +7103,11 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (RV_BACK_NAME, _rv_back_check, _rv_back), (SW_BACK_NAME, _rv_switch_back_check, _rv_switch_back),
             (MAN_NAME, _manuel_isin_check, _manuel_isin),
             # (the bonds' tables two-way: over every formula the additions above wrote into their rows - the clean
-            # price's default from the ISIN of Manuel Tahvil's too)
+            # price's default from the ISIN of Manuel Tahvil's too; DİBS RV's with its yields' O/N equivalents, whose term
+            # past Motor's daily calendar the TRY list's own sheet gives)
+            (ISG_NAME, _isg_check, _tto_isgunu),
             (RV_TW_NAME, _rv_tw_check, _rv_tw), (SW_TW_NAME, _sw_tw_check, _sw_tw), (MAN_TW_NAME, _man_tw_check, _man_tw),
+            (UNI_ON_NAME, _universe_on_check, _tto_universe_on),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01), (VIOP_ON_NAME, _viop_on_check, _tto_viop_on),

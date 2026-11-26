@@ -2120,3 +2120,85 @@ Code: `tto/extras.py` (`on_rate`, `on_rate_back`, `ON_NOTE`; `FWD_ON` / `FWD_TW_
 (`_cross_typed_forwards`: the forward's store only; `_pick_columns`: spans), `tto/views/30_forward.json` (the groups' ON
 members, the tables' `"cols"`, the helper tables), `tto/views/10_masa.json` (EKS / EKSE). Tests: `tests/test_fwd_on.py`; the
 browser test's checks "… ON karşılık …".
+
+### DİBS: getirinin ON karşılığı (26.11.2026)
+
+The desk first asked:
+
+> "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun gibi başka önerin olur mu"
+
+and, given eight such additions - one of them, in the integrator's words, "Bonds: each DİBS yield also as its ON equivalent
+on TLREF's convention, so it compares directly with TLREF and repo" -, answered:
+
+> "Bunların da hepsini yap"
+
+**What was built** (README, *Getirinin ON karşılığı*):
+- **DİBS RV**'s bonds' table: **ON karşılık %** right of the BIST compound yield (the yield of the price in use), **Alış ON
+  %** right of the bid yield, **Satış ON %** right of the ask yield (`DİBS RV!BO:BQ`, put beside the yields by the table's
+  column order). Two decimals, as the yields.
+- **DİBS Trading**'s summary: **ON karşılık %** right of "Getiri %" (OIS'e göre); **DİBS RV · Genel** (the entry's first
+  tab): **ON karşılık %** in "Getiri", after the compound and the simple yield; **Tüm Kâğıtlar**: **ON karşılık % (RV)**
+  right of "Getiri % (RV)" (a trading list bond's, from DİBS RV); the **bond card**: right after the compound yield.
+
+**The convention** - TLREF's, the desk's "B" of 25.11.2026
+([above](#ppk-adımı-tlref-iş-günlerinde-bileşik-25112026)); [curves.md](curves.md#meeting-steps-from-a-rate):
+1. **The window**: the bond's valör (DİBS RV's `DC`: today for an `ISL0` source, else the next business day of the TRY
+   list) to its maturity (`CT`), d calendar days.
+2. **The yield's own growth over it**, G:
+   - a bill or a zero coupon bond: BIST's simple ACT/365, G = 1 + y·d/365 = 100 / dirty (its compound yield, (1 + T)^(d/365),
+     gives the same G);
+   - a fixed coupon bond: BIST's yield, compounded CU times a year, G = (1 + y/CU)^n - n the maturity's exponent in DİBS
+     RV's own yield sum Σ CF·(1 + y/f)^−x (`LV:MS`: the current period's fraction left, next coupon − valör over the
+     period's days, then whole periods); the compound yield gives the same ((1 + T)^(n/CU)).
+3. **The O/N**: x with d·ln(1 + x/365) − W·(x/365)² = ln G - the MPC ima model's second order, `overnight_bd`'s eight steps
+   from ln G (`extras.overnight_bd_growth`); W = Σ g(g − 1)/2 over the gaps between the window's business days.
+4. **W**: from the OIS spot on, Motor's daily calendar (its Pcum at the maturity - what `Motor!J` reads at a meeting); a T+0
+   valör adds today's days to the spot, (spot − a)·p(a) + (spot − a)(spot − a − 1)/2; **past the calendar's last day**
+   (OIS spot + 3700 days: the end of 2036 now) from the TRY holiday list itself (`EK_ISGUNU`: Saturdays 1, Sundays 2, a week-day
+   holiday its own p - the days since the business day before it -, a Friday holiday's p once more on its Saturday and its
+   Sunday), so any maturity counts the desk's list (`extras.try_term`). No bond of the replay day reaches it: the longest
+   fixed coupon bond (05.09.2035) is 3227 days from its valör, a new 10-year bond about 3650.
+
+**Worked example** (replay, 03.11.2026):
+- TRB100227T13, a bill on `ISL0`: valör 03.11.2026 → 10.02.2027, d = 99; clean 92,220; BIST simple 31,1037 %, compound
+  34,7985 % → ln G = 0,0809932 (both); W = 45 (14 weekends × 3, and New Year's Day 2027 on a Friday: Thursday → Monday is
+  4 days, 6 in place of 3) → **ON 29,8845 %**. Every calendar day compounded alone (ACT/365): 29,8733 %, 1,1 bp lower.
+- TRT150328T24, 36,8 % fixed coupon twice a year on `ISL1`: valör 04.11.2026 → 15.03.2028, d = 497, n = 0,7308 + 2 periods;
+  clean 100,1125; simple 36,3918 %, compound 39,7028 % → ln G = 0,4565120; W = 247 → **ON 33,5573 %**; calendar days 33,5419 %.
+- The exact product Π (1 + x·g) puts these O/Ns 0,002–0,005 bp away (all replay bonds); TLREF's O/N is 1,1–1,6 bp above
+  the calendar day's on the replay bonds (a weekend earns Friday's rate for three days in one step).
+
+**Choices made while building it** (ask the desk before changing):
+- **One O/N per price**: the simple and the compound yield grow the window the same; the O/N stands beside the yield the
+  page shows (the compound on DİBS Trading and Tüm Kâğıtlar). The bid's and the ask's from their own yields.
+- **The yield's own period count** for a coupon bond (n periods of 1/CU year each, the first one's fraction by its days),
+  not d/365: the growth is the yield's as BIST computes it - what the desk sees in the yield column.
+- **The model's second-order form** (as the PPK step), not the exact product.
+- **Only nominal fixed coupon bonds and bills** (zero coupon bonds with them): TLREF floaters, FRNs and CPI linkers have
+  none (a real yield has no nominal O/N; a floater's price is its spread's); Eurobonds are on none of these tables.
+- **Two-way on DİBS RV** (the desk's rule of 24.11.2026: "tüm tablolar bu şekilde olmalı"): "ON karşılık %" is a member of
+  the bonds' two-way table - typed, it stays (✎), the row's clean price is the one it gives (its growth back to the yield in
+  the yield's own convention, then the yield's price), the other members follow; the last typed wins; Delete goes back to
+  the market; a floater's or a CPI linker's O/N typed prices nothing ("Fiyat durumu" says so); a bond without a price is
+  priced by it. Kept in `DİBS RV!YQ` (personal, the columns that move with the ISIN). The bid's and the ask's O/N show only:
+  their yields are the market's. DİBS Trading, Genel, Tüm Kâğıtlar and the card show the O/N as they show the yield (not
+  typed there).
+- **Soft** where no live two-sided quote stands behind the price (as the yields); **the same on either curve setting**
+  (no curve is read).
+- **Kâğıt Fiyat Yükleme is left as it is**: its yields are the upload file's quotes (t0 on its own value date, its own
+  coupon schedule, written to the txt in BIST simple yields), every cell there is editable - an O/N column would be a
+  two-way column of its own on that page (JavaScript and its `cevir` route) and a second implementation of the
+  convention on its schedule; the same bonds' O/N at the market is on DİBS RV, DİBS Trading and Tüm Kâğıtlar. A question
+  for the desk.
+- No new Bloomberg request; nothing typed, every existing value unchanged (checked cell for cell against 5ed4eab on DİBS RV,
+  Tüm Kâğıtlar, DİBS Trading's sheet, EK_PPK, Motor, OIS_MAIN, Manuel Tahvil and MASA - 107 078 cells, the shared
+  calculation and a user with a manual price, yields, an ASW, a repo, a carry and a PPK rate and spread typed -, and the
+  pages' tables column by column).
+
+Code: `tto/extras.py` ("a bond's yield as an O/N rate": `try_term`, `_tto_isgunu` / `EK_ISGUNU`, `bond_growth`, `bond_yield`,
+`_rv_on`, `overnight_bd_growth`, `growth_bd`; `_rv_tw` - its O/N member -; `_tto_universe_on`), `tto/service.py` (`ON_HEAD`,
+`_trading_columns` / `_trading_table`, `_RV_PRICED`, `_bond_card`, `_universe_quote_marks`, `_pick_columns` - a table's
+frozen columns kept when its own order keeps them first), `tto/dibsgenel.py` (`columns`, `SOFT`), `tto/views/60_dibs.json`
+(B3's `cols`, the group's member, the helper table "on"), `58_kagitlar.json` (U1's `cols`), `60_dibslive.json` (the note).
+Tests: `tests/test_kagit_on.py`; `tests/test_kagit_twoway.py`, `tests/test_rvfair.py`, `tests/test_dibsgenel.py` (the new
+member, the summary's and Genel's column); the browser test's "DİBS: getirinin ON karşılığı" checks.

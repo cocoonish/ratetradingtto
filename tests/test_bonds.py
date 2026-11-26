@@ -1243,7 +1243,7 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         floaters = [x for x in lines if x[2] in ("TRT190128T14", "TRT090130T12", "TRT030730T12", "TRT110930T36")]
         assert [x[1] for x in floaters] == ["19.01.28 TLREF", "09.01.30 TLREF", "03.07.30 TLREF", "11.09.30 TLREF"]   # by maturity
         t8 = next(x for x in lines if x[2] == "TRT150328T24")
-        assert t8[5:10] == ["ISL1", "100,100", "100,125", "100,200", "03.11.2026"] and t8[15] in ("UCUZ", "PAHALI", "–")
+        assert t8[5:10] == ["ISL1", "100,100", "100,125", "100,200", "03.11.2026"] and t8[lines[1].index("Sinyal")] in ("UCUZ", "PAHALI", "–")
         # what goes with a row: the desk's source and everyone's own values for it
         s.set_inputs(u, "tto", [{"ref": "DİBS RV!B%d" % r, "value": "ISL0"}, {"ref": "DİBS RV!N%d" % r, "value": 100.5}])
         s.set_inputs(other, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": 40.0}])

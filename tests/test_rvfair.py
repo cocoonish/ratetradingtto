@@ -141,11 +141,12 @@ def test_every_trading_bond_has_its_fair_values_or_why_not(service, tmp_path):
     tops = [c.get("t") for c in d["rows"][0] if not c.get("sk")]
     assert tops == ["", "Fiyat", "OIS'e göre", "FX swap'a göre", "Risk", "Carry", "Broker", ""]
     heads = [c["t"] for c in d["rows"][1]]
-    assert heads[:12] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %", "ASW / DM"]
-    assert heads[12:21] == ["Adil getiri %", "Adil fiyat", "Pahalı / ucuz", "Sinyal", "ASW FX", "Adil getiri %", "Adil fiyat",
+    assert heads[:13] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %",
+                          "ON karşılık %", "ASW / DM"]                     # (the yield's O/N equivalent beside it: 26.11.2026)
+    assert heads[13:22] == ["Adil getiri %", "Adil fiyat", "Pahalı / ucuz", "Sinyal", "ASW FX", "Adil getiri %", "Adil fiyat",
                             "Pahalı / ucuz", "Sinyal"]
-    assert heads[21:26] == ["Mod. süre", "DV01 / 1mn", s.USD_DV01_HEAD, "C+R (bp)", "T0→T1 repo %"] and heads[-1] == "Kart"
-    assert d["c"][:12] == list("ABCDEFGHIJKL") and d["c"][12:21] == ["Y", "Z", "M", "N", "AA", "AB", "AC", "AD", "AE"]
+    assert heads[22:27] == ["Mod. süre", "DV01 / 1mn", s.USD_DV01_HEAD, "C+R (bp)", "T0→T1 repo %"] and heads[-1] == "Kart"
+    assert d["c"][:13] == list("ABCDEFGHIJK") + ["AF", "L"] and d["c"][13:22] == ["Y", "Z", "M", "N", "AA", "AB", "AC", "AD", "AE"]
     lines = [row for row in d["rows"][2:] if row[-1].get("t") == "▸"]
     assert len(lines) == len([v for v in s._list_values(u, "tto", "DİBS RV!A5:A54") if v]) >= 15
     for line in lines:

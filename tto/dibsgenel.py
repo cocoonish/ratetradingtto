@@ -10,7 +10,7 @@ before); only the menu shows them as tabs (``menu``: the nav's ``menu`` / ``menu
 summary; every row keyed by its ISIN), in groups of columns:
 
 * Kâğıt · Fiyat (the value date's Bloomberg source, bid / ask as DİBS RV has them, the last trade, the clean price in use)
-  · Getiri (BIST compound and simple, DİBS RV!T / S);
+  · Getiri (BIST compound and simple, DİBS RV!T / S, and their O/N equivalent on TLREF's convention, BO - 26.11.2026);
 * **OIS ASW** - DİBS RV's ASW / DM (Z), the fitted curve's ASW at the bond's years (rvfair: a + b·t + c·t², AA on a fixed
   coupon bond), cheap / rich (AB), signal (AC), the fair yield and clean price on the curve (rvfair);
 * **FX swap ASW** - the same on the FX swap implied TRY curve (EK_FX: TRYI 1–9M FX swap implied, TRYSAQ 1–10Y XCCY, 18M
@@ -47,6 +47,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from . import extras as ex
 from . import quantcurve as qc
 from . import rvfair
 from .xl import numfmt
@@ -83,7 +84,7 @@ GROUP_TIPS = {"OIS ASW": "DİBS RV'nin TLREF OIS eğrisine göre hesabı (RV hes
               ZERO_GROUP: "Trading listesinin sabit kuponlularına şimdi uydurulan %s sıfır kupon eğrisi (quant'ın DİBS adil "
                           "değeri hesabı); bonolar eğride fiyatlanır, uydurmaya girmez" % qc.MODEL_TEXT[qc.DIBS_MODEL]}
 #: DİBS RV's columns a quote that is no live one makes soft (worked out of its price)
-SOFT = ("ycomp", "ysimple", "ois_asw", "ois_rc", "ois_sig", "fx_asw", "fx_rc", "fx_sig", "z_rc", "z_model")
+SOFT = ("ycomp", "ysimple", "on", "ois_asw", "ois_rc", "ois_sig", "fx_asw", "fx_rc", "fx_sig", "z_rc", "z_model")
 GRID_STEP = 0.1                          # years between the points of the curve's lines
 FIT_KEPT = 8                             # fits kept (users with inputs of their own see their own)
 
@@ -103,7 +104,10 @@ def columns() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
                    ("ask", "Ask", "DİBS RV: Bloomberg satış ('–': o tarafta emir yok)"),
                    ("last", "Son işlem", "Son işlem fiyatı (DİBS RV!AS); günü üzerinde"),
                    ("clean", "Kullanılan temiz", "DİBS RV!O: hesapların kullandığı temiz fiyat (Fiyat tipi, manuel fiyat)")]),
-        ("Getiri", [("ycomp", "Bileşik %", "DİBS RV!T: BIST bileşik getiri"), ("ysimple", "Basit %", "DİBS RV!S: BIST basit getiri")]),
+        ("Getiri", [("ycomp", "Bileşik %", "DİBS RV!T: BIST bileşik getiri"), ("ysimple", "Basit %", "DİBS RV!S: BIST basit getiri"),
+                    ("on", "ON karşılık %", "DİBS RV!BO: getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde "
+                                            "bileşik (ACT/365; hafta sonu / tatilde son iş gününün faizi aradaki günler için tek adımda), "
+                                            "TLREF ve repoyla karşılaştırılır · sabit kuponlu ve bono")]),
         ("OIS ASW", [("ois_asw", "ASW / DM", "DİBS RV!Z: TLREF OIS eğrisine göre ASW (bp; sabit kuponlu, bono) · TLREF'e endeksli kâğıtta DM"),
                      ("ois_curve", "Eğri", "DİBS RV'nin OIS ASW eğrisi (a + b·t + c·t², sabit kuponlulara uydurulan) kâğıdın vadesinde "
                                            "(sabit kuponluda DİBS RV!AA; bono eğriye girmez: eğrinin vadesindeki değeri)"),
@@ -410,7 +414,7 @@ class DibsGenel(object):
                   "src": {"t": str(src or ""), "k": "s", "cls": "soft"},
                   "bid": svc._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
                   "ask": svc._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), "last": last, "clean": cell("O", r),
-                  "ycomp": cell("T", r), "ysimple": cell("S", r),
+                  "ycomp": cell("T", r), "ysimple": cell("S", r), "on": cell(ex.RV_ON[0][0], r),
                   "ois_asw": cell("Z", r), "ois_curve": ois_curve, "ois_rc": cell("AB", r), "ois_sig": dict(cell("AC", r), b=1),
                   "ois_fy": ois_fy, "ois_fp": ois_fp,
                   "fx_asw": fx_own, "fx_curve": fx_curve, "fx_rc": fx_rich, "fx_sig": fx_signal, "fx_fy": fx_fy, "fx_fp": fx_fp,
