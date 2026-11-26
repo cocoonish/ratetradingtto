@@ -649,7 +649,7 @@ export class Grid {
         else td.style.removeProperty('--bar');
         td.classList.remove('up', 'down');
         if (flash && cell.k === 'n' && before.k === 'n' && typeof cell.v === 'number' && typeof before.v === 'number'
-            && cell.v !== before.v) {
+            && cell.v !== before.v && !isTick(cell)) {                   // (a tick box ticked is no price moving)
           moved.push([td, cell.v > before.v ? 'up' : 'down']);
         }
       }

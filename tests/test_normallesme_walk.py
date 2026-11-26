@@ -248,8 +248,10 @@ def test_two_meetings_inside_need_three_tenors(svc):
     res = svc.set_inputs(u, "tto", [{"ref": ref, "value": 0} for ref in TICKS])
     assert res["errors"] == [] and cell(svc, "EK_NORM!B12", u) == 3.0
     assert cell(svc, "OIS_MAIN!%s%d" % (ex.NW_LABEL, ex.NW_MSG_ROW), u) == "Tarih için kotası olan en az bir vade seçin."
-    u2 = case(svc, "normalsiz", ["1W"], l0="")
-    assert cell(svc, "EK_NORM!B12", u2) == 2.0 and cell(svc, "EK_NORM!E11", u2) == ""
+    # no normal TLREF read (the switch builder's L4 has a default - its policy rate gone, say): typed over by hand, a text
+    u2 = case(svc, "normalsiz", ["1W"])
+    assert svc.set_inputs(u2, "tto", [{"ref": "EK_NORM!B7", "value": "yok"}], allow_adhoc=True)["errors"] == []
+    assert cell(svc, "EK_NORM!B12", u2) == 2.0 and cell(svc, "EK_NORM!E11", u2) == "" and cell(svc, "OIS_MAIN!L5", u2) == ""
     assert "Normal TLREF (L4)" in cell(svc, "OIS_MAIN!%s%d" % (ex.NW_LABEL, ex.NW_MSG_ROW), u2)
 
 
@@ -414,32 +416,41 @@ def raw_model():
 
 
 def test_the_addition_writes_its_own_cells_only(monkeypatch):
-    """The workbook with every addition but this one, against all of them: the same sheets but EK_NORM (last), the same
-    formulas, values and looks everywhere but OIS_MAIN's block right of STUB İMA (AO8:AS15, empty in the workbook) and L5
-    (the date in use; empty in this branch) - and one conditional number format, the tick boxes' while off."""
+    """The workbook with every addition but this one, against all of them: the same sheets but EK_NORM, the same formulas,
+    values and looks everywhere but OIS_MAIN's block right of STUB İMA (AO8:AS15, empty in the workbook) and L5 (the date
+    in use: empty in this branch alone, the switch builder's formula once merged - widened) - and one conditional number
+    format, the tick boxes' while off."""
     full = raw_model()
     assert ex.apply("tto", full) == []
     without = raw_model()
     monkeypatch.setitem(ex._BUILDERS, "tto", tuple(b for b in ex._BUILDERS["tto"] if b[0] != ex.NW_NAME))
     assert ex.apply("tto", without) == []
-    assert [s.name for s in full.sheets] == [s.name for s in without.sheets] + [ex.NW_SHEET]
+    assert [s.name for s in full.sheets if s.name != ex.NW_SHEET] == [s.name for s in without.sheets]
 
     def cells(model, sh):
         out = {rc: ("=", model.templates[t]) for rc, t in sh.fml.items()}
         out.update({rc: ("c", v) for rc, v in sh.consts.items()})
         return out
 
+    def rules(model, sh):
+        """A sheet's conditional formats, each with its style's contents (the model's list of them is shared)."""
+        return [dict(x, dxf=model.dxfs[x["dxf"]] if isinstance(x.get("dxf"), int) else x.get("dxf")) for x in sh.cf]
+
     block = {r * COLS + c for r in range(8, 16) for c in range(41, 46)}            # AO8:AS15
-    new = block | {parse_a1(ex.NW_USED)}
-    for a, b in zip(full.sheets, without.sheets):
+    used = parse_a1(ex.NW_USED)
+    new = block | {used}
+    others = [s for s in full.sheets if s.name != ex.NW_SHEET]
+    for a, b in zip(others, without.sheets):
         ca, cb = cells(full, a), cells(without, b)
         if a.name != "OIS_MAIN":
-            assert ca == cb and a.styles == b.styles and a.comments == b.comments and a.cf == b.cf, a.name
+            assert ca == cb and a.styles == b.styles and a.comments == b.comments and rules(full, a) == rules(without, b), a.name
             continue
-        assert set(ca) - set(cb) <= new and set(cb) <= set(ca) and parse_a1(ex.NW_USED) in set(ca) - set(cb)
-        assert {rc: v for rc, v in ca.items() if rc not in new} == cb
+        assert set(ca) - set(cb) <= new and set(cb) <= set(ca) and ca[used] != cb.get(used)
+        assert {rc: v for rc, v in ca.items() if rc not in new} == {rc: v for rc, v in cb.items() if rc not in new}
         assert {rc: x for rc, x in a.styles.items() if rc not in new} == {rc: x for rc, x in b.styles.items() if rc not in new}
-        assert a.cf[:-1] == b.cf and a.cf[-1]["sqref"] == ex.NW_TICKS and full.dxfs[a.cf[-1]["dxf"]] == {"fmt": ";;;"}
+        mine = [x for x in rules(full, a) if x["sqref"] == ex.NW_TICKS]
+        assert [x for x in rules(full, a) if x["sqref"] != ex.NW_TICKS] == rules(without, b)
+        assert len(mine) == 1 and mine[0]["dxf"] == {"fmt": ";;;"}
     sh = full.sheet("OIS_MAIN")
     assert ex.formula_of(full, "OIS_MAIN", "L5") == 'IF($L$2="Açık",IF(ISNUMBER($L$3),$L$3,EK_NORM!$E$11),"")'
     assert [ex.formula_of(full, "OIS_MAIN", "AP%d" % r) for r in range(9, 14)] == ["1", "1", "1", "0", "0"]
@@ -448,34 +459,36 @@ def test_the_addition_writes_its_own_cells_only(monkeypatch):
 
 
 def test_the_date_in_use_kept_from_the_switch_builder():
-    """With the switch builder's L5 there (the date typed, while on), the addition widens it to the OIS-implied date when
-    none is typed - its look kept; an L5 that is anything else leaves the addition out."""
-    m = raw_model()
-    b = ex.SheetBuilder(m, "OIS_MAIN")
-    b.set("L5", '=IF(AND($L$2="Açık",ISNUMBER($L$3)),$L$3,"")', fmt="d.m.yyyy", bold=True)
-    look = m.sheet("OIS_MAIN").styles[parse_a1("L5")]
-    assert ex.apply("tto", m) == []
-    assert ex.formula_of(m, "OIS_MAIN", "L5") == 'IF($L$2="Açık",IF(ISNUMBER($L$3),$L$3,EK_NORM!$E$11),"")'
-    assert m.sheet("OIS_MAIN").styles[parse_a1("L5")] == look
-    for value, why in (("Normalleşme", "OIS_MAIN!L5 boş ya da kullanılan normalleşme tarihi değil"),
-                       ("=$J$2", "OIS_MAIN!L5 boş ya da kullanılan normalleşme tarihi değil"),
-                       (None, None)):
-        m = raw_model()
-        if value is not None:
-            ex.SheetBuilder(m, "OIS_MAIN").set("L5", value)
-        if why:
-            problems = ex.apply("tto", m)
-            assert problems == ["%s: %s" % (ex.NW_NAME, why)] and ex.NW_SHEET not in m.sheet_index
-    for sheet, addr, value, why in (("OIS_MAIN", "AQ10", 1.5, "OIS_MAIN!AQ10 boş değil"),
+    """With the switch builder's L5 there (the date typed, while on - its own formula once merged, else written here as it
+    writes it), the addition widens it to the OIS-implied date when none is typed - its look kept; an L5 that is anything
+    else leaves the addition out."""
+    m = before_the_walk()
+    ex._nw_check(m)                                                           # (the workbook as it comes: it fits)
+    l5 = "OIS_MAIN!L5 boş ya da kullanılan normalleşme tarihi değil"
+    for sheet, addr, value, why in (("OIS_MAIN", "L5", "Normalleşme", l5), ("OIS_MAIN", "L5", "=$J$2", l5),
+                                    ("OIS_MAIN", "AQ10", 1.5, "OIS_MAIN!AQ10 boş değil"),
                                     ("OIS_MAIN", "AT13", "1W", "OIS_MAIN!AT13 beklenen başlık değil"),
                                     ("Motor", "B4306", "=7", "Motor!B4306 beklenen formül değil"),
                                     ("OIS_MAIN", "E443", "=61", "OIS_MAIN!E443 beklenen formül değil"),
                                     ("Motor", "G528", "=A528", "Motor!G528 beklenen formül değil")):
-        m = before_the_walk()
-        ex._nw_check(m)                                                       # (the workbook as it comes: it fits)
+        sh, rc = m.sheet(sheet), parse_a1(addr)
+        kept = (sh.fml.get(rc), sh.consts.get(rc), sh.styles.get(rc))
         ex.SheetBuilder(m, sheet).set(addr, value)
         with pytest.raises(ValueError, match=re.escape(why)):
             ex._nw_check(m)
+        for part, was in zip((sh.fml, sh.consts, sh.styles), kept):           # (the cell as it was)
+            part.pop(rc, None)
+            if was is not None:
+                part[rc] = was
+    ex._nw_check(m)
+    sh = m.sheet("OIS_MAIN")
+    if parse_a1("L5") not in sh.fml:
+        ex.SheetBuilder(m, "OIS_MAIN").set("L5", '=IF(AND($L$2="Açık",ISNUMBER($L$3)),$L$3,"")', fmt="d.m.yyyy", bold=True)
+    look = sh.styles.get(parse_a1("L5"))
+    ex._nw_check(m)
+    ex._tto_norm_walk(m)
+    assert ex.formula_of(m, "OIS_MAIN", "L5") == 'IF($L$2="Açık",IF(ISNUMBER($L$3),$L$3,EK_NORM!$E$11),"")'
+    assert sh.styles.get(parse_a1("L5")) == look
 
 
 def before_the_walk():
@@ -489,13 +502,16 @@ def before_the_walk():
 
 
 def test_nothing_but_the_walk_reads_its_cells(svc):
-    """The block, EK_NORM and L5 feed nothing of before: what reads them is the walk itself, the block and L5."""
+    """The block and EK_NORM feed nothing of before: what reads them is the walk itself, the block and the date in use
+    (L5 - which the switch builder's cells read, once merged: the date the PPK model takes)."""
     book = svc.books["tto"]
     idx = svc.et.call(book.engine.ref_index)
     model = book.model
     ois, norm = model.sheet_index["OIS_MAIN"], model.sheet_index[ex.NW_SHEET]
-    mine = {(ois, r * COLS + c) for r in range(8, 16) for c in range(41, 46)} | {(ois, parse_a1(ex.NW_USED))}
+    block = {(ois, r * COLS + c) for r in range(8, 16) for c in range(41, 46)}
     assert idx.complete
-    for si, rc in list(mine) + [(norm, rc) for rc in model.sheets[norm].fml]:
+    for si, rc in list(block) + [(norm, rc) for rc in model.sheets[norm].fml]:
         for reader in idx.readers(si, rc):
-            assert reader[0] == norm or reader in mine, (model.sheets[si].name, rc, reader)
+            assert reader[0] == norm or reader in block or reader == (ois, parse_a1(ex.NW_USED)), (model.sheets[si].name, rc,
+                                                                                                    reader)
+    assert (ois, parse_a1(ex.NW_USED)) in idx.readers(norm, parse_a1("E11"))           # (the OIS-implied date)
