@@ -4,7 +4,7 @@
 // copies ("Geçici kopya aç" in its "+ Launchpad" menu): "… · kopya 2" right under it, with inputs of its own.
 import { openAddIsin, bondCardLinks, bondFlags } from '../bonds.js';
 import { api } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, menu, fitOneLine, watchWidth, foldNote } from '../ui.js';
 import { Grid, copyGrid, findCell, reviveEditor, trackWrite } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
@@ -85,8 +85,9 @@ export class ViewPage {
 
   signature(data) {
     const ids = data.ids || data.panels.map((p) => p.id + ':' + p.type);
-    return ids.join('|') + '#' + (data.sections || []).map((s) => s.id + '=' + s.panels.join(',')).join('|')
-      + '#' + (data.pinned || []).join(',');
+    const cols = (stacks) => (stacks && stacks.length ? '[' + stacks.map((st) => st.join(',')).join('|') + ']' : '');
+    return ids.join('|') + '#' + (data.sections || []).map((s) => s.id + '=' + s.panels.join(',') + cols(s.stacks)).join('|')
+      + '#' + (data.pinned || []).join(',') + cols(data.pinned_stacks);
   }
 
   /** What a table shows right now (refreshed in place since the page was built): what a message or a trade is made of. */
@@ -149,7 +150,7 @@ export class ViewPage {
         it.titleEl.title = p.title;
       }
       // (a note that says what is drawn - the ASW history's offshore days - follows it too)
-      if (typeof p.note === 'string' && it.noteEl && p.note !== it.noteEl.textContent) it.noteEl.textContent = p.note;
+      if (typeof p.note === 'string' && it.noteEl && p.note !== it.note) { this.setNote(it, p.note, p.tw); this.dedupeNotes(); }
       if (p.type === 'chart') {
         const data = it.choice && p.choice ? it.choice.take(p.choice) : p.data;      // (drawn several ways: the user's way)
         it.data = data;
@@ -163,6 +164,7 @@ export class ViewPage {
         // (a temporary copy's strip of inputs above it)
         (p.lead || []).forEach((l, k) => { const g = (it.leads || [])[k]; if (g && l.data && g.update(l.data, true) === false) held.add(p.id); });
         if (it.grow) it.grow();
+        if (it.limit) it.limit();
       }
     }
     return held;
@@ -211,6 +213,7 @@ export class ViewPage {
     this.as = data.as;
     this.sections = data.sections || [];
     this.pinned = data.pinned || [];
+    this.pinnedStacks = data.pinned_stacks || [];
     if (this.sections.length && this.tab !== ALL && !this.sections.some((s) => s.id === this.tab)) this.tab = this.sections[0].id;
     clear(this.host);
     this.host.classList.toggle('hand', this.adhoc);
@@ -242,30 +245,52 @@ export class ViewPage {
     this.overChip = h('button', { class: 'btn sm warnchip hidden', type: 'button', id: 'hand-values',
       title: 'Bu sayfada formülün yerine elle yazdığınız değerler var. Tıklayın: hepsi formüle döner.' });
     this.overChip.addEventListener('click', () => this.restoreFormulas());
+    // what the colours of the cells mean: one click away, behind "?" (the desk, 27.11.2026: a lighter top of the page) -
+    // and how long the page took, said there
+    const legend = h('div', { class: 'legend' },
+      h('span', null, h('i', { class: 'sw-in' }), 'kişisel girdi'),
+      h('span', { title: 'Piyasadan ya da başka bir hücreden dolan girdi: üzerine yazabilirsiniz, silince otomatik değer geri gelir' },
+        h('i', { class: 'sw-auto' }), 'otomatik (üzerine yazılabilir)'),
+      h('span', null, h('i', { class: 'sw-sh' }), 'ortak girdi (herkes görür)'),
+      h('span', { title: 'Sarı ya da yeşil bir hücreye = yazıp başka bir hücreye tıklayın - bu tablonun, sayfanın başka bir '
+        + 'tablosunun ya da sekmesinin, yan panelin: adresi formüle eklenir (=C60+7). Değer canlıdır: okuduğu hücre değişince '
+        + 'kendiliğinden güncellenir. F2 ya da üzerine gelmek formülü gösterir; silmek formülü de kaldırır. Bloomberg işlevleri '
+        + 'kullanılamaz.' }, h('i', { class: 'sw-ff' }, 'ƒ'), 'formüllü girdi'),
+      h('span', null, h('i', { class: 'sw-hand' }), 'formül yerine elle değer'),
+      h('span', { title: 'İki yönlü tablo: bir satırın değerlerinden (spread, TRY %, puan, fwd …) hangisini yazarsanız o kalır, '
+        + 'diğerleri ondan hesaplanır. Silince satır varsayılana döner.' }, h('i', { class: 'sw-anchor' }, '✎'), 'iki yönlü: yazılan'));
+    const legendBtn = h('button', { class: 'btn sm legend-chip', type: 'button', id: 'legend-chip',
+      title: 'Hücre renkleri: kişisel / ortak girdi, otomatik, formüllü, elle değer, iki yönlü' }, '?');
+    legendBtn.addEventListener('click', () => {
+      const r = legendBtn.getBoundingClientRect();
+      menu(r.right - 290, r.bottom + 4, [{ header: 'Hücre renkleri' }, { node: legend },
+        { node: h('div', { class: 'mh legend-ms' }, 'Sayfa ' + data.ms + ' ms\'de hesaplandı') }], 'legend-pop');
+    });
     this.host.appendChild(h('div', { class: 'page-tools' }, search, allBtn, handBtn, resetBtn, this.overChip, h('span', { class: 'grow' }),
-      h('span', { class: 'legend' },
-        h('span', null, h('i', { class: 'sw-in' }), 'kişisel girdi'),
-        h('span', { title: 'Piyasadan ya da başka bir hücreden dolan girdi: üzerine yazabilirsiniz, silince otomatik değer geri gelir' },
-          h('i', { class: 'sw-auto' }), 'otomatik (üzerine yazılabilir)'),
-        h('span', null, h('i', { class: 'sw-sh' }), 'ortak girdi (herkes görür)'),
-        h('span', { title: 'Sarı ya da yeşil bir hücreye = yazıp başka bir hücreye tıklayın - bu tablonun, sayfanın başka bir '
-          + 'tablosunun ya da sekmesinin, yan panelin: adresi formüle eklenir (=C60+7). Değer canlıdır: okuduğu hücre değişince '
-          + 'kendiliğinden güncellenir. F2 ya da üzerine gelmek formülü gösterir; silmek formülü de kaldırır. Bloomberg işlevleri '
-          + 'kullanılamaz.' }, h('i', { class: 'sw-ff' }, 'ƒ'), 'formüllü girdi'),
-        h('span', null, h('i', { class: 'sw-hand' }), 'formül yerine elle değer'),
-        h('span', { title: 'İki yönlü tablo: bir satırın değerlerinden (spread, TRY %, puan, fwd …) hangisini yazarsanız o kalır, '
-          + 'diğerleri ondan hesaplanır. Silince satır varsayılana döner.' }, h('i', { class: 'sw-anchor' }, '✎'), 'iki yönlü: yazılan'),
-        h('span', { class: 'muted' }, data.ms + ' ms'))));
+      legendBtn));
 
     if (data.links && data.links.length) {
-      // the workbook's own "go to" links: other pages, straight to the table they point at
-      const bar = h('div', { class: 'shortcuts' }, h('span', { class: 'lbl' }, 'Kısayollar'));
+      // the workbook's own "go to" links: other pages, straight to the table they point at - on one line, "+N" the rest
+      // (opened, they stay so in this browser)
+      const bar = h('div', { class: 'shortcuts one' + (pref('tto.kisayol.open', '0') === '1' ? ' open' : '') },
+        h('span', { class: 'lbl' }, 'Kısayollar'));
+      const chips = [];
       for (const l of data.links) {
         const a = h('a', { class: 'chip', href: '#/' + l.page + (l.panel ? '?p=' + encodeURIComponent(l.panel) : ''),
           title: 'Excel\'deki köprü: ' + l.ref }, l.label);
         a.addEventListener('click', (e) => { e.preventDefault(); this.ctx.goto(l.page, l.panel); });
         bar.appendChild(a);
+        chips.push(a);
       }
+      const more = h('button', { class: 'shortcut-more', type: 'button', id: 'shortcuts-more', title: 'Bütün kısayollar / tek satır' });
+      bar.appendChild(more);
+      const fit = () => fitOneLine(bar, chips, more, 'daha az');
+      more.addEventListener('click', () => {
+        const open = bar.classList.toggle('open');
+        setPref('tto.kisayol.open', open ? '1' : '0');
+        fit();
+      });
+      watchWidth(bar, fit);
       this.host.appendChild(bar);
     }
     if (data.note) this.host.appendChild(h('div', { class: 'banner' }, data.note));
@@ -315,13 +340,33 @@ export class ViewPage {
       if (it.stale && it.chart && it.data) { it.stale = false; it.chart.update(it.data); }
       return true;
     };
+    // the panels of ``ids`` in their order; a column of the view (``stacks``: small panels one under the other beside a
+    // tall one - the desk, 27.11.2026) at the place of its first panel, with those of its panels that are in ``ids``
+    const placeAll = (host, ids, stacks) => {
+      const stackOf = new Map();
+      for (const st of stacks || []) for (const sid of st) if (!stackOf.has(sid)) stackOf.set(sid, st);
+      const done = new Set();
+      let n = 0;
+      for (const id of ids) {
+        const st = stackOf.get(id);
+        if (!st) { n += place(host, id) ? 1 : 0; continue; }
+        if (done.has(st)) continue;
+        done.add(st);
+        const col = h('div', { class: 'stack' });
+        for (const sid of st) if (ids.includes(sid)) n += place(col, sid) ? 1 : 0;
+        if (!col.children.length) continue;
+        col.classList.toggle('wide', [...col.children].some((c) => c.classList.contains('wide')));
+        host.appendChild(col);
+      }
+      return n;
+    };
     while (this.wrap.firstChild) this.wrap.removeChild(this.wrap.firstChild);
     while (this.pinWrap.firstChild) this.pinWrap.removeChild(this.pinWrap.firstChild);
-    for (const id of this.pinned) place(this.pinWrap, id);
+    placeAll(this.pinWrap, this.pinned, this.pinnedStacks);
     let shown = 0;
     let note = '';
     if (!this.sections.length) {
-      for (const id of this.ids) if (hit(this.items.get(id))) shown += place(this.wrap, id) ? 1 : 0;
+      shown += placeAll(this.wrap, this.ids.filter((id) => hit(this.items.get(id))), []);
     } else if (q || this.tab === ALL) {
       const placed = new Set(this.pinned);
       for (const s of this.sections) {
@@ -329,12 +374,13 @@ export class ViewPage {
         if (!ids.length) continue;
         const head = h('div', { class: 'secthead' }, s.title, h('span', { class: 'n' }, String(ids.length)));
         this.wrap.appendChild(head);
-        for (const id of ids) { placed.add(id); shown += place(this.wrap, id) ? 1 : 0; }
+        for (const id of ids) placed.add(id);
+        shown += placeAll(this.wrap, ids, s.stacks);
       }
     } else {
       const s = this.sections.find((x) => x.id === this.tab) || this.sections[0];
       note = s.note || '';
-      for (const id of s.panels) if (this.pinned.indexOf(id) < 0) shown += place(this.wrap, id) ? 1 : 0;
+      shown += placeAll(this.wrap, s.panels.filter((id) => this.pinned.indexOf(id) < 0), s.stacks);
     }
     if (!shown) this.wrap.appendChild(h('div', { class: 'empty' }, q ? 'Aramayla eşleşen tablo yok' : 'Bu sekmede tablo yok'));
     for (const [id, b] of this.tabBtns) b.classList.toggle('on', !q && id === this.tab);
@@ -342,6 +388,7 @@ export class ViewPage {
     this.secNote.textContent = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
     this.secNote.classList.toggle('hidden', !this.secNote.textContent);
     this.placed = placed;
+    this.dedupeNotes();
     reviveEditor();                    // (a cell typed into whose table left the page: its editor goes on in a bar of its own)
     // a tab whose panels were not brought up to date while another was open: now - shown dimmed until then, so that
     // nobody reads a number from before the change
@@ -422,14 +469,14 @@ export class ViewPage {
    * A table with more rows than are in use (a list, a bulk pricing): the rows after the last filled one stay
    * out of the way but ``extra`` empty ones; "+ Satır" opens one more, "Tümü" all of them.
    */
-  growable(it, p, head, tools) {
+  growable(it, p, head) {
     const key = 'tto.grow.' + this.id + '.' + p.id;
     let extra = Math.max(1, Number(pref(key, String(p.grow.extra || 1))) || 1);
     let all = false;
     const more = h('button', { class: 'iconbtn grow-more', type: 'button', title: 'Bir boş satır daha göster' }, '+ Satır');
     const every = h('button', { class: 'iconbtn grow-all', type: 'button', title: 'Bütün satırları göster / yalnızca dolu olanları' }, 'Tümü');
-    head.insertBefore(more, tools);
-    head.insertBefore(every, tools);
+    head.appendChild(more);
+    head.appendChild(every);
     it.grow = () => {
       const g = it.grid;
       const d = g && g.data;
@@ -458,10 +505,87 @@ export class ViewPage {
     it.grow();
   }
 
+  /**
+   * A long table that opens on its first rows (the view's ``"limit": {"rows": n}``; the desk, 27.11.2026: one scrollbar -
+   * the PPK table's 82 meetings opened on 24): the first n rows under its captions, "Tümü (N)" in its header the rest -
+   * kept so in this browser, as the tabs and the folded panels are (a temporary copy as its table).
+   */
+  limitable(it, p, head) {
+    const n = Math.max(1, Math.floor(Number(p.limit.rows)) || 1);
+    const key = 'tto.limit.' + this.id + '.' + (p.copy ? p.copy.of : p.id);
+    let all = pref(key, '0') === '1';
+    const btn = h('button', { class: 'iconbtn limit-all', type: 'button' });
+    btn.dataset.action = 'limit';
+    head.appendChild(btn);
+    it.limit = () => {
+      const g = it.grid;
+      if (!g || !g.data) return;
+      const heads = new Set(g.heads);
+      const trs = [...g.el.querySelectorAll('tbody > tr')].filter((tr) => !tr.classList.contains('axisrow'));
+      let k = 0;
+      trs.forEach((tr, i) => {
+        if (heads.has(i)) return;                        // (the captions stay)
+        k += 1;
+        tr.classList.toggle('limit-hidden', !all && k > n);
+      });
+      btn.classList.toggle('hidden', k <= n);
+      btn.textContent = all ? 'İlk ' + n : 'Tümü (' + k + ')';
+      btn.title = all ? 'Yalnız ilk ' + n + ' satırı göster' : 'Bütün ' + k + ' satırı göster (ilk ' + n + ' gösteriliyor)';
+    };
+    btn.addEventListener('click', () => { all = !all; setPref(key, all ? '1' : '0'); it.limit(); });
+    it.limit();
+  }
+
+  /** A panel's note: its own words, then each two-way group's note (tto/twoway.py; ``tw``: those of ``note``, at its end) -
+   *  one a table above it on screen says already is left out there (dedupeNotes); two lines of it, "devamı" the rest. */
+  setNote(it, note, tw) {
+    const el = it.noteEl;
+    const more = it.noteFold.more;
+    const parts = Array.isArray(tw) ? tw.filter((t) => typeof t === 'string' && t) : [];
+    const joined = parts.join(' ');
+    const split = !!joined && note.endsWith(joined);
+    const own = split ? note.slice(0, note.length - joined.length).trim() : note;
+    while (el.firstChild && el.firstChild !== more) el.removeChild(el.firstChild);
+    if (own) el.insertBefore(document.createTextNode(own), more);
+    it.note = note;
+    it.noteOwn = !!own;
+    it.tw = split ? parts : [];
+    it.twEls = it.tw.map((t, k) => el.insertBefore(h('span', { class: 'tw' }, (own || k ? ' ' : '') + t), more));
+    it.noteFold.check();
+  }
+
+  /**
+   * A two-way group's note (tto/twoway.py) under the first table on screen that shows the group; the tables after it (the
+   * same calculator's other tables, a temporary copy, the page's other tab when "Tümü" shows them all) leave it out - one
+   * note a page, not four (the desk, 27.11.2026).  A folded panel says nothing: the next one on screen says it.
+   */
+  dedupeNotes() {
+    const seen = new Set();
+    const notes = [];
+    for (const el of this.host.querySelectorAll('section.panel')) {
+      const it = this.items.get(el.dataset.panel);
+      if (!it || it.el !== el || !it.noteEl) continue;
+      const shut = el.classList.contains('collapsed');
+      let says = it.noteOwn;
+      (it.twEls || []).forEach((span, k) => {
+        const dup = !shut && seen.has(it.tw[k]);
+        if (!shut) seen.add(it.tw[k]);
+        span.classList.toggle('dup', dup);
+        if (!dup) says = true;
+      });
+      it.noteEl.classList.toggle('empty', !says);
+      if (!it.noteEl.classList.contains('open')) notes.push(it.noteEl);
+    }
+    // longer than its two lines? - all measured first, then marked: the page laid out once, not once a note
+    const long = notes.map((n) => n.scrollHeight > n.clientHeight + 2);
+    notes.forEach((n, k) => n.classList.toggle('long', long[k]));
+  }
+
   panel(p) {
     const key = 'tto.col.' + this.id + '.' + p.id;
     const collapsed = pref(key, p.collapsed ? '1' : '0') === '1';
-    const el = h('section', { class: 'panel' + (p.wide ? ' wide' : '') + (p.full ? ' full' : '') + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
+    const el = h('section', { class: 'panel vpanel' + (p.wide ? ' wide' : '') + (p.full ? ' full' : '') + (p.fit ? ' fit' : '')
+      + (p.type === 'chart' ? ' chart' : '') + (p.type === 'notes' ? ' notes' : '')
       + (p.hidden ? ' aux' : '') + (collapsed ? ' collapsed' : '') + (p.copy ? ' copy' : '') });
     el.dataset.panel = p.id;
     if (p.copy) { el.dataset.copy = p.copy.id; el.dataset.copyOf = p.copy.of; }       // a temporary copy of the table p.copy.of
@@ -470,8 +594,16 @@ export class ViewPage {
     const tools = h('div', { class: 'tools' });
     const title = h('h2', { title: p.title || '' }, p.title || '');
     it.titleEl = title;
-    const head = h('header', null, title);
-    if (p.range && p.data) head.appendChild(h('span', { class: 'rng' }, p.range));
+    // the panel is as wide as its table, not its title (the desk, 27.11.2026): the header takes the panel's width and never
+    // sets it - the title wraps to two lines at most (all of it in its tooltip), the tools come over the title's end on
+    // hover, the header's buttons go under the title when there is no room beside it.  ▾ / ▸ folds it (every panel, the
+    // pinned ones too; each browser remembers it)
+    const fold = h('button', { class: 'fold', type: 'button', title: 'Daralt / aç', 'aria-expanded': collapsed ? 'false' : 'true' },
+      collapsed ? '▸' : '▾');
+    fold.dataset.action = 'fold';
+    // (the sheet's range on the title's line, under the tools while they show)
+    const ttl = h('div', { class: 'ttl' }, title, p.range && p.data ? h('span', { class: 'rng' }, p.range) : null, tools);
+    const head = h('header', { class: 'vhead' }, fold, ttl);
     if (p.action === 'add-isin' && p.add) {
       // a list of bonds: add by ISIN (typed, or picked from the TRY government bonds)
       const b = h('button', { class: 'btn sm', type: 'button', title: p.add.title || 'ISIN ile ekle' }, '+ ISIN ekle');
@@ -526,7 +658,6 @@ export class ViewPage {
       it.data = it.choice.data();
       head.appendChild(it.choice.el);
     }
-    head.appendChild(tools);
     el.appendChild(head);
     el.appendChild(body);
 
@@ -553,6 +684,7 @@ export class ViewPage {
           }
           tableHost.classList.toggle('hidden', !showTable);
           chartHost.classList.toggle('hidden', showTable);
+          body.classList.toggle('tbl', showTable);           // (a chart is never cut: its table is, as any table)
           tb.textContent = showTable ? 'Grafik' : 'Tablo';
         });
         tools.appendChild(tb);
@@ -571,23 +703,28 @@ export class ViewPage {
         });
       }
       // each user hides columns of their own: by the page and the table, a column by its letter in the sheet (a copy: as
-      // its table); a copy takes what is typed into its own inputs, never "Elle değer"; each user's own decimals
+      // its table); a copy takes what is typed into its own inputs, never "Elle değer"; each user's own decimals; a
+      // table drawn anew (another column order) hides again the rows "+ Satır" / "Tümü" hid
       it.grid = new Grid({ book: this.book, data: p.data, editable: true, adhoc: copy ? false : this.adhoc, copy, decimals: true,
         name: p.type === 'notes' ? null : 'v/' + this.id + '/' + (p.copy ? p.copy.of : p.id), order: true, tools,
-         rowItems: !copy && quoteRows(p.client_quote) ? (i) => quoteRowItems(this.id, p, it.grid, i) : null });
+        wrap: p.type !== 'notes', onBuild: () => { if (it.grow) it.grow(); if (it.limit) it.limit(); },
+        rowItems: !copy && quoteRows(p.client_quote) ? (i) => quoteRowItems(this.id, p, it.grid, i) : null });
       body.appendChild(it.grid.el);
+      // (the label of the columns the user hid: on the header's line of buttons, never under the tools)
+      if (tools.__columns && tools.__columns.chip) head.appendChild(tools.__columns.chip);
       if (p.data.hc) {
         // Excel hides some columns of this table: say so, one click shows them
         const more = h('button', { class: 'iconbtn hc', type: 'button',
           title: 'Bu tabloda Excel\'de gizli ' + p.data.hc + ' sütun var. Göstermek için tıklayın (Yardımcı tablolar).' },
         '+' + p.data.hc + ' gizli sütun');
         more.addEventListener('click', () => this.toggleAll());
-        head.insertBefore(more, tools);
+        head.appendChild(more);
       }
       const cp = h('button', { class: 'iconbtn', type: 'button', title: 'Tüm tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
       cp.addEventListener('click', () => copyGrid(it.grid, false));
       tools.appendChild(cp);
-      if (p.grow) this.growable(it, p, head, tools);
+      if (p.grow) this.growable(it, p, head);
+      if (p.limit && p.limit.rows) this.limitable(it, p, head);
       if (p.card === 'bond') bondCardLinks(this.ctx, it.grid.el);            // ▸ opens the bond's card
       if (p.flags === 'dibs') bondFlags(this.ctx, it.grid.el);                // ☆ / ★: onto / off the trading list
     }
@@ -611,14 +748,14 @@ export class ViewPage {
       rs.addEventListener('click', () => this.resetCopy(p));
       tools.appendChild(rs);
     }
-    const col = h('button', { class: 'iconbtn', type: 'button', title: 'Daralt / aç' }, collapsed ? '▸' : '▾');
     it.toggle = (now) => {
       el.classList.toggle('collapsed', now);
-      col.textContent = now ? '▸' : '▾';
+      fold.textContent = now ? '▸' : '▾';
+      fold.setAttribute('aria-expanded', now ? 'false' : 'true');
       setPref(key, now ? '1' : '0');
+      this.dedupeNotes();                         // (a folded panel's note is out of sight: the next one on screen says it)
     };
-    col.addEventListener('click', () => it.toggle(!el.classList.contains('collapsed')));
-    tools.appendChild(col);
+    fold.addEventListener('click', () => it.toggle(!el.classList.contains('collapsed')));
     if (p.copy) {
       const x = h('button', { class: 'iconbtn copy-x', type: 'button', title: 'Geçici kopyayı kapat (kopyaya yazılan değerler silinir)' }, '×');
       x.dataset.action = 'copy-close';
@@ -626,7 +763,10 @@ export class ViewPage {
       tools.appendChild(x);
     }
     if (p.note) {
-      it.noteEl = h('div', { class: 'note' }, p.note);
+      // two lines of it, "devamı" the rest; a folded panel hides it (app.css)
+      it.noteEl = h('div', { class: 'note' });
+      it.noteFold = foldNote(it.noteEl);
+      this.setNote(it, p.note, p.tw);
       el.appendChild(it.noteEl);
     }
     this.items.set(p.id, it);

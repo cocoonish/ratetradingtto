@@ -1,7 +1,7 @@
 // Application shell: sign-in (name and password), navigation, live refresh (server-sent events), status bar.
 import { api, session } from './api.js';
 import { settings, setLang, num, isoToTr } from './format.js';
-import { h, clear, toast, errorToast, debounce, menu, modal, inFormControl } from './ui.js';
+import { h, clear, toast, errorToast, debounce, menu, closeMenu, modal, inFormControl, fitOneLine, watchWidth } from './ui.js';
 import { configureGrid, clearSelection, findCell, selectionText, trackWrite } from './grid.js';
 import { ViewPage } from './pages/view.js';
 import { BlotterPage } from './pages/blotter.js';
@@ -609,18 +609,33 @@ function commandEnv(text, onRead) {
 }
 
 // ---------------------------------------------------------------------- favourite pages (★), the landing page
+// (one line of the top bar: the ones past its end behind "+N", a menu of them - the desk, 27.11.2026)
+let favChips = [];
+let favMore = null;
+const fitFavs = () => { if (favMore && favMore.isConnected) fitOneLine($('favs'), favChips, favMore); };
+
 function paintFavs() {
   const box = $('favs');
   if (!box) return;
   clear(box);
   const mine = favs().filter((id) => id === 'launchpad' || state.pages.some((p) => p.id === id)
     || (session.role === 'admin' && (id === 'explorer' || id === 'users' || id === 'backup')));
+  favChips = [];
   for (const id of mine) {
     const a = h('a', { class: 'fav' + (id === state.pageId ? ' on' : ''), href: '#/' + id, title: pageTitle(id) }, pageTitle(id));
     a.dataset.page = id;
     box.appendChild(a);
+    favChips.push(a);
   }
+  favMore = h('button', { class: 'fav-more hidden', type: 'button', id: 'favs-more', title: 'Diğer favorileriniz' });
+  favMore.addEventListener('click', () => {
+    const r = favMore.getBoundingClientRect();
+    menu(r.left, r.bottom + 4, favChips.filter((a) => a.classList.contains('ovfl'))
+      .map((a) => ({ label: a.textContent, action: () => { window.location.hash = '#/' + a.dataset.page; } })));
+  });
+  box.appendChild(favMore);
   box.classList.toggle('hidden', !mine.length);
+  fitFavs();
   const star = $('btn-fav');
   const on = !!state.pageId && favs().includes(state.pageId);
   star.textContent = on ? '★' : '☆';
@@ -901,7 +916,10 @@ function applyStatus(status) {
     $('mode-text').textContent = 'KAYITLI VERİ';
     badge.title = status.note || 'Excel dosyasındaki son kayıtlı piyasa verisiyle çalışıyor';
   }
-  $('asof').textContent = status.today ? 'Değerleme: ' + isoToTr(status.today) : '';
+  // (the word goes below 1500 px: the date stays, its title says what it is)
+  clear($('asof'));
+  if (status.today) $('asof').append(h('span', { class: 'lbl' }, 'Değerleme: '), isoToTr(status.today));
+  $('asof').title = status.today ? 'Değerleme tarihi: ' + isoToTr(status.today) : '';
   // RET curve freshness: typed by the desk, so remind when it was not loaded today
   const ret = status.ret;
   const fresh = !!(ret && ret.updated_at && status.server_date && ret.updated_at.slice(0, 10) === status.server_date);
@@ -1030,17 +1048,32 @@ function onSelect(info) {
 }
 
 // ---------------------------------------------------------------------- boot
-function applyLangButton() {
-  $('btn-lang').textContent = settings.lang === 'en' ? '1,234.56' : '1.234,56';
-}
-
-/** Changed cells flash green / red for a moment; some find it tiring: it can be turned off (per browser). */
+/** Changed cells flash green / red for a moment; some find it tiring: it can be turned off (per browser; the user's menu). */
 function applyFlash(on) {
   document.body.classList.toggle('noflash', !on);
-  const b = $('btn-flash');
-  b.classList.toggle('off', !on);
-  b.setAttribute('aria-pressed', on ? 'true' : 'false');
-  b.title = on ? 'Değişen hücreler yanıp sönüyor – kapatmak için tıklayın' : 'Yanıp sönme kapalı – açmak için tıklayın';
+}
+
+/** The light / dark theme (per browser; the user's menu). */
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  store('tto.theme', next);
+}
+
+/** The number format: 1.234,56 (Turkish Excel) or 1,234.56 (English) - every page drawn again in it (the user's menu). */
+function toggleLang() {
+  setLang(settings.lang === 'en' ? 'tr' : 'en');
+  store('tto.lang', settings.lang);
+  toast(settings.lang === 'en' ? 'Sayı biçimi: 1,234.56 (İngilizce Excel)' : 'Sayı biçimi: 1.234,56 (Türkçe Excel)', '', 2600);
+  const id = state.pageId;
+  const sub = id === 'launchpad' && state.page && state.page.name ? state.page.name : null;
+  dropKept();                                     // (the pages kept were drawn in the other format)
+  if (POP) { state.popKey = null; route(); return; }
+  state.pageId = null;
+  state.headerGen = 0;                            // (another number format: the whole strip again)
+  loadHeader().catch(() => {});
+  if (id) openPage(id, null, sub);
 }
 
 /** "Sıkışık görünüm" (the user menu): rows shorter and text a step smaller in every table - app.css does it all from one
@@ -1057,7 +1090,6 @@ function boot() {
   if (POP) $('app').classList.add('pop');
   else drawer = new Drawer(ctx);
   setLang(store('tto.lang') || 'tr');
-  applyLangButton();
   applyFlash(store('tto.flash') !== '0');
   if (store('tto.nav') === '1') $('app').classList.add('nav-collapsed');
 
@@ -1096,36 +1128,16 @@ function boot() {
     setLoginMode(signin.mode === 'request' ? 'login' : 'request');
     $('login-name').focus();
   });
-  $('btn-theme').addEventListener('click', () => {
-    const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-    const next = cur === 'light' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', next);
-    store('tto.theme', next);
-  });
-  $('btn-flash').addEventListener('click', () => {
-    const on = document.body.classList.contains('noflash');
-    store('tto.flash', on ? '1' : '0');
-    applyFlash(on);
-    toast(on ? 'Değişen hücreler yeniden yanıp sönecek' : 'Yanıp sönme kapatıldı', '', 2200);
-  });
   $('mode-badge').addEventListener('click', () => openStatus(state.status).catch(errorToast));
   $('interp-badge').addEventListener('click', () => ctx.goto('settings', 'interp'));
   $('hesap-ind').addEventListener('click', () => openProgress());
   if (!POP) setupProp();                            // "Prop": the calculator and the prop risk, on every page
-  $('btn-lang').addEventListener('click', () => {
-    setLang(settings.lang === 'en' ? 'tr' : 'en');
-    store('tto.lang', settings.lang);
-    applyLangButton();
-    toast(settings.lang === 'en' ? 'Sayı biçimi: 1,234.56 (İngilizce Excel)' : 'Sayı biçimi: 1.234,56 (Türkçe Excel)', '', 2600);
-    const id = state.pageId;
-    const sub = id === 'launchpad' && state.page && state.page.name ? state.page.name : null;
-    dropKept();                                     // (the pages kept were drawn in the other format)
-    if (POP) { state.popKey = null; route(); return; }
-    state.pageId = null;
-    state.headerGen = 0;                            // (another number format: the whole strip again)
-    loadHeader().catch(() => {});
-    if (id) openPage(id, null, sub);
-  });
+  // the favourites on one line: fitted again whenever the room left for them changes - the window, the title, a badge or
+  // "Hesap" coming and going (each of them watched: the bar itself keeps its width meanwhile)
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => fitFavs());
+    for (const id of ['top', 'page-title', 'favs', 'mode-badge', 'interp-badge', 'asof', 'desk-alarm', 'hesap-ind']) if ($(id)) ro.observe($(id));
+  } else watchWidth($('top'), fitFavs);
   $('btn-collapse').addEventListener('click', () => {
     const on = $('app').classList.toggle('nav-collapsed');
     store('tto.nav', on ? '1' : '0');
@@ -1159,6 +1171,19 @@ function boot() {
             if (box) box.checked = compact();
           });
         } },
+      // (the top bar's 1.234,56 / ⚡ / ◐ until 27.11.2026: set once, so here - the bar stays one row on a laptop)
+      { check: true, id: 'btn-lang', on: settings.lang === 'en', label: 'İngilizce sayı biçimi (1,234.56)',
+        title: 'Sayılar 1,234.56 biçiminde okunur, gösterilir ve kopyalanır (İngilizce Excel); kapalıyken 1.234,56 (Türkçe Excel). '
+          + 'Bu tarayıcıda saklanır.',
+        action: () => { closeMenu(); toggleLang(); } },
+      { check: true, id: 'btn-flash', on: !document.body.classList.contains('noflash'), label: 'Değişen hücreler yanıp sönsün',
+        title: 'Değişen hücre bir an yeşil / kırmızı yanar; kapalıyken değer sessizce değişir. Bu tarayıcıda saklanır.',
+        action: (on) => {
+          store('tto.flash', on ? '1' : '0');
+          applyFlash(on);
+        } },
+      { check: true, id: 'btn-theme', on: document.documentElement.getAttribute('data-theme') === 'light', label: 'Açık tema',
+        title: 'Açık / koyu tema. Bu tarayıcıda saklanır.', action: () => { toggleTheme(); } },
       { label: 'Senaryolarım', action: () => openScenarios(ctx) },
       { label: 'Şifremi değiştir', action: () => openPasswordDialog() },
     ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } }] : [],

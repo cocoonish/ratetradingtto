@@ -1566,15 +1566,22 @@ async function clipAfter(page, action) {
     // ------------------------------------------------------------------ number format + theme
     console.log('number format, theme, explorer');
     await open(page, 'forward');
+    // (the number format, the flashing and the theme are in the user's menu since 27.11.2026: the top bar is one row)
+    await page.click('#btn-user');
     await page.click('#btn-lang');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ready && /\d\.\d{4}/.test(window.tto.findCell('EK_FWD!E50')?.textContent || ''));
     check('English number format shows a decimal point', /^\d+\.\d{4}$/.test((await cellText(page, 'EK_FWD!E50')).trim()), await cellText(page, 'EK_FWD!E50'));
+    await page.click('#btn-user');
     await page.click('#btn-lang');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ready && /\d,\d{4}/.test(window.tto.findCell('EK_FWD!E50')?.textContent || ''));
+    await page.click('#btn-user');
     await page.click('#btn-theme');
     check('theme toggles to light', (await page.evaluate(() => document.documentElement.getAttribute('data-theme'))) === 'light');
+    await page.keyboard.press('Escape');
     await shot(page, '05-forward-light');
+    await page.click('#btn-user');
     await page.click('#btn-theme');
+    await page.keyboard.press('Escape');
 
     // ------------------------------------------------------------------ explorer + formula bar
     await open(page, 'explorer');
@@ -1706,7 +1713,10 @@ async function clipAfter(page, action) {
     await open(page, 'masa');
     check('the desk page has the workbook\'s shortcuts (29 of its 30: the sheet without a page is not offered)',
       await page.locator('.shortcuts .chip').count() === 29 && await page.locator('.shortcuts .chip', { hasText: 'YP DİBS' }).count() === 0);
+    // (on one line since 27.11.2026: the ones past its end behind "+N")
+    if (!(await page.locator('.shortcuts .chip', { hasText: 'Matrisler' }).isVisible())) await page.click('#shortcuts-more');
     await page.locator('.shortcuts .chip', { hasText: 'Matrisler' }).click();
+    await page.evaluate(() => { try { localStorage.removeItem('tto.kisayol.open'); } catch (e) { /* ignore */ } });
     await page.waitForFunction(() => window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     await page.waitForTimeout(900);
     const hit = await page.evaluate(() => {
@@ -7500,6 +7510,173 @@ async function clipAfter(page, action) {
     check('status window: the data folder on this computer\'s own disk (WAL), the one-dashboard lock held by this dashboard',
       /kendi diskinde/.test(dbLines.folder) && /WAL/.test(dbLines.folder) && !dbLines.folderBad && /bu dashboard tutuyor/.test(dbLines.lock)
       && !dbLines.lockBad, dbLines);
+
+    // ------------------------------------------------------------------ düzen (27.11.2026): the app-wide layout mechanisms
+    console.log('layout: panel widths, notes, columns of panels, the top bar');
+    // a panel is as wide as its table - never its title or its hover tools (they come over the title's end); 320 px at least
+    const duzenL1Widths = [];
+    for (const id of ['forward', 'viop', 'ois']) {
+      await open(page, id);
+      duzenL1Widths.push(...await page.evaluate(() => [...document.querySelectorAll('#content .panels > .panel:not(.wide):not(.chart):not(.collapsed)')]
+        .filter((p) => p.querySelector('.body table.grid') && p.querySelector('header .tools'))
+        .map((p) => ({ id: p.dataset.panel, w: Math.round(p.getBoundingClientRect().width),
+          t: Math.round(Math.max(...[...p.querySelectorAll('.body table.grid')].map((t) => t.getBoundingClientRect().width))),
+          tools: getComputedStyle(p.querySelector('header .tools')).position }))));
+    }
+    check('duzenL1: a panel is as wide as its table, never its title or its hover tools (over the title, no width of their own); 320 px at least',
+      duzenL1Widths.length >= 5 && duzenL1Widths.every((x) => x.w <= Math.max(x.t + 2, 322) && x.w >= 320 && x.tools === 'absolute'),
+      duzenL1Widths.filter((x) => !(x.w <= Math.max(x.t + 2, 322) && x.w >= 320 && x.tools === 'absolute')).concat([duzenL1Widths.length]));
+    // the colours of the cells behind "?"
+    await page.click('#legend-chip');
+    const duzenL1Legend = await page.evaluate(() => (document.querySelector('.menu.legend-pop') || {}).textContent || '');
+    await page.keyboard.press('Escape');
+    check('duzenL1: the colours of the cells behind "?" (and how long the page took)', /kişisel girdi/.test(duzenL1Legend)
+      && /iki yönlü: yazılan/.test(duzenL1Legend) && /ms'de hesaplandı/.test(duzenL1Legend) && !(await page.locator('.page-tools .legend').count()), duzenL1Legend);
+    // a column of panels in a tab (a view's ["B3", ["B2", "B8"]]): one under the other at the place of its first
+    const duzenL1Stack = await page.evaluate(() => {
+      const pg = window.tto.state.page;
+      const was = pg.tab;
+      const ids = pg.ids.filter((id) => pg.pinned.indexOf(id) < 0 && pg.items.has(id)).slice(0, 3);
+      pg.sections.push({ id: 'duzenL1', title: 'L1', panels: ids, stacks: [ids.slice(1)] });
+      pg.tab = 'duzenL1';
+      pg.layout();
+      const col = document.querySelector('#content .panels:not(.pinned) > .stack');
+      const inCol = col ? [...col.children].map((c) => c.dataset.panel) : [];
+      const r = inCol.length === 2 ? [...col.children].map((c) => c.getBoundingClientRect()) : [];
+      const first = document.querySelector('#content .panels:not(.pinned) > :first-child');
+      const out = { ids, inCol, first: first && first.dataset.panel, under: r.length === 2 && r[1].top >= r[0].bottom && Math.abs(r[1].left - r[0].left) < 2 };
+      pg.sections.pop();
+      pg.tab = was;
+      pg.layout();
+      return out;
+    });
+    check('duzenL1: a column of panels in a tab - its panels one under the other at the place of the first',
+      duzenL1Stack.ids.length === 3 && duzenL1Stack.inCol.join() === duzenL1Stack.ids.slice(1).join() && duzenL1Stack.under
+      && duzenL1Stack.first === duzenL1Stack.ids[0], duzenL1Stack);
+    // "limit": a long table opens on its first rows; "Tümü (N)" shows them all (kept in the browser)
+    const duzenL1Limit = await page.evaluate(() => {
+      const pg = window.tto.state.page;
+      const its = [...pg.items.entries()].filter(([, it]) => it.grid && it.grid.data && !it.grow && !it.limit && !it.copy);
+      its.sort((a, b) => b[1].grid.data.rows.length - a[1].grid.data.rows.length);
+      const [id, it] = its[0];
+      pg.showPanel(id);
+      const key = 'tto.limit.' + pg.id + '.' + id;
+      try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+      if (it.el.classList.contains('collapsed')) it.toggle(false);
+      const head = it.el.querySelector('header');
+      pg.limitable(it, { id, limit: { rows: 3 } }, head);
+      const shown = () => [...it.grid.el.querySelectorAll('tbody > tr')].filter((tr) => getComputedStyle(tr).display !== 'none').length;
+      const btn = head.querySelector('button[data-action="limit"]');
+      const out = { id, heads: it.grid.heads.length, rows: it.grid.data.rows.length, r0: shown(), t0: btn.textContent };
+      btn.click();
+      Object.assign(out, { r1: shown(), t1: btn.textContent, kept: localStorage.getItem(key) });
+      btn.click();
+      out.r2 = shown();
+      btn.remove();
+      it.limit = null;
+      it.grid.el.querySelectorAll('tr.limit-hidden').forEach((tr) => tr.classList.remove('limit-hidden'));
+      try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+      return out;
+    });
+    check('duzenL1: "limit" - a long table opens on its first rows, "Tümü (N)" shows them all (kept), "İlk n" its first rows again',
+      duzenL1Limit.r0 === duzenL1Limit.heads + 3 && duzenL1Limit.t0 === 'Tümü (' + (duzenL1Limit.rows - duzenL1Limit.heads) + ')'
+      && duzenL1Limit.r1 === duzenL1Limit.rows && duzenL1Limit.t1 === 'İlk 3' && duzenL1Limit.kept === '1' && duzenL1Limit.r2 === duzenL1Limit.r0, duzenL1Limit);
+    // a table the page builds itself: its first column stays in view while it scrolls sideways (plainData's "freeze")
+    const duzenL1Fz = await page.evaluate(async () => {
+      const { Grid, plainData } = await import('/static/js/grid.js');
+      const box = document.createElement('div');
+      box.style.cssText = 'width: 320px; overflow: auto; position: fixed; left: 0; top: 0; z-index: 99; background: #000';
+      document.body.appendChild(box);
+      const cols = [...Array(14).keys()];
+      const g = new Grid({ data: plainData(['Ad'].concat(cols.map((j) => 'Sütun ' + j)), [0, 1, 2].map((i) => ['Satır ' + i].concat(cols.map((j) => String(i * j)))),
+        { freeze: 1 }), editable: false });
+      box.appendChild(g.el);
+      g._freeze();
+      const at = () => [g.tds[2][0].getBoundingClientRect().left, g.tds[2][1].getBoundingClientRect().left];
+      const before = at();
+      box.scrollLeft = 300;
+      const after = at();
+      const out = { fz: g.tds[2][0].classList.contains('fz'), before, after, scrolled: box.scrollLeft };
+      box.remove();
+      return out;
+    });
+    check('duzenL1: a table a page builds (plainData) keeps its first column in view while it scrolls sideways ({freeze: 1})',
+      duzenL1Fz.fz && duzenL1Fz.scrolled > 100 && Math.abs(duzenL1Fz.after[0] - duzenL1Fz.before[0]) < 1 && duzenL1Fz.after[1] < duzenL1Fz.before[1] - 100, duzenL1Fz);
+    // a long note in a sheet's range wraps in the table's width (DİBS ASW's FX curve: 7 531 px wide from one note before)
+    await open(page, 'asw');
+    const duzenL1Ovw = await page.evaluate(() => [...document.querySelectorAll('#content td.ovw')].filter((td) => td.textContent.length >= 300
+      && td.offsetParent !== null).map((td) => {
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position: absolute; white-space: nowrap; visibility: hidden; font: ' + getComputedStyle(td).font;
+      probe.textContent = td.textContent;
+      document.body.appendChild(probe);
+      const one = probe.getBoundingClientRect().width;
+      probe.remove();
+      return { len: td.textContent.length, one: Math.round(one), table: Math.round(td.closest('table').getBoundingClientRect().width), h: Math.round(td.getBoundingClientRect().height) };
+    }));
+    check('duzenL1: a long note inside a table wraps in the width of the table\'s other cells (no column widened by it)',
+      duzenL1Ovw.length >= 1 && duzenL1Ovw.every((x) => x.table < x.one * 0.6 && x.h > 30), duzenL1Ovw);
+    // a two-way group's note once on the page (Manuel Tahvil: four tables of one group); a folded panel hides its note -
+    // the next table says it; a long note two lines, "devamı" the rest
+    await open(page, 'manuel');
+    const twShown = () => page.evaluate(() => [...document.querySelectorAll('#content section.panel > .note .tw')]
+      .filter((s) => /İki yönlü: temiz fiyat ya da sonuçlardan biri/.test(s.textContent))
+      .map((s) => ({ id: s.closest('section.panel').dataset.panel, on: s.offsetParent !== null })));
+    const duzenL1Tw = await twShown();
+    const duzenL1TwFirst = (duzenL1Tw.find((x) => x.on) || {}).id || null;
+    let duzenL1TwFolded = [];
+    let duzenL1FoldedNote = true;
+    if (duzenL1TwFirst) {
+      await page.evaluate((id) => window.tto.state.page.items.get(id).toggle(true), duzenL1TwFirst);
+      duzenL1TwFolded = await twShown();
+      duzenL1FoldedNote = await page.evaluate((id) => document.querySelector('#content section.panel[data-panel="' + id + '"] > .note').offsetParent !== null, duzenL1TwFirst);
+      await page.evaluate((id) => window.tto.state.page.items.get(id).toggle(false), duzenL1TwFirst);
+    }
+    check('duzenL1: a two-way note once on the page; folded, its panel hides it and the next table on screen says it',
+      duzenL1Tw.length >= 2 && duzenL1Tw.filter((x) => x.on).length === 1 && !duzenL1FoldedNote
+      && duzenL1TwFolded.filter((x) => x.on).length === 1 && duzenL1TwFolded.find((x) => x.on).id !== duzenL1TwFirst, { duzenL1Tw, duzenL1TwFolded });
+    const duzenL1Note = await page.evaluate(() => {
+      const n = [...document.querySelectorAll('#content section.panel > .note.clamp.long')].find((x) => x.offsetParent !== null);
+      if (!n) return null;
+      const more = n.querySelector('.note-more');
+      const h0 = n.getBoundingClientRect().height;
+      more.click();
+      const out = { h0, h1: n.getBoundingClientRect().height, t1: more.textContent };
+      more.click();
+      return Object.assign(out, { h2: n.getBoundingClientRect().height, t2: more.textContent, lh: parseFloat(getComputedStyle(n).lineHeight) });
+    });
+    check('duzenL1: a long note shows two lines - "devamı" the rest, "kısalt" two lines again', !!duzenL1Note
+      && duzenL1Note.h0 <= 2 * duzenL1Note.lh + 2 && duzenL1Note.h1 > duzenL1Note.h0 + 8 && duzenL1Note.t1 === 'kısalt' && duzenL1Note.t2 === 'devamı'
+      && Math.abs(duzenL1Note.h2 - duzenL1Note.h0) < 1, duzenL1Note);
+    // a laptop's 1366 px: the top bar one row, the search an icon until Ctrl+K, KISAYOLLAR one line with "+N"
+    const duzenL1Keep = signedIn[keyOf('Ayşe Yılmaz')];
+    const ctxL1 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+    const pageL1 = await ctxL1.newPage();
+    pageL1.on('pageerror', (e) => errors.push('pageerror (1366): ' + e.message));
+    await login(pageL1, 'Ayşe Yılmaz');
+    signedIn[keyOf('Ayşe Yılmaz')] = duzenL1Keep;
+    await open(pageL1, 'masa');
+    await pageL1.waitForTimeout(400);
+    const duzenL1Top = await pageL1.evaluate(() => ({ top: Math.round(document.getElementById('top').getBoundingClientRect().height),
+      find: Math.round(document.getElementById('find').getBoundingClientRect().width), lang: !!document.getElementById('btn-lang'),
+      bar: Math.round(document.querySelector('.shortcuts').getBoundingClientRect().height), more: document.getElementById('shortcuts-more').textContent,
+      shown: [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length }));
+    await pageL1.keyboard.press('Control+k');
+    await pageL1.waitForTimeout(250);
+    duzenL1Top.open = await pageL1.evaluate(() => Math.round(document.getElementById('find').getBoundingClientRect().width));
+    await pageL1.keyboard.press('Escape');
+    await pageL1.click('#shortcuts-more');
+    duzenL1Top.all = await pageL1.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
+    duzenL1Top.less = await pageL1.textContent('#shortcuts-more');
+    await pageL1.click('#shortcuts-more');
+    duzenL1Top.again = await pageL1.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
+    await shot(pageL1, '99-duzen-1366');
+    await ctxL1.close();
+    check('duzenL1: at 1366 px the top bar is one row (number format, flashing, theme in the user\'s menu), the search an icon until Ctrl+K; '
+      + 'KISAYOLLAR one line with "+N" (all of them / one line again)',
+      duzenL1Top.top <= 52 && duzenL1Top.find <= 40 && duzenL1Top.open >= 200 && !duzenL1Top.lang && duzenL1Top.bar <= 30
+      && duzenL1Top.more === '+' + (29 - duzenL1Top.shown) && duzenL1Top.shown < 29 && duzenL1Top.all === 29 && duzenL1Top.less === 'daha az'
+      && duzenL1Top.again === duzenL1Top.shown, duzenL1Top);
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

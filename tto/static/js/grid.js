@@ -100,6 +100,7 @@ function cellClass(cell) {
   if (cell.f && cell.f !== 'in') cls += ' f-' + cell.f;
   if (cell.al) cls += ' al-' + cell.al;
   if (cell.ov) cls += ' ov';
+  if (cell.ovw) cls += ' ovw';                          // (a long one: it wraps in the table's width - prepare)
   if (cell.n) cls += ' nt';
   if (typeof cell.bar === 'number') cls += ' bar bar-' + (cell.bc || 'info');
   if (cell.ro) cls += ' ro';                            // an input a temporary copy keeps read-only (the reason: its tip)
@@ -181,11 +182,17 @@ function noteTyped(grid, shortcuts) {
   }
 }
 
+/** A text this long that runs over the cells to its right is a note: it wraps in the table's width (``ovw``). */
+const WRAP_AT = 70;
+
 /**
  * Excel lets a long text run over the empty cells to its right; do the same with a column span so notes and
- * captions do not blow up the width of their own column.  Marks the data once (the shape check sees it).
+ * captions do not blow up the width of their own column.  Marks the data once (the shape check sees it).  A long one
+ * (``WRAP_AT`` characters or more: a note inside the sheet's range, up to 1 400 characters) wraps within the width the
+ * table's other cells give it instead of making every column under it wider (the desk, 27.11.2026: an 11-column table
+ * was 7 531 px wide from its note) - unless ``wrap`` is false (a notes panel: its own rule).
  */
-function prepare(data) {
+function prepare(data, wrap = true) {
   if (!data || data.__prepared || !data.rows) return data;
   data.__prepared = true;
   for (const row of data.rows) {
@@ -202,12 +209,26 @@ function prepare(data) {
       if (n > 0) {
         c.cs = n + 1;
         c.ov = 1;
+        if (wrap && c.t.length >= WRAP_AT) c.ovw = 1;
         for (let k = 1; k <= n; k++) { row[j + k].sk = 1; row[j + k].ovk = 1; }      // (ovk: run over, no merged cell)
         j += n;
       }
     }
   }
   return data;
+}
+
+/** A cell's text into its <td>: a long note that wraps (``ovw``) in a box of its own that gives the table no width. */
+function fillText(td, cell) {
+  const t = cell.t || '';
+  if (!cell.ovw) { td.textContent = t; return; }
+  let box = td.firstElementChild;
+  if (!box || !box.classList.contains('ovt')) {
+    td.textContent = '';
+    box = td.appendChild(document.createElement('div'));
+    box.className = 'ovt';
+  }
+  box.textContent = t;
 }
 
 function isHeaderRow(row) {
@@ -301,7 +322,7 @@ function ordered(data, keys, order) {
       if (!cell || (cell.sk && !cell.ovk)) return;                 // (covered by a merged cell: placed with it)
       const c = Object.assign({}, cell);
       if (c.ovk) { delete c.sk; delete c.ovk; rows[i][pos[j]] = c; return; }
-      if (c.ov) { delete c.ov; delete c.cs; }
+      if (c.ov) { delete c.ov; delete c.cs; delete c.ovw; }
       const cs = c.cs || 1;
       const rs = c.rs || 1;
       const ps = [];
@@ -342,9 +363,15 @@ export class Grid {
    *                 after a price's "İşlem gir")
    *       decimals (bool: the right-click menu sets this user's own decimals of the numbers selected - a table of a
    *                 workbook page, whose answers the server puts them on: decimals.js)
+   *       freeze (n: its first n columns stay in view while it scrolls sideways - a table the page builds itself, whose
+   *               data says none (``fz``: the workbook's frozen panes, a view's "freeze"); plainData takes it too)
+   *       wrap (bool, default true: a long note that runs over a row wraps in the table's width - prepare; false: a
+   *             notes panel, whose cells wrap by their own rule)
+   *       onBuild (() => …: the table was drawn anew - its rows are new elements: a page's rows hidden by "+ Satır" /
+   *                "Tümü" are hidden again)
    */
   constructor(opts) {
-    this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true }, opts);
+    this.opts = Object.assign({ editable: true, adhoc: false, axis: false, header: true, wrap: true }, opts);
     this.book = this.opts.book || null;
     this.data = null;
     this.tds = [];
@@ -404,7 +431,7 @@ export class Grid {
     if (!data || !data.rows) return true;
     this.source = data;
     data = this._ordered(data);
-    prepare(data);
+    prepare(data, this.opts.wrap);
     if (this.sameShape(data)) {
       this._patch(data, flash);
       return true;
@@ -423,7 +450,7 @@ export class Grid {
     if (editing && editing.grid === this) editing = null;
     this.source = data;
     data = this._ordered(data);
-    prepare(data);
+    prepare(data, this.opts.wrap);
     this.data = data;
     this._build();
   }
@@ -441,7 +468,7 @@ export class Grid {
     if (editing && editing.grid === this) commitEdit();
     if (sel.grid === this) clearSelection();
     const data = this._ordered(this.source);
-    prepare(data);
+    prepare(data, this.opts.wrap);
     this.data = data;
     this._build();
   }
@@ -485,7 +512,7 @@ export class Grid {
           b.addEventListener('change', () => cell.chk.fn(b.checked));
           td.appendChild(b);
         } else {
-          td.textContent = cell.t || '';
+          fillText(td, cell);
         }
         if (cell.rs) td.rowSpan = cell.rs;
         if (cell.cs) td.colSpan = cell.cs;
@@ -513,6 +540,7 @@ export class Grid {
       editing.pts = [];
       paintPoint(editing);
     }
+    if (this.opts.onBuild) this.opts.onBuild(this);
   }
 
   /** True when this user hid column j of the table. */
@@ -559,7 +587,9 @@ export class Grid {
    * rendered widths, so this runs again whenever the table changes size.
    */
   _freeze() {
-    const n = this.data && this.data.fz;
+    const width = this.data && this.data.rows && this.data.rows.length ? this.data.rows[0].length : 0;
+    // the data's own (the workbook's panes, a view's "freeze") - else the page's for a table it builds (opts.freeze)
+    const n = (this.data && this.data.fz) || (this.opts.freeze > 0 && this.opts.freeze < width ? this.opts.freeze : 0);
     if (!n || this.opts.axis || !this.tds.length) return;
     const rows = this.data.rows;
     const span = (i, j) => rows[i][j].cs || 1;            // as built (a hidden column narrows the cell, not this)
@@ -604,7 +634,7 @@ export class Grid {
         if (cell.act || cell.chk) continue;
         td.className = cellClass(cell) + (cell.cls ? ' ' + cell.cls : '') + (keepSel ? ' sel' : '') + (keepCur ? ' cur' : '')
           + (keepPt ? ' pt' : '');
-        td.textContent = cell.t || '';
+        fillText(td, cell);
         // (a formula typed, changed or gone - or a tooltip the workbook gives, which curve a rate is of: the tooltip with
         // it; a date typed as a shortcut: what was typed; a two-way table's row typed into or back to its default)
         if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size
@@ -1453,8 +1483,10 @@ export function findCell(ref, root = document, skip = null) {
 /**
  * Build grid data from plain rows (client-rendered tables such as the blotter lists).  A caption is a text, or
  * {t, ck}: ``ck`` names the column for the user's column choice when the caption changes ("σ 10g (bp)" -> "σ 10g").
+ * ``opts.freeze``: its first n columns stay in view while it scrolls sideways (the instrument's name of a wide list;
+ * the desk, 27.11.2026) - the Grid's own ``freeze`` option does the same for every data it is given.
  */
-export function plainData(header, rows) {
+export function plainData(header, rows, opts) {
   const out = [];
   if (header) out.push(header.map((t) => (t && typeof t === 'object' ? Object.assign({ k: 's', b: 1, f: 'hd' }, t) : { t, k: 's', b: 1, f: 'hd' })));
   for (const row of rows) {
@@ -1464,5 +1496,8 @@ export function plainData(header, rows) {
       return { t: String(c), k: 's' };
     }));
   }
-  return { sheet: '', rows: out };
+  const data = { sheet: '', rows: out };
+  const n = opts && opts.freeze;
+  if (n > 0 && out.length && n < out[0].length) data.fz = n;
+  return data;
 }
