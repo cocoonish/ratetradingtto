@@ -4084,6 +4084,88 @@ async function clipAfter(page, action) {
       && /Hesaplanan: bu satırda yazılan değer Gerçekleşen FRA · S337/.test(fraTw.r.tip), fraTw);
     for (const ref of ['OIS_MAIN!U337', 'OIS_MAIN!Q337', 'OIS_MAIN!R337']) await ppkClear(ref);
     await page.evaluate(() => window.tto.state.page.items.get('B21').toggle(true));           // (folded again, as it was)
+    // OIS · PPK, TLREF normalleşmesi (v2; the desk, 26.11.2026): the date OIS implies, right of STUB İMA in its own panel
+    // (no new panel) - switched off the panel is as before; a tick box per tenor, an input of kind "check", writes 1 / 0
+    console.log('normalleşme · OIS ima');
+    const normWalkTicks = ['OIS_MAIN!AP9', 'OIS_MAIN!AP10', 'OIS_MAIN!AP11', 'OIS_MAIN!AP12', 'OIS_MAIN!AP13'];
+    const normWalkCell = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json;
+    const normWalkPost = async (items) => (await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items })).json;
+    const normWalkStub = () => page.evaluate(() => {
+      const td = window.tto.findCell('OIS_MAIN!AJ8');
+      const table = td && td.closest('table.grid');
+      return { cols: table && table.__grid ? table.__grid.data.c : null, ticks: table ? table.querySelectorAll('input.tick').length : -1,
+        box: !!window.tto.findCell('OIS_MAIN!AP9') };
+    });
+    await tab(page, 'mpc');
+    await waitCell(page, 'OIS_MAIN!AK9', 't.trim() !== ""');
+    const normWalkOff = await normWalkStub();
+    check('OIS · PPK: switched off (normalleşme kapalı) STUB İMA reads as before - its columns AJ:AN, no tick box of the normalization',
+      JSON.stringify(normWalkOff.cols) === JSON.stringify(['AJ', 'AK', 'AL', 'AM', 'AN']) && !normWalkOff.box && normWalkOff.ticks === 0, normWalkOff);
+    // the tick boxes' input over the API: the user's own 1 / 0, anything else refused in Turkish, Delete - its default
+    const normWalkW1 = await normWalkPost([{ ref: normWalkTicks[4], value: '1' }]);
+    const normWalkW2 = await normWalkPost([{ ref: normWalkTicks[4], value: '2' }]);
+    const normWalk3M = await normWalkCell(normWalkTicks[4]);
+    await normWalkPost([{ ref: normWalkTicks[4], value: '' }]);
+    const normWalk3MBack = await normWalkCell(normWalkTicks[4]);
+    check('OIS · PPK normalleşme: a tick box is an input of kind "check" - 1 written (the user\'s own), "2" refused ("tik kutusu"), '
+      + 'Delete - its default (3M: 0)',
+      normWalkW1.errors.length === 0 && normWalkW2.errors.length === 1 && /tik kutusu/.test(normWalkW2.errors[0])
+      && normWalk3M.input && normWalk3M.input.kind === 'check' && normWalk3M.cell.v === 1 && normWalk3MBack.cell.v === 0,
+      { normWalkW1, normWalkW2, normWalk3M: normWalk3M.cell, back: normWalk3MBack.cell });
+    // switched on: the switch (OIS_MAIN!L2, Kapalı / Açık) is norm-ppk's input - where it is not one yet (this branch alone)
+    // the page's tick boxes wait for the merge
+    await normWalkPost([{ ref: 'OIS_MAIN!L2', value: 'Açık' }]);
+    if ((await normWalkCell('OIS_MAIN!L2')).cell.t !== 'Açık') {
+      console.log('  (normalleşme: OIS_MAIN!L2 is no input in this branch - norm-ppk declares it; the tick boxes on the page are checked once merged)');
+    } else {
+      await open(page, 'ois');
+      await tab(page, 'mpc');
+      await page.waitForFunction(() => { const td = window.tto.findCell('OIS_MAIN!AP9'); return !!(td && td.querySelector('input.tick')); },
+        null, { timeout: 30000 });
+      // (the page brought up to date with the writes above: 3M back to its default, unticked)
+      await page.waitForFunction(() => { const b = window.tto.findCell('OIS_MAIN!AP13').querySelector('input.tick'); return !!b && !b.checked; },
+        null, { timeout: 20000 }).catch(() => {});
+      const normWalkOn = await normWalkStub();
+      const normWalkBoxes = await page.evaluate((refs) => refs.map((r) => {
+        const b = window.tto.findCell(r).querySelector('input.tick'); return b ? b.checked : null; }), normWalkTicks);
+      const normWalk2M = (await cellText(page, 'OIS_MAIN!AR12')).trim();
+      check('OIS · PPK normalleşme açık: right of STUB İMA (AO:AS) a tick box per tenor - 1W, 2W, 1M ticked by default -, the quotes, '
+        + 'the model at the OIS-implied date and the miss',
+        JSON.stringify(normWalkOn.cols) === JSON.stringify(['AJ', 'AK', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS']) && normWalkOn.ticks === 5
+        && JSON.stringify(normWalkBoxes) === '[true,true,true,false,false]' && normWalk2M === ''
+        && (await cellText(page, 'OIS_MAIN!AO9')).trim() === '1W' && /%$/.test((await cellText(page, 'OIS_MAIN!AQ12')).trim()),
+        { normWalkOn, normWalkBoxes, normWalk2M });
+      // a click on 2M's box: written 1, ticked after the refresh, 2M fitted too (its model rate), the date (or "–") and a message
+      await (await (await cellHandle(page, normWalkTicks[3])).$('input.tick')).click();
+      await page.waitForFunction(() => (window.tto.findCell('OIS_MAIN!AR12') || {}).textContent.trim() !== '', null, { timeout: 20000 }).catch(() => {});
+      const normWalkClick = { v: (await normWalkCell(normWalkTicks[3])).cell.v, model: (await cellText(page, 'OIS_MAIN!AR12')).trim(),
+        checked: await page.evaluate(() => window.tto.findCell('OIS_MAIN!AP12').querySelector('input.tick').checked),
+        mod: await page.evaluate(() => window.tto.findCell('OIS_MAIN!AP12').classList.contains('mod')),
+        date: (await cellText(page, 'OIS_MAIN!AQ14')).trim(), msg: (await cellText(page, 'OIS_MAIN!AO15')).trim() };
+      check('OIS · PPK normalleşme: a click on the 2M tick box writes 1 (the user\'s own, marked) - 2M is fitted too (its model rate '
+        + 'shown), with the date (or "–") and the message under the tenors',
+        normWalkClick.v === 1 && normWalkClick.checked && normWalkClick.mod && /%$/.test(normWalkClick.model)
+        && (/^\d\d\.\d\d\.\d{4}$/.test(normWalkClick.date) || normWalkClick.date === '–') && normWalkClick.msg.length > 20, normWalkClick);
+      // the keyboard: the cell selected (beside its box), Space unticks 1W; Delete - its default again (ticked)
+      await (await cellHandle(page, normWalkTicks[0])).click({ position: { x: 2, y: 2 } });
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => !window.tto.findCell('OIS_MAIN!AP9').querySelector('input.tick').checked, null, { timeout: 20000 }).catch(() => {});
+      const normWalkSpace = (await normWalkCell(normWalkTicks[0])).cell.v;
+      await page.keyboard.press('Delete');
+      await page.waitForFunction(() => window.tto.findCell('OIS_MAIN!AP9').querySelector('input.tick').checked
+        && !window.tto.findCell('OIS_MAIN!AP9').classList.contains('mod'), null, { timeout: 20000 }).catch(() => {});
+      const normWalkDel = (await normWalkCell(normWalkTicks[0])).cell.v;
+      check('OIS · PPK normalleşme: the keyboard - Space on a tick box unticks it (0 written), Delete takes it back to its default (1W: ticked)',
+        normWalkSpace === 0 && normWalkDel === 1, { normWalkSpace, normWalkDel });
+      // switched off again: the block goes, the panel as before (the ticks kept for the next time)
+      await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!L2'] });
+      await page.waitForFunction(() => !window.tto.findCell('OIS_MAIN!AP9'), null, { timeout: 30000 }).catch(() => {});
+      const normWalkOffAgain = await normWalkStub();
+      check('OIS · PPK normalleşme: switched off again, STUB İMA is as before (AJ:AN, no tick box); the 2M tick kept',
+        JSON.stringify(normWalkOffAgain.cols) === JSON.stringify(['AJ', 'AK', 'AL', 'AM', 'AN']) && normWalkOffAgain.ticks === 0
+        && (await normWalkCell(normWalkTicks[3])).cell.v === 1, normWalkOffAgain);
+      await normWalkPost([{ ref: normWalkTicks[3], value: '' }]);
+    }
     await open(page, 'usd');
     await tab(page, 'fomc');
     await waitCell(page, 'SOFR_FOMC!AA74', 't.trim() !== ""');
