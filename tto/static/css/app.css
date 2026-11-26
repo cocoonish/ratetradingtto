@@ -1736,7 +1736,7 @@ table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }
 #nav .nav-group.folded > .nav-item:not(.active) { display: none; }
 #nav .nav-group.folded > .nav-item:has(.nav-count) { display: flex; }
 #app.nav-collapsed #nav .nav-group.folded > .nav-item { display: flex; }
-@media (max-width: 900px) { #nav .nav-group.folded > .nav-item { display: flex; } }
+@media (max-width: 900px) { #nav .nav-group.folded > .nav-item { display: flex; } #nav .nav-group > .gt { display: none; } }
 /* Bugün: the blocks in columns (bugun.js columnPlan), none leaves a hole beside a taller one */
 .bugun-grid.bugun-cols { display: flex; gap: 12px; align-items: flex-start; }
 .bugun-cols > .bugun-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
