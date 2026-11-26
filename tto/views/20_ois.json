@@ -28,6 +28,37 @@
    "label": "'TLREF bugün'"
   },
   {
+   "range": "L2",
+   "scope": "user",
+   "group": "ois-norm-switch",
+   "kind": "list",
+   "label": "'Normalleşme' – TLREF normalleşmesi aç / kapat (Açık: TLREF bugünkü düzeyinde kullanılan tarihe kadar, sonra normal TLREF; PPK ima normal TLREF'ten ölçülür)",
+   "options": [
+    "Kapalı",
+    "Açık"
+   ],
+   "aliases": {
+    "Kapali": "Kapalı",
+    "Acik": "Açık",
+    "Aç": "Açık",
+    "Kapat": "Kapalı"
+   }
+  },
+  {
+   "range": "L3",
+   "scope": "user",
+   "group": "ois-norm-date",
+   "kind": "date",
+   "label": "'Normalleşme tarihi' – the first day TLREF is normal again (boş: tarih yok)"
+  },
+  {
+   "range": "L4",
+   "scope": "user",
+   "group": "ois-norm-level",
+   "kind": "pct",
+   "label": "'Normal TLREF %' (formula default: Masa'daki politika faizi − 15 bp, MASA!Q155 / 100 − 0,0015; silince varsayılana döner)"
+  },
+  {
    "range": "B3",
    "scope": "user",
    "group": "ois-3",
@@ -369,8 +400,8 @@
   {
    "id": "B1",
    "type": "table",
-   "title": "Parametreler  ·  bütün sekmelerdeki tablolar bunları okur (DV01/bacak, yuvarlama, senaryo tabanı, C+R, ufuklar, vade limiti)",
-   "range": "A2:L5",
+   "title": "Parametreler  ·  bütün sekmelerdeki tablolar bunları okur (DV01/bacak, yuvarlama, senaryo tabanı, C+R, ufuklar, vade limiti, TLREF normalleşmesi)",
+   "range": "A2:L6",
    "hidden": false
   },
   {
@@ -645,6 +676,14 @@
    "type": "table",
    "title": "Yardımcı · spot valör (Bloomberg, W2)",
    "range": "W2:W2",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "NORMPPK",
+   "type": "table",
+   "title": "Yardımcı · TLREF normalleşmesi: açık (M2), gün (M3), referans TLREF (M4), fark (M5)",
+   "range": "M2:M5",
    "hidden": true,
    "keep_title": true
   }

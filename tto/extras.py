@@ -93,7 +93,10 @@ class SheetBuilder(object):
         return i
 
     def _template(self, formula: str, r: int, c: int) -> int:
-        tpl = to_template(formula.lstrip("="), r, c)
+        return self.template_id(to_template(formula.lstrip("="), r, c))
+
+    def template_id(self, tpl: str) -> int:
+        """The id of a template (:func:`tto.xl.tokenizer.to_template`'s text), added to the model when new."""
         tid = self._templates.get(tpl)
         if tid is None:
             tid = len(self.model.templates)
@@ -657,7 +660,9 @@ def _tto_fx_dates(model: Model) -> None:
 #: comparison (K2:L2).  The workbook's OIS, TLREF, meeting, money market and bond dates count from B2; its FX value
 #: dates from Forward!I2.
 OIS_SPOT_NAME = "OIS spot valörü"
-OIS_SPOT_CELLS = ("K2", "L2")            # the caption and Bloomberg's date, right of the OIS page's parameters
+#: the caption and Bloomberg's date, the last row of the OIS page's parameters, in the spot's columns (K2:L2 until
+#: 26.11.2026, the normalization switch's since: ``NORM_ROWS``)
+OIS_SPOT_CELLS = ("A6", "B6")
 
 
 def _ois_spot_check(model: Model) -> None:
@@ -7226,6 +7231,303 @@ def _masa_off(model: Model) -> None:
         b.patch("G%d" % r, '=IFERROR(Motor!$M$%d,"")' % m)
 
 
+# ---------------------------------------------------------------------------------------------- TLREF normalleşmesi
+#: TLREF back to normal (the desk, 26.11.2026: TCMB paused the one-week repo auctions, TLREF sits near the upper band and
+#: comes back when they restart - "Ois ppk sayfasi ustunde yapmaliyiz yeni panel olmadan, normalizasyon ac kapat
+#: yapabilmeliyiz"; docs/desk-decisions.md, "TLREF normalleşmesi").  A switch on the OIS · PPK page's pinned parameters,
+#: each user's own: with it on, TLREF is today's (H, OIS_MAIN!J2) until the normalization date N and normal afterwards,
+#: and the PPK model is solved for the *normal* path - its levels and steps measured from the normal TLREF L0 (REF) - with
+#: the stretch before N added where its ln G is read:
+#:
+#:   actual ln G(t) = normal ln G(t) + E(min(t, n)),  n = N − the OIS spot (days),
+#:   E(m) = m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²]
+#:
+#: (TLREF compounding as the model's own formula: d·ln(1 + x/365) − W·(x/365)², W Motor's Pcum - exact while the normal
+#: path is L0 over the stretch; a meeting inside it errs ~1e-9 a day).  Off (the file's "Kapalı", and every calculation
+#: without a user: history, alarms, quant) the added term is an exact 0 (x + 0 = x) and every reference is picked with IF,
+#: so every value is the one before, bit for bit.  Bootstrap (Murex's MTM) reads none of it.
+#:
+#: The interface for the other parts of the feature (OIS_MAIN!M2:M5, outside the panel; nobody else writes them):
+#: M2 ON (1 / 0), M3 n (0 off), M4 REF = IF(ON, L0, J2), M5 gap·ON = (J2 − L0)·ON.  L5 (the date in use) is its own
+#: addition (``NORM_USED_NAME``) so that the OIS-implied date's can replace it after it.
+NORM_NAME = "Normalleşme anahtarı"
+NORM_USED_NAME = "Normalleşme kullanılan tarih"
+NORM_PPK_NAME = "Normalleşme PPK modeli"
+NORM_OFF, NORM_OPEN = "Kapalı", "Açık"
+#: the panel's rows: (label cell, label, value cell) - OIS_MAIN, beside "TLREF bugün"
+NORM_ROWS = (("K2", "Normalleşme", "L2"), ("K3", "Normalleşme tarihi", "L3"), ("K4", "Normal TLREF %", "L4"),
+             ("K5", "Kullanılan tarih", "L5"), ("K6", "Durum", "L6"))
+NORM_SWITCH, NORM_DATE, NORM_LEVEL, NORM_USED, NORM_STATUS = "L2", "L3", "L4", "L5", "L6"
+NORM_ON, NORM_DAYS, NORM_REF, NORM_GAP = "M2", "M3", "M4", "M5"
+#: the normal TLREF until a user types one: Masa's typed policy rate (%, a desk input) − 15 bp (TLREF ran 15–20 bp under
+#: the 36 % policy rate in early November)
+NORM_POLICY = "MASA!$Q$155"
+NORM_BELOW_POLICY = 0.0015
+#: the reference the PPK path is measured from, in OIS_MAIN's own cells: the normal TLREF when on, today's TLREF otherwise
+NORM_REF_TEXT = "IF($M$2=1,$M$4,$J$2)"
+NORM_LIMIT = 3700                         # Motor's daily calendar: days 0 … 3700 from the OIS spot
+#: Motor: E(day) beside the daily calendar (rows 528 … 4228, day = column A; its header in row 527)
+NORM_E_COL, NORM_E_ROWS = "H", (528, 4228)
+NORM_E_RANGE = "Motor!$H$528:$H$4228"
+#: the PPK solver's ("GLOBAL İMA PPK v3", Motor!A4300) payment days (B: day t) and the rows where each Gauss-Newton
+#: iteration (İterasyon 1 … 7) and the result (SONUÇ) evaluate their ln G at those days: block start + 88 … + 132 for the
+#: iterations, 5815 … 5859 for the result
+NORM_PAYDAYS = (4395, 4439)
+NORM_ITERATIONS = (4474, 4653, 4832, 5011, 5190, 5369, 5548)
+NORM_RESULT = 5815
+NORM_PRIOR = "D4305"                     # the prior mean of r0, the level at the OIS spot: today's TLREF, REF when on
+#: the PPK paths' ln G at the meeting days (Motor's meeting table: İma L, S1 I, S2 O, S3 Q; rows 4 … 84) and the fair
+#: RET's reference path (EK_RET!E30:E110, a scenario without steps on Motor's days): every formula that reads one at a
+#: day t - INDEX(<path>, MATCH(t, Motor!$C$4:$C$84, ·)) + the growth from that meeting to t - gets + E(t)
+NORM_PATHS = (("Motor", "I", 4, 84), ("Motor", "L", 4, 84), ("Motor", "O", 4, 84), ("Motor", "Q", 4, 84),
+              ("EK_RET", "E", 30, 110))
+#: the sheets whose formulas read those paths (the dashboard's own sheets that read them, transplanted from MASA's
+#: date-to-date block or the meeting table, among them); the other additions are left alone: EK_PPK, EK_INTERP and the
+#: "İma oran (model)" column OIS_MAIN!BJ belong to the step / PPK basamak part of the feature
+NORM_READERS = ("Motor", "OIS_MAIN", "MASA", "C & R", "TM_OIS", "EK_FWD", "EK_TARIH", "EK_RET", "EK_VFRA", "EK_CARRY")
+NORM_SKIP = {("OIS_MAIN", "BJ")}
+#: the paths' levels at the OIS spot (Motor's meeting table, row 4): today's TLREF, REF when on - S1 H, S2 N, S3 P, and
+#: the fair RET's reference (EK_RET!D30)
+NORM_SPOT_LEVELS = (("Motor", "H4"), ("Motor", "N4"), ("Motor", "P4"), ("EK_RET", "D30"))
+#: the scenarios' MPC OIS window rates (OIS_MAIN, rows 84 … 99: S1 BD, S2 BE, S3 BF), worked out from the window's level
+NORM_WINDOWS = (("BD", "BE", "BF"), (84, 99))
+#: OIS_MAIN's cells that measure the PPK path from today's TLREF ($J$2): measured from REF (``NORM_REF_TEXT``) instead
+NORM_MEASURES = (["S9", "X9", "Y9", "Z9", "D5", "S3", "S4", "S5", "AU4"] + ["AN%d" % r for r in range(9, 15)]
+                 + ["R%d" % r for r in range(10, 90)] + ["T%d" % r for r in range(10, 90)])
+#: Masa's "PPK · piyasa ima vs anket": İma PF = PF + (ima TLREF − REF)
+NORM_MASA = ["S%d" % r for r in range(157, 164)]
+_NORM_J2 = re.compile(r"(?<![A-Za-z0-9_!$.'])\$J\$2(?![0-9])")
+
+
+def norm_e(day: str) -> str:
+    """E(min(``day``, n)) - what the stretch before the normalization date adds to a PPK path's ln G at a day counted
+    from the OIS spot - as an Excel expression, an exact 0 while the switch is off (OIS_MAIN!M2)."""
+    return "IF(OIS_MAIN!$M$2=1,INDEX(%s,MIN(%s,%d)+1),0)" % (NORM_E_RANGE, day, NORM_LIMIT)
+
+
+def _norm_e_node(day: tuple) -> tuple:
+    """:func:`norm_e` as an AST node (``tto.xl.parser``), ``day`` a node of the formula it goes into."""
+    on = ("bin", "=", ("cell", "OIS_MAIN", True, 2, True, 13), ("num", 1.0))
+    e = ("range", "Motor", True, NORM_E_ROWS[0], True, 8, True, NORM_E_ROWS[1], True, 8)
+    at = ("bin", "+", ("func", "MIN", [day, ("num", float(NORM_LIMIT))], False), ("num", 1.0))
+    return ("func", "IF", [on, ("func", "INDEX", [e, at], False), ("num", 0.0)], False)
+
+
+def _norm_ref(nd: tuple, host: str, c: int) -> Optional[Tuple[str, str, int, int]]:
+    """(sheet, column letter, first row, last row) of a one-column range node with absolute rows (the host cell's sheet
+    and column ``c`` for what is relative); None for anything else."""
+    if nd[0] != "range" or not (nd[2] and nd[6]):
+        return None
+    c1 = nd[5] if nd[4] else c + nd[5]
+    c2 = nd[9] if nd[8] else c + nd[9]
+    if c1 != c2:
+        return None
+    return nd[1] or host, index_to_col(c1), nd[3], nd[7]
+
+
+def _norm_rewrite(nd: tuple, host: str, c: int) -> tuple:
+    """``nd`` with + E(t) after every read of a PPK path's ln G at a day t, INDEX(<path>, MATCH(t, Motor!$C$4:$C$84, ·))
+    (``NORM_PATHS``) - the path's ln G at the last meeting up to t, to which the formula adds the growth from there to t;
+    the same node when there is none (an AST is read only: a new tree is built)."""
+    k = nd[0]
+    if k == "func":
+        args = [_norm_rewrite(a, host, c) for a in nd[2]]
+        out = nd if all(a is b for a, b in zip(args, nd[2])) else ("func", nd[1], args, nd[3])
+        a = nd[2]
+        if nd[1] == "INDEX" and len(a) == 2 and _norm_ref(a[0], host, c) in NORM_PATHS and a[1][0] == "func" \
+                and a[1][1] == "MATCH" and len(a[1][2]) == 3 and _norm_ref(a[1][2][1], host, c) == ("Motor", "C", 4, 84):
+            return ("paren", ("bin", "+", out, _norm_e_node(a[1][2][0])))
+        return out
+    if k == "bin":
+        x, y = _norm_rewrite(nd[2], host, c), _norm_rewrite(nd[3], host, c)
+        return nd if x is nd[2] and y is nd[3] else ("bin", nd[1], x, y)
+    if k in ("neg", "pos", "pct", "single", "paren"):
+        x = _norm_rewrite(nd[1], host, c)
+        return nd if x is nd[1] else (k, x)
+    return nd
+
+
+_NORM_PATH_TPL = re.compile(r"R4C(9|12|15|17):R84C\1`|EK_RET!R30C5:R110C5`")
+
+
+def norm_path_readers(model: Model) -> Dict[Tuple[str, int], str]:
+    """Every formula of ``NORM_READERS`` that reads a PPK path's ln G at a day, by its template: (sheet, template id) ->
+    the template with E.  (The paths' references are absolute, the E added is too: the cells sharing a template share the
+    new one.)"""
+    from .xl.parser import parse_template
+    from .xl.unparse import Unparser
+    out: Dict[Tuple[str, int], str] = {}
+    for name in NORM_READERS:
+        if name not in model.sheet_index:
+            continue
+        seen = set()
+        for rc, tid in model.sheet(name).fml.items():
+            if tid in seen:
+                continue
+            seen.add(tid)
+            tpl = model.templates[tid]
+            if not _NORM_PATH_TPL.search(tpl):
+                continue
+            r, c = divmod(rc, COLS)
+            ast = parse_template(tpl)
+            new = _norm_rewrite(ast, name, c)
+            if new is not ast:
+                out[(name, tid)] = to_template(Unparser(r, c).text(new), r, c)
+    return out
+
+
+def _norm_window(text: str) -> str:
+    """A scenario's MPC OIS window rate worked out from its level, (EXP(<ln G over the window>) − 1)·365 / days, with the
+    stretch's part of the window, E(end) − E(start), added to its ln G (the window's days on Motor's meeting days, the
+    Pcum lookups' days: end first)."""
+    days = re.findall(r"INDEX\(Motor!\$F\$528:\$F\$4228,MIN\((Motor!\$C\$\d+),3700\)\+1\)", text)
+    if not text.startswith("(EXP(") or len(days) != 2 or text.count("EXP(") != 1:
+        raise ValueError("pencere formülü beklenen değil: %s" % text[:60])
+    head, tail = text.split(")-1)*365/", 1)
+    return "%s+%s-%s)-1)*365/%s" % (head, norm_e(days[0]), norm_e(days[1]), tail)
+
+
+def _norm_switch_check(model: Model) -> None:
+    """The OIS page's parameters: "TLREF bugün" (J2, Bloomberg's TLREF), the spot B2, Masa's policy rate (a typed number);
+    the switch's cells and Motor's column beside the daily calendar are empty."""
+    _need_sheets(model, "OIS_MAIN", "MASA", "Motor")
+    _need_captions(model, (("OIS_MAIN", "I2", "TLREF bugün"), ("MASA", "P155", "Politika faizi %"),
+                           ("Motor", "A527", "Gün"), ("Motor", "F527", "Pcum")))
+    _need_formula(model, "OIS_MAIN", "J2", "BISTTREF")
+    _need_formula(model, "OIS_MAIN", "B2", "WORKDAY(")
+    _need_formula(model, "Motor", "F529", "F528+E528")
+    oism, motor = model.sheet("OIS_MAIN"), model.sheet("Motor")
+    taken = [a for _, _, a in NORM_ROWS] + [a for a, _, _ in NORM_ROWS] + [NORM_ON, NORM_DAYS, NORM_REF, NORM_GAP, "M6"]
+    for addr in taken:
+        if parse_a1(addr) in oism.fml or parse_a1(addr) in oism.consts:
+            raise ValueError("OIS_MAIN!%s boş değil" % addr)
+    for r in range(NORM_E_ROWS[0] - 1, NORM_E_ROWS[1] + 1):
+        if parse_a1("%s%d" % (NORM_E_COL, r)) in motor.fml or parse_a1("%s%d" % (NORM_E_COL, r)) in motor.consts:
+            raise ValueError("Motor!%s%d boş değil" % (NORM_E_COL, r))
+        if r >= NORM_E_ROWS[0] and motor.consts.get(parse_a1("A%d" % r)) != float(r - NORM_E_ROWS[0]):
+            raise ValueError("Motor!A%d gün değil" % r)
+
+
+def _tto_norm_switch(model: Model) -> None:
+    """The switch, the normalization date, the normal TLREF (a formula default: Masa's policy rate − 15 bp, typed over per
+    user), the status and the interface cells M2:M5; Motor's E(day) column."""
+    b = SheetBuilder(model, "OIS_MAIN")
+    for label_cell, label, _ in NORM_ROWS:
+        b.set(label_cell, label, like="I2")
+    b.input(NORM_SWITCH, NORM_OFF, align="center")
+    b.dropdown(NORM_SWITCH, [NORM_OFF, NORM_OPEN])
+    b.input(NORM_DATE, None, fmt=DATE, align="center")
+    b.input(NORM_LEVEL, '=IF(ISNUMBER(%s),%s/100-%s,"")' % (NORM_POLICY, NORM_POLICY, NORM_BELOW_POLICY), fmt="0.00%",
+            align="center")
+    # ON: the switch on, a date after the OIS spot (and inside Motor's calendar), a normal TLREF and today's TLREF
+    b.set(NORM_ON, '=IF($L$2<>"%s",0,IF(NOT(ISNUMBER($L$5)),0,IF(NOT(ISNUMBER($L$4)),0,IF(NOT(ISNUMBER($J$2)),0,'
+                   'IF(OR($L$4<=0,$J$2<=0,$L$5<=$B$2,$L$5-$B$2>%d),0,1)))))' % (NORM_OPEN, NORM_LIMIT), fmt="0")
+    b.set(NORM_DAYS, "=IF($M$2=1,$L$5-$B$2,0)", fmt="0")
+    b.set(NORM_REF, "=IF($M$2=1,$L$4,$J$2)", fmt="0.0000%")
+    b.set(NORM_GAP, "=IF($M$2=1,$J$2-$L$4,0)", fmt="0.0000%")
+    b.set(NORM_STATUS, '=IF($L$2<>"{on}","{off}",IF($M$2=1,"{on} · "&$M$3&" gün · fark "&TEXT($M$5*10000,"0")&" bp",'
+                       'IF(NOT(ISNUMBER($L$5)),"{on} değil: tarih yok",IF(NOT(ISNUMBER($L$4)),"{on} değil: normal TLREF yok",'
+                       'IF($L$4<=0,"{on} değil: normal TLREF yok",IF(NOT(ISNUMBER($J$2)),"{on} değil: TLREF yok",'
+                       'IF($L$5<=$B$2,"{on} değil: tarih geçti","{on} değil: tarih takvimin dışında")))))))'
+          .format(on=NORM_OPEN, off=NORM_OFF), color=NOTE_COLOR, align="center")
+    # Motor: E(day) beside the daily calendar's Pcum (day = column A), worked out only while on
+    m = SheetBuilder(model, "Motor")
+    m.set("%s%d" % (NORM_E_COL, NORM_E_ROWS[0] - 1), "E(gün)", like="F%d" % (NORM_E_ROWS[0] - 1))
+    first = "%s%d" % (NORM_E_COL, NORM_E_ROWS[0])
+    m.set(first, "=IF(OIS_MAIN!$M$2=1,MIN($A%(r)d,OIS_MAIN!$M$3)*(LN(1+OIS_MAIN!$J$2/365)-LN(1+OIS_MAIN!$L$4/365))"
+                 "-INDEX($F$528:$F$4228,MIN($A%(r)d,OIS_MAIN!$M$3)+1)*((OIS_MAIN!$J$2/365)^2-(OIS_MAIN!$L$4/365)^2),0)"
+                 % {"r": NORM_E_ROWS[0]}, fmt="0.000000000")
+    m.fill_down(first, NORM_E_ROWS[1])
+
+
+def _norm_used_check(model: Model) -> None:
+    """The switch is there (its addition fitted) and nothing stands in the date's cell yet."""
+    _need_sheets(model, "OIS_MAIN")
+    sh = model.sheet("OIS_MAIN")
+    if sh.consts.get(parse_a1(NORM_SWITCH)) != NORM_OFF or parse_a1(NORM_USED) in sh.fml:
+        raise ValueError("OIS_MAIN!%s normalleşme anahtarı değil" % NORM_SWITCH)
+
+
+def _tto_norm_used(model: Model) -> None:
+    """The normalization date in use (OIS_MAIN!L5): the date typed while the switch is on, else none."""
+    SheetBuilder(model, "OIS_MAIN").set(NORM_USED, '=IF(AND($L$2="%s",ISNUMBER($L$3)),$L$3,"")' % NORM_OPEN, fmt=DATE,
+                                        color=NOTE_COLOR, align="center")
+
+
+def _norm_ppk_check(model: Model) -> None:
+    """The PPK solver's layout as the model is written against it, the paths' spot levels, the window rates and the cells
+    measured from today's TLREF."""
+    _need_sheets(model, "OIS_MAIN", "MASA", "Motor", "EK_RET")
+    _need_captions(model, (("Motor", "A4394", "p"), ("Motor", "B4394", "Gün t"), ("Motor", "D4394", "Pcum(t)"),
+                           ("Motor", "A5727", "SONUÇ"), ("Motor", "H3", "S1 TLREF"), ("Motor", "N3", "S2 TLREF"),
+                           ("Motor", "P3", "S3 TLREF"), ("OIS_MAIN", "O9", "Spot")))
+    if "GLOBAL İMA PPK v3" not in str(model.sheet("Motor").consts.get(parse_a1("A4300"))):
+        raise ValueError("Motor!A4300 GLOBAL İMA PPK v3 değil")
+    for k, start in enumerate(NORM_ITERATIONS):
+        _need_captions(model, (("Motor", "A%d" % start, "İterasyon %d" % (k + 1)),))
+    knots = {s: "$C$%d:$C$%d" % (s + 1, s + 86) for s in NORM_ITERATIONS}
+    knots[NORM_RESULT - 88] = "$C$5728:$C$5813"
+    for start, lng in knots.items():
+        for p in range(NORM_PAYDAYS[1] - NORM_PAYDAYS[0] + 1):
+            _need_formula(model, "Motor", "B%d" % (start + 88 + p), "INDEX(%s,A%d)+($B$%d-" % (lng, start + 88 + p, NORM_PAYDAYS[0] + p))
+    _need_formula(model, "Motor", NORM_PRIOR, "OIS_MAIN!$J$2")
+    for sheet, addr in NORM_SPOT_LEVELS:
+        if formula_of(model, sheet, addr) != "OIS_MAIN!$J$2":
+            raise ValueError("%s!%s bugünkü TLREF değil" % (sheet, addr))
+    cols, (r1, r2) = NORM_WINDOWS
+    for col, level in zip(cols, "HNP"):
+        for r in range(r1, r2 + 1):
+            _norm_window(_need_formula(model, "OIS_MAIN", "%s%d" % (col, r), "LN(1+(Motor!$%s$%d)/365)" % (level, r - 79)))
+    for addr in NORM_MEASURES:
+        if len(_NORM_J2.findall(_need_formula(model, "OIS_MAIN", addr))) != 1:
+            raise ValueError("OIS_MAIN!%s bugünkü TLREF'ten ölçmüyor" % addr)
+    for addr in NORM_MASA:
+        _need_formula(model, "MASA", addr, "$Q$155+($W%s-$J$2)*100" % addr[1:])
+    _need_formula(model, "MASA", "J2", "OIS_MAIN!$J$2")
+    for addr in (NORM_ON, NORM_REF):
+        _need_formula(model, "OIS_MAIN", addr)
+    # the paths read as the meeting table's readers read them (the scenario pars, the date-to-date block)
+    _need_formula(model, "Motor", "E325", "EXP(INDEX($I$4:$I$84,MATCH(B325,$C$4:$C$84,1))+(B325-INDEX($C$4:$C$84,")
+    _need_formula(model, "MASA", "I62", "INDEX(Motor!$L$4:$L$84,MATCH($M$60,Motor!$C$4:$C$84,1))+($M$60-INDEX(")
+
+
+def _tto_norm_ppk(model: Model) -> None:
+    """The PPK model with the stretch: + E at every payment day of each Gauss-Newton iteration and of the result (their
+    derivatives as they are: E does not depend on the levels), r0's prior mean REF; the paths' spot levels REF; + E
+    wherever a path's ln G is read at a day (the scenarios', the implied path's, the fair RET's reference); the scenarios'
+    window rates with the stretch's part of the window; the page's cells measured from REF; the Spot row says so."""
+    m = SheetBuilder(model, "Motor")
+    for start in NORM_ITERATIONS + (NORM_RESULT - 88,):
+        for p in range(NORM_PAYDAYS[1] - NORM_PAYDAYS[0] + 1):
+            addr = "B%d" % (start + 88 + p)
+            m.patch(addr, "=%s+%s" % (formula_of(model, "Motor", addr), norm_e("$B$%d" % (NORM_PAYDAYS[0] + p))))
+    m.patch(NORM_PRIOR, "=IF(OIS_MAIN!$M$2=1,OIS_MAIN!$M$4,%s)" % formula_of(model, "Motor", NORM_PRIOR))
+    for sheet, addr in NORM_SPOT_LEVELS:
+        SheetBuilder(model, sheet).patch(addr, "=IF(OIS_MAIN!$M$2=1,OIS_MAIN!$M$4,OIS_MAIN!$J$2)")
+    new = {key: m.template_id(tpl) for key, tpl in norm_path_readers(model).items()}
+    for name in NORM_READERS:
+        if name not in model.sheet_index:
+            continue
+        fml = model.sheet(name).fml
+        for rc, tid in list(fml.items()):
+            got = new.get((name, tid))
+            if got is not None and (name, index_to_col(rc % COLS)) not in NORM_SKIP:
+                fml[rc] = got
+    o = SheetBuilder(model, "OIS_MAIN")
+    cols, (r1, r2) = NORM_WINDOWS
+    for col in cols:
+        for r in range(r1, r2 + 1):
+            addr = "%s%d" % (col, r)
+            o.patch(addr, "=" + _norm_window(formula_of(model, "OIS_MAIN", addr)))
+    for addr in NORM_MEASURES:
+        o.patch(addr, "=" + _NORM_J2.sub(NORM_REF_TEXT, formula_of(model, "OIS_MAIN", addr)))
+    # (the Spot row says it is the normal TLREF while on: its label, read by Masa's copy of the path too)
+    o.set("O9", '=IF($M$2=1,"Spot · normal","Spot")', like="O9")
+    masa = SheetBuilder(model, "MASA")
+    for addr in NORM_MASA:
+        masa.patch(addr, "=" + _NORM_J2.sub("IF(OIS_MAIN!$M$2=1,OIS_MAIN!$M$4,$J$2)", formula_of(model, "MASA", addr)))
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
@@ -7278,7 +7580,11 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp),
             # (Masa's ORANLAR past 2Y: the XCCY bootstrap's and Motor's zero rates)
-            (MASA_OFF_NAME, _masa_off_check, _masa_off)),
+            (MASA_OFF_NAME, _masa_off_check, _masa_off),
+            # (TLREF normalleşmesi: the switch, the date in use - its own addition, the OIS-implied date's after it -
+            # and the PPK model with the stretch; last, after every addition that reads the PPK paths)
+            (NORM_NAME, _norm_switch_check, _tto_norm_switch), (NORM_USED_NAME, _norm_used_check, _tto_norm_used),
+            (NORM_PPK_NAME, _norm_ppk_check, _tto_norm_ppk)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }
 

@@ -524,6 +524,9 @@ REFERENCE = {
         "Forward!W33:X47", "Forward!U37", "Forward!U6", "VIOP!B44", "VIOP!R353", "DV01_RISK!H6:I25",
         # spot value dates (formula defaults: T+1 / T+2 past the holidays)
         "Forward!I2", "Forward!K2", "VIOP!K3",
+        # TLREF normalleşmesi (OIS · PPK's pinned Parametreler, each user's own: the switch, the date, the normal TLREF -
+        # its default the desk's policy rate on Masa): every reader of a PPK path reads it, as it reads today's TLREF
+        "OIS_MAIN!L2:L4", "MASA!Q155",
         # market data typed by hand: today's TLREF, the manual spot, gold's spot, value date, swap rates and source
         "OIS_MAIN!J2", "VIOP!AA9:AA10", "EK_XAU!B5:C5", "EK_XAU!B8", "EK_XAU!B11", "EK_XAU!F16:F22",
     ],

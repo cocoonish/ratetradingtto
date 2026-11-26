@@ -185,6 +185,71 @@ The setting is Ayarlar → "Eğri interpolasyonu", per user:
 
 **A new curve-dependent feature** must decide which of the three groups above it belongs to, and test both modes.
 
+## TLREF normalleşmesi
+
+The desk's decision of 26.11.2026 ([desk-decisions.md](desk-decisions.md#tlref-normalleşmesi-26112026)): TCMB paused the
+one-week repo auctions, TLREF sits a few hundred bp over its normal level and comes back when they restart. TRY OIS only;
+the offshore curve never reads any of it.
+
+**The switch** (OIS · PPK, the pinned "Parametreler" `OIS_MAIN!A2:L6`; scope "user", like "TLREF bugün"):
+
+| Cell | Label (K) | Value (L) |
+|---|---|---|
+| K2 / L2 | Normalleşme | `Kapalı` / `Açık` (list; the file's `Kapalı`) |
+| K3 / L3 | Normalleşme tarihi | a date N, the first day TLREF is normal again |
+| K4 / L4 | Normal TLREF % | L0; a formula default, `MASA!Q155` / 100 − 0,0015 (the policy rate − 15 bp), typed over per user, Delete → the default |
+| K5 / L5 | Kullanılan tarih | the date in use: on → L3 if a date, else none (its own addition, `extras.NORM_USED_NAME`) |
+| K6 / L6 | Durum | `Kapalı`, `Açık · n gün · fark … bp`, or why it is off although `Açık` |
+
+Interface cells (outside the panel, nobody else writes them): `M2` ON = 1 when `Açık` and L5 is a date after the OIS spot
+(within Motor's 3700-day calendar), L0 > 0 and TLREF (J2) > 0, else 0; `M3` n = N − the OIS spot (`B2`), 0 off; `M4`
+REF = IF(ON, L0, J2); `M5` gap·ON = (J2 − L0)·ON. Bloomberg's settle date moved to `A6:B6` for it.
+
+**The model.** H = today's TLREF (`OIS_MAIN!J2`). On, TLREF is actual(t) = normal(t) + gap for spot ≤ t < N, normal(t)
+after (a meeting inside the stretch moves both: the corridor moves with the policy rate). TLREF compounds as the PPK
+model compounds it (d·ln(1 + x/365) − W·(x/365)², W Motor's Pcum `Motor!F528:F4228`), so the stretch adds at a day t,
+m = min(t, n):
+
+  **E(m) = m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²]**
+
+to a path's ln G - exact while the normal path is L0 over the stretch; a meeting inside it errs ~1e-9 a day. E by day is
+`Motor!H528:H4228` (day = column A, beside Pcum; 0 without evaluating anything while off); `extras.norm_e(t)` reads it:
+`IF(OIS_MAIN!$M$2=1,INDEX(Motor!$H$528:$H$4228,MIN(t,3700)+1),0)`.
+
+**What follows the switch** (on = measured "as if TLREF were back to normal"; `extras.NORM_PPK_NAME`):
+- **The PPK solver** ("GLOBAL İMA PPK v3", `Motor!A4300`): every Gauss-Newton iteration's ln G at the payment days
+  (`Motor!B` at block start + 88 … + 132 of İterasyon 1 … 7) and the result's (`Motor!B5815:B5859`) + E(min(t, n)); their
+  derivatives (`C`) as they are (E does not depend on the levels); r0's prior mean (`Motor!D4305`) = REF. So the solved
+  levels are the normal path, and the quotes are fitted with the stretch.
+- **The paths start at REF:** the scenarios S1–S3 in the meeting table (`Motor!H4`, `N4`, `P4`), the page's Spot row
+  (`OIS_MAIN!X9:Z9`, `S9`; its label `O9` reads "Spot · normal" while on) and the fair RET's reference path
+  (`EK_RET!D30`). The implied path ("MPC ima", `Motor!K`/`L`) is the solver's normal levels by itself.
+- **Every read of a PPK path's ln G at a day t + E(t):** `INDEX(<path>, MATCH(t, Motor!$C$4:$C$84, ·))` - İma `L`, S1 `I`,
+  S2 `O`, S3 `Q` and RET's reference `EK_RET!E30:E110` - in Motor, OIS_MAIN, MASA, C & R, TM_OIS, EK_FWD, EK_TARIH,
+  EK_RET, EK_VFRA and EK_CARRY (about 1 700 reads, `extras.norm_path_readers`): the scenario pars and the implied curve's
+  DFs (Motor's tenor universe and quarterly calendar), the date-to-date block and EK_TARIH, FORWARD KOTASYON's curves,
+  RET's scenarios, OIS · Nakit Akışı, carry, the calculators, MPC OIS's scenario columns. Every curve on a PPK path is the
+  normal path + the stretch, so it still prices the market. The scenarios' window rates worked out from a level (MPC OIS
+  `BD:BF`) get E(end) − E(start).
+- **The page measures from REF** (every "− $J$2" that measured the PPK path from today's TLREF): `OIS_MAIN!R10:R89` (the
+  first upcoming meeting's Implied bps), `T10:T89`, `D5` (→ `F5`), SENARYOLAR `S3:S5`, `AU4`, STUB İMA `AN9:AN14`; Masa's
+  "PPK · piyasa ima vs anket" `MASA!S157:S163` (İma PF = PF + (ima TLREF − REF)).
+- **Not here:** EK_PPK, Broker Chat's step, `OIS_MAIN!BJ` and PPK basamak (the step part), the OIS-implied date (`L5`'s
+  fallback) - their parts of the feature.
+
+**What never follows:** Bootstrap (Murex's MTM) and everything on it; the offshore curve; quote conversions (O/N
+EŞLENİKLERİ, the calculators' "TLREF sabit", MPC OIS's market rates); KOTA ARALIKLARI (on: the normal path's average
+between two quotes); every calculation without a user - the history's `MpcMachine`, alarms, quant, Günlük İşlemler - sees
+the file's `Kapalı`.
+
+**Off is the workbook as before, bit for bit:** every added term is `IF(OIS_MAIN!$M$2=1, …, 0)` (x + 0 = x) and every
+reference is picked with IF (`IF($M$2=1,$M$4,$J$2)`); `tests/test_normallesme_ppk.py` compares every cell of every sheet
+with the workbook without the addition, and on with no gap (L0 = J2) with off.
+
+**A market made from a known path** (replay's calendar: TLREF 40 % for 20 days, then 37 %; −100, −100, −75, −75 bp at
+the next meetings, smaller cuts after): on with that date and level, every quote reprices within 0,09 bp and the next
+meeting's step reads −100,15 bp (−99,08 the one after); off, −427,5 bp - the normalization inside the cut.
+
 ## Eğri noktaları (`tto/curvepoints.py`)
 
 The desk's list of points each curve is built from, one list for OIS and one for Offshore.
@@ -406,7 +471,7 @@ TRY list itself (`extras.try_term`, `EK_ISGUNU`). Fixed coupon bonds and bills o
 
 - The rules live in `extras.FX_SPOTS`, `pair_calendar` and `_tto_ois_spot`.
 - Beside `Forward!I2`, `K2` and `OIS_MAIN!B2`, Bloomberg's `SETTLE_DT` is only shown, as "Bloomberg valörü"
-  (`Forward!J2`, `L2`, `OIS_MAIN!L2`). Three dates still use it, and no addition patches them: `VIOP!K3` (VİOP's
+  (`Forward!J2`, `L2`, `OIS_MAIN!B6` - `OIS_MAIN!L2` until 26.11.2026). Three dates still use it, and no addition patches them: `VIOP!K3` (VİOP's
   implied rates), `ASW!C4` → `T65` (the ASW sheet's curve and the shift of ASW FX's 18M) and the gold spot date
   (`EK_XAU!B9`, when none is typed).
 - **VİOP's ON karşılık** (26.11.2026, [desk-decisions.md](desk-decisions.md), "VİOP: ON karşılık") counts the same

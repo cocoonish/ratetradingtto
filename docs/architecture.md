@@ -341,7 +341,10 @@ stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores
 ON karşılık (26.11.2026, "VİOP ON karşılık", `_tto_viop_on`: `MASA!A109:A121` ON bid and `O109:O121` ON ask, cells the
 workbook leaves empty - the panel's `cols` puts each beside its implied rate -, each the VİOP sheet's own "TRY Repo" of
 the contract, `VIOP!M17:X17` / `M29:X29`; display only, nothing kept), DİBS RV's yields' O/N equivalents (26.11.2026:
-`DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`) and
+`DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`), the
+TLREF normalization (26.11.2026, [curves.md](curves.md#tlref-normalleşmesi): the switch `OIS_MAIN!K2:L6` and its
+interface `M2:M5`, Motor's E column `H527:H4228`, and + E written into every formula that reads a PPK path's ln G at a
+day - `extras.norm_path_readers`, the last of the tto additions so that it finds every reader the others wrote) and
 others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 

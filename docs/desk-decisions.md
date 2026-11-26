@@ -2319,3 +2319,63 @@ frozen columns kept when its own order keeps them first), `tto/dibsgenel.py` (`c
 (B3's `cols`, the group's member, the helper table "on"), `58_kagitlar.json` (U1's `cols`), `60_dibslive.json` (the note).
 Tests: `tests/test_kagit_on.py`; `tests/test_kagit_twoway.py`, `tests/test_rvfair.py`, `tests/test_dibsgenel.py` (the new
 member, the summary's and Genel's column); the browser test's "DİBS: getirinin ON karşılığı" checks.
+
+### TLREF normalleşmesi (26.11.2026)
+
+TCMB paused the one-week repo (APİ) auctions, so TLREF sits near the upper band, a few hundred bp over its normal level;
+when the auctions restart, TLREF comes back. The PPK model anchored its path at today's TLREF, so the return showed up
+as a huge cut at the next meeting (and rippled into the next steps). The desk's words (26.11.2026):
+
+1. "Tcmb api ihalelerine ara verdigi icin tlrefin normallesecegi tarihi de bulmamiz veya bir input yazip onun ustunden
+   gitmemiz gerekli."
+2. "Iki sey istiyorum. Bir kendim yeni ppk noktasi gibi normallesme tarihi ekleyebilmeliyim. Burada tlref'e geri gelecek
+   gibi hesap yapacagiz. Ois'in imply ettigi normallesme noktasini da bulacagiz. Bunu simdiki ppk implied faizleri
+   buldugumuz yerde degil ek olarak gunluk 1w 2w 1m hepsine bakip gunluk gunluk yurutup bulacagiz."
+3. "Bu arada bunu txt'ye v2 olarak kaydedecegiz. Yarin denedikten sonra iyi gelisirse bunla devam edecegiz"
+4. (on a first plan with a new panel) "Ois ppk sayfasi ustunde yapmaliyiz yeni panel olmadan, normalizasyon ac kapat
+   yapabilmeliyiz. Bu olay duzeldiginde yeni panel kullanmak zorunda kalmayiz"
+5. (asked whether the normal TLREF should default to the policy rate − 15 bp or the policy rate) "bunu da yazabileyim"
+6. "onayliyorum. Ancak implied rate cutlarda 1m-2m'yi secebildigim gibi vadeleri de tikleyip secip ona gore
+   ilerleyebilmeliyim 1w 2w dahil"
+
+It ships as v2 (a separate installer, item 3); `main` keeps today's. Three parts were built side by side: the switch and
+the PPK model (below), the OIS-implied date with the tick boxes (items 2 and 6) and what turns rates into steps with the
+PPK basamak curve - their subsections follow.
+
+**The switch and the model** ([curves.md](curves.md#tlref-normalleşmesi)): no new panel (item 4) - in OIS · PPK's pinned
+"Parametreler", each user's own (as "TLREF bugün"): Normalleşme `Kapalı` / `Açık` (`OIS_MAIN!L2`, the file's `Kapalı`),
+Normalleşme tarihi (`L3`, "kendim ... normallesme tarihi ekleyebilmeliyim"), Normal TLREF % (`L4`), Kullanılan tarih
+(`L5`) and Durum (`L6`, why it is off although `Açık`: no date, no normal TLREF, the date passed). On, TLREF is today's
+until the date and normal after it; the PPK model is solved for the normal path - its levels, steps, scenarios and the
+page's measures from the normal TLREF - and every curve built on a PPK path gets the stretch before the date back, so it
+still prices the market ("tlref'e geri gelecek gibi hesap yapacagiz").
+
+**Choices made while building it** (ask the desk before changing):
+- **The normal TLREF's default is Masa's typed policy rate − 15 bp** (`MASA!Q155` / 100 − 0,0015; TLREF ran 15–20 bp under
+  the 36 % policy rate in early November, home database), and each user can type their own (item 5). It is the
+  codebase's **formula default** of a typed input: the cell holds the formula, a value typed over it is the user's own,
+  Delete gives the formula back (as the forward matrix's spreads and EK_PPK's rates).
+- **"Açık" counts only with a date after the OIS spot, a normal TLREF and today's TLREF** (`OIS_MAIN!M2`); otherwise
+  everything stays as off and Durum says why ("Açık değil: tarih yok", "… normal TLREF yok", "… tarih geçti").
+- **Measured from the normal TLREF:** the first upcoming meeting's Implied bps, Cum. Implied, the Spot row (it reads "Spot
+  · normal", with the normal TLREF in its TLREF columns), the 1Y figures (İma 12A, İma / toplantı), SENARYOLAR' 12A,
+  the stub's "− TLREF" columns, Masa's "İma PF" (PF + ima TLREF − the normal TLREF). The scenarios S1–S3 start from it.
+- **Every curve on a PPK path keeps pricing the market:** the implied path ("MPC ima") and the scenarios are the normal
+  path; wherever their discount factors are read (Masa's date-to-date rates, FORWARD KOTASYON's curves, RET's
+  scenarios, OIS · Nakit Akışı, carry, the scenario pars and MPC OIS's scenario rates) the stretch before the date is
+  added. Without it a "MPC ima" 1M would have dropped by about the gap × the stretch's share of the month.
+- **Left as they are:** quote conversions (O/N EŞLENİKLERİ, the calculators' "TLREF sabit", MPC OIS's market rates) and
+  KOTA ARALIKLARI (on: the normal path's average between two quotes, the stretch not in it); Bootstrap (Murex's MTM) and
+  the offshore curve never read any of it; the history, alarms, quant and Günlük İşlemler run without a user: `Kapalı`.
+- **Bloomberg's settle date** ("Bloomberg valörü", 25.11.2026) moved from `OIS_MAIN!K2:L2` to the parameters' last row
+  (`A6:B6`) to make room for the switch.
+- No new Bloomberg request. Off, every value of the workbook is the one before, bit for bit (tested cell for cell).
+
+On a market made from a known path (TLREF 40 % for 20 days, then the normal 37 %, −100 / −100 / −75 / −75 bp at the next
+meetings; replay's calendar), switched on with that date and level the solver reprices every quote within 0,09 bp and
+reads the next meeting's step as −100,15 bp (the one after −99,08); off, the same quotes read −427,5 bp at the next
+meeting - the normalization inside the cut.
+
+Code: `tto/extras.py` (`NORM_NAME`: `_tto_norm_switch`; `NORM_USED_NAME`: `_tto_norm_used`; `NORM_PPK_NAME`:
+`_tto_norm_ppk`, `norm_e`, `norm_path_readers`), `tto/views/20_ois.json` (the three inputs, B1's range). Tests:
+`tests/test_normallesme_ppk.py`; the browser test's "TLREF normalleşmesi" check.
