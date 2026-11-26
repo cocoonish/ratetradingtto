@@ -3,7 +3,7 @@
 // the out-of-sample record holds), the chart of a picked one (its out-of-sample probability below as z(p)), every
 // instrument with its record, whether it prints, today's probability and the three features behind it, and the
 // features' share of the trees' gain per group.  Computed in the quant worker's thread; the page reads the result.
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, fmt, pct, sgn, isNum } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, fmt, pct, sgn, isNum, sideClass } from './quantbase.js';
 import { h } from '../ui.js';
 
 const EFFECT_TIP = '↑: bugünkü tahmini yükselişe (yukarı tarafa: AL, pay, steepener, vol al), ↓: düşüşe iten veri; büyüklük sırasıyla';
@@ -13,16 +13,16 @@ class MlPage extends QuantPage {
 
   build() {
     this.tools([]);
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-ml-signals', 'Makine öğrenmesi · sinyaller');
+    const page = this.pageEl();
+    const sp = panel('quant-ml-signals', 'Makine öğrenmesi · sinyaller', { wide: true });
     sp.note.textContent = 'Yalnızca örneklem dışı kaydı tutan (isabet ≥ model eşiği, en az test sayısı) ve bugünkü olasılığı girişi geçen '
       + 'enstrümanlar. İşlem satırı: yön, enstrüman, büyüklük, olasılık, isabet (test). Satıra tıklayın: kartta düz anlatım ve tahmini en çok '
       + 'oynatan üç veri; grafikte serinin altında örneklem dışı olasılık gün gün (z(p) = (p − 0,5) ÷ 0,05).';
-    this.boxes.sig = new GridBox(sp, 'quant/ml/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-ml-chart', 'Seçili seri');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-ml-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     this.table = panel('quant-ml-table', 'Enstrümanlar · önümüzdeki 5 iş gününün yönü');
-    this.boxes.table = new GridBox(this.table, 'quant/ml/table', (sid) => this.pick(sid));
+    this.boxes.table = new GridBox(this.table, 'quant/ml/table', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.feats = panel('quant-ml-features', 'Verilerin payı · grup başına');
     this.feats.note.textContent = 'Bugün işleyen modellerin (her enstrümanın bu ayki modeli) ağaçlarındaki bölünmelerin kazancı, veri başına: '
       + 'her modelinki %100\'e ölçeklenir, sütun grubun modellerinin ortalaması; ortak model (TRY OIS düz vadeleri) kendi sütununda, bir model. '
@@ -31,7 +31,6 @@ class MlPage extends QuantPage {
       + 've G10 paritelerinin RR ortalamasını (küresel risk) okur.';
     this.boxes.feats = new GridBox(this.feats, 'quant/ml/features');
     page.append(sp.el, cp.el, this.table.el, this.feats.el);
-    this.addStatus(page);
     this.host.appendChild(page);
   }
 
@@ -48,13 +47,8 @@ class MlPage extends QuantPage {
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Şu an basılan satır yok: örneklem dışı isabet, test sayısı ve bugünkü olasılık birlikte tutmalı (aşağıdaki tabloda her '
-      + 'enstrümanın nedeni).', this.picked);
+    this.showSignals('Şu an basılan satır yok: örneklem dışı isabet, test sayısı ve bugünkü olasılık birlikte tutmalı (aşağıdaki tabloda her '
+      + 'enstrümanın nedeni).');
   }
 
   fillPage() {
@@ -86,7 +80,8 @@ class MlPage extends QuantPage {
         N(r.tests, 0, { tip: isNum(r.days) ? r.days + ' örneklem dışı gün; ' + (st.horizon || 5) + ' günlük ufuklar örtüştüğü için bağımsız test = gün ÷ ' + (st.horizon || 5) : '' }),
         { t: pct(r.hit, 1), v: r.hit, k: isNum(r.hit) ? 'n' : '', cls: isNum(r.hit) && r.hit >= hitMin ? 'thru' : '' }, T(pct(r.base, 0)), N(r.log_loss, 3),
         T(r.prints ? '✓' : (r.why || '—'), { cls: r.prints ? 'thru' : 'soft' }),
-        T(isNum(r.prob) ? (r.verb ? r.verb + ' ' : '') + '%' + fmt(r.prob * 100, 0) : '', { tip: isNum(r.p) ? 'yukarı olasılığı %' + fmt(r.p * 100, 1) : '' }),
+        T(isNum(r.prob) ? (r.verb ? r.verb + ' ' : '') + '%' + fmt(r.prob * 100, 0) : '', Object.assign({ tip: isNum(r.p) ? 'yukarı olasılığı %' + fmt(r.p * 100, 1) : '' },
+          sideClass(r.verb) ? { cls: sideClass(r.verb) } : {})),
         Z(r.z, entry), T(top, { tip: EFFECT_TIP }), T(bt, { tip: 'Örneklem dışı tahminlerin olasılığı girişi geçtiği günler, ' + (st.horizon || 5) + ' günlük K/Z (' + (r.unit || '') + ')' }),
         r.pool ? { t: (r.months || 0) + ' · ortak', v: r.months, k: 'n', tip: r.pool + (r.first ? '; ilk test ayı ' + r.first.slice(0, 7) : '') }
           : N(r.months, 0, { tip: r.first ? 'ilk test ayı ' + r.first.slice(0, 7) : '' })];

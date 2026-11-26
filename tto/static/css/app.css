@@ -1718,3 +1718,36 @@ table.plain.kf td.kf-2l { text-align: right; white-space: nowrap; line-height: 1
 table.plain.kf td.kf-2l .kf-2l-p { font-size: 11px; color: var(--ink-3); }
 table.plain.kf td.kf-m-proj-model { white-space: nowrap; font-size: 11px; }
 table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }
+
+/* ---------------------------------------------------------------- Quant düzen (27.11.2026, duzen-quant)
+   The quant pages (pages/quant*.js, quantbase.js panel()): the panels in a wrapping row - a table at its own width,
+   narrow ones side by side; the signal list, the card and a panel with a chart (.wide) the whole row. The app's one
+   table height (no 46vh of their own: the page is no .volpage), the card never capped. An empty panel is its title and
+   its reason (.qempty); a folded one its title (▸); a long page's panels in a jump bar (.qjump). */
+.qpage { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.qpage > .panel { margin: 0; }
+.qpage > .panel.fit { min-width: min(100%, 440px); }
+/* (a panel as wide as its table: its title, its read line and its note wrap inside it) */
+.qpage > .panel.fit > header, .qpage > .panel.fit > .qread, .qpage > .panel.fit > .qnote { width: 0; min-width: 100%; box-sizing: border-box; }
+.qpage .panel > header .grow { flex: 1; }
+.qpage .panel > header .seg button { padding: 3px 9px; font-size: 12px; }
+.qpage .panel > header .qtools { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.qpage > .panel.qcardp > .body { max-height: none; }
+.qpage > .panel.qempty > .qread, .qpage > .panel.qempty > .qnote { display: none; }
+.qpage > .panel.qempty > .body > .empty { text-align: left; padding: 8px 12px; }
+/* (an empty table under a sentence that already says why - a basket's card, DİBS switch's head line: the reason once) */
+.qpage > .panel.qempty.qsaid > .body { display: none; }
+.qpage > .panel.collapsed > :not(header) { display: none; }
+.qpage > .panel.collapsed > header { cursor: pointer; border-bottom: 0; }
+.qpage > .panel.collapsed > header h2::before { content: '▸ '; color: var(--ink-3); }
+.qjump { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: -4px 0 10px; }
+.qjump a { display: inline-block; padding: 1px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2);
+  font-size: 11.5px; line-height: 18px; text-decoration: none; background: var(--surface); white-space: nowrap; }
+.qjump a:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-soft); }
+.page-tools .qcov { font-size: 11.5px; text-decoration: none; }
+.page-tools .qcov:hover { text-decoration: underline; }
+.qpage table.grid td.qwrap { white-space: normal; min-width: 240px; max-width: 520px; }
+.qpage table.grid td.fz.pick { --fzt: var(--accent-soft); }
+.qpage .qform.qcontract { padding-bottom: 0; }
+.qpage .qform.qcontract .seg { flex-wrap: wrap; }
+.qpage details.qlegsfold > summary { cursor: pointer; color: var(--ink-2); font-size: 12px; padding: 2px 0 4px; }

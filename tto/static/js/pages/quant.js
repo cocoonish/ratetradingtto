@@ -25,7 +25,7 @@ import { SIRA_PAGES } from './quantsira.js';          // Carry + momentum
 import { ML_PAGES } from './quantml.js';              // Makine öğrenmesi
 import { OPTSPOT_PAGES } from './quantoptspot.js';    // Opsiyon → spot
 import { DIBSSW_PAGES } from './quantdibssw.js';      // DİBS switch
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, LOW, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, signalRows, signalHead, SIGNALS_TABLE, LOW, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum, live } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
 // ------------------------------------------------------------------------------------------------ Sinyaller
@@ -49,10 +49,10 @@ class SignalsPage extends QuantPage {
     this.famSel.addEventListener('change', () => { this.family = this.famSel.value; keep(FAMILY_PREF, this.family); this.refresh(true); });
     this.assetSel.addEventListener('change', () => { this.asset = this.assetSel.value; keep(ASSET_PREF, this.asset); this.refresh(true); });
     this.tools([h('span', { class: 'muted' }, 'Aile'), this.famSel, h('span', { class: 'muted' }, 'Varlık'), this.assetSel]);
-    const page = h('div', { class: 'volpage quantpage' });
+    const page = this.pageEl();
     // the groups above the list, in its order: a button each (its lines), "Tümü" all of them
     this.groupBar = h('div', { class: 'seg qgroups', id: 'quant-groups', role: 'tablist' });
-    const list = panel('quant-signals', 'Sinyaller', { top: this.groupBar });
+    const list = panel('quant-signals', 'Sinyaller', { top: this.groupBar, wide: true });
     list.note.textContent = 'En üstte Konsensüs: aynı enstrümanda üç ya da daha fazla ailenin güvenli satırı aynı yöndeyse tek satır (seviyeler en iyi örneklem '
       + 'dışı kayıtlı ailenin, büyüklük ailelerinkinin medyanı; kendi kaydı ve alarmı yok, aileler kendi satırlarıyla durur). '
       + 'Sıra: gruplar (G10 spot, G10 opsiyon, TRY OIS - önce ≤ 2Y, sonra uzun uç -, DİBS, VİOP, Offshore, Diğer); grubun içinde önce '
@@ -64,11 +64,12 @@ class SignalsPage extends QuantPage {
       + '"offshore limiti" taşır: masanın offshore işlem limiti dar. FX: giriş / hedef / stop işlem yapılan forward\'ın kuru (ufkun sonu valörlü; Birim '
       + 'sütununda hangisi), beklenen K/Z 1 mn baz döviz başına kote para biriminde (USDTRY: TRY, EURUSD: USD); faiz: bp (TL karşılığı ipucunda, ana bacak '
       + 'DV01\'iyle). Satıra tıklayın: işlemin düz anlatımı, seri, bantlar ve giriş / hedef / stop aşağıda. Backtest değildir.';
-    this.boxes.signals = new GridBox(list, 'quant/signals', (sid) => this.pick(sid));
+    // (its columns are the 19 signal lists' one choice; "#" and the trade stay in view while it scrolls sideways)
+    this.boxes.signals = new GridBox(list, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 2 });
     // the list on a launchpad, in the side drawer, in a window of its own - with this page's filter
     list.tools.append(...boxTools(() => ({ type: 'quant-signals', family: this.family || undefined, asset: this.asset || undefined,
       group: this.group || undefined, w: 12 }), this.ctx));
-    const chartPanel = panel('quant-chart', 'Seçili sinyal');
+    const chartPanel = panel('quant-chart', 'Seçili sinyal', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(chartPanel.body);
     this.btPanel = panel('quant-backtest', 'Geri test · aynı kurallarla yürüyen pencere (son yıl), ayarlı seviyelerle');
     this.btPanel.note.textContent = 'Her ' + 10 + ' iş gününde bütün aileler yalnızca o güne kadarki kapanışlarla yeniden kurulur, aradaki günler o günün kapanışıyla '
@@ -86,19 +87,17 @@ class SignalsPage extends QuantPage {
       + 'İsabet = (hedef + süresi dolup kârda kapananlar) ÷ kapananlar; K/Z σ: kapanıştaki kâr / zarar, sinyalin σ\'sı cinsinden. Canlı takip – backtest değildir.';
     this.boxes.hits = new GridBox(hits, 'quant/hits');
     const log = panel('quant-log', 'Sinyal kaydı · son girişler', { cls: 'aux' });
-    this.boxes.log = new GridBox(log, 'quant/log', (sid) => this.pick(sid));
-    this.subPanel = panel('quant-subscribe', 'Sinyal alarmı aboneliği', { cls: 'aux' });
-    this.setPanel = panel('quant-settings', 'Masa ayarları (herkes için)', { cls: 'aux' });
+    this.boxes.log = new GridBox(log, 'quant/log', (sid, click) => this.pick(sid, click));
+    // (the settings, the alarm subscription, the coverage and the status: folded at the page's foot, a jump link each)
+    this.subPanel = panel('quant-subscribe', 'Sinyal alarmı aboneliği', { cls: 'aux', folded: true });
+    this.setPanel = panel('quant-settings', 'Masa ayarları (herkes için)', { cls: 'aux', folded: true, wide: true });
     page.append(list.el, chartPanel.el, this.btPanel.el, hits.el, log.el, this.subPanel.el, this.setPanel.el);
     this.addStatus(page);
     this.host.appendChild(page);
+    this.addJumps(page);
     this.loadSubscription().catch(() => {});
     this.loadSettings().catch(() => {});
     this.loadLog().catch(() => {});
-  }
-
-  focusPanel(p) {
-    if (p && p.startsWith('sig:')) this.pick(p.slice(4));
   }
 
   afterPick() {
@@ -157,13 +156,13 @@ class SignalsPage extends QuantPage {
       if (sig[i].gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
       return row;
     });
-    this.boxes.signals.set(['#', 'Grup'].concat(SIGNAL_HEAD, ['Bileşik / neden', 'Saat']), rows, sig.map((s) => s.id),
+    this.boxes.signals.set(signalHead({ rank: true, group: true }), rows, sig.map((s) => s.id),
       (this.group ? this.group + ' grubunda' : 'Şu an') + ' eşiği geçen sinyal yok (giriş |z| ≥ ' + fmt((d.settings || {}).entry_z, 1) + ').', this.picked);
     const hitRows = (d.hits || []).map((f) => [T(f.label, { b: 1 }), N(f.n, 0), N(f.open, 0), N(f.target, 0), N(f.stop, 0), N(f.expired, 0), N(f.closed, 0),
       { t: isNum(f.hit_rate) ? pct(f.hit_rate) : '', v: f.hit_rate, k: 'n', b: 1 }, N(f.avg_pnl_sigma, 2, { sign: true }), N(f.avg_held, 1)]);
     this.boxes.hits.set(['Aile', 'Kayıt', 'Açık', 'Hedef', 'Stop', 'Süre doldu', 'Kapanan', 'İsabet', 'Ort. K/Z σ', 'Ort. gün'], hitRows, null,
       'Henüz kayıt yok: bir sinyal giriş eşiğini geçince burada izlenmeye başlar.');
-    if (!this.picked && sig.length) this.pick(sig[0].id);
+    this.firstPick(sig, (this.group ? this.group + ' grubunda' : 'Şu an') + ' sinyal yok: geri test, kayıt ya da bir satır seçilince burada çizilir.');
     this.loadLog().catch(() => {});
     this.loadBacktest().catch(() => {});
   }

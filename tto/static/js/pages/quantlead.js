@@ -5,7 +5,7 @@
 // (signals), and the same scan on intraday bars when the dashboard has them; a group filter over the three tables.
 // Computed in the quant worker's thread.
 import { h } from '../ui.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, pct, isNum } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, seg, pref, keep, fmt, pct, isNum } from './quantbase.js';
 
 const pval = (p) => (isNum(p) ? (p < 0.001 ? '<0,001' : fmt(p, 3)) : '');
 const GROUP_PREF = 'tto.quant.lead.group';
@@ -22,12 +22,12 @@ class LeadPage extends QuantPage {
   build() {
     this.groupSeg = seg(GROUPS, this.group, (v) => { this.group = v; keep(GROUP_PREF, v); this.fillPage(); }, 'quant-lead-group');
     this.tools([h('span', { class: 'muted' }, 'Grup'), this.groupSeg]);
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-lead-signals', 'Öncü-Takipçi · sinyaller');
+    const page = this.pageEl();
+    const sp = panel('quant-lead-signals', 'Öncü-Takipçi · sinyaller', { wide: true });
     sp.note.textContent = 'Lider son ℓ + 1 günde en az k σ oynadı, takipçi henüz yetişmedi: beklenen yetişme = β × liderin hareketi − takipçinin aynı günlerdeki '
       + 'hareketi; z = yetişme ÷ σ (β\'nın hatası ve takipçinin kendi gürültüsü). Giriş takipçinin şimdiki seviyesi, hedef yetişme, stop bir σ. Tez notta.';
-    this.boxes.sig = new GridBox(sp, 'quant/lead/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-lead-chart', 'Seçili seri');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-lead-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     this.scan = panel('quant-lead-pairs', 'Öncü-takipçi taraması · günlük değişimler');
     this.scan.note.textContent = 'Değişimler: faizlerde bp, kurlarda % (log), swap puanında puan; ikisinin de kapanışı olan günler. Kim önde: '
@@ -36,16 +36,16 @@ class LeadPage extends QuantPage {
       + 'takipçinin ℓ gün içindeki toplam tepkisi (Σ b₀ … b_ℓ). Kararlılık: ℓ\'deki asimetri son 60 / 120 / 250 günde aynı işaret ve |z| ≥ 2 - her '
       + 'pencerede tutmayan öncülüğün sinyali elenir. Olay / isabet: liderin k σ hareketlerinden sonra takipçinin beklenen yöne gitme oranı ve '
       + 'beklenenin gelen kısmı (örneklem içi).';
-    this.boxes.scan = new GridBox(this.scan, 'quant/lead/pairs', (sid) => this.pick(sid));
-    this.xc = panel('quant-lead-xcorr', 'Çapraz korelasyonlar · x_t ile y_t+k', { cls: 'aux' });
+    // (19 columns: the group and the pair stay in view while it scrolls sideways at 1366)
+    this.boxes.scan = new GridBox(this.scan, 'quant/lead/pairs', (sid, click) => this.pick(sid, click), { freeze: 2 });
+    this.xc = panel('quant-lead-xcorr', 'Çapraz korelasyonlar · x_t ile y_t+k', { cls: 'aux', folded: true });
     this.xc.note.textContent = 'k > 0: x (soldaki) önde; k < 0: y önde; k = 0 aynı gün. Liderin seçilen gecikmesi kalın.';
     this.boxes.xc = new GridBox(this.xc, 'quant/lead/xcorr');
     this.bars = panel('quant-lead-intraday', 'Gün içi · 1 ve 5 dakikalık barlar');
     this.bars.note.textContent = 'Aynı analiz canlı akışın dakikalık barlarında (gecikmeler bar cinsinden), 15 dakikada bir. 1 dakikalık: OIS, '
       + 'offshore ve kurların 20 günlük barları; VİOP, DİBS ve diğer vadeler yalnız 5 dakikalık barlarla, son 5 günün barlarından.';
     this.boxes.bars = new GridBox(this.bars, 'quant/lead/intraday');
-    page.append(sp.el, cp.el, this.scan.el, this.xc.el, this.bars.el);
-    this.addStatus(page);
+    page.append(sp.el, cp.el, this.scan.el, this.bars.el, this.xc.el);
     this.host.appendChild(page);
   }
 
@@ -62,12 +62,7 @@ class LeadPage extends QuantPage {
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Şu an yetişmemiş takipçi yok (liderin en az k σ hareketi ve |z| ≥ giriş gerekli).', this.picked);
+    this.showSignals('Şu an yetişmemiş takipçi yok (liderin en az k σ hareketi ve |z| ≥ giriş gerekli).');
   }
 
   fillPage() {

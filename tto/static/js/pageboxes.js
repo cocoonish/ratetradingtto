@@ -15,7 +15,7 @@ import { plainData } from './grid.js';
 import { isoToTr, num } from './format.js';
 import { BOX_TYPES } from './boxes.js';
 import { OwnBox } from './pagebox.js';
-import { SignalChart, signalRows, SIGNAL_HEAD, isNum } from './pages/quantbase.js';
+import { SignalChart, signalRows, signalHead, SIGNALS_TABLE, isNum } from './pages/quantbase.js';
 import { CONTRACT_HEAD, contractRows, levelsTitle, drawLevels } from './pages/quantviop.js';
 import { FX_SUMMARY_HEAD, fxSummaryRows } from './pages/quantviews.js';
 import { wirpHead, wirpRows } from './pages/quantpath.js';
@@ -87,7 +87,7 @@ class SignalsBox extends PageBox {
       if (sig[i].gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
       return row;
     });
-    this.showGrid(plainData(['#', 'Grup'].concat(SIGNAL_HEAD, ['Bileşik / neden', 'Saat']), rows), 'quant/signals',
+    this.showGrid(plainData(signalHead({ rank: true, group: true }), rows), SIGNALS_TABLE,
       (i) => this.open(this.ids[i]), JSON.stringify(this.ids));
   }
 

@@ -9,36 +9,32 @@ import { api } from '../api.js';
 import { h, clear, copyText, errorToast, toast } from '../ui.js';
 import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, fmt, sgn, pct, isNum, REGIME, pref, keep,
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, fmt, sgn, pct, isNum, REGIME, pref, keep, sideClass,
   BLUE, ORANGE, GREEN, PURPLE, RED, GREY } from './quantbase.js';
 
 const KIND = { fixed: 'Sabit', bill: 'Bono' };
 const CONV = { simple: 'basit', compound: 'bileşik' };
 
-/** The frame of a page: its signals, the chart of a picked row, its panels, the status (as quantviews.js's). */
+/** The frame of a page: its signals, the card of a picked row, its trade tables, its analysis, its secondary tables
+ * (folded), the panels in a jump bar above them (as quantviews.js's). */
 class FitPage extends QuantPage {
   frame(title, panels) {
     this.tools([]);
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller');
+    const page = this.pageEl();
+    const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller', { wide: true });
     sp.note.textContent = 'Bu analizden çıkan sinyaller (elenenler gri, nedeniyle). Beklenen K/Z: FX\'te 1 mn baz döviz başına para, faizde bp (TL ipucunda). '
       + 'Satıra tıklayın: işlemin düz anlatımı (ne alınır / satılır, hangi fiyattan, hedefte ve stopta ne olur), seri ve giriş / hedef / stop aşağıda.';
-    this.boxes.sig = new GridBox(sp, 'quant/' + this.what + '/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-' + this.what + '-chart', 'Seçili seri');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-' + this.what + '-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     page.append(sp.el, cp.el);
     for (const p of panels) page.appendChild(p.el);
-    this.addStatus(page);
     this.host.appendChild(page);
+    this.addJumps(page);
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Bu analizden şu an eşiği geçen sinyal yok.', this.picked);
+    this.showSignals('Bu analizden şu an eşiği geçen sinyal yok.');
   }
 
   fill() {
@@ -76,18 +72,19 @@ class CurvePage extends FitPage {
 
   build() {
     this.oisChart = h('div', { class: 'volchart' });
-    this.ois = panel('quant-curve-ois', 'TRY OIS · NSS uyumu', { top: this.oisChart });
-    this.boxes.ois = new GridBox(this.ois, 'quant/curve/ois', (sid) => this.pick(sid));
+    this.ois = panel('quant-curve-ois', 'TRY OIS · NSS uyumu', { top: this.oisChart, wide: true });
+    this.boxes.ois = new GridBox(this.ois, 'quant/curve/ois', (sid, click) => this.pick(sid, click));
     this.bondChart = h('div', { class: 'volchart' });
-    this.bonds = panel('quant-curve-dibs', 'DİBS · NS uyumu (sabit kuponlulara; bonolar eğride ölçülür)', { top: this.bondChart });
-    this.boxes.bonds = new GridBox(this.bonds, 'quant/curve/dibs', (sid) => this.pick(sid));
+    this.bonds = panel('quant-curve-dibs', 'DİBS · NS uyumu (sabit kuponlulara; bonolar eğride ölçülür)', { top: this.bondChart, wide: true });
+    // (25 columns: the bond stays in view while the table scrolls sideways at 1366)
+    this.boxes.bonds = new GridBox(this.bonds, 'quant/curve/dibs', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.best = panel('quant-curve-best', 'Receive / pay için en iyi kâğıt');
     this.best.note.textContent = 'Puan = z × (1 aylık carry + roll) ÷ σ (kâğıdın 1 aylık getiri oynaklığı): z ile carry aynı yönü gösterdiğinde artı. '
       + 'Receive (al): ucuz (z > 0) ve carry\'si artı; pay (sat): pahalı (z < 0) ve carry\'si eksi (açığa satış onu kazanır). Carry\'si z\'ye ters olan '
       + 'kâğıt kendi tarafında eksi puanla sonda.';
-    this.boxes.best = new GridBox(this.best, 'quant/curve/best', (sid) => this.pick(sid));
+    this.boxes.best = new GridBox(this.best, 'quant/curve/best', (sid, click) => this.pick(sid, click));
     this.quotes = new BondQuote(this);
-    this.frame('Eğri Adil Değeri', [this.ois, this.bonds, this.best, this.quotes.quote, this.quotes.sw]);
+    this.frame('Eğri Adil Değeri', [this.best, this.quotes.quote, this.quotes.sw, this.ois, this.bonds]);
   }
 
   fillPage() {
@@ -150,7 +147,7 @@ class CurvePage extends FitPage {
       + fmt(d.rmse, 1) + ' bp' + (isNum(d.loo) ? ' · LOO RMSE ' + fmt(d.loo, 1) + ' bp (uydurulan her kâğıt, eğri o olmadan uydurulunca)' : '') + ', '
       + d.n + ' kâğıt' + (d.n_bills ? ' (' + d.n_bills + ' bono uyum dışı)' : '') + ', ' + (d.days || 0) + ' gün geçmiş.';
     const pick = ['Yön', 'Kâğıt', 'Vade', 'Fark (bp)', 'z', 'C+R 1A (bp)', 'σ 1A (bp)', 'C+R / σ', 'Puan'];
-    const best = (side, list) => list.map((r) => [T(side, { b: 1 }), T(r.label, { b: 1 }), T(isoToTr(r.maturity)), N(r.resid, 1, { sign: true }), Z(r.z, entry),
+    const best = (side, list) => list.map((r) => [T(side, { b: 1, cls: sideClass(side) || undefined }), T(r.label, { b: 1 }), T(isoToTr(r.maturity)), N(r.resid, 1, { sign: true }), Z(r.z, entry),
       N(r.total_1m, 1, { sign: true }), N(r.sigma_1m, 1), N(r.cpr, 2, { sign: true }), N(r.score, 2, { sign: true, b: 1 })]);
     const rec = d.receive || [], pay = d.pay || [];
     this.boxes.best.set(pick, best('Receive (al)', rec).concat(best('Pay (sat)', pay)), rec.concat(pay).map((r) => r.sid || null),
@@ -328,22 +325,22 @@ class OptPage extends FitPage {
     this.surface = panel('quant-opt-surface', 'Vol yüzeyi · ATM, 25D / 10D risk reversal ve butterfly (vol puanı)');
     this.surface.note.textContent = 'Canlı değer (yoksa son kapanış) ve z\'si (tahmin penceresine göre). RR / ATM ve BF / ATM, seviyenin ATM vol\'ün kendi '
       + 'hareketinden gelen kısmını ayırır. Sinyaller: 25D RR (skew) ve 25D / 10D BF (kanatlar) - + z pahalı (sat), − z ucuz (al).';
-    this.boxes.surface = new GridBox(this.surface, 'quant/opt/surface', (sid) => this.pick(sid));
+    this.boxes.surface = new GridBox(this.surface, 'quant/opt/surface', (sid, click) => this.pick(sid, click), { freeze: 2 });
     this.tsChart = h('div', { class: 'volchart' });
-    this.ts = panel('quant-opt-ts', 'ATM vade yapısı', { top: this.tsChart });
+    this.ts = panel('quant-opt-ts', 'ATM vade yapısı', { top: this.tsChart, wide: true });
     this.ts.note.textContent = 'Eğim = uzun vade ATM vol − kısa vade (vol puanı); 1Y − 1M\'nin z\'si sinyaldir: + ise eğim pahalı (1Y sat / 1M al).';
-    this.boxes.ts = new GridBox(this.ts, 'quant/opt/ts', (sid) => this.pick(sid));
+    this.boxes.ts = new GridBox(this.ts, 'quant/opt/ts', (sid, click) => this.pick(sid, click));
     this.probs = panel('quant-opt-probs', 'Smile\'ın ima ettiği dağılım · forward\'a göre ±X% olasılığı ve gerçekleşen sıklık');
     this.probs.note.textContent = 'Hareketler forward\'dan ölçülür (carry dahil: USDTRY\'nin forward\'ı spotun epey üstündedir). İma: SVI smile\'ından '
       + 'Breeden-Litzenberger, P(S > F·(1+X)) ve P(S < F·(1−X)) (forward ölçüsü). Gerçekleşen: tarihçedeki her gün o vadenin forward\'ı ve vade sonraki spot - '
       + 'S/F − 1\'in X\'i aştığı günlerin payı; pencereler çakışır, n gün ≈ n ÷ vadedeki iş günü bağımsız gözlem (± standart hata ondan). '
       + 'Fark + ise opsiyonlar o kuyruğu geçmişe göre pahalı fiyatlıyor.';
-    this.boxes.probs = new GridBox(this.probs, 'quant/opt/probs');
-    this.smile = panel('quant-opt-smile', 'Smile uyumu ve dağılımın yüzdelikleri', { cls: 'aux' });
+    this.boxes.probs = new GridBox(this.probs, 'quant/opt/probs', null, { freeze: 2 });
+    this.smile = panel('quant-opt-smile', 'Smile uyumu ve dağılımın yüzdelikleri', { cls: 'aux', folded: true });
     this.smile.note.textContent = 'SVI (Gatheral) beş kotaya, paritenin delta kuralıyla (USDTRY primli forward delta, EURUSD spot delta); kelebek ve kanat '
       + 'koşulları ceza olarak - yoğunluk hiç eksiye düşmez. Artıklar vol puanı (kotalar kendi aralarında tutarsızsa en yakın arbitrajsız smile). '
       + 'Yüzdelikler forward\'a göre %. Gerçekleşen ort.: S/F − 1\'in ortalaması (forward\'ın sapması, carry getirisi).';
-    this.boxes.smile = new GridBox(this.smile, 'quant/opt/smile');
+    this.boxes.smile = new GridBox(this.smile, 'quant/opt/smile', null, { freeze: 2 });
     this.frame('Opsiyon', [this.surface, this.ts, this.probs, this.smile]);
   }
 
