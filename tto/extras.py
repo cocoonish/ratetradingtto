@@ -6688,6 +6688,64 @@ def _asw_interp(model: Model) -> None:
         a.patch(addr, "=IF(%s!$B$3=1,%s!$C$%d,%s)" % (e, e, INTERP_FIRST + i, formula_of(model, "ASW", addr)))
 
 
+# ---------------------------------------------------------------------------------------------- Masa: offshore after 2Y
+#: Masa's ORANLAR (MASA!B4:N21, "kota ve 360 basit karşılaştırma") past 2Y - the desk, 26.11.2026: "Masa sayfasında
+#: offshore'un da 2y sonrasını zero ve on karşılıkta göstermemişiz".  The workbook's 3Y / 5Y / 7Y / 10Y rows hold "" in
+#: ICAP (offshore) and OIS zero, so "ICAP − OIS (bp)" was blank there too: its rows up to 2Y read the Forward sheet's
+#: comparison table (Forward!AA122:AG137), which ends at 2Y.  Its 2Y is each curve's own zero rate, simple ACT/360 from
+#: the curve's own spot - ICAP the XCCY bootstrap's "Zero Rate" (AC137 = J18/100, J18 = H126·100), OIS zero the OIS
+#: bootstrap's "Zero simple 360" (AD137 = P15/100, P15 = Motor!M98·100).  The rows after 2Y read the same two columns at
+#: their own tenor:
+#:
+#: * ICAP: ``Forward!H127 / H129 / H131 / H134`` = (1/DF − 1)·360/days - the XCCY discount factor (``Forward!G127 …``, the
+#:   annual ACT/360 pars bootstrapped) over the XCCY ticker's DAYS_TO_MTY from the USDTRY spot (``Forward!G19`` / ``G21``;
+#:   6Y–10Y ``K130:K134``, counted from ``Forward!I2`` when Bloomberg has none).  Never an OIS number: a node the XCCY curve
+#:   lacks (its TRYSAQ, or one before it, without a price) stays blank, and so does its difference;
+#: * OIS zero: ``Motor!M102 / M110 / M118 / M130`` = (1/DF − 1)·360/days at Motor's 36 / 60 / 84 / 120-month node
+#:   (``BOOT_GUN`` / ``BOOT_LNDF``, days from the OIS spot ``OIS_MAIN!B2``) - the column the rows up to 2Y read through
+#:   Forward!P (Motor!M89 … M98); it follows the viewer's curve setting as they do.
+#:
+#: RET and VİOP stay blank there (no quotes).  O/N EŞLENİKLERİ (MASA!P4:AB21) reads the offshore O/N of the same XCCY
+#: discount factors over the same days at 3Y–10Y already (Forward!E112 / E114 / E116 / E119): nothing changes there.  (The
+#: replay file has TRYSAQ6–10 as #N/A - its 7Y / 10Y offshore stay blank in replay -; the desk's history has them every
+#: day.)  Masa's chart "Oranlar (360 basit)" stays at 2Y on purpose (its series run over MASA!AF6:AK16, the workbook's):
+#: 360-simple zero rates at long tenors would squash its axis, and the desk reads its short end.  Its chart data
+#: AF17:AK20 reads the new rows as it reads the others; no chart draws those rows.  The O/N chart runs to 10Y already.
+MASA_OFF_NAME = "Masa offshore 2Y sonrası"
+#: (MASA's row, tenor, the XCCY bootstrap's zero rate on the Forward sheet, Motor's row of the node)
+MASA_OFF_ROWS = ((17, "3Y", "H127", 102), (18, "5Y", "H129", 110), (19, "7Y", "H131", 118), (20, "10Y", "H134", 130))
+
+
+def _masa_off_check(model: Model) -> None:
+    """ORANLAR's 2Y row reads the XCCY bootstrap's zero rate and Motor's (through the Forward sheet's comparison table),
+    its 3Y-10Y rows hold "" in ICAP and OIS zero, and the XCCY bootstrap's and Motor's zero rates of those tenors are the
+    cells read."""
+    _need_sheets(model, "MASA", "Forward", "Motor")
+    _need_captions(model, (("MASA", "F5", "ICAP"), ("MASA", "G5", "OIS zero"), ("MASA", "L5", "ICAP − OIS (bp)"),
+                           ("Forward", "H124", "Zero Rate"), ("Motor", "M87", "Zero simple 360")))
+    for sheet, addr, text in (("MASA", "F16", "Forward!$AC$137"), ("MASA", "G16", "Forward!$AD$137"),
+                              ("Forward", "AC137", "J18/100"), ("Forward", "J18", "H126*100"),
+                              ("Forward", "AD137", "P15/100"), ("Forward", "P15", "Motor!M98*100")):
+        _need_formula(model, sheet, addr, text)
+    for r, tenor, zero, m in MASA_OFF_ROWS:
+        k = int(zero[1:])
+        _need_captions(model, (("MASA", "B%d" % r, tenor), ("Forward", "C%d" % k, tenor), ("Motor", "A%d" % m, tenor)))
+        for col in "FG":
+            if _need_formula(model, "MASA", "%s%d" % (col, r)).replace(" ", "") != '""':
+                raise ValueError('MASA!%s%d "" değil' % (col, r))
+        _need_formula(model, "MASA", "L%d" % r, "(F%d-G%d)*10000" % (r, r))
+        _need_formula(model, "Forward", zero, "(1/G%d-1)*360/" % k)
+        _need_formula(model, "Motor", "M%d" % m, "(1/G%d-1)*360/C%d" % (m, m))
+
+
+def _masa_off(model: Model) -> None:
+    """ORANLAR's ICAP and OIS zero at 3Y / 5Y / 7Y / 10Y (``MASA_OFF_ROWS``): each curve's own zero rate, as the 2Y row."""
+    b = SheetBuilder(model, "MASA")
+    for r, _, zero, m in MASA_OFF_ROWS:
+        b.patch("F%d" % r, '=IFERROR(Forward!$%s$%s,"")' % (zero[0], zero[1:]))
+        b.patch("G%d" % r, '=IFERROR(Motor!$M$%d,"")' % m)
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
@@ -6735,7 +6793,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # (two-way calculators: Hesaplayıcılar and DV01's scenario P&L - after the market defaults and the way back of
             # the implied move, whose formulas they keep; the VİOP target after its types and the FRA's curve)
             *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw),
-            (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp)),
+            (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp),
+            # (Masa's ORANLAR past 2Y: the XCCY bootstrap's and Motor's zero rates)
+            (MASA_OFF_NAME, _masa_off_check, _masa_off)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }
 

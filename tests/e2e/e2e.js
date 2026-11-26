@@ -1632,6 +1632,12 @@ async function clipAfter(page, action) {
       && JSON.stringify(mc[0].strokes) === JSON.stringify(['var(--c-red)', 'var(--c-purple)', 'var(--c-orange)', 'var(--c-blue)', 'var(--c-green)'])
       && mc[0].dashed === 2 && mc[0].markers > 35 && mc[0].curved === 0, mc[0]);
     check('value axis starts at the minimum fixed in Excel, with the format\'s decimals', mc[0].y[0] === '25,0%' && mc[0].y[1] === '30,0%', mc[0].y);
+    // ORANLAR past 2Y (the desk, 26.11.2026): each curve's own zero rate at 3Y-10Y - the replay file prices TRYSAQ1-5 only
+    const ratesRow = async (r) => { const out = []; for (const c of 'FGLR') out.push((await cellText(page, 'MASA!' + c + r)).trim()); return out; };
+    const r3y = await ratesRow(17), r7y = await ratesRow(19);
+    check('ORANLAR past 2Y: 3Y has ICAP, OIS zero, ICAP − OIS and its offshore O/N; 7Y its OIS zero alone (TRYSAQ7 #N/A in replay)',
+      /^\d+,\d\d%$/.test(r3y[0]) && /^\d+,\d\d%$/.test(r3y[1]) && /^-?[\d.]+$/.test(r3y[2]) && /^\d+,\d\d%$/.test(r3y[3])
+      && r7y[0] === '' && /^\d+,\d\d%$/.test(r7y[1]) && r7y[2] === '' && r7y[3] === '', [r3y, r7y]);
     check('"RET bid–ask": 30–42 % in steps of 1 % and the bid–ask boxes',
       mc[2].y.length === 13 && mc[2].y[0] === '30%' && mc[2].y[12] === '42%' && mc[2].boxes === 8, { y: mc[2].y, boxes: mc[2].boxes });
     check('"RET bandı": one legend key for the band, drawn as two washes', mc[3].keys.length === 4 && mc[3].keys[0] === 'RET bid–ask bandı' && mc[3].areas === 2, mc[3].keys);

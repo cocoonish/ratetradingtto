@@ -430,6 +430,10 @@ offshore side, ask the desk first.
 - The O/N: `borsaspread` (and `retfair` through it) uses offshore ICAP `Forward!AC123` and TLREF `Forward!AD123`
   (365 → 360); `tradevalue` uses offshore `AC123` and TLREF `OIS_MAIN!J2` (ACT/365).
 - Trades' USDTRY forward never takes TRY OIS.
+- Masa's ORANLAR and O/N EŞLENİKLERİ (`MASA!B4:AB21`): each curve's zero rate (360 simple) and O/N side by side, their
+  difference in bp. To 10Y since 26.11.2026 ([desk-decisions.md](desk-decisions.md#masa-offshore-2y-sonrası-zero-ve-on-26112026)):
+  offshore the XCCY bootstrap (`Forward!H127 …`, `E112 …`; days from the USDTRY spot), OIS Motor's node (`Motor!M102 …`,
+  `Forward!F112 …`; days from the OIS spot). A tenor without an XCCY node stays blank.
 
 ## Known differences - read before changing
 

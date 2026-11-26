@@ -2001,3 +2001,48 @@ equal to the last bit on the replay data. Replay (03.11.2026's file), the 30.11.
 Code: `tto/extras.py` ("VİOP ON karşılık": `VIOP_ON_SIDES`, `viop_on_masa`, `_viop_on_check`, `_tto_viop_on`),
 `tto/views/10_masa.json` (B15: its range, `cols`, note), `tto/views/40_viop.json` (B5 / B7 notes). Tests:
 `tests/test_viop_on.py`, the browser test's check "VİOP: ON karşılık …".
+
+### Masa: offshore 2Y sonrası zero ve O/N (26.11.2026)
+
+> "Masa sayfasında offshore'un da 2y sonrasını zero ve on karşılıkta göstermemişiz"
+
+**What was missing.** Masa → Genel bakış, ORANLAR (`MASA!B4:N21`, "kota ve 360 basit karşılaştırma"): its 3Y / 5Y / 7Y /
+10Y rows held the workbook's `""` in ICAP (offshore) and OIS zero - the rows up to 2Y read the Forward sheet's comparison
+table (`Forward!AA122:AG137`), which ends at 2Y - so "ICAP − OIS (bp)" was blank there too. Its OIS kota already ran to 10Y.
+
+**What the rows show now** (`extras.MASA_OFF_NAME`; [curves.md](curves.md#where-ois-and-offshore-meet)), each curve's own
+zero rate, simple ACT/360 from the curve's own spot, as the 2Y row:
+- **ICAP** = the XCCY bootstrap's "Zero Rate" at the tenor, `Forward!H127 / H129 / H131 / H134` = (1/DF − 1)·360/days - the
+  column the 2Y row's ICAP comes from (`AC137 = J18/100`, `J18 = H126·100`). DF: the XCCY pars (annual ACT/360)
+  bootstrapped, `Forward!G127 …`; days: the XCCY ticker's `DAYS_TO_MTY` from the USDTRY spot `Forward!I2` (`G19`, `G21`;
+  6Y–10Y `K130:K134`, counted from `I2` on the TRY+USD calendar when Bloomberg has none).
+- **OIS zero** = Motor's "Zero simple 360" at its 36 / 60 / 84 / 120-month node, `Motor!M102 / M110 / M118 / M130` - the
+  cell the rows up to 2Y read through `Forward!P` → `AD` (2Y: `Motor!M98`). DF: Motor's bootstrap (`BOOT_GUN` /
+  `BOOT_LNDF`); days from the OIS spot `OIS_MAIN!B2` (TRY list). It follows the viewer's curve setting (Bootstrap / PPK
+  basamak) as the rows above do; ICAP, the XCCY bootstrap of the quotes, does not - as at 2Y.
+- **ICAP − OIS (bp)**: the row's own formula, (F − G)·10 000. RET bid / ask and VİOP stay blank (no quotes past 2Y), and
+  so do their differences.
+- **Never an OIS number on the offshore side.** A tenor whose XCCY node cannot be bootstrapped - its `TRYSAQ`, or one
+  before it, without a price - stays blank, and so does its difference (`IFERROR(…,"")`).
+- **O/N EŞLENİKLERİ** (`MASA!P4:AB21`) already read the offshore O/N at 3Y–10Y from the same discount factors over the same
+  days (`Forward!E112 / E114 / E116 / E119` = 360·((1/DF)^(1/days) − 1)): nothing changed there. On each curve a row's zero
+  and O/N are one DF: 1 + zero·d/360 = (1 + O/N/360)^d.
+
+**Replay is not the desk.** The replay file has `TRYSAQ6–10` as `#N/A`, so 7Y / 10Y offshore (ICAP, its bp, the offshore
+O/N) are blank in replay. A copy of the install's database (17.11.2026) has `TRYSAQ1–10` closes from both sources (ICPL,
+BGN) on every one of its 528 days since 07.11.2024, and that day's `DAYS_TO_MTY` answers of `TRYSAQ6–10`: on the desk 7Y and
+10Y show.
+
+**Choices made while building it** (ask the desk before changing):
+- **Each curve on its own days**, as at 2Y: offshore from the USDTRY spot (T+1, TRY+USD) to the XCCY ticker's maturity, OIS
+  from the OIS spot (T+1, TRY) to Motor's node - a day or two apart at some tenors (replay: 3Y one day, 2Y two).
+- **The chart "Oranlar (360 basit)" stays at 2Y on purpose** (`MASA!AF6:AK16`, the workbook's): 360-simple zero rates at
+  long tenors would squash its axis (the O/N chart runs to 10Y already).
+- **The table's own remark** (`MASA!B21`, the workbook's) is as it was; the panel's note says where 3Y–10Y come from.
+- No new Bloomberg request; no Bootstrap number moves. On MASA and Forward nothing else changed: every formula, constant
+  and format, and every value but these cells and what reads them (`L17:L18`, `AI17:AJ20`) - cell for cell against
+  5ed4eab, replay.
+
+Code: `tto/extras.py` (`MASA_OFF_ROWS`, `_masa_off_check` / `_masa_off`), `tto/views/10_masa.json` (B3's note). Tests:
+`tests/test_masa_offshore.py`, `tests/test_extras.py` (the additions' list), the browser test's check "ORANLAR past
+2Y …".
