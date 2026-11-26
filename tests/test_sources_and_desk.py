@@ -260,7 +260,7 @@ def test_the_value_date_tables_price_like_the_forward_sheet(svc):
     page = svc.view(None, "forward")
     panels = {p["id"]: p for p in page["panels"]}
     tab = next(s for s in page["sections"] if s["id"] == "fwd")["panels"]
-    assert tab == ["FR1", "FR2", "FR3", "FR4", "B16", "B18"]
+    assert tab == ["FR1", "FR2", "FR3", "FR4", "B18", "B16"]             # (Forward DV01 before the gold forward, a column: düzen)
     assert [panels[p]["title"].split("  ·  ")[0] for p in tab[:4]] == ["USDTRY FORWARD", "EURTRY FORWARD", "SERBEST FORWARD",
                                                                      "TRY FAİZLERİ VADELERE GÖRE"]
     assert all(not panels[p].get("error") for p in tab)

@@ -77,9 +77,10 @@ def test_header_strip(service):
 
 
 def test_manual_spot_is_at_the_top_and_can_be_typed_from_the_header(service, tmp_path):
-    """The manual USDTRY spot (VİOP sheet, "Manuel SP") replaces the Bloomberg spot on every page.  It is the
-    first table of the VİOP page and of the main page, and the "Spot kaynağı" box of the header strip opens
-    it from anywhere.  (Run live, as on the desk: offline the spot cells are frozen at what Excel recorded.)"""
+    """The manual USDTRY spot (VİOP sheet, "Manuel SP") replaces the Bloomberg spot on every page.  Since the layout
+    work (27.11.2026, "Hepsini yap") it is the last table of VİOP → Kontratlar and a helper table on the main page;
+    the "Spot kaynağı" box of the header strip opens it from anywhere.  (Run live, as on the desk: offline the spot
+    cells are frozen at what Excel recorded.)"""
     from conftest import cell
     from tto.config import Settings
     from tto.marketdata.base import bdp_key
@@ -105,9 +106,12 @@ def test_manual_spot_is_at_the_top_and_can_be_typed_from_the_header(service, tmp
     svc = Service(Settings(data_dir=str(tmp_path), mode="live", history=False), provider=Direct(snapshot), clock=clock)
     try:
         user = login(svc, "Spot Giren")
-        for view_id in ("viop", "masa"):
-            first = next(p for p in svc.view(user, view_id)["panels"] if not p["hidden"])
-            assert first["title"].startswith("Manuel spot") and first["range"] == "Z8:AA11", view_id
+        for view_id, shown in (("viop", True), ("masa", False)):
+            first = next(p for p in svc.view(user, view_id, show_hidden=True)["panels"] if p.get("range") == "Z8:AA11")
+            # (Masa's copy is titled "Yardımcı · Manuel spot …")
+            assert "Manuel spot" in first["title"] and bool(first["hidden"]) is (not shown), view_id
+            if not shown:
+                continue                                          # (Masa: a helper table, the header edits it)
             texts = [c.get("t", "") for row in first["data"]["rows"] for c in row]
             assert "Bid" in texts and "Ask" in texts and "BBG" in texts
             inputs = [c for row in first["data"]["rows"] for c in row if c.get("i")]
@@ -345,10 +349,10 @@ def test_cell_info_and_grid(service):
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
     # the dashboard's own sheets come last; four of the workbook's 17 are taken out (MOBIL MK, YP DIBS, Ivır Zıvır,
     # USDTRY IYIX)
-    assert [s["name"] for s in service.sheets("tto")][-16:] == ["EK_TATIL", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_PPK",
+    assert [s["name"] for s in service.sheets("tto")][-17:] == ["EK_TATIL", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_PPK",
                                                                  "EK_DIBS", "EK_EVREN", "EK_ISGUNU", "EK_CARRY", "EK_IHALE", "EK_TARIH",
-                                                                 "EK_VFRA", "EK_RET", "EK_INTERP"]
-    assert len(service.sheets("tto")) == 17 - 4 + 16
+                                                                 "EK_VFRA", "EK_RET", "EK_INTERP", "EK_NORM"]
+    assert len(service.sheets("tto")) == 17 - 4 + 17
     assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2", "EK_TATIL"]
     assert [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX", "EK_INTERP"]
 

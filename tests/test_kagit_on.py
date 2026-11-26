@@ -413,7 +413,7 @@ def test_dibs_rv_shows_each_on_beside_its_yield(svc):
     p = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")
     d = p["data"]
     at = d["c"].index
-    assert d["c"][at("S"):at("S") + 7] == ["S", "T", ON, "U", ON_BID, "V", ON_ASK] and d["fz"] == 3
+    assert d["c"][at("S"):at("S") + 7] == ["S", "T", ON, "U", ON_BID, "V", ON_ASK] and d["fz"] == 2         # (ISIN, Kaynak: the page's freeze since the layout work)
     assert not set(d["c"]) & {"BK", "BL", "BM", "BN"}                        # ("ASW / DM → temiz fiyat": its own table)
     head = d["rows"][d["r"].index(4)]
     assert [head[at(c)]["t"] for c in (ON, ON_BID, ON_ASK)] == ["ON karşılık %", "Alış ON %", "Satış ON %"]

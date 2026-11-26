@@ -127,6 +127,14 @@ This is a requirement.
   - A running dashboard is not stopped: restart it afterwards.
   - If a write fails, the script exits 2; run it again to finish.
 - **No manifest means a fresh install.** A folder unpacked from an old ZIP counts as fresh, and its stale files stay.
+- **A version on trial: `kurulum/tto_kur_v2.txt`** (27.11.2026, the desk: "Bu arada bunu txt'ye v2 olarak
+  kaydedecegiz. Yarin denedikten sonra iyi gelisirse bunla devam edecegiz"). Branch `v2` (TLREF normalleşmesi and the
+  page-by-page layout work) builds its own installer; a copy of it sits on `main` as `kurulum/tto_kur_v2.txt`, while
+  `main`'s code and `kurulum/tto_kur.txt` stay the version in use. `python tto_kur_v2.txt` installs over the same folder
+  (data kept; the brand reads "TTO Masa v2"); `python tto_kur.txt` goes back. When the desk accepts v2: merge `v2` into
+  `entegrasyon`, rebuild `tto_kur.txt`, delete `tto_kur_v2.txt`. Until then new work goes on `v2`, and the copy on
+  `main` is refreshed with every v2 push (`git show v2:kurulum/tto_kur.txt > kurulum/tto_kur_v2.txt`). `test_bundle`
+  checks only `tto_kur.py` / `tto_kur.txt`; the v2 copy is checked against branch `v2`'s own build (same bytes).
 
 ## Release checklist (integrator)
 
