@@ -321,11 +321,14 @@ export class TradesPage {
     this.host.appendChild(this.stale);
     this.curveNote = h('div', { class: 'banner hidden', id: 'trades-curve-note' });
     this.host.appendChild(this.curveNote);
+    // the tables at their own width, side by side when they fit (the desk, 27.11.2026: the layout proposals)
+    const wrap = h('div', { class: 'panels trades-panels' });
+    this.host.appendChild(wrap);
     const section = (id, title) => {
       const count = h('span', { class: 'muted' });
       const body = h('div', { class: 'body' });
-      const el = h('section', { class: 'panel wide trades' }, h('header', null, h('h2', null, title), count), body);
-      this.host.appendChild(el);
+      const el = h('section', { class: 'panel fit trades', id: id + '-panel' }, h('header', null, h('h2', null, title), count), body);
+      wrap.appendChild(el);
       return { el, body, count, id };
     };
     this.quantSec = section('trades-quant-sec', 'Quant\'tan · aile aile');
@@ -785,7 +788,7 @@ export class TradesPage {
     const r = mtm && mtm.dv01;
     if (!r) {
       sec.count.textContent = '';
-      sec.body.appendChild(h('div', { class: 'muted' }, 'DV01 tablosu "MTM yenile" ile hesaplanır.'));
+      sec.body.appendChild(h('div', { class: 'empty' }, 'DV01 tablosu "MTM yenile" ile hesaplanır.'));
       return;
     }
     sec.count.textContent = 'açık işlemler · ' + mtm.at.slice(11, 16);
@@ -824,7 +827,7 @@ export class TradesPage {
     };
     if (r.try) sec.body.appendChild(table(r.try, 'trades-dv01-try', 'TRY OIS · vade', 'TL'));
     if (r.usd) sec.body.appendChild(table(r.usd, 'trades-dv01-usd', 'SOFR · vade', '$'));
-    if (!r.try && !r.usd) sec.body.appendChild(h('div', { class: 'muted' }, 'Bu sekmede açık swap yok.'));
+    if (!r.try && !r.usd) sec.body.appendChild(h('div', { class: 'empty' }, 'Bu sekmede açık swap yok.'));
     sec.body.appendChild(h('div', { class: 'note muted trades-note' }, 'Günlük İşlemler\'in "OIS · vade özeti" gibi, sekmenin açık işlemleri (son MTM yenile). '
       + 'Swap bitişinde: bugün spot\'tan vadeyle girilen kendi vadesinde (15M: ½ 1Y + ½ 18M), tarihle girilen ya da başlamış olan bitiş tarihinin '
       + 'iki yanındaki vadeye gün oranında; ileri başlangıçlı (FRA, PPK dönemi, ileri bacak) spot\'tan bitişine swap ile ters yönde başlangıcına swap, '

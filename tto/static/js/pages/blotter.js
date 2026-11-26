@@ -388,7 +388,8 @@ export class BlotterPage {
         toast(res.name + ' indirildi', 'ok', 3200);
       } catch (err) { errorToast(err); } finally { this.exportBtn.disabled = false; }
     });
-    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'İşlem günü'), this.dateSel, this.todayBtn, range,
+    // (the same bar as Broker Chat's, in the same words: Gün · Bugün · Aralık … Göster · Bu hafta · Bu ay · Son 30 gün · … arşivi)
+    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Gün'), this.dateSel, this.todayBtn, range,
       this.exportBtn, h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Kaydedilen işlemler tüm kullanıcılarda anında görünür')));
     this.host.appendChild(this.dayNote);
     this.dayNote.className = 'banner hidden';
@@ -456,7 +457,7 @@ export class BlotterPage {
     this.host.appendChild(h('div', { class: 'blotter' }, h('div', { class: 'left' }, this.entry, this.readonlyNote),
       h('div', { class: 'right' }, this.riskBar, lists)));
     this.sheetTitle = h('div', { class: 'section-title' }, 'Excel sayfasının kendi özet tabloları (Günlük İşlemler)');
-    this.sheetWrap = h('div', { class: 'panels' });
+    this.sheetWrap = h('div', { class: 'panels blotter-sheets', id: 'blotter-sheets' });
     // every cell of the workbook's blotter sheet (the per-trade columns, helpers) is one click away
     this.sheetLink = h('button', { class: 'btn sm', type: 'button',
       title: 'Günlük İşlemler sayfasının tamamını (Excel düzeni, formülleriyle) Sayfa gezgininde aç' }, 'Sayfanın tamamı');
@@ -1704,8 +1705,10 @@ export class BlotterPage {
     this.setGrid('cbond', ['Enstrüman', 'Alış', 'Ort. alış', 'Satış', 'Ort. satış', 'Net', 'Maliyet', 'Gerçekleşen K/Z'],
       c.bond.map((x) => [x.key, n(x.buy, 0), n(x.buy_avg, 4), n(x.sell, 0), n(x.sell_avg, 4), n(x.net, 0), n(x.cost, 4), n(x.realised, 2)]));
 
-    // workbook summary tables
+    // workbook summary tables: folded until opened (each user's own choice kept in this browser); the CPT × VADE table
+    // with the counterparties that hold a DV01 only, "Tümü" for every row (the desk, 27.11.2026: the layout proposals)
     const sheet = d.sheet || [];
+    this.sheetData = sheet;
     const order = sheet.map((s) => s.id).join('|');
     if (order !== this.sheetOrder) {
       this.sheetOrder = order;
@@ -1714,14 +1717,18 @@ export class BlotterPage {
       for (const s of sheet) {
         const body = h('div', { class: 'body' });
         const tools = h('div', { class: 'tools' });
-        const el = h('section', { class: 'panel' }, h('header', null, h('h2', null, s.title), h('span', { class: 'rng' }, s.range || ''), tools), body);
+        const title = h('h2', null, s.title);
+        const head = h('header', null, title, h('span', { class: 'rng' }, s.range || ''), tools);
+        const el = h('section', { class: 'panel', id: 'blotter-sheet-' + s.id }, head, body);
+        sheetFold(el, head, title, s.id);
         if (s.data) {
-          const g = new Grid({ book: 'tto', data: s.data, editable: false, name: 'blotter/sheet/' + s.id, tools });
+          const g = new Grid({ book: 'tto', data: s.id === 'cpt' ? this.cptShown(s.data) : s.data, editable: false, name: 'blotter/sheet/' + s.id, tools });
           body.appendChild(g.el);
           const cp = h('button', { class: 'iconbtn', type: 'button' }, 'Kopyala');
           cp.addEventListener('click', () => copyGrid(g));
           tools.appendChild(cp);
           this.sheetGrids.set(s.id, g);
+          if (s.id === 'cpt') head.insertBefore(this.cptToggle(), tools);
         } else {
           body.appendChild(h('div', { class: 'err' }, s.error || 'veri yok'));
         }
@@ -1730,9 +1737,10 @@ export class BlotterPage {
     } else {
       for (const s of sheet) {
         const g = this.sheetGrids.get(s.id);
-        if (g && s.data) g.update(s.data, true);
+        if (g && s.data) g.update(s.id === 'cpt' ? this.cptShown(s.data) : s.data, true);
       }
     }
+    this.cptLabel();
     const others = d.trades.filter((t) => t.kind === 'fwd' && (t.pair || 'USDTRY') !== 'USDTRY').length;
     const mpc = d.trades.filter((t) => t.kind === 'ois' && t.mpc).length;
     const parts = [];
@@ -1748,6 +1756,99 @@ export class BlotterPage {
     this.sheetLink.classList.toggle('hidden', !sheet.length || !!d.sheet_scope);
     if (this.position) this.position.refresh();
   }
+
+  /** The CPT × VADE table as this user looks at it: the counterparties with a DV01 (``cptRows``) or every row. */
+  cptShown(data) {
+    let all = false;
+    try { all = localStorage.getItem(CPT_ALL_KEY) === '1'; } catch (e) { all = false; }
+    return all ? data : cptRows(data);
+  }
+
+  /** "Tümü (262)" / "DV01'i olanlar": the CPT × VADE table's rows, all of them or those with a DV01 (kept in this browser). */
+  cptToggle() {
+    this.cptBtn = h('button', { class: 'btn sm', type: 'button', id: 'blotter-cpt-all' });
+    this.cptBtn.addEventListener('click', () => {
+      let all = false;
+      try { all = localStorage.getItem(CPT_ALL_KEY) === '1'; } catch (e) { all = false; }
+      try { localStorage.setItem(CPT_ALL_KEY, all ? '0' : '1'); } catch (e) { /* not kept: this page only */ }
+      const s = (this.sheetData || []).find((x) => x.id === 'cpt');
+      const g = this.sheetGrids.get('cpt');
+      if (s && s.data && g) g.update(this.cptShown(s.data), false);
+      this.cptLabel();
+    });
+    return this.cptBtn;
+  }
+
+  cptLabel() {
+    const s = (this.sheetData || []).find((x) => x.id === 'cpt');
+    if (!this.cptBtn || !s || !s.data) return;
+    let all = false;
+    try { all = localStorage.getItem(CPT_ALL_KEY) === '1'; } catch (e) { all = false; }
+    const every = (s.data.rows || []).length, some = cptRows(s.data).rows.length;
+    this.cptBtn.textContent = all ? 'DV01\'i olanlar (' + some + ')' : 'Tümü (' + every + ')';
+    this.cptBtn.title = all ? 'Yalnızca DV01\'i olan karşı tarafların satırları, toplamları ve genel toplam'
+      : 'Tablonun bütün satırları: her karşı tarafın bütün vadeleri, boşlar da (Excel sayfasındaki gibi)';
+    this.cptBtn.disabled = every === some;
+  }
+}
+
+const CPT_ALL_KEY = 'tto.blotter.cpt.all';
+const FOLD_KEY = 'tto.blotter.fold.';
+
+/** A summary table of the sheet folds by its ▸ / ▾ (and its title opens it): folded until this user opens it. */
+function sheetFold(el, head, title, id) {
+  let kept = null;
+  try { kept = localStorage.getItem(FOLD_KEY + id); } catch (e) { kept = null; }
+  const btn = h('button', { class: 'iconbtn fold', type: 'button', title: 'Daralt / aç' });
+  btn.dataset.fold = id;
+  const set = (on, remember) => {
+    el.classList.toggle('collapsed', on);
+    btn.textContent = on ? '▸' : '▾';
+    if (remember) try { localStorage.setItem(FOLD_KEY + id, on ? '1' : '0'); } catch (e) { /* not kept */ }
+  };
+  btn.addEventListener('click', () => set(!el.classList.contains('collapsed'), true));
+  title.addEventListener('click', () => { if (el.classList.contains('collapsed')) set(false, true); });
+  head.insertBefore(btn, title);
+  set(kept === null ? true : kept === '1', false);
+}
+
+/** The DV01 of a cell (a number other than zero). */
+const dv01Of = (c) => !!c && typeof c.v === 'number' && isFinite(c.v) && Math.abs(c.v) > 1e-9;
+
+/**
+ * The CPT × VADE table (the sheet's "OIS — CPT x VADE", P87:V349: a block per counterparty - its tenors, ON to 10Y, then
+ * its TOPLAM -, "(CPT YOK)" for trades without one, GENEL TOPLAM last; 262 rows, nearly all empty) with only what holds a
+ * DV01: the caption, each counterparty's tenors with a DV01 and its TOPLAM, GENEL TOPLAM.  Every cell keeps its row
+ * (``r``); nothing is computed.
+ */
+export function cptRows(data) {
+  const rows = (data && data.rows) || [];
+  if (!rows.length) return data;
+  let heads = 0;
+  while (heads < rows.length && rows[heads].some((c) => c && c.f === 'hd')) heads += 1;
+  const cols = [];
+  for (let i = 0; i < heads; i++) rows[i].forEach((c, j) => { if (c && /DV01/i.test(String(c.t || '')) && !cols.includes(j)) cols.push(j); });
+  if (!cols.length) return data;
+  const text = (row, j) => String((row[j] && row[j].t) || '').trim().toUpperCase();
+  const keep = [];
+  for (let i = 0; i < heads; i++) keep.push(i);
+  let block = [];
+  for (let i = heads; i < rows.length; i++) {
+    const row = rows[i];
+    if (text(row, 0) === 'GENEL') { keep.push(i); block = []; continue; }
+    block.push(i);
+    if (text(row, 1) !== 'TOPLAM' && i < rows.length - 1) continue;
+    const filled = block.filter((k) => cols.some((j) => dv01Of(rows[k][j])));
+    if (filled.length) {
+      for (const k of block) if (filled.includes(k) || text(rows[k], 1) === 'TOPLAM') keep.push(k);
+    }
+    block = [];
+  }
+  if (keep.length === rows.length) return data;
+  const out = Object.assign({}, data, { rows: keep.map((i) => rows[i]) });
+  if (Array.isArray(data.r)) out.r = keep.map((i) => data.r[i]);
+  delete out.__prepared;
+  return out;
 }
 
 export { settings };

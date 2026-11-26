@@ -579,13 +579,15 @@ export class BrokerPage {
       b.addEventListener('click', () => { const [a, z] = fn(new Date()); this.show(isoDay(a), isoDay(z)); });
       return b;
     };
+    // (the same bar as Günlük İşlemler's, in the same words: Gün · Bugün · Aralık … Göster · Bu hafta · Bu ay · Son 30 gün · … arşivi)
     const range = h('span', { class: 'rangebox' }, h('span', { class: 'muted' }, 'Aralık'), this.fromInp, h('span', { class: 'muted' }, '–'), this.toInp, go,
       preset('Bu hafta', 'Pazartesiden bugüne', (t) => { const a = new Date(t); a.setDate(t.getDate() - ((t.getDay() + 6) % 7)); return [a, t]; }),
+      preset('Bu ay', 'Ayın birinden bugüne', (t) => [new Date(t.getFullYear(), t.getMonth(), 1), t]),
       preset('Son 30 gün', 'Otuz gün öncesinden bugüne', (t) => { const a = new Date(t); a.setDate(t.getDate() - 30); return [a, t]; }));
     this.todayBtn = h('button', { class: 'btn sm', type: 'button', id: 'broker-today', title: 'Bugünün chat\'ine dön' }, 'Bugün');
     this.todayBtn.addEventListener('click', () => this.show(this.data.today, null));
     this.exportBtn = h('button', { class: 'btn sm', type: 'button', id: 'broker-export',
-      title: 'Görüntülenen günün / aralığın tahtasını ve bütün kayıtlarını Excel dosyası olarak indir (BrokerChat_yyyy.aa.gg.xlsx)' }, 'Excel (.xlsx)');
+      title: 'Görüntülenen günün / aralığın tahtasını ve bütün kayıtlarını Excel dosyası olarak indir (BrokerChat_yyyy.aa.gg.xlsx)' }, 'Chat arşivi (.xlsx)');
     this.exportBtn.addEventListener('click', async () => {
       this.exportBtn.disabled = true;
       try {
@@ -715,6 +717,7 @@ export class BrokerPage {
     this.delPicked.addEventListener('click', () => this.removePicked());
     this.log = this.panel('log', 'Kayıt · söylendiği sırayla', [this.delPicked, this.onlyBtn, whose, this.findInp,
       h('label', { class: 'check' }, this.quotesBox, ' Yalnızca kotalar')]);
+    this.log.el.classList.replace('wide', 'fit');           // (as wide as its table, not the page: the desk, 27.11.2026)
     // entry and board side by side, the chat itself across the page below them
     this.host.appendChild(h('div', { class: 'broker' }, h('div', { class: 'entrycol' }, entry), h('div', { class: 'boardcol' }, this.board.el),
       h('div', { class: 'logcol' }, this.log.el)));

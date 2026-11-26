@@ -4,6 +4,9 @@
 // handled and says plainly when there is nothing.  Read again with the market's generations (at most every 20 s), when
 // the agenda or the trades change (the live stream's counters) and with "Yenile"; "Açılış sayfası yap" makes it the page
 // the dashboard opens on.
+// The blocks stand in columns, the things to do first (the desk, 27.11.2026: "Hepsini yap" - the layout proposals): RET,
+// the chat's trades not entered and the agenda in the first column, then the trades and the quant's lines, the DİBS
+// bonds last; a block never leaves a hole beside a taller one, and a table's column that is empty in every row goes.
 import { api } from '../api.js';
 import { h, clear, toast, errorToast } from '../ui.js';
 import { num, isoToTr } from '../format.js';
@@ -11,6 +14,43 @@ import { landing, setLanding } from '../layout.js';
 import { level } from './broker.js';
 
 const EVERY = 20000;               // ms: the market's generations read the page again at most this often
+/** The blocks in the order they are read: the things to do first. */
+export const ORDER = ['ret', 'chat', 'agenda', 'trades', 'quant', 'dibs'];
+const COL_MIN = 480;               // px: a column is never narrower (fewer columns instead)
+const GAP = 12;
+
+/** How many columns a page this wide takes (1 to 3). */
+export function columnCount(width) {
+  return Math.max(1, Math.min(3, Math.floor((width + GAP) / (COL_MIN + GAP))));
+}
+
+/** The blocks of each column for ``n`` columns: the things to do together in the first, the DİBS bonds in the last. */
+export function columnPlan(n) {
+  if (n >= 3) return [['ret', 'chat', 'agenda'], ['trades', 'quant'], ['dibs']];
+  if (n === 2) return [['ret', 'chat', 'agenda'], ['trades', 'quant', 'dibs']];
+  return [ORDER.slice()];
+}
+
+const EMPTY_TEXT = new Set(['', '—', '–', '-']);
+
+/** A column of a plain table whose every row (the header and a total aside) is empty goes: [its index, ...]. */
+export function emptyColumns(rows) {
+  const body = rows.filter((r) => !r.head && !r.sum);
+  if (!body.length) return [];
+  const n = Math.max(...rows.map((r) => r.cells.length));
+  const out = [];
+  for (let j = 0; j < n; j++) if (body.every((r) => EMPTY_TEXT.has(String(r.cells[j] === undefined ? '' : r.cells[j]).trim()))) out.push(j);
+  return out;
+}
+
+/** Take the empty columns out of a table drawn (``tr`` of ``th`` / ``td``, no spans). */
+function dropEmptyColumns(table) {
+  const trs = [...table.querySelectorAll('tr')];
+  const rows = trs.map((tr) => ({ head: !!tr.querySelector('th'), sum: tr.classList.contains('sum'), cells: [...tr.children].map((c) => c.textContent) }));
+  const gone = emptyColumns(rows);
+  if (!gone.length || gone.length >= rows[0].cells.length) return;
+  for (const tr of trs) for (const j of gone.slice().reverse()) if (tr.children[j]) tr.children[j].remove();
+}
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const sgn = (v, d = 0) => (isNum(v) ? (v > 0 ? '+' : '') + num(v, d) : '—');
@@ -84,6 +124,7 @@ export class BugunPage {
     this.dead = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.resize) this.resize.disconnect();
   }
 
   /** One reading at a time; a change meanwhile reads once more after it. */
@@ -112,7 +153,7 @@ export class BugunPage {
     this.stamp = h('span', { class: 'muted', id: 'bugun-time' });
     this.landingBox = h('span', { class: 'bugun-landing', id: 'bugun-landing' });
     this.host.appendChild(h('div', { class: 'page-tools' }, again, this.stamp, h('span', { class: 'grow' }), this.landingBox));
-    this.grid = h('div', { class: 'bugun-grid', id: 'bugun' });
+    this.grid = h('div', { class: 'bugun-grid bugun-cols', id: 'bugun' });
     this.host.appendChild(this.grid);
     const card = (key, title, link, tip, go) => {
       const count = h('span', { class: 'bugun-count hidden', id: 'bugun-' + key + '-count' });
@@ -120,7 +161,6 @@ export class BugunPage {
       btn.addEventListener('click', go);
       const body = h('div', { class: 'bugun-body', id: 'bugun-' + key + '-body' });
       const el = h('section', { class: 'panel bugun-card', id: 'bugun-' + key }, h('header', null, h('h2', null, title), count, btn), body);
-      this.grid.appendChild(el);
       this.cards[key] = { el, body, count };
     };
     const hash = (x) => () => { window.location.hash = '#/' + x; };
@@ -133,6 +173,26 @@ export class BugunPage {
     card('chat', 'Girilmemiş işlemler', 'Chat ↔ Günlük İşlemler', 'Masanın chat\'teki işlemleri Günlük İşlemler\'in yanında: eşleştir, yok say, gir',
       () => this.ctx.openRecon().catch(errorToast));
     card('agenda', 'Ajanda · takvim', 'Ajanda', 'Ajanda: bugünün işleri, deadline\'lar, tekrarlayan işler', hash('agenda'));
+    this.columns = 0;
+    this.arrange();
+    // the columns follow the page's width (the menu folded, the side drawer opened, the window resized)
+    if (typeof ResizeObserver === 'function') {
+      this.resize = new ResizeObserver(() => this.arrange());
+      this.resize.observe(this.grid);
+    }
+  }
+
+  /** The blocks into their columns (only when the number of columns changes: a block keeps its place). */
+  arrange() {
+    const n = columnCount(this.grid.clientWidth || this.host.clientWidth || 1600);
+    if (n === this.columns) return;
+    this.columns = n;
+    clear(this.grid);
+    for (const keys of columnPlan(n)) {
+      const col = h('div', { class: 'bugun-col' });
+      for (const k of keys) if (this.cards[k]) col.appendChild(this.cards[k].el);
+      this.grid.appendChild(col);
+    }
   }
 
   openRet(tab) {
@@ -154,7 +214,10 @@ export class BugunPage {
       c.el.classList.remove('bugun-attn');
       if (x.error) { c.body.appendChild(h('div', { class: 'err' }, 'Okunamadı: ' + x.error.replace(/^okunamadı: /, ''))); continue; }
       if (x.available === false) { c.body.appendChild(none('Bu dashboard\'da yok (çalışma kitabı yüklü değil).')); continue; }
-      try { fn.call(this, c, x, d); } catch (err) { c.body.appendChild(h('div', { class: 'err' }, 'Çizilemedi: ' + err.message)); }
+      try {
+        fn.call(this, c, x, d);
+        for (const t of c.body.querySelectorAll('table.plain.bugun')) dropEmptyColumns(t);      // (e.g. "Sıfır kupon" all "—")
+      } catch (err) { c.body.appendChild(h('div', { class: 'err' }, 'Çizilemedi: ' + err.message)); }
     }
   }
 

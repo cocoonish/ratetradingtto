@@ -56,20 +56,49 @@ function seg(options, value, onChange, id) {
   return el;
 }
 
-/** A panel whose body can be folded away (remembered per browser). */
+/** The panels folded until the user opens them (the desk, 27.11.2026: the pairs' table, the tenor's charts and the method
+ *  each shown open once - on FX Vol İzleme, which this page links to - and the method here for both pages). */
+export const FOLDED_FIRST = new Set(['fx-board', 'fx-tenor', 'fx-method']);
+
+/** A panel whose body can be folded away (remembered per browser; ``FOLDED_FIRST`` folded until opened). */
 function panel(id, title, tools, ...body) {
   const key = 'tto.fx.fold.' + id;
   const sec = h('section', { class: 'panel wide fxpanel', id });
   const fold = h('button', { class: 'iconbtn fold', type: 'button', title: 'Aç / kapat' }, '▾');
-  const head = h('header', null, fold, h('h2', null, title), h('span', { class: 'grow' }), ...(tools || []));
+  const titleEl = h('h2', null, title);
+  const head = h('header', null, fold, titleEl, h('span', { class: 'grow' }), ...(tools || []));
   const inner = h('div', { class: 'body fxbody' }, ...body);
   const setFold = (on) => { sec.classList.toggle('collapsed', on); fold.textContent = on ? '▸' : '▾'; };
-  fold.addEventListener('click', () => { const on = !sec.classList.contains('collapsed'); setFold(on); keep(key, on ? '1' : '0'); });
-  setFold(pref(key, '0') === '1');
+  sec.fold = (on) => { setFold(on); keep(key, on ? '1' : '0'); };
+  fold.addEventListener('click', () => sec.fold(!sec.classList.contains('collapsed')));
+  titleEl.addEventListener('click', () => { if (sec.classList.contains('collapsed')) sec.fold(false); });
+  setFold(pref(key, FOLDED_FIRST.has(id) ? '1' : '0') === '1');
   sec.appendChild(head);
   sec.appendChild(inner);
-  sec.titleEl = head.querySelector('h2');
+  sec.titleEl = titleEl;
   return sec;
+}
+
+/** A link to the other FX page (``pair``: it opens on this pair). */
+function goLink(id, text, title, page, pairKey, pair) {
+  const a = h('a', { class: 'btn sm ghost golink', id, href: '#/' + page, title });
+  a.textContent = text;
+  if (pairKey) a.addEventListener('click', () => { if (pair()) keep(pairKey, pair()); });
+  return a;
+}
+
+/** FX Vol İzleme's method, on this page's "Yöntem" (shown once for both pages; FX Vol İzleme links here). */
+function fxVolMethod() {
+  return [h('h3', { class: 'fxmethod-h', id: 'fx-method-fxvol' }, 'FX Vol İzleme'),
+    h('p', null, 'Ticker\'lar: ', h('code', null, '<PARİTE>V<vade> BGN Curncy'), ' (ATM), ', h('code', null, '25R'), ' / ', h('code', null, '10R'), ' (risk reversal), ',
+      h('code', null, '25B'), ' / ', h('code', null, '10B'), ' (butterfly), spot ', h('code', null, '<PARİTE> Curncy'), '. Fiyat kaynağı (BGN) masanın ortak ayarıdır. '
+      + 'Her paritenin izlenen seti: ATM 1W 1M 3M 6M 1Y, 25D RR ve BF 1M 3M 1Y, 10D RR ve BF 1M; ayrıntıda bütün vadeler.'),
+    h('p', null, 'Skew = risk reversal ÷ aynı vadenin ATM vol\'ü (25D RR / ATM 1M 3M 1Y, 10D RR / ATM 1M): call\'ların put\'lara göre primi, vol seviyesinden arındırılmış. '
+      + 'Kapanışları iki serinin aynı günkü kapanışlarının oranı (yeni Bloomberg isteği yok); değişim, z ve yüzdelik vol\'lerle aynı tanımla.'),
+    h('p', null, 'Değişim ve istatistikler Masa sayfasının Makro bloğundaki gibidir: hafta içi günler (boş gün önceki kapanışla), Δ1G / Δ1H / Δ1A canlı değerin 1 / 5 / 21 iş günü önceki '
+      + 'kapanışa farkı; z 3A son 63 kapanışa, z ve yüzdelik seçili pencereye göre; |z| ≥ 1,5 vurgulu.'),
+    h('p', null, 'Tarihçe: her vol\'ün günlük kapanışı (PX_LAST) bir kez bir yıl geriye, sonra günde bir son on gün istenir ve dashboard\'un tarihçe tablosunda saklanır. '
+      + 'Gerçekleşen vol: spotun günlük log getirilerinin son 21 günlük standart sapması × √252.')];
 }
 
 const vol = (v, d = 2) => (isNum(v) ? num(v, d, false) : '');
@@ -168,8 +197,11 @@ export class FxPage {
       title: 'Bu paritede kendi yazdığınız kotaları silip Bloomberg\'e dönün' });
     this.ownBtn.addEventListener('click', () => this.clearOwn());
     this.info = h('span', { class: 'muted', id: 'fx-info' });
-    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Smile'), this.modelSeg, this.ownBtn,
-      h('span', { class: 'grow' }), this.info));
+    // the pair opened, picked here (the pairs' table below is folded until opened: every pair at a glance is FX Vol İzleme)
+    this.pairSel = h('select', { class: 'inp', id: 'fx-pair', title: 'Açılan parite' });
+    this.pairSel.addEventListener('change', () => this.pickPair(this.pairSel.value));
+    this.host.appendChild(h('div', { class: 'page-tools' }, h('span', { class: 'muted' }, 'Parite'), this.pairSel,
+      h('span', { class: 'muted' }, 'Smile'), this.modelSeg, this.ownBtn, h('span', { class: 'grow' }), this.info));
     this.banner = h('div', { class: 'banner hidden', id: 'fx-banner' });
     this.host.appendChild(this.banner);
 
@@ -177,8 +209,10 @@ export class FxPage {
     this.boardBody = h('div');
     const copyB = h('button', { class: 'iconbtn', type: 'button', title: 'Tabloyu kopyala' }, 'Kopyala');
     copyB.addEventListener('click', () => this.grids.board && copyGrid(this.grids.board));
-    this.host.appendChild(panel('fx-board', 'Pariteler · spot ve vol (satıra tıklayınca parite açılır)', [h('div', { class: 'tools' }, copyB)],
-      this.boardBody));
+    this.boardPanel = panel('fx-board', 'Pariteler · spot ve vol (satıra tıklayınca parite açılır)', [
+      goLink('fx-to-fxvol', 'FX Vol İzleme →', 'Bütün pariteler bir arada (seviye, değişim, z, yüzdelik, ısı haritası): FX Vol İzleme', 'fxvol'),
+      h('div', { class: 'tools' }, copyB)], this.boardBody);
+    this.host.appendChild(this.boardPanel);
 
     // ---- the surface
     this.surfBody = h('div');
@@ -196,7 +230,9 @@ export class FxPage {
     this.histNote = h('div', { class: 'note' }, 'Vol yüzeyinde bir satıra tıklayınca o vadenin son bir yılı çizilir (smile ve yoğunluk da o vadeye geçer). '
       + 'Skew = 25D RR / ATM: risk reversal bölü aynı vadenin ATM vol\'ü (oran); kapanışları iki serinin aynı günkü kapanışlarından. '
       + 'Alttaki grafiklerde seviye, seçili pencerenin ortalaması ve ±2σ bandı, her günün kendinden önceki pencereye göre z-skoru (son nokta bugünkü canlı değer).');
-    this.histPanel = panel('fx-tenor', 'Vade geçmişi', [h('span', { class: 'muted' }, 'Vade'), this.histSeg],
+    this.histPanel = panel('fx-tenor', 'Vade geçmişi', [h('span', { class: 'muted' }, 'Vade'), this.histSeg,
+      goLink('fx-tenor-to-fxvol', 'FX Vol İzleme\'de ayrıntı →', 'Paritenin vade yapısı, smile, RR / BF / skew geçmişi ve ima − gerçekleşen vol: FX Vol İzleme › Parite ayrıntısı',
+        'fxvol', 'tto.fxvol.pair', () => (this.surf ? this.surf.pair : this.pair))],
       h('div', { class: 'volcharts' }, h('div', null, this.histTitles.atm, this.histHosts.atm), h('div', null, this.histTitles.rrbf, this.histHosts.rrbf)),
       this.svHost, this.histNote);
     this.host.appendChild(this.histPanel);
@@ -262,8 +298,9 @@ export class FxPage {
       h('div', { class: 'volcharts' }, h('div', null, this.smileTitle, this.smileHost), h('div', null, this.densTitle, this.densHost)));
     this.host.appendChild(this.smilePanel);
 
-    // ---- how it is done
-    this.host.appendChild(panel('fx-method', 'Yöntem', null, h('div', { class: 'fxmethod' },
+    // ---- how it is done: this page's and FX Vol İzleme's (that page links here)
+    this.host.appendChild(panel('fx-method', 'Yöntem · Spot / FX ve FX Vol İzleme', null, h('div', { class: 'fxmethod' },
+      h('h3', { class: 'fxmethod-h' }, 'Spot / FX'),
       h('p', null, 'Kotalar Bloomberg\'den: ATM (', h('code', null, 'USDTRYV1M BGN Curncy'), '), 25D / 10D risk reversal (', h('code', null, '25R'), ', ',
         h('code', null, '10R'), ') ve butterfly (', h('code', null, '25B'), ', ', h('code', null, '10B'), '). Butterfly market (broker) strangle\'dır: smile, ATM + BF tek vol\'le fiyatlanan strangle\'ı aynı fiyatlar; RR smile\'ın kendi delta strike\'larındaki vol farkıdır. ATM = delta-neutral straddle.'),
       h('p', null, 'Smile: SVI (toplam varyans, log-moneyness) beş kotaya en küçük kareler ile, Gatheral\'ın kelebek arbitrajı koşulu ve Lee kanat sınırı ceza olarak — yoğunluk hiçbir yerde negatif olmaz. USDTRY\'nin orta kotaları kendi aralarında arbitrajsız olmayabilir; o zaman en yakın arbitrajsız smile alınır ve sapma "Uyum" sütununda vol olarak yazar. SABR ve Vanna-Volga karşılaştırma içindir.'),
@@ -273,7 +310,30 @@ export class FxPage {
         + 'Dağılımın ortalaması forward\'dır: USDTRY gibi uzun bir sağ kuyruk (devalüasyon sıçraması) taşıyan bir paritede gövde forward\'ın altında kalır, '
         + '↑1σ küçülür (eksi bile olabilir: %84 yüzdelik forward\'ın altında) ve ↓1σ büyür; kuyruğun kendisi %95 / %99 yüzdeliklerinde görünür.'),
       h('p', null, 'Dağılım risk-nötrdür (forward ölçüsü): vade sonundaki spotun beklenen değeri forward\'dır, yani USDTRY\'de bulutun merkezi faiz farkı kadar yukarıdadır — gerçek dünya olasılığı değil, opsiyon piyasasının fiyatladığıdır. P(S > K) = N(d2) − F·n(d1)·√T·σ\'(K) (Breeden–Litzenberger).'),
-      h('p', null, 'Forward: USDTRY Forward sayfasının offshore eğrisinden (ICAP ima TRY faizi ve USD OIS, "Serbest forward" formülü); EURTRY = EURUSD × USDTRY; diğerleri Bloomberg spot + forward puanı. Delta: primli delta USD karşısı olmayan pariteler ve USDxxx için; G10\'da 1Y\'ye kadar spot, sonrası forward delta; USDTRY ve EURTRY her vadede forward delta.'))));
+      h('p', null, 'Forward: USDTRY Forward sayfasının offshore eğrisinden (ICAP ima TRY faizi ve USD OIS, "Serbest forward" formülü); EURTRY = EURUSD × USDTRY; diğerleri Bloomberg spot + forward puanı. Delta: primli delta USD karşısı olmayan pariteler ve USDxxx için; G10\'da 1Y\'ye kadar spot, sonrası forward delta; USDTRY ve EURTRY her vadede forward delta.'),
+      ...fxVolMethod())));
+  }
+
+  /** Bring a panel into view (``#/fx?p=fx-method``: FX Vol İzleme's "Yöntem" link): a folded one is opened. */
+  focusPanel(id) {
+    const el = this.host.querySelector('#' + id);
+    if (!el || !el.classList.contains('fxpanel')) return false;
+    if (el.classList.contains('collapsed') && el.fold) el.fold(false);
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    el.classList.remove('focus');
+    void el.offsetWidth;
+    el.classList.add('focus');
+    return true;
+  }
+
+  /** Open a pair (the pair box, a row of the pairs' table). */
+  pickPair(pair) {
+    if (!pair || pair === this.pair) return;
+    this.pair = pair;
+    keep('tto.fx.pair', pair);
+    this.levelsInput.value = pref(this.levelsKey(), '');
+    this.fillBoard();
+    this.reload();
   }
 
   // ------------------------------------------------------------------ fill
@@ -338,12 +398,18 @@ export class FxPage {
         if (r && r.pair === this.pair) { this.markSurface(); this.loadTenor(); }
       }
       if (!r || r.pair === this.pair) return;
-      this.pair = r.pair;
-      keep('tto.fx.pair', r.pair);
-      this.levelsInput.value = pref(this.levelsKey(), '');
-      this.fillBoard();
-      this.reload();
+      this.pickPair(r.pair);
     });
+    // the pair box: every pair of the board, the one opened chosen
+    if (this.pairSel) {
+      const want = rows.map((r) => r.pair);
+      if ([...this.pairSel.options].map((o) => o.value).join('|') !== want.join('|')) {
+        clear(this.pairSel);
+        for (const p of want) this.pairSel.appendChild(h('option', { value: p }, p));
+      }
+      if (!want.includes(this.pair)) this.pairSel.appendChild(h('option', { value: this.pair }, this.pair));
+      this.pairSel.value = this.pair;
+    }
   }
 
   fillSurface() {
@@ -404,7 +470,9 @@ export class FxPage {
     const g = this.setGrid('surf', this.surfBody, ['Vade', 'Teslim', 'Gün', 'Forward', 'ATM', '25D RR', '25D BF', '10D RR', '10D BF', '10P', '25P', '25C', '10C',
       'ATM ±1σ', '↑1σ', '↓1σ', '%5', 'Medyan', 'En olası', '%95', 'Uyum', 'Yoğunluk'], marked, 'Vade yok', (i) => {
       const r = this.surf.rows[i];
-      if (r) this.setTenor(r.tenor);
+      if (!r) return;
+      this.setTenor(r.tenor);
+      if (this.histPanel && this.histPanel.classList.contains('collapsed')) this.histPanel.fold(false);     // (what the click is for)
     });
     if (g && !g.el.__fxedit) {
       g.el.__fxedit = true;

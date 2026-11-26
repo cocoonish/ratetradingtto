@@ -79,7 +79,8 @@ export class HeatPage {
         + 'diğerleri dashboard\'un kaydettiği kapanış); son nokta şimdiki değer.'));
     this.host.appendChild(this.seriesSec);
     this.sv = new SeriesView(seriesBody, { rule: 'raw', prefKey: 'tto.heat.series.window', window: 60, height: 220 });
-    this.box = h('div', { id: 'heat-panels' });
+    // (each map as wide as its tiles - the VİOP contracts' twelve no longer in a page-wide panel: the desk, 27.11.2026)
+    this.box = h('div', { id: 'heat-panels', class: 'panels heat-panels' });
     this.host.appendChild(this.box);
   }
 
@@ -122,7 +123,7 @@ export class HeatPage {
         t.appendChild(tr);
       }
       const body = h('div', { class: 'body heat-wrap' }, t);
-      box.appendChild(h('section', { class: 'panel wide', id: 'heat-' + p.id }, h('header', null, h('h2', null, p.title)), body));
+      box.appendChild(h('section', { class: 'panel fit', id: 'heat-' + p.id }, h('header', null, h('h2', null, p.title)), body));
       // each user hides columns of their own (a right click on a caption, or "Sütunlar")
       this.colsOf = this.colsOf || new Map();
       if (!this.colsOf.has(p.id)) this.colsOf.set(p.id, new TableColumns('heat/' + p.id));

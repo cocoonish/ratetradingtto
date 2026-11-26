@@ -84,12 +84,14 @@ export class AgendaPage {
     this.end = h('input', { class: 'inp', type: 'date', id: 'agenda-end', title: 'Bitiş günü (isteğe bağlı; boşsa süresiz)' });
     this.endBox = h('span', { class: 'agenda-end' }, h('span', { class: 'muted' }, 'Bitiş'), this.end);
     this.repeatHint = h('span', { class: 'muted agenda-repeat-hint' });
-    const form = h('section', { class: 'panel wide' }, h('header', null, h('h2', null, 'Ajandaya ekle')),
+    // (the form at its own width: the text box no longer stretched over the page, "Tekrar" on the same line - the desk,
+    // 27.11.2026: the layout proposals)
+    const form = h('section', { class: 'panel fit agenda-new' }, h('header', null, h('h2', null, 'Ajandaya ekle')),
       h('div', { class: 'agenda-form' }, this.day, today, this.time, this.text,
+        h('span', { class: 'agenda-repeat', id: 'agenda-repeat-row' }, h('span', { class: 'muted' }, 'Tekrar'), this.repeat, this.weekdays,
+          this.endBox, this.repeatHint),
         h('label', { class: 'check', title: 'Son gün / son saat: yaklaşınca ve gelince ekranda uyarı' }, this.deadline, ' Deadline'),
         this.scope, add),
-      h('div', { class: 'agenda-repeat', id: 'agenda-repeat-row' }, h('span', { class: 'muted' }, 'Tekrar'), this.repeat, this.weekdays,
-        this.endBox, this.repeatHint),
       h('div', { class: 'note' }, 'Saati olan işte o saatte, deadline\'da 15 dakika önce de ekranda uyarı çıkar (saatsiz deadline\'da '
         + 'bir gün önce ve o gün); hangi sayfada olursanız olun. Tekrarlayan işin (Tekrar) saati olmalıdır: her günü ayrı tamamlanır, '
         + 'uyarısında "Ertele 10 dk" ve "Bugün tamam" vardır; dashboard kapalıyken saati geçen gün, açılınca gecikmiş görünür. '
