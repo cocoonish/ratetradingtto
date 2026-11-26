@@ -1731,7 +1731,7 @@ table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }
 .qpage > .panel.fit > header, .qpage > .panel.fit > .qread, .qpage > .panel.fit > .qnote { width: 0; min-width: 100%; box-sizing: border-box; }
 .qpage .panel > header .grow { flex: 1; }
 .qpage .panel > header .seg button { padding: 3px 9px; font-size: 12px; }
-.qpage .panel > header .qtools { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.qpage .qcontract .qtools { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .qpage > .panel.qcardp > .body { max-height: none; }
 .qpage > .panel.qempty > .qread, .qpage > .panel.qempty > .qnote { display: none; }
 .qpage > .panel.qempty > .body > .empty { text-align: left; padding: 8px 12px; }
