@@ -85,7 +85,7 @@
    "type": "notes",
    "title": "NAKİT AKIŞI BAZLI OIS FİYATLAYICI",
    "range": "A2:J2",
-   "hidden": false
+   "hidden": true
   },
   {
    "id": "B2",
@@ -115,16 +115,18 @@
   {
    "id": "B4",
    "type": "table",
-   "title": "Nakit akışı takvimi (girdi)",
-   "range": "A9:E34",
+   "title": "Nakit akışı takvimi (girdi) ve piyasa bacağı (dönem bazında)",
+   "range": "A9:J34",
+   "grow": {"key": "A", "first": 10, "extra": 1, "last": 34},
    "hidden": false
   },
   {
    "id": "B5",
    "type": "table",
-   "title": "Piyasa bacağı (dönem bazında)",
+   "title": "Yardımcı · piyasa bacağı (dönem bazında) - sayfada nakit akışı takviminin sağ yarısı",
    "range": "F9:J34",
-   "hidden": false
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "B6",

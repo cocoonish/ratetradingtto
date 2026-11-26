@@ -175,7 +175,7 @@ async function clipAfter(page, action) {
     const tabs0 = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button')].map((b) => b.dataset.tab + (b.classList.contains('on') ? '!' : '')));
     const on0 = await panelsOnPage(page);
     check('forward page opens on the calculators, the value date pinned above the tabs',
-      tabs0.join(' ') === 'calc! fwd kot ret bulk curves off tick *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
+      tabs0.join(' ') === 'calc! fwd kot ret bulk curves off *' && on0.slice(0, 5).join(' ') === 'B1 B7 B8 B9 B10' && !on0.includes('B19') && !on0.includes('B15'), [tabs0, on0]);
     const caps = await page.evaluate(() => [...document.querySelectorAll('.panels.pinned .panel[data-panel="B1"] tr.hd td')].map((td) => td.textContent));
     check('the value date strip names its cells - each spot date with Bloomberg\'s beside it', caps.join('|')
       === '|Valör tarihi|USDTRY spot|EURTRY spot|USDTRY spot valörü|Bloomberg valörü|EURTRY spot valörü|Bloomberg valörü', caps);
@@ -192,7 +192,7 @@ async function clipAfter(page, action) {
     check('the open tab is remembered', (await panelsOnPage(page)).join(' ') === 'B1 B19 B20 B26');
     await tab(page, '*');
     check('forward page has many tables', (await page.locator('table.grid').count()) >= 20);
-    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 8);
+    check('"Tümü" lists the tabs one after the other', await page.locator('#content .secthead').count() === 7);
     await tab(page, 'calc');
     // (EK_FWD!E50: RET bid of the USDTRY table of the "Forward fiyatları" tab - the sheet's Forward!D33)
     check('a cell of another tab is found - its tab opens', (await cellText(page, 'EK_FWD!E50')) !== null
@@ -319,8 +319,8 @@ async function clipAfter(page, action) {
     // ------------------------------------------------------------------ the forward pricing tab
     await tab(page, 'fwd');
     const onFwd = await panelsOnPage(page);
-    check('forward pricing: USDTRY and EURTRY one below the other, then the free forwards and the TRY rates by tenor',
-      onFwd.join(' ') === 'B1 FR1 FR2 FR3 FR4 B16 B18', onFwd);
+    check('forward pricing: USDTRY and EURTRY one below the other, then the free forwards and the TRY rates by tenor, Forward DV01 before the gold forward',
+      onFwd.join(' ') === 'B1 FR1 FR2 FR3 FR4 B18 B16', onFwd);
     check('the USDTRY table shows the TRY mid and the daily swap points', (await cellText(page, 'EK_FWD!C46')) === 'TRY mid %'
       && (await cellText(page, 'EK_FWD!L46')) === 'P/gün mid' && trNumber(await cellText(page, 'EK_FWD!L50')) > 0);
     // the TRY rates with two decimals (the desk, 25.11.2026); the outrights and the USD rates of the value date as before
@@ -2094,6 +2094,17 @@ async function clipAfter(page, action) {
     await tab(page, 'kot');
     check('the forward quote matrices: USDTRY, EURTRY, then the ways back of each (by points, by a rate) - the Forward page\'s "Kotasyon" tab',
       await order(['EKF1', 'EKF5', 'EKF2', 'EKF8', 'EKF6', 'EKF9']));
+    // (düzen, 27.11.2026: the four ways back start folded - one click opens each -; of the matrices' four "serbest" rows the
+    // filled ones and one more show, "+ Satır" opens another)
+    const duzenTryBKot = await page.evaluate(() => {
+      const folded = ['EKF1', 'EKF5', 'EKF2', 'EKF8', 'EKF6', 'EKF9'].map((id) => document.querySelector('#content .panel[data-panel="' + id + '"]').classList.contains('collapsed'));
+      const row = (r) => { const td = window.tto.findCell('EK_FWD!A' + r); return td ? !td.closest('tr').classList.contains('grow-hidden') : null; };
+      return { folded, serbest: [11, 12, 13, 14].map(row), more: !!document.querySelector('#content .panel[data-panel="EKF1"] .grow-more') };
+    });
+    check('Kotasyon: the four ways back (by points, by a rate; USDTRY and EURTRY) start folded, the two matrices open; of the "serbest" rows one empty shows, "+ Satır" opens more',
+      JSON.stringify(duzenTryBKot.folded) === JSON.stringify([false, false, true, true, true, true])
+      && JSON.stringify(duzenTryBKot.serbest) === JSON.stringify([true, false, false, false]) && duzenTryBKot.more, duzenTryBKot);
+    await page.evaluate(() => ['EKF2', 'EKF8', 'EKF6', 'EKF9'].forEach((id) => window.tto.state.page.items.get(id).toggle(false)));
     const ois1m = trNumber(await cellText(page, 'EK_FWD!L5'));
     check('... and the desk\'s TRY rate is the matrix\'s OIS + the spread (1M bid: OIS − 150 bp)', Math.abs(tryBidDesk - (ois1m - 1.5)) < 0.011,
       { tryBidDesk, ois1m });
@@ -2207,11 +2218,11 @@ async function clipAfter(page, action) {
 
     await open(page, 'viop');
     await tab(page, 'gold');
-    check('gold tab: the VİOP gold tables, the calculator, then spot / source, swap rate curve and forwards (the Forward page\'s date above them)',
-      await order(['B9', 'B10', 'B11', 'XAU4', 'XAU1', 'XAU2', 'XAU3D', 'XAU3', 'B11b']), await panelsOnPage(page));
-    await tab(page, 'calc');
-    check('the gold calculator is with the calculators as well (Interest 2 SP: Forward page)', (await panelsOnPage(page)).join(' ') === 'XAU4');
-    await tab(page, 'gold');
+    check('gold tab: the VİOP gold tables (the XAUTRY calendar spread under the XAUUSD one), the calculator, then spot / source, swap rate curve and forwards (the Forward page\'s date above them)',
+      await order(['B9', 'B10', 'B11', 'B11b', 'XAU4', 'XAU1', 'XAU2', 'XAU3D', 'XAU3']), await panelsOnPage(page));
+    const duzenTryBViopTabs = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button')].map((b) => b.dataset.tab));
+    check('the gold calculator has one home, the Altın tab (its own tab repeated it - düzen, 27.11.2026)',
+      duzenTryBViopTabs.join(' ') === 'main gold matrix basis curves *', duzenTryBViopTabs);
     check('gold swap rate tickers are Bloomberg\'s XAUSR… roots with the yellow key next to them',
       (await cellText(page, 'EK_XAU!D16')).trim() === 'XAUSR1W' && (await cellText(page, 'EK_XAU!D17')).trim() === 'XAUSR1M'
       && (await cellText(page, 'EK_XAU!D22')).trim() === 'XAUSR12M' && (await cellText(page, 'EK_XAU!B12')).trim() === 'Curncy');
@@ -2311,7 +2322,15 @@ async function clipAfter(page, action) {
     });
     await open(page, 'viop');
     await tab(page, 'main');
-    check('VİOP page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
+    const duzenTryBMain = await panelsOnPage(page);
+    check('VİOP page: Kontratlar → DEALS → Target first, then BID / ASK / OIS / ICAP, the manual spot last (the header strip\'s "Spot kaynağı" edits the same two cells)',
+      duzenTryBMain.join(' ') === 'B1 B32 B33 B5 B7 B12 B13 B6' && /^Kontratlar/.test(await firstPanel()), duzenTryBMain);
+    // (the tables' merged column that only repeats their name is left out: from L; Target's filled rows and one more show)
+    const duzenTryBNames = await page.evaluate(() => ['B5', 'B7', 'B12', 'B13', 'B32', 'B33'].map((id) => window.tto.state.page.items.get(id).grid.data.c[0]));
+    const duzenTryBTarget = await page.evaluate(() => ({ hidden: document.querySelectorAll('#content .panel[data-panel="B33"] tr.grow-hidden').length,
+      more: !!document.querySelector('#content .panel[data-panel="B33"] .grow-more') }));
+    check('VİOP tables start at L (their name is the title), Target shows its filled rows and one empty more ("+ Satır" / "Tümü")',
+      duzenTryBNames.every((c) => c === 'L') && duzenTryBTarget.more && duzenTryBTarget.hidden >= 1, { duzenTryBNames, duzenTryBTarget });
     await open(page, 'masa');
     await tab(page, 'over');
     check('main page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
@@ -2711,11 +2730,14 @@ async function clipAfter(page, action) {
       const texts = head.map((td) => td.textContent.trim());
       const at = ['BID %', 'ASK %'].concat(want).map((t) => texts.indexOf(t));
       const body = rows.filter((r) => r !== head && r.length === head.length && r.some((td) => td.textContent.trim()));
-      return { last: texts.slice(-6), rows: body.map((r) => at.map((j) => (j >= 0 ? r[j].textContent.trim() : null))),
+      const ask = texts.indexOf('ASK %');
+      return { pair: ask - texts.indexOf('BID %'), after: texts.slice(ask + 1, ask + 7), rows: body.map((r) => at.map((j) => (j >= 0 ? r[j].textContent.trim() : null))),
         tip: body.length && at[2] >= 0 ? body[0][at[2]].title : '' };
     }), spreadHeads);
-    check('BIST swap tables end in the spreads to the OIS and the offshore mid (both tables)',
-      spread.every((s) => JSON.stringify(s.last) === JSON.stringify(spreadHeads) && s.rows.length >= 5), spread.map((s) => [s.last, s.rows.length]));
+    // (düzen, 27.11.2026: at 1366 px the four spreads were what scrolled away - they follow BID % / ASK %, the zero rates after them)
+    const duzenTryBBorsa = spreadHeads.slice(2).concat(spreadHeads.slice(0, 2));
+    check('BIST swap tables: BID % / ASK % side by side, right after them the spreads to the OIS and the offshore mid, then the two mid zero rates (both tables)',
+      spread.every((s) => s.pair === 1 && JSON.stringify(s.after) === JSON.stringify(duzenTryBBorsa) && s.rows.length >= 5), spread.map((s) => [s.after, s.rows.length]));
     const bp = (t) => (t === '' || t === null ? NaN : trNumber(t));
     check('each quote\'s spread is its BID % / ASK % less the mid zero rate, in bp (a one-sided quote: its own side only)',
       spread.every((s) => s.rows.every(([bid, ask, ois, off, bidOis, askOis, bidOff, askOff]) => {
@@ -4940,7 +4962,7 @@ async function clipAfter(page, action) {
     await page.waitForFunction(() => window.tto.state.pageId === 'viop' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     await page.waitForTimeout(600);
     check('Enter goes to the table: its page, its tab', (await panelsOnPage(page)).includes('XAU4')
-      && await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab) === 'calc');
+      && await page.evaluate(() => document.querySelector('.viewtabs button.on').dataset.tab) === 'gold');
 
     // ------------------------------------------------------------------ the columns each user hides
     console.log('hidden columns');

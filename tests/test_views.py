@@ -319,8 +319,9 @@ def test_calculators_are_easy_to_reach():
     titles = {p["id"]: p.get("title", "") for p in fwd["panels"]}
     assert titles["B7"].startswith("Interest 2 SP") and titles["B8"].startswith("SP 2 Interest")
     assert fwd["pinned"] == ["B1"]                                   # the value date they all read stays in sight
+    # (VİOP: the gold calculator's one home is the Altın tab, right after the contracts - its own tab repeated it, 27.11.2026)
     viop = next(v for v in VIEWS if v["id"] == "viop")
-    assert [s["title"] for s in viop["sections"]][:3] == ["Kontratlar", "Hesaplayıcılar", "Altın"]
+    assert [s["title"] for s in viop["sections"]][:2] == ["Kontratlar", "Altın"] and "XAU4" in viop["sections"][1]["panels"]
     # the copies on the Calculators sheet are told apart by name
     calc = next(v for v in VIEWS if v["id"] == "calc")
     names = [p.get("title", "") for p in calc["panels"] if not p.get("hidden")]

@@ -229,7 +229,8 @@ def test_tabs_hand_values_and_search_data_over_http(client, user):
     assert page["pinned"] == ["B1"] and page["sections"][0]["id"] == "calc" and page["sections"][0]["panels"][0] == "B7"
     assert client.get("/api/view/bulk").json()["sections"] == []
     tables = {p["id"]: p.get("tables") for p in client.get("/api/nav").json()["pages"]}
-    assert any(t["id"] == "XAU4" and t["tab"] == "Hesaplayıcılar" for t in tables["viop"]) and tables["blotter"] is None
+    # (the VİOP gold calculator's one home is the Altın tab since 27.11.2026: its own tab only repeated it)
+    assert any(t["id"] == "XAU4" and t["tab"] == "Altın" for t in tables["viop"]) and tables["blotter"] is None
     # a value over a formula needs the mode ("adhoc"); it is undone by "reset" with the cell's address
     # (EK_FWD!F50: the RET mid outright of the USDTRY table on the "Forward fiyatları" tab - a formula)
     res = client.post("/api/inputs", json={"book": "tto", "items": [{"ref": "EK_FWD!F50", "value": "55"}]}, headers=h).json()

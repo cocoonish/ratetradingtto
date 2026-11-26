@@ -42,6 +42,8 @@
    "type": "table",
    "title": "BIST swap · T+0 valör (BFX0) — kota, ima TRY faizi, O/N karşılığı ve OIS / offshore mid spread'i",
    "range": "D8:P54",
+   "cols": ["D", "E", "H", "M", "BID − OIS mid (bp)", "ASK − OIS mid (bp)", "BID − Off mid (bp)", "ASK − Off mid (bp)", "OIS mid zero %", "Offshore mid zero %", "F", "G", "I", "J", "K", "L", "N", "O", "P"],
+   "freeze": 1,
    "keep_title": true,
    "append": "borsa_spread",
    "note": "BID % / ASK %: swap puanından ima edilen TRY basit faizi (ACT/360, USD OIS ile). O/N = 360·((1 + r·gün/360)^(1/gün) − 1). SP / gün = swap puanı ÷ vade günü. OIS mid zero % / Offshore mid zero %: aynı tarihler arasında – satırın başlangıcından (T+0'da bugün, T+1'de TRY tatillerini atlayan ertesi iş günü, OIS spot'u gibi) Valör'e – eğrinin iskonto faktörlerinden zero faiz, basit ACT/360. OIS = bootstrap TLREF OIS mid eğrisi (OIS par kotalarının MID'i; Masa'nın 'Tarih arası faiz' Bootstrap satırı, düğümlerde ORANLAR'ın OIS zero'su); eğrinin ilk düğümü 1A'dan önce, yalnız bu spread'lerde, 1W ve 2W OIS kotaları düğüm olarak girer (ORANLAR'ın 1W / 2W OIS zero'su). Offshore = offshore TRY mid eğrisi (9A'ya kadar FX swap ima faizlerinin bid–ask ortası – 1W, 2W, 1A dahil –, 1Y'den XCCY ortalarının bootstrap'ı). Eğrinin spot'undan önceki gün(ler) kendi O/N'uyla basit taşınır (ORANLAR'ın ON satırı): OIS'te TLREF, offshore'da offshore O/N mid. Spread'ler swap'ın kendi tarafıyla: BID / ASK − OIS mid ve BID / ASK − Off mid (bp; + ise swap mid'in üstünde). Yalnızca arkasında emir olan kota gösterilir: miktarı (size) sıfırdan büyük olan taraf. Bloomberg'in kotasız vadeler için döndürdüğü eski fiyatlar (miktar 0) listelenmez; tek taraflı kotada diğer taraf – ve onun spread'leri – boş kalır."
@@ -51,6 +53,8 @@
    "type": "table",
    "title": "BIST swap · T+1 valör (BFX1) — kota, ima TRY faizi, O/N karşılığı ve OIS / offshore mid spread'i",
    "range": "Q8:AC54",
+   "cols": ["Q", "R", "U", "Z", "BID − OIS mid (bp)", "ASK − OIS mid (bp)", "BID − Off mid (bp)", "ASK − Off mid (bp)", "OIS mid zero %", "Offshore mid zero %", "S", "T", "V", "W", "X", "Y", "AA", "AB", "AC"],
+   "freeze": 1,
    "keep_title": true,
    "append": "borsa_spread"
   },

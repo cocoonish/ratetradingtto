@@ -1506,6 +1506,7 @@
    "id": "FR1",
    "type": "table",
    "sheet": "EK_FWD",
+   "freeze": 1,
    "range": "A44:X52",
    "cols": ["A", "B", "C", "D", "V", "W", "X", "E", "F", "G", "H", "I", "J", "K", "L", "M"],
    "hidden": false,
@@ -1601,6 +1602,7 @@
    "id": "FR2",
    "type": "table",
    "sheet": "EK_FWD",
+   "freeze": 1,
    "range": "A55:X62",
    "cols": ["A", "B", "C", "D", "V", "W", "X", "E", "F", "G", "H", "I", "J", "K", "L", "M"],
    "hidden": false,
@@ -1743,6 +1745,8 @@
    "id": "EKF1",
    "type": "table",
    "sheet": "EK_FWD",
+   "freeze": 2,
+   "grow": {"key": "B", "first": 5, "extra": 1, "last": 14},
    "range": "A1:AW16",
    "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "AV", "AW", "O", "P", "Q", "R", "S", "T", "U", "V", "W"],
    "hidden": false,
@@ -1834,7 +1838,8 @@
    "sheet": "EK_FWD",
    "range": "A18:N30",
    "hidden": false,
-   "wide": true,
+   "collapsed": true,
+   "grow": {"key": "B", "first": 20, "extra": 1, "last": 29},
    "title": "PUAN → OIS SPREAD  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
   },
   {
@@ -1843,13 +1848,17 @@
    "sheet": "EK_FWD",
    "range": "A131:R143",
    "hidden": false,
-   "wide": true,
+   "collapsed": true,
+   "freeze": 2,
+   "grow": {"key": "B", "first": 133, "extra": 1, "last": 142},
    "title": "FAİZ → SPREAD  ·  elle verilen TRY faizinin OIS'e göre spread'i, puanı ve forward'ı"
   },
   {
    "id": "EKF5",
    "type": "table",
    "sheet": "EK_FWD",
+   "freeze": 2,
+   "grow": {"key": "B", "first": 104, "extra": 1, "last": 113},
    "range": "A100:AW115",
    "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "AV", "AW", "O", "P", "Q", "R", "S", "T", "U", "V", "W"],
    "hidden": false,
@@ -1941,7 +1950,8 @@
    "sheet": "EK_FWD",
    "range": "A117:N129",
    "hidden": false,
-   "wide": true,
+   "collapsed": true,
+   "grow": {"key": "B", "first": 119, "extra": 1, "last": 128},
    "title": "PUAN → OIS SPREAD  ·  EURTRY  ·  elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i"
   },
   {
@@ -1950,7 +1960,9 @@
    "sheet": "EK_FWD",
    "range": "A145:R157",
    "hidden": false,
-   "wide": true,
+   "collapsed": true,
+   "freeze": 2,
+   "grow": {"key": "B", "first": 147, "extra": 1, "last": 156},
    "title": "FAİZ → SPREAD  ·  EURTRY  ·  elle verilen TRY faizinin OIS'e göre spread'i, puanı ve forward'ı"
   },
   {
@@ -2134,6 +2146,7 @@
    "type": "table",
    "title": "FORWARD STARTING SWAP",
    "range": "B166:T182",
+   "freeze": 1,
    "cols": ["B", "C", "D", "S", "E", "T", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R"],
    "hidden": false,
    "note": "Elle puan → faiz: bir broker'ın ya da müşterinin verdiği FS swap puanını yazın (USDTRY: I181, EURTRY: O182) - ima ettiği TRY fwd-fwd %, Manuel satırının formülünün tersiyle (aynı near / far valör, near outright RET mid'den, aynı USD / EUR fwd-fwd %: C170 / C171 ya da eğri); yanında OIS mid, offshore mid ve RET mid'e göre bp."
@@ -2151,6 +2164,8 @@
    "type": "table",
    "title": "ÇAPRAZ FORWARD",
    "range": "B196:Y217",
+   "freeze": 1,
+   "grow": {"key": "B", "first": 200, "extra": 1, "last": 215},
    "cols": ["B", "C", "D", "E", "F", "X", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "Y", "T"],
    "hidden": false,
    "note": "XXXTRY fwd (elle): bir forward yazın - ima ettiği TRY faizi, döviz bacağı sabit tutularak (manuel forward'ın formülünün tersi: USD / EUR'da o dövizin OIS faizi ve günü; başka dövizde Bloomberg'in USDXXX forward'ının ortası); yanında RET mid'e göre bp."
@@ -2606,10 +2621,9 @@
     "FR2",
     "FR3",
     "FR4",
-    "B16",
-    "B18"
+    ["B18", "B16"]
    ],
-   "note": "Üstteki valör tarihi için USDTRY ve EURTRY: her eğrinin (offshore, OIS, VİOP, RET) bid / mid / ask TRY faizi, forward, swap puanı ve günlük puan. Faizi, spotu ya da döviz faizini değiştirin, hemen yeniden hesaplanır; silince piyasaya döner. 'Elle' satırı: bir eğri seçip mid ya da mid'e spread ile kendi faiziniz. Altında serbest forward listesi (spot, major ve minor faizi eğrilerden) ve eğrilerin vadelere göre simple zero faizleri."
+   "note": "Üstteki valör tarihi için USDTRY ve EURTRY: her eğrinin (offshore, OIS, VİOP, RET) bid / mid / ask TRY faizi, forward, swap puanı ve günlük puan. Faizi, spotu ya da döviz faizini değiştirin, hemen yeniden hesaplanır; silince piyasaya döner. 'Elle' satırı: bir eğri seçip mid ya da mid'e spread ile kendi faiziniz. Altında serbest forward listesi (spot, major ve minor faizi eğrilerden), eğrilerin vadelere göre simple zero faizleri ve yanlarında Forward DV01 ile altın forward."
   },
   {
    "id": "kot",
@@ -2622,7 +2636,7 @@
     "EKF6",
     "EKF9"
    ],
-   "note": "Forward kotasyonu OIS + spread'ten (USDTRY ve EURTRY; bid ve ask spread'i ayrı, eğri ve spread kaynağı seçilir) ve tersi: elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i; elle verilen TRY faizinin spread'i, puanı ve forward'ı. Genel spread Masa'daki tarih arası faiz spread'inden (MASA!I60) gelir; üzerine yazılabilir."
+   "note": "Forward kotasyonu OIS + spread'ten (USDTRY ve EURTRY; bid ve ask spread'i ayrı, eğri ve spread kaynağı seçilir) ve tersi: elle verilen swap puanının ima ettiği TRY faizi ve OIS'e göre spread'i; elle verilen TRY faizinin spread'i, puanı ve forward'ı. Genel spread Masa'daki tarih arası faiz spread'inden (MASA!I60) gelir; üzerine yazılabilir. Ters tablolar (puandan ve faizden spread) kapalı gelir: başlığındaki ▸ açar. Serbest satırlardan dolu olanlar ve bir boş satır görünür; \"+ Satır\" bir satır daha açar."
   },
   {
    "id": "ret",
@@ -2655,8 +2669,10 @@
     "B5",
     "B6",
     "B27",
-    "chart0"
-   ]
+    "chart0",
+    "B12"
+   ],
+   "note": "Eğrilerin okuduğu Bloomberg ticker'ları (ICAP, TRY OIS, USD OIS, EUR OIS) en altta."
   },
   {
    "id": "off",
@@ -2667,13 +2683,6 @@
     "B30",
     "B32",
     "chart1"
-   ]
-  },
-  {
-   "id": "tick",
-   "title": "Ticker'lar",
-   "panels": [
-    "B12"
    ]
   }
  ]

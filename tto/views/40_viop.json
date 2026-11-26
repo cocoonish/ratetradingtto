@@ -392,6 +392,7 @@
    "type": "table",
    "title": "VIOP BID",
    "range": "K7:X18",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "note": "ON karşılık (Excel'deki adı TRY Repo): TRY satırındaki ima faizin (kontratın bid fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON bid."
   },
@@ -400,6 +401,7 @@
    "type": "table",
    "title": "VIOP ASK",
    "range": "K19:X29",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "note": "ON karşılık (Excel'deki adı TRY Repo): TRY satırındaki ima faizin (kontratın ask fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON ask."
   },
@@ -408,6 +410,7 @@
    "type": "table",
    "title": "DEALS",
    "range": "K320:W328",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W"],
    "hidden": false
   },
   {
@@ -416,7 +419,9 @@
    "type": "table",
    "title": "Target",
    "range": "K330:AC338",
-   "cols": ["K", "L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"],
+   "cols": ["L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"],
+   "grow": {"key": "L", "first": 331, "extra": 1, "last": 338},
+   "freeze": 2,
    "tips": {"W": "AA", "Q": "AB", "Z": "AC"},
    "hidden": false,
    "note": "FRA eğrisi: FRA+bp satırının OIS FRA'sı ve hedef faizi hangi eğriden – Bootstrap (piyasa) ya da OIS · PPK'daki senaryolar S1 / S2 / S3 (adları SENARYOLAR tablosundan). FXswap+bp, Faiz % ve Fiyat satırlarında etkisiz. Hedef tipi Fiyat: Hedef değer uzak kontratın fiyatıdır (51,10), Hedef faiz o fiyatın ima ettiği TRY faizi (tablonun kendi hesabının tersi: yakın limit, iki kontratın günleri, USD faizi). Hücrenin üzerine gelince OIS FRA ve Hedef faiz eğrilerini yazar.",
@@ -433,6 +438,7 @@
    "type": "table",
    "title": "OIS",
    "range": "K71:X82",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false
   },
   {
@@ -440,6 +446,7 @@
    "type": "table",
    "title": "ICAP",
    "range": "K84:X95",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false
   },
   {
@@ -454,6 +461,7 @@
    "type": "table",
    "title": "Uzak AL / Yakın SAT – spread fiyatı",
    "range": "K110:X122",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -462,6 +470,7 @@
    "type": "table",
    "title": "Uzak SAT / Yakın AL – spread fiyatı",
    "range": "K124:X136",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -470,6 +479,7 @@
    "type": "table",
    "title": "Uzak AL / Yakın SAT – ima TRY",
    "range": "K138:X150",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -478,6 +488,7 @@
    "type": "table",
    "title": "Uzak SAT / Yakın AL – ima TRY",
    "range": "K152:X164",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -486,6 +497,7 @@
    "type": "table",
    "title": "Alış−satış farkı (bp)",
    "range": "K166:X178",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -494,6 +506,7 @@
    "type": "table",
    "title": "TRY OIS",
    "range": "K180:X192",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -502,6 +515,7 @@
    "type": "table",
    "title": "Orta ima ff − OIS ff (bp)",
    "range": "K194:X206",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -510,6 +524,7 @@
    "type": "table",
    "title": "OIS FRA",
    "range": "K208:X220",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -518,6 +533,7 @@
    "type": "table",
    "title": "VİOP orta ima ff − OIS FRA (bp)",
    "range": "K222:X234",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -526,6 +542,7 @@
    "type": "table",
    "title": "Uzak AL / Yakın SAT − OIS FRA (bp)",
    "range": "K236:X248",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -534,6 +551,7 @@
    "type": "table",
    "title": "Uzak SAT / Yakın AL − OIS FRA (bp)",
    "range": "K250:X262",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -542,6 +560,7 @@
    "type": "table",
    "title": "FX swap ima TRY ff",
    "range": "K264:X276",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -550,6 +569,7 @@
    "type": "table",
    "title": "VİOP orta ima ff − FX swap ima ff (bp)",
    "range": "K278:X290",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -558,6 +578,7 @@
    "type": "table",
    "title": "FX swap ima ff − OIS FRA (bp)",
    "range": "K292:X304",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -566,6 +587,7 @@
    "type": "table",
    "title": "TRY ff DV01 (TL, 1mn USD)",
    "range": "K306:X318",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
    "collapsed": true
   },
@@ -574,6 +596,8 @@
    "type": "table",
    "title": "BAZ GEÇMİŞİ",
    "range": "K340:X352",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
+   "freeze": 1,
    "hidden": false
   },
   {
@@ -581,6 +605,8 @@
    "type": "table",
    "title": "FX SWAP BAZI",
    "range": "K353:S365",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S"],
+   "freeze": 1,
    "hidden": false
   },
   {
@@ -588,6 +614,8 @@
    "type": "table",
    "title": "VİOP − FX SWAP",
    "range": "K366:X378",
+   "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
+   "freeze": 1,
    "hidden": false
   },
   {
@@ -951,23 +979,15 @@
    "id": "main",
    "title": "Kontratlar",
    "panels": [
-    "B6",
     "B1",
+    "B32",
+    "B33",
     "B5",
     "B7",
     "B12",
     "B13",
-    "B32",
-    "B33"
+    "B6"
    ]
-  },
-  {
-   "id": "calc",
-   "title": "Hesaplayıcılar",
-   "panels": [
-    "XAU4"
-   ],
-   "note": "Sarı hücrelere kendi değerinizi yazın. Tarih, spot, USD faizi ve VİOP fiyatı piyasadan gelir; üzerine yazabilir, hücreyi silerek (Delete) piyasadaki değere dönebilirsiniz."
   },
   {
    "id": "gold",
@@ -975,15 +995,14 @@
    "panels": [
     "B9",
     "B10",
-    "B11",
+    ["B11", "B11b"],
     "XAU4",
     "XAU1",
     "XAU2",
     "XAU3D",
-    "XAU3",
-    "B11b"
+    "XAU3"
    ],
-   "note": "VİOP XAUTRY / XAUUSD. Bloomberg'den gelmeyen altın spotunu, swap faizini ya da VİOP fiyatını sarı / yeşil hücrelere elle yazabilirsiniz."
+   "note": "VİOP XAUTRY / XAUUSD ve XAUTRY hesaplayıcısı (faizden fiyat, fiyattan faiz). Sarı / yeşil hücrelere kendi değerinizi yazın - Bloomberg'den gelmeyen altın spotunu, swap faizini ya da VİOP fiyatını da; tarih, spot, USD faizi ve VİOP fiyatı piyasadan gelir, hücreyi silerek (Delete) piyasadaki değere dönersiniz."
   },
   {
    "id": "matrix",

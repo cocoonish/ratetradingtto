@@ -108,8 +108,12 @@ def test_each_quote_gets_its_spread_to_the_ois_and_the_offshore_mid(service):
     loc = numfmt.get_locale("tr")
     seen = {"pos": 0, "neg": 0, "bid only": 0, "ask only": 0}
     for data, letters in zip(tables(service), (T0, T1)):
-        assert data["c"][-6:] == HEADS and data["added"] == 6
-        head = data["rows"][data["r"].index(8)][-6:]
+        # (where the page lists them, by caption: the four spreads right after ASK %, then the two zero rates - düzen,
+        # 27.11.2026: at 1366 px the spreads were what scrolled away; tests/test_duzen_try_b.py)
+        added = [data["c"].index(h) for h in HEADS]
+        ask = data["c"].index(letters[3])
+        assert data["added"] == 6 and data["c"][ask + 1:ask + 7] == HEADS[2:] + HEADS[:2]
+        head = [data["rows"][data["r"].index(8)][j] for j in added]
         assert [c["t"] for c in head] == HEADS and all(c["b"] and c["tip"] for c in head)
         rows = quoted(data, letters)
         assert len(rows) >= 5
@@ -133,7 +137,7 @@ def test_each_quote_gets_its_spread_to_the_ois_and_the_offshore_mid(service):
                     assert spread["t"].lstrip("+-") == numfmt.format_value(math.floor(abs(spread["v"]) + 0.5), "#,##0", loc)
             if isinstance(row["bid"], float) != isinstance(row["ask"], float):
                 seen["bid only" if isinstance(row["bid"], float) else "ask only"] += 1
-        texts = [c.get("t", "") for row in data["rows"] for c in row[-6:]]
+        texts = [row[j].get("t", "") for row in data["rows"] for j in added]
         assert not [t for t in texts if t.startswith("#")]
     assert all(n >= 1 for n in seen.values()), seen                # (the recorded day has all four)
 
