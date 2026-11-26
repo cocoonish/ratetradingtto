@@ -2319,3 +2319,46 @@ frozen columns kept when its own order keeps them first), `tto/dibsgenel.py` (`c
 (B3's `cols`, the group's member, the helper table "on"), `58_kagitlar.json` (U1's `cols`), `60_dibslive.json` (the note).
 Tests: `tests/test_kagit_on.py`; `tests/test_kagit_twoway.py`, `tests/test_rvfair.py`, `tests/test_dibsgenel.py` (the new
 member, the summary's and Genel's column); the browser test's "DİBS: getirinin ON karşılığı" checks.
+
+#### TLREF normalleşmesi: OIS'in ima ettiği tarih (26.11.2026)
+
+The desk (26.11.2026), on the date TLREF comes back to normal once TCMB restarts its one-week repo auctions:
+
+> "Ois'in imply ettigi normallesme noktasini da bulacagiz. Bunu simdiki ppk implied faizleri buldugumuz yerde degil ek
+> olarak gunluk 1w 2w 1m hepsine bakip gunluk gunluk yurutup bulacagiz."
+
+> "onayliyorum. Ancak implied rate cutlarda 1m-2m'yi secebildigim gibi vadeleri de tikleyip secip ona gore
+> ilerleyebilmeliyim 1w 2w dahil"
+
+**What it does** ([curves.md](curves.md#tlref-normalleşmesi-the-date-ois-implies)): every TRY business day after the OIS
+spot is tried as N, the day TLREF is normal again - TLREF from the spot to N is the normal path + (today's − normal), after
+N the normal path; the normal path is the normal TLREF (`OIS_MAIN!L4`) up to the first PPK meeting inside the ticked tenors,
+and after each meeting inside a level fitted to the ticked quotes. The day whose path prices the ticked quotes best is the
+OIS-implied date; it is the date in use (`OIS_MAIN!L5`) when no date is typed (`L3`).
+
+**Choices made while building it** (ask the desk before changing):
+- **No new panel:** the block sits right of STUB İMA in its own panel (OIS · PPK → PPK ima, `OIS_MAIN!AO8:AS15`): a tick
+  box per tenor (1W, 2W, 1M, 2M, 3M; **1W, 2W, 1M ticked by default**, each user's own), the quote, the model's rate at the
+  date and the miss (bp); the date (and "spot + n gün"); a message. **Switched off it is empty** - the panel as before,
+  cell for cell (the desk's "Bu olay duzeldiginde yeni panel kullanmak zorunda kalmayiz"); a user's ticks are kept for
+  the next time.
+- **The quotes the PPK solver itself reads:** 1W `TYSO1Z` and 2W `TYSO2Z` (`OIS_MAIN!AU13` / `AU14`, 7 and 14 days as the
+  solver counts them), 1M-3M `OIS_MAIN!D442:D444` (their days `E442:E444`); zero-coupon simple ACT/365. No new Bloomberg
+  request.
+- **TLREF compounds as the MPC ima model compounds it** (the desk's "B" of 25.11.2026): on business days, ln G = d·ln(1 +
+  x/365) − W·(x/365)², W from Motor's Pcum - a weekend's and New Year's Day's fixings counted as the model counts them.
+- **The levels after the meetings inside are least squares** on the rate misses (each meeting's effective day, Motor's
+  calendar - a calendar change moves nothing; at most three inside the ticked tenors). The days are scored by the sum of
+  squared misses; **the earliest on a tie**.
+- **When the ticked tenors cannot fix a date it says so, and gives none:** no more ticked tenors than unknown levels ("en
+  az … vade seçin"); the best fit past the longest ticked tenor ("normalleşme seçili vadelerin sonrasında" - a longer
+  tenor is needed); and a tie - the levels after a meeting take up the gap, so every day from one on fits as well - is
+  said with the days it spans (the earliest taken).
+- **The normal TLREF and the switch are the other builder's** (`OIS_MAIN!L2:L4`); the walk reads them by address.
+- Nothing of before changes while switched off (checked cell for cell: the workbook with and without the addition, and
+  STUB İMA's panel against its old range).
+
+Code: `tto/extras.py` (`_tto_norm_walk`, `_nw_check`, `_nw_lng`, `_nw_dlng`, `_nw_step`, `NW_*`; sheet `EK_NORM`),
+`tto/views/20_ois.json` (B6's range, the tick boxes' input), `tto/inputs.py` (`parse_check`), `tto/render.py` (a tick box
+that reads nothing is not offered), `tto/static/js/grid.js` (`fillCell`, `toggleTick`). Tests:
+`tests/test_normallesme_walk.py`; the browser test's "normalleşme · OIS ima" checks.

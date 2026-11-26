@@ -28,8 +28,9 @@ def sheets_of(view):
 
 #: sheets without a page of their own (the sheet explorer shows them): the order of the pricing sources and the USD /
 #: EUR holiday lists, which are on the settings page - and the curve between quoted tenors (Ayarlar → Eğri
-#: interpolasyonu: the choice and the PPK cells the service fills, in the TRY and the ASW workbook)
-NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL"), ("tto", "EK_INTERP"), ("asw", "EK_INTERP")}
+#: interpolasyonu: the choice and the PPK cells the service fills, in the TRY and the ASW workbook) - and the days tried
+#: for TLREF's normalization (OIS · PPK: its result right of STUB İMA, no panel of its own - the desk, 26.11.2026)
+NO_PAGE = {("tto", "EK_KAYNAK"), ("tto", "EK_TATIL"), ("tto", "EK_INTERP"), ("asw", "EK_INTERP"), ("tto", "EK_NORM")}
 
 
 def test_every_sheet_of_the_workbooks_has_a_page(models):
@@ -520,6 +521,9 @@ REFERENCE = {
         # and the list of FRAs - typed on the OIS page
         "OIS_MAIN!F3", "OIS_MAIN!J4", "OIS_MAIN!AU6:AU15", "OIS_MAIN!V444:V457", "OIS_MAIN!B3", "OIS_MAIN!D3",
         "OIS_MAIN!P3:Q5", "OIS_MAIN!U10:W89", "OIS_MAIN!M336:N438",
+        # ... and the tenors the normalization's OIS-implied date is fitted to (tick boxes right of STUB İMA, PPK ima): the
+        # date in use (L5, pinned) falls back to that date
+        "OIS_MAIN!AP9:AP13",
         # the desk's shared RET curve (Forward → RET) and day-count conventions
         "Forward!W33:X47", "Forward!U37", "Forward!U6", "VIOP!B44", "VIOP!R353", "DV01_RISK!H6:I25",
         # spot value dates (formula defaults: T+1 / T+2 past the holidays)
