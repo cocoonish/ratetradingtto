@@ -508,11 +508,13 @@ def test_a_workbook_whose_formulas_differ_loads_without_the_ways_back():
     tto = Model.load(os.path.join(root, "models", "tto.json.gz"))
     extras.SheetBuilder(tto, "DİBS RV").patch("EH20", '=IF(AND(DG20,OR(CR20="S",CR20="B")),(EG20-DH20)/EE20*100,"")')
     problems = extras.apply("tto", tto)
+    # (the yields' O/N equivalents are a member of DİBS RV's two-way table: Tüm Kâğıtlar' with them - test_kagit_on.py)
     assert [p.split(":")[0] for p in problems] == ["DİBS RV ASW / DM'den fiyat", "DİBS RV switch seviyesinden fiyat",
-                                                   "DİBS RV iki yönlü", "DİBS RV switch iki yönlü"]
+                                                   "DİBS RV iki yönlü", "DİBS RV switch iki yönlü", "Tüm Kâğıtlar ON karşılık"]
     assert problems[0].endswith("DİBS RV!EH20 beklenen formül değil ((EG20-DI20)/EE20*100 yok)")
     rv, man = tto.sheet("DİBS RV"), tto.sheet("Manuel Tahvil")
     assert parse_a1("BL20") not in rv.fml and parse_a1("V64") not in rv.fml and parse_a1("A78") not in rv.consts
+    assert parse_a1("BO20") not in rv.fml and "EK_ISGUNU" in tto.sheet_index
     assert parse_a1("N20") not in rv.fml and extras.formula_of(tto, "DİBS RV", "S20") == 'IF(AND(DG20,CR20<>"T"),DX20,"")'
     assert parse_a1("AA64") not in rv.fml
     assert parse_a1("B7") in man.fml and parse_a1("AM18") in man.fml           # (Manuel Tahvil's ISIN does not read EH)

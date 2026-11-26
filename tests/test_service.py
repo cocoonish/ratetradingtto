@@ -345,10 +345,10 @@ def test_cell_info_and_grid(service):
     assert [s["name"] for s in service.sheets("sofr")] == ["SOFR_FOMC"]
     # the dashboard's own sheets come last; four of the workbook's 17 are taken out (MOBIL MK, YP DIBS, Ivır Zıvır,
     # USDTRY IYIX)
-    assert [s["name"] for s in service.sheets("tto")][-15:] == ["EK_TATIL", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_PPK",
-                                                                 "EK_DIBS", "EK_EVREN", "EK_CARRY", "EK_IHALE", "EK_TARIH", "EK_VFRA", "EK_RET",
-                                                                 "EK_INTERP"]
-    assert len(service.sheets("tto")) == 17 - 4 + 15
+    assert [s["name"] for s in service.sheets("tto")][-16:] == ["EK_TATIL", "EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_PPK",
+                                                                 "EK_DIBS", "EK_EVREN", "EK_ISGUNU", "EK_CARRY", "EK_IHALE", "EK_TARIH",
+                                                                 "EK_VFRA", "EK_RET", "EK_INTERP"]
+    assert len(service.sheets("tto")) == 17 - 4 + 16
     assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2", "EK_TATIL"]
     assert [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX", "EK_INTERP"]
 

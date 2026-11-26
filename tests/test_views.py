@@ -540,9 +540,9 @@ REFERENCE = {
 #: (page, panel) -> [(what the note names, sheet ranges)]
 _POSITION = ("Pozisyon", ["DV01_RISK!C6:C25", "DV01_RISK!K6:K25", "DV01_RISK!Q6:Q25"])    # bucket DV01s, pivots, rates
 _HEDGE = ("Hedge", ["DV01_RISK!C85:G85", "DV01_RISK!C88:E102"])                           # the hedge instruments
-#: DİBS RV's bond rows two-way: a yield, spread or carry typed in a row is kept in its stores (YF:YL) - typed on DİBS RV
-#: as the manual clean price is (test_kagit_twoway.py)
-_RV_TYPED = ["DİBS RV!N5:N54", "DİBS RV!YF5:YL54"]
+#: DİBS RV's bond rows two-way: a yield, spread, carry or the yield's O/N equivalent typed in a row is kept in its stores
+#: (YF:YL, YQ) - typed on DİBS RV as the manual clean price is (test_kagit_twoway.py, test_kagit_on.py)
+_RV_TYPED = ["DİBS RV!N5:N54", "DİBS RV!YF5:YL54", "DİBS RV!YQ5:YQ54"]
 NAMED = {
     ("masa", "B19"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!AL5:AL54"] + _RV_TYPED)],
     ("kagitlar", "U1"): [("DİBS RV", ["DİBS RV!H5:H54"] + _RV_TYPED)],

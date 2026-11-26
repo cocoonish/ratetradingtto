@@ -88,7 +88,8 @@ def test_every_figure_of_the_table_is_its_sources(service):
                                                                      "Sıfır kupon eğrisi (NS)", "Risk", "Carry", "Broker", ""]
     assert dg.ZERO_GROUP == "Sıfır kupon eğrisi (NS)"
     assert t["c"][:4] == ["bond", "isin", "due", "left"] and t["c"][-2:] == ["card", "flag"]
-    assert [c["t"] for c in t["rows"][1]][23:26] == ["Model getiri %", "Pahalı / ucuz", "Adil fiyat"]
+    assert [c["t"] for c in t["rows"][1]][9:12] == ["Bileşik %", "Basit %", "ON karşılık %"]        # (the O/N: 26.11.2026)
+    assert [c["t"] for c in t["rows"][1]][24:27] == ["Model getiri %", "Pahalı / ucuz", "Adil fiyat"]
     # the trading list's bonds, kind by kind (bills first), by maturity: each row its bond's
     listed = [v for v in s._list_values(u, "tto", "DİBS RV!A5:A54") if v]
     bonds = [x for x in t["isin"] if x]

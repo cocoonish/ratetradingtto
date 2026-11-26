@@ -138,7 +138,8 @@ def test_the_bond_tables_are_two_way_groups(svc):
     s = svc
     assert s.twoway.problems == {}
     assert all(b.left_out == [] for b in s.books.values())
-    want = {"dibs-rv": ("tto", ["Manuel temiz", "BIST basit getiri", "BIST bileşik getiri", "Getiri − OIS", "ASW / DM", "Z-spread"]),
+    want = {"dibs-rv": ("tto", ["Manuel temiz", "BIST basit getiri", "BIST bileşik getiri", "Getiri − OIS", "ASW / DM", "Z-spread",
+                                "ON karşılık"]),
             "dibs-carry": ("tto", ["Repo", "Carry"]), "dibs-switch": ("tto", ["Getiri farkı", "ASW/DM farkı"]),
             "asw-rv": ("asw", ["Manuel temiz", "ASW", "Kirli @spot"]),
             "manuel": ("tto", ["Temiz fiyat", "Kirli fiyat (valör)", "Kirli fiyat (OIS spot)", "BIST basit getiri",
@@ -160,7 +161,7 @@ def test_the_bond_tables_are_two_way_groups(svc):
         stores = {c for m in g.members if not m.own for c in m.store}
         retired = {c for x in extras.RETIRED_INPUTS.get(bid, ()) for c in book.cells_of(x)}
         assert stores and not stores & declared and not stores & retired, gid
-    assert [m.own for m in s.twoway.groups["dibs-rv"].members] == [True] + [False] * 5
+    assert [m.own for m in s.twoway.groups["dibs-rv"].members] == [True] + [False] * 6        # (the O/N equivalent's: 26.11.2026)
     assert not any(m.own for m in s.twoway.groups["dibs-switch"].members)          # (both kept in stores)
 
 
@@ -648,7 +649,7 @@ def test_the_pages_mark_the_typed_value_and_say_what_the_tables_do(svc):
     p, m = marks(s, u, "dibs", "B3")
     assert p["note"].count("İki yönlü: Manuel temiz, BIST basit / bileşik getiri") == 1 and "Repo ile carry de iki yönlüdür" in p["note"]
     assert all(m["%s%d" % (c, r)]["i"] == "u" for c in RV_MEMBERS + ("AL", "AM"))
-    assert m["Z%d" % r]["an"] == "Manuel temiz, BIST basit getiri, BIST bileşik getiri, Getiri − OIS, Z-spread"
+    assert m["Z%d" % r]["an"] == "Manuel temiz, BIST basit getiri, BIST bileşik getiri, Getiri − OIS, Z-spread, ON karşılık"
     assert m["S%d" % r]["ao"] == "ASW / DM · Z%d" % r and m["AL%d" % r]["ao"] == "Carry · AM%d" % r and m["AM%d" % r]["an"] == "Repo"
     assert m["J%d" % r]["t"] == "ASW'den (yazılan)"
     p, m = marks(s, u, "dibs", "B4")

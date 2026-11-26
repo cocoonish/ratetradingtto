@@ -376,6 +376,14 @@ the period before's O/N + the step, then the window's simple rate from that O/N 
 24.11.2026): an FRA typed into Gerçekleşen FRA holds the start leg (its fill, else its market par) and gives the end leg's
 fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula (`extras.fra_end_leg`, one implementation for both).
 
+**A bond's yield → its O/N equivalent** (26.11.2026, [desk-decisions.md](desk-decisions.md#dibs-getirinin-on-karşılığı-26112026);
+DİBS RV `BO:BQ`, DİBS Trading, Tüm Kâğıtlar, the card): the same TLREF over a window, on no curve - the window from the
+bond's valör (`DC`) to its maturity, the growth the yield's own (a bill's simple ACT/365, 1 + y·d/365; a fixed coupon
+bond's (1 + y/f)^n, n its maturity's periods in DİBS RV's yield sum `LV:MS`), then d·ln(1 + x/365) − W·(x/365)² = ln G
+(`extras.overnight_bd_growth`, `bond_growth`; the way back `growth_bd` → `bond_yield`, two-way on DİBS RV). W: Motor's
+daily calendar from the OIS spot, a T+0 valör's days to the spot added, and past the calendar's last day (spot + 3700) the
+TRY list itself (`extras.try_term`, `EK_ISGUNU`). Fixed coupon bonds and bills only.
+
 ## Spot and value dates
 
 | Pair / use | Spot | Holidays |

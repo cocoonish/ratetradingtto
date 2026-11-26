@@ -183,6 +183,9 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
     (`Service._twoway_pins`) - a typed OIS ASW is a clean price, not an FX ASW.
   - Members whose sheet values are rounded or solved in a few steps (DİBS RV's 0.1 bp spreads, its yield and Z-spread
     solvers) are exact on a row with anything typed, so that a value typed back gives the same row.
+  - A member in a column of its own right of the table (DİBS RV's O/N equivalent `BO`, 26.11.2026; its store `YQ`, its
+    helpers `YR:YW`): the panel's `cols` puts it beside the yield it belongs to (`Service._pick_columns` keeps the columns
+    Excel keeps in view when the order keeps them first).
 - **Calculators of a workbook sheet** (`extras.TW_HUBS`: Hesaplayıcılar, DV01 Risk's scenario P&L): one `_BUILDERS` entry
   per calculator (a block the workbook changed is left out by itself). Each has a hub - the input its block computes
   from -: the other members keep their workbook formula wrapped in their store, the hub is its store, else the value the
@@ -321,6 +324,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | EK_RET | tto | RET tenors on the OIS scenario curves |
 | EK_PPK | tto | OIS · PPK's ways back: a meeting window's rate / an MPC spread typed -> the PPK step it prices (Broker Chat's implied step, cell for cell). Its typed and computed columns are bands of `meetings.TCMB` (row 3 + k: meeting slot k). Two-way: a window's O/N or step, a pair's later rate, O/N or step typed instead (stores `Y:Z`, `AA:AC`, typed bands too). Formula-only beside it: "FRA ikinci bacak" (`OIS_MAIN!U335:W438`; the FRA list two-way too: the end leg's fill or the FRA, store `OIS_MAIN!BG336:BG438`) and, in book `sofr`, "FOMC pencere OIS'ten adım" (`SOFR_FOMC!AA72:AE83`, bands of `meetings.FED`; two-way: its O/N or step and WIRP's difference typed instead, stores `AG:AJ`) |
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
+| EK_ISGUNU | tto | the TRY holiday list's pieces of TLREF's weekend / holiday term W, for a window past Motor's daily calendar (OIS spot + 3700 days): each week-day holiday listed once, its p, a Friday's p again (`extras.try_term`: a bond's O/N equivalent, DİBS RV `BO:BQ` - [curves.md](curves.md#meeting-steps-from-a-rate)); shown as a hidden helper table of the DİBS RV page ("isg") |
 | EK_FX | asw | the offshore rates ASW FX is built on |
 
 Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01, the calculators' ways back
@@ -331,7 +335,9 @@ with its helper block `AL17:AM36` and the inputs' defaults it gives; [desk-decis
 Forward page's calculators two-way (`_tto_fwd_calc_tw`: Interest 2 SP … Repo, Forward DV01, TRY OIS w/Spread - their
 stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores in `X:Z`), the bonds' tables two-way
 (the same day: their stores in hidden columns of the rows - `DİBS RV!YF:YP`, `AB:AJ` of the switch rows, `ASW!Z:AB`,
-`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own) and others.
+`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own), DİBS RV's yields' O/N
+equivalents (26.11.2026: `DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm
+Kâğıtlar' `EK_EVREN!S`) and others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 ## Module map
