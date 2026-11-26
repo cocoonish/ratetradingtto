@@ -341,8 +341,10 @@ stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores
 ON karşılık (26.11.2026, "VİOP ON karşılık", `_tto_viop_on`: `MASA!A109:A121` ON bid and `O109:O121` ON ask, cells the
 workbook leaves empty - the panel's `cols` puts each beside its implied rate -, each the VİOP sheet's own "TRY Repo" of
 the contract, `VIOP!M17:X17` / `M29:X29`; display only, nothing kept), DİBS RV's yields' O/N equivalents (26.11.2026:
-`DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`) and
-others.
+`DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`), the
+pages' looks of the layout review (27.11.2026, `LOOK_NAME`: conditional formats colouring the OIS lists' and Masa's YÖN as
+the USD sheet does, the OIS solver's two bp figures' number format, Masa chart 2's RET ask colour - how cells read, never a
+value) and others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 ## Module map
@@ -501,7 +503,8 @@ Two kinds of panel key add the dashboard's own columns:
 - the `append` keys (aswfx, rvfair, borsaspread, dibs_live, universe …): see `Service._panel`.
 
 A table's `"cols"` shows only the columns it names, in its order (`Service._pick_columns`; every cell keeps its column
-letter): Masa's forward summaries, and the Forward page's pricing tables whose ON karşılık (26.11.2026) sits right of their
+letter): Masa's forward summaries, TOPLU TARİH ARASI FAİZ and USD's FOMC table (their inputs moved into view, the layout
+review of 27.11.2026), and the Forward page's pricing tables whose ON karşılık (26.11.2026) sits right of their
 stores but shows beside the TRY rate (FORWARD KOTASYON, the value-date tables, SERBEST FORWARD, FORWARD STARTING SWAP,
 ÇAPRAZ FORWARD). A merged cell keeps the columns it covered that still follow it, in order (ÇAPRAZ FORWARD's "Yöntem" row);
 a covered cell it no longer reaches is an empty cell of its own, so a row keeps every column.

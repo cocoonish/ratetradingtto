@@ -2319,3 +2319,79 @@ frozen columns kept when its own order keeps them first), `tto/dibsgenel.py` (`c
 (B3's `cols`, the group's member, the helper table "on"), `58_kagitlar.json` (U1's `cols`), `60_dibslive.json` (the note).
 Tests: `tests/test_kagit_on.py`; `tests/test_kagit_twoway.py`, `tests/test_rvfair.py`, `tests/test_dibsgenel.py` (the new
 member, the summary's and Genel's column); the browser test's "DİBS: getirinin ON karşılığı" checks.
+
+#### Düzen: Masa, OIS · PPK, USD, Fiyatlama, Swaption
+
+The desk's answer to the layout proposals (27.11.2026): **"Hepsini yap"** - this part is builder L2a's (proposals 3, 4, 5, 8,
+9, 11, 13, 16 and 19 on these pages). The layout only: no value, formula, input, curve or Bloomberg request changed; every
+panel keeps its id (a panel moved to another tab too), every DOM id stays, and what is hidden is one click away.
+
+- **Masa**
+  - *Genel bakış* opens on Kontrol and ORANLAR: "Manuel spot" (`VIOP!Z8:AA11`, borrowed) is a helper table there - the
+    header strip's "Spot kaynağı ✎" writes the same two cells and the VİOP page shows them. The charts side by side: the
+    three rate charts (Oranlar, O/N eşlenikleri, RET bid–ask ve piyasa) in one row, "RET bandı vs piyasa" beside RET BANDINA
+    GÖRE PİYASA, whose bp columns it draws (it stood alone, ~900 px empty beside it).
+  - **Tarih arası** (a tab of its own, id `tarih`): TARİH ARASI FAİZ, TARİH ARASI FORWARD, TARİH ARASI FAİZ → SPREAD, TOPLU
+    TARİH ARASI FAİZ - **one dates row** (TARİH ARASI FAİZ's first row, `MASA!C60` / `E60` / `I60`) instead of three: the
+    strip that repeated it above the forward (`B10D`) is a helper; a temporary copy of the forward still shows it above
+    itself, the copy's own dates (`copy_with`). *Forward fiyatlama* keeps the two quote summaries and KIRIK VADE; *Faiz ·
+    PPK* the MPC ima path, the survey and the FRA charts.
+  - TOPLU TARİH ARASI FAİZ's columns (`cols`): Başlangıç, Bitiş, Spread, Gün, **Kote %** and what it reads (Kote − the chosen
+    curve, Kote − Bootstrap), then the curves - the Kote % input was 450 px out of view at 1920. (Gün stays between Spread and
+    Kote % so that the settings row above it - Eğri, Gün esası, Genel spread - keeps each caption beside its cell.)
+  - The forward quote summaries: the curves' legend ("Eğriler: S1 = Baz (%60) · …") stood in `EK_FWD!K2`, the summary's last
+    column (Fwd ask), and widened it by ~500 px; it is in `EK_FWD!L2` now (`extras.FWD_LEGEND`), right of Fwd ask - the
+    Forward page's matrix runs it over its empty row as before - and the summary shows it as its note (`note_ref`).
+    EURTRY's line (`K101` → `L101`) the same; the summary's title says it. The free ("serbest") rows past the first empty
+    one are folded (`grow`: "+ Satır", "Tümü"); the panels as wide as their matrix (no longer `wide`).
+  - *VİOP*: DEALS' contract limit above DEALS, the targets' inputs above TARGET (one column each: an array in the tab's
+    list); the targets' empty input rows folded. *Sinyaller*: each strip of inputs above its table, and **Makro** (its
+    one-table tab gone; the "Makro" shortcut opens Sinyaller).
+- **OIS · PPK**
+  - *Kotalar*: OUTRIGHT first; beside it one column - SENARYOLAR, the stub of the one-table *Hesaplayıcılar* tab (STUB – Spot
+    → yarından sonraki ilk MPC; that tab is gone) and Çözücü ayarları ve durum; then the two charts and O/N EŞLENİKLERİ.
+  - *PPK ima* in two, by the names of the desk's own shortcuts (Masa's KISAYOLLAR): **MPC ima** (id `mpc`: IMPLIED RATES,
+    the TLREF path and step charts, STUB İMA, KOTA ARALIKLARI, İMA PPK kontrolü) and **MPC işlem** (id `mpcis`: MPC OIS, MPC
+    OIS → PPK ADIMI, the bucket DV01s, MPC SPREAD, MPC SPREAD → PPK ADIMI). The shortcuts open them. Parametreler stays
+    pinned and open (the TLREF normalization's switch); B1, B6, PPK1, PPK2 and PPKY as they were.
+  - IMPLIED RATES opens on its first 24 meetings (`"limit": {"rows": 24}`; "Tümü (82)"). EN İYİ SPREAD / FLY / FRA fold their
+    empty ranks (FLY had 7, FRA 5 on the recorded day); EN İYİ FRA keeps # and İşlem in view sideways.
+  - **YÖN coloured as on USD**: the USD sheet's own conditional formats - a receive (RECEIVE, REC GÖVDE, REC k+1 / PAY k)
+    green, a pay red, FLATTENER navy, STEEPENER brown - on OUTRIGHT, the best and the full lists, MPC OIS, MPC SPREAD and
+    Masa's OIS signals (`extras.LOOK_YON`: conditional formats added to OIS_MAIN and MASA; the text decides, nothing is
+    written).
+  - Çözücü's two figures the solver works out - Spot→MPC1 stub ort. − TLREF and Maks. |kontrol| (`OIS_MAIN!AU4`, `AU11`) -
+    with one decimal, as Masa's status row says them ("6,040528679" → "6,0"; the value whole).
+- **USD · FOMC**
+  - *Özet*: En iyi işlemler, the spreads and the flies first, Girdiler and Kontroller after them; the caption panel (it
+    repeated the page's title) a helper. *FOMC* and *Eğri*: the table first, Girdiler beside its chart (the table started
+    at y = 610 under Girdiler); *İşlemler*: Girdiler last. The best lists' empty ranks folded.
+  - FOMC ima patikası: "PENCERE OIS → FOMC ADIMI" - the market's window rate and the four two-way inputs (`AA:AE`, "Pencere OIS
+    (elle) %" first) - right after İma O/N % (`cols`; they were 1 199 px out of view); # and Toplantı in view sideways.
+  - **Hidden by default** (proposal 19; "Sütunlar" brings them back, and a user's own choice stands -
+    `Service.DEFAULT_HIDDEN_COLUMNS`): the FOMC table's *Başl. gün*, *Bitiş gün*, *ln DF başl.*, *ln DF bitiş* (`F`, `G`,
+    `I`, `J`: what İma O/N % is worked out from) and the OIS quotes' *Kullan*, *Ay*, *Hafta*, *ln DF*, *SOFR ticker*, *FF
+    ticker* (`G`, `H`, `I`, `M`, `S`, `T`). No rate, quote, step, error or the window's own day count (Gün) among them.
+- **Fiyatlama**: the DV01 buckets at their own width; beside them one column - the tiles, the payment schedule (as wide as
+  its table), **Toplu fiyatlama** - so the bulk list is on the first screen (it started at y ≈ 1 015). TRY rates with **two
+  decimals** (the 25.11 rule): the mids, the rate an NPV / upfront gives, the buckets' quotes, the bulk table; an FX
+  forward's outright keeps four, the USD / EUR rate its own. How they read only: everything is priced on the full value.
+- **Swaption**: the small "Vadede faiz" above Gerçekleşen vol, the two beside the options; Dayanak swap as wide as its table
+  (it stretched to 1 678 px); the forward, the strike, the breakevens and the rates at the expiry with two decimals.
+- **Masa's charts**: the RET ask in one colour in every chart - purple, as in Oranlar and O/N eşlenikleri ("RET bid–ask ve
+  piyasa" drew it red, the RET bid's colour; `extras.LOOK_RET_ASK`).
+- **The identifier column in view** when a wide table scrolls sideways (`"freeze"`): TOPLU TARİH ARASI FAİZ (Başlangıç,
+  Bitiş), TARİH ARASI FAİZ, TARİH ARASI FORWARD, → SPREAD, PPK anket, KIRIK VADE (their first column), FOMC ima patikası
+  (#, Toplantı), EN İYİ FRA (#, İşlem).
+
+**Left as they were** (for the desk to say): EN İYİ SPREAD and EN İYİ FLY miss sharing a row by ~16 px at 1920 (none of their
+columns is a helper); Fiyatlama's and Swaption's convention panels stay open; Masa's TARGET shows one row a target, as before
+(Excel hides its other rows).
+
+Code: `tto/views/10_masa.json`, `20_ois.json`, `80_usd.json` (tabs, `cols`, `grow`, `limit`, `freeze`, `note_ref`, a column
+of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an array read as its ids, in order),
+`tto/service.py` (`DEFAULT_HIDDEN_COLUMNS`), `tto/extras.py` (`FWD_LEGEND`; `LOOK_NAME`: `_look_check`, `_tto_look`),
+`tto/static/js/pages/pricing.js`, `swaption.js`, `tto/static/css/app.css` (the L2a block at its end). Tests:
+`tests/test_duzen_try_a.py`; `tests/test_views.py`, `test_toplufaiz.py`, `test_ppkters.py`, `test_decimals.py`,
+`test_columns.py`, `test_extras.py`, `test_workbook_features.py` (each for the layout, as said there); the browser test's
+`duzenTryA…` checks and its Fiyatlama / Swaption checks (two decimals).
