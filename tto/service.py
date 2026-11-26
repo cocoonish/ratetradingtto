@@ -2310,6 +2310,11 @@ class Service(object):
                     self._universe_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "borsa_spread":
                     self._borsa_spread_columns(book, calc, user, entry["data"], loc, p["range"])
+                if p.get("cols") and entry["data"].get("added"):
+                    # the dashboard's own columns added above, named in "cols" by their caption, where the page lists
+                    # them (Borsa Swap: the spreads right after BID % / ASK %); one it does not name stays at the end
+                    have = entry["data"]["c"]
+                    _pick_columns(entry["data"], [c for c in p["cols"] if c in have] + [c for c in have if c not in p["cols"]])
                 if p.get("bonds"):
                     # a list of bonds: its rows without a bond left out, the bonds in the trading list's order (display only)
                     self._bond_rows(book, calc, sheet, p["bonds"], entry["data"])

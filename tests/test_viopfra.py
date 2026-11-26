@@ -79,9 +79,10 @@ def test_the_choice_sits_beside_the_target_type_as_a_list_of_the_scenarios(svc):
     u = svc.login("FRA eğrisi liste")["user"]
     page = svc.view(u, "viop")
     table = next(p for p in page["panels"] if p["id"] == "B33")["data"]
-    assert table["c"] == ["K", "L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"]
+    # (from L: the merged column K that only repeats the table's name "Target" is left out - düzen, 27.11.2026)
+    assert table["c"] == ["L", "M", "N", "O", "Z", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"]
     head = [c.get("t") for c in table["rows"][0]]
-    assert head[4:7] == ["Hedef tipi", "FRA eğrisi", "Hedef değer"] and head[13] == "OIS FRA · " + BOOT
+    assert head[3:6] == ["Hedef tipi", "FRA eğrisi", "Hedef değer"] and head[12] == "OIS FRA · " + BOOT
     for r in range(331, 339):
         z = page_cells(svc, u, "viop", "B33", r)["Z"]
         assert z["i"] == "u" and z["o"] == [BOOT, S1, S2, S3], r
@@ -286,7 +287,7 @@ def test_the_rows_say_their_curve_wherever_they_are_shown(svc):
         assert part["c"] == ["L", "M", "Z", "W"]
         row = dict(zip(part["c"], part["rows"][part["r"].index(331)]))
         assert row["Z"]["t"] == S1 and row["W"]["tip"].startswith("OIS FRA, %s eğrisinden" % S1)
-        assert got["viop/B33"]["entry"]["data"]["c"][5] == "Z" and got["masa/B17D"]["entry"]["data"]["c"][4] == "Z"
+        assert got["viop/B33"]["entry"]["data"]["c"][4] == "Z" and got["masa/B17D"]["entry"]["data"]["c"][4] == "Z"
     finally:
         svc.reset_inputs(u, "tto")
 

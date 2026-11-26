@@ -620,7 +620,9 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     page = service.view(None, "forward")
     assert page["pinned"] == ["B1"]
     tabs = page["sections"]
-    assert [s["id"] for s in tabs] == ["calc", "fwd", "kot", "ret", "bulk", "curves", "off", "tick"]
+    # (the one-table Ticker'lar tab folded into Eğriler - düzen, 27.11.2026)
+    assert [s["id"] for s in tabs] == ["calc", "fwd", "kot", "ret", "bulk", "curves", "off"]
+    assert next(s for s in tabs if s["id"] == "curves")["panels"][-1] == "B12"
     assert tabs[0]["title"] == "Hesaplayıcılar" and tabs[0]["panels"][:5] == ["B7", "B8", "B9", "B10", "B11"] and tabs[0]["note"]
     shown = [p["id"] for p in page["panels"]]
     listed = [pid for s in tabs for pid in s["panels"]]
@@ -642,9 +644,9 @@ def test_pages_come_in_tabs_with_the_calculators_first(service):
     # a page without tabs
     small = service.view(None, "bulk")
     assert small["sections"] == [] and small["pinned"] == []
-    # a calculator may be in two tabs (VİOP: the gold calculator)
+    # the VİOP gold calculator: one home, the Altın tab (its own tab only repeated it - düzen, 27.11.2026)
     viop = {s["id"]: s for s in service.view(None, "viop")["sections"]}
-    assert viop["calc"]["panels"] == ["XAU4"] and "XAU4" in viop["gold"]["panels"]
+    assert "calc" not in viop and "XAU4" in viop["gold"]["panels"]
     # the search box of the top bar: the tables of every page, with their tab
     pages = {p["id"]: p for p in service.nav()}
     tables = {t["id"]: t for t in pages["forward"]["tables"]}

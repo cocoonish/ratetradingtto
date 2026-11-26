@@ -179,6 +179,30 @@ class SheetBuilder(object):
         if value is not None:
             self.sheet.cached[parse_a1(addr)] = value
 
+    def number_format(self, rng: str, fmt: Callable[[str], str]) -> None:
+        """Another number format for the cells of ``rng``: ``fmt`` of the one each has, the rest of its look (bold,
+        colours, fill, alignment) kept - how it reads only: its value, its formula and how what is typed into it is
+        read stay as they are (a user's own decimals sit on top of the new format, as on any other)."""
+        r1, c1, r2, c2 = parse_range(rng)
+        model, sh = self.model, self.sheet
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                rc = r * COLS + c
+                xi = sh.styles.get(rc, 0)
+                old = model.xfs[xi] if xi < len(model.xfs) else model.xfs[0]
+                new = fmt(old[0])
+                if new == old[0]:
+                    continue
+                key = (new,) + tuple(old[1:])
+                i = self._xfs.get(key)
+                if i is None:
+                    i = len(model.xfs)
+                    model.xfs.append(list(key))
+                    model.numfmts.append(new)
+                    model.xf_flags.append(model.xf_flags[xi] if xi < len(model.xf_flags) else old[1])
+                    self._xfs[key] = i
+                sh.styles[rc] = i
+
     def patch(self, addr: str, formula: str) -> None:
         """Replace the formula of an existing cell, keeping its format and array flag."""
         rc = parse_a1(addr)
@@ -7980,11 +8004,56 @@ def _tto_norm_walk(model: Model) -> None:
         o.patch(NW_USED, used)
     else:
         o.set(NW_USED, used, fmt=DATE, align="center")
+# ---------------------------------------------------------------------------------------------- how numbers read
+# The desk, 27.11.2026, of the pages' layout ("Hepsini yap", proposal 9 - same decimals on every page): numbers that read
+# oddly on the Forward, DV01 Risk and Borsa Swap pages read as the rest of the dashboard - how they read only: every value,
+# formula and input stays as it is, and each user's own decimals (right click) still sit on top.
+FMT_NAME = "Sayı biçimleri (düzen)"
+#: day counts read as whole days: the Forward sheet's O/N eşlenikleri table, its helper columns "OIS gün" and "VİOP gün"
+#: (1W-10Y; "1.097,00" read "1.097")
+FMT_DAYS = (("Forward", "K100", "OIS gün", "K101:K119"), ("Forward", "M100", "VİOP gün", "M101:M119"))
+#: DV01 Risk's Günlük P&L tab: TLREF and the quotes of today and yesterday with two decimals, as the rates of every other
+#: tab of the page ("35,8159%" read "35,82%"); the bp moves beside them keep their own decimal
+FMT_PNL_RATES = ("G112", "I112", "D115:F134")
+FMT_PNL_CAPTIONS = (("DV01_RISK", "F112", "TLREF dün (BBG)"), ("DV01_RISK", "H112", "TLREF dün (manuel)"),
+                    ("DV01_RISK", "B114", "Bucket"), ("DV01_RISK", "D114", "Bugün kota"), ("DV01_RISK", "E114", "Dün kota (BBG)"),
+                    ("DV01_RISK", "F114", "Dün (manuel)"))
+PNL_RATE_FMT = "0.0000%"
+
+
+def _layout_formats_check(model: Model) -> None:
+    _need_sheets(model, "Forward", "DV01_RISK")
+    _need_captions(model, tuple((sheet, head, text) for sheet, head, text, _ in FMT_DAYS) + FMT_PNL_CAPTIONS)
+
+
+def _tto_layout_formats(model: Model) -> None:
+    """The day counts of the Forward sheet's O/N eşlenikleri as whole days, DV01 Risk's P&L rates with two decimals."""
+    from .xl import numfmt
+    for sheet, _, _, rng in FMT_DAYS:
+        SheetBuilder(model, sheet).number_format(rng, lambda fmt: numfmt.with_decimals(fmt, 0))
+    b = SheetBuilder(model, "DV01_RISK")
+    for rng in FMT_PNL_RATES:
+        b.number_format(rng, lambda fmt: "0.00%" if fmt == PNL_RATE_FMT else fmt)
+
+
+#: Borsa Swap's "ON kur" row: the TRY O/N swap points (TRYON BGN, MID) the ON rate is the spot less - read as points
+#: ("415,50"), not with the workbook's eight decimals ("415,50000000")
+BORSA_ON_POINTS = "AE19"
+
+
+def _borsa_formats_check(model: Model) -> None:
+    _need_sheets(model, "Sheet1")
+    _need_captions(model, (("Sheet1", "AC19", "ON kur"),))
+    _need_formula(model, "Sheet1", BORSA_ON_POINTS, "TRYON")
+
+
+def _borsa_formats(model: Model) -> None:
+    SheetBuilder(model, "Sheet1").number_format(BORSA_ON_POINTS, lambda fmt: "#,##0.00")
 
 
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
-              ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1)),
+              ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1), (FMT_NAME, _borsa_formats_check, _borsa_formats)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx), (ASW_HIST_NAME, _asw_hist_check, _asw_hist),
             (INTERP_ASW_NAME, _asw_interp_check, _asw_interp), (ASW_BACK_NAME, _asw_back_check, _asw_back),
             # (the bonds' table two-way: after its way back, whose cells it leaves as they are)
@@ -8042,7 +8111,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (NORM_NAME, _norm_switch_check, _tto_norm_switch), (NORM_USED_NAME, _norm_used_check, _tto_norm_used),
             (NORM_PPK_NAME, _norm_ppk_check, _tto_norm_ppk),
             # (TLREF's normalization: the date OIS implies - after the switch's builder, whose date in use it extends)
-            (NW_NAME, _nw_check, _tto_norm_walk)),
+            (NW_NAME, _nw_check, _tto_norm_walk),
+            # (how numbers read - after everything that writes the cells, whose look it changes only)
+            (FMT_NAME, _layout_formats_check, _tto_layout_formats)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }
 

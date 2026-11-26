@@ -90,7 +90,9 @@
 * ``sections`` (optional)  the page in tabs: ``[{"id": "calc", "title": "Hesaplayıcılar", "note": "...",
   "panels": ["B7", "B8"]}, ...]`` - the panels of a tab in the order they are listed (a panel may be listed in
   more than one tab).  Every panel that is shown belongs to a tab or to ``pinned``; the helper tables that
-  are not listed are gathered in a last tab of their own.
+  are not listed are gathered in a last tab of their own.  An element of ``panels`` may be a list of panel ids:
+  small panels stacked in one column beside a tall one (``["B14", ["B14D", "B16"]]``); read in order, the list
+  is flattened (:func:`flat`).
 * ``pinned`` (optional)  ids of the panels that stay above the tabs whichever tab is open (the value date of
   the Forward page)
 * ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
@@ -132,6 +134,14 @@ from typing import Any, Dict, List, Optional
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def flat(ids: List[Any]) -> List[str]:
+    """A tab's panel ids in order, a stacked column (a list of ids) read as its ids one after the other."""
+    out: List[str] = []
+    for p in ids:
+        out.extend(flat(p) if isinstance(p, list) else [p])
+    return out
+
+
 def load_views() -> List[Dict[str, Any]]:
     views = []
     for name in sorted(os.listdir(HERE)):
@@ -144,6 +154,8 @@ def load_views() -> List[Dict[str, Any]]:
         v.setdefault("panels", [])
         v.setdefault("sections", [])
         v.setdefault("pinned", [])
+        for sec in v["sections"]:
+            sec["panels"] = flat(sec.get("panels", []))
         views.append(v)
     views.sort(key=lambda v: (v["order"], v["id"]))
     return views

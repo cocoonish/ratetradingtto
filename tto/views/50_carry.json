@@ -82,7 +82,7 @@
    "type": "notes",
    "title": "CARRY & ROLL-DOWN – eğri sabit, TLREF = senaryo patikası (iş günü bileşik)",
    "range": "A1",
-   "hidden": false
+   "hidden": true
   },
   {
    "id": "B2",
@@ -118,16 +118,14 @@
    "title": "Carry & roll · spread (flattener)",
    "range": "A41:G162",
    "hidden": false,
-   "keep_title": true,
-   "collapsed": true
+   "keep_title": true
   },
   {
    "id": "B7",
    "type": "table",
    "title": "Carry & roll · fly (gövde receive)",
    "range": "A165:F199",
-   "hidden": false,
-   "collapsed": true
+   "hidden": false
   },
   {
    "id": "B8",
@@ -141,7 +139,8 @@
    "type": "table",
    "title": "Kapanış simülatörü · ara değerler",
    "range": "A208:B225",
-   "hidden": false
+   "hidden": false,
+   "collapsed": true
   },
   {
    "id": "B10",
@@ -156,11 +155,8 @@
    "id": "out",
    "title": "Outright",
    "panels": [
-    "B1",
-    "B2",
-    "B3",
-    "B4",
-    "B5"
+    ["B2", "B3"],
+    ["B4", "B5"]
    ]
   },
   {
@@ -176,8 +172,8 @@
    "title": "Kapanış simülatörü",
    "panels": [
     "B8",
-    "B9",
-    "B10"
+    "B10",
+    "B9"
    ]
   }
  ],

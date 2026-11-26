@@ -517,7 +517,9 @@ A table's `"cols"` shows only the columns it names, in its order (`Service._pick
 letter): Masa's forward summaries, and the Forward page's pricing tables whose ON karşılık (26.11.2026) sits right of their
 stores but shows beside the TRY rate (FORWARD KOTASYON, the value-date tables, SERBEST FORWARD, FORWARD STARTING SWAP,
 ÇAPRAZ FORWARD). A merged cell keeps the columns it covered that still follow it, in order (ÇAPRAZ FORWARD's "Yöntem" row);
-a covered cell it no longer reaches is an empty cell of its own, so a row keeps every column.
+a covered cell it no longer reaches is an empty cell of its own, so a row keeps every column. The dashboard's own columns added to a
+table (`"append"`: Borsa Swap's spreads) are named in `"cols"` by their caption: a second pass after they are added puts
+them where the page lists them (Borsa: right after BID % / ASK %); one a page does not name stays on the right.
 
 ### The top bar's own panels
 

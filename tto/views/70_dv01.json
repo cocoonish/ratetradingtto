@@ -250,7 +250,8 @@
    "id": "B4",
    "type": "table",
    "title": "Carry / roll-down (kova bazında)",
-   "range": "Q5:Y27",
+   "range": "B5:Y27",
+   "cols": ["B", "Q", "R", "S", "T", "U", "V", "W", "X", "Y"],
    "hidden": false
   },
   {
@@ -386,10 +387,9 @@
    "id": "pos",
    "title": "Pozisyon",
    "panels": [
-    "B1",
     "B3",
-    "B4",
-    "B7"
+    ["B1", "B7"],
+    "B4"
    ]
   },
   {
@@ -407,9 +407,8 @@
    "id": "hedge",
    "title": "Hedge",
    "panels": [
-    "B14D",
     "B14",
-    "B16"
+    ["B14D", "B16"]
    ],
    "note": "Hedge edilen pozisyon (kova DV01'leri) Pozisyon sekmesinde yapıştırılır."
   },

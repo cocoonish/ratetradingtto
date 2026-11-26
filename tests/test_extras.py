@@ -129,7 +129,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "EK_RET", "Eğri interpolasyonu", "Masa offshore 2Y sonrası",
                                                    "Normalleşme anahtarı", "Normalleşme kullanılan tarih",
                                                    "Normalleşme PPK modeli",
-                                                   "Normalleşme OIS ima tarihi"]
+                                                   "Normalleşme OIS ima tarihi",
+                                                   # (how numbers read on the Forward and DV01 Risk pages - düzen, 27.11.2026)
+                                                   extras.FMT_NAME]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK", "EK_ISGUNU",
                                               "EK_NORM"} & set(sofr.sheet_index)
