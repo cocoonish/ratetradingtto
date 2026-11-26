@@ -331,7 +331,10 @@ with its helper block `AL17:AM36` and the inputs' defaults it gives; [desk-decis
 Forward page's calculators two-way (`_tto_fwd_calc_tw`: Interest 2 SP … Repo, Forward DV01, TRY OIS w/Spread - their
 stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores in `X:Z`), the bonds' tables two-way
 (the same day: their stores in hidden columns of the rows - `DİBS RV!YF:YP`, `AB:AJ` of the switch rows, `ASW!Z:AB`,
-`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own) and others.
+`Manuel Tahvil!AO17:AP25` and `AG24:AG63` -, the members' formulas over the sheets' own), the desk page's VİOP summary's
+ON karşılık (26.11.2026, "VİOP ON karşılık", `_tto_viop_on`: `MASA!A109:A121` ON bid and `O109:O121` ON ask, cells the
+workbook leaves empty - the panel's `cols` puts each beside its implied rate -, each the VİOP sheet's own "TRY Repo" of the
+contract, `VIOP!M17:X17` / `M29:X29`; display only, nothing kept) and others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 ## Module map

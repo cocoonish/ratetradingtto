@@ -1956,3 +1956,48 @@ with its file), `tto/recover.py` (`kurtar`: what each table does, RULES - table 
 [architecture.md](architecture.md#the-file-itself-one-dashboard-the-journal-mode-a-damaged-file)), `tto/__main__.py`
 (`cmd_run`, `cmd_restore`, `cmd_recover`), `tto/ops.py` (`check_folder`, `folder_status`), `tto/static/js/status.js`.
 Tests: `tests/test_datadir.py`, `tests/test_kurtar.py`, the browser test's "status window: the data folder …".
+
+### VİOP: ON karşılık (26.11.2026)
+
+> "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun gibi başka önerin olur mu"
+
+Among the proposals put to the desk: "VİOP USDTRY contracts: the ON of each contract's implied TRY rate (the gold
+calculator already has one)". The desk: **"Bunların da hepsini yap"**.
+
+**What the workbook already had.** The VİOP sheet's BID / ASK tables carry it: their **"TRY Repo"** rows (`VIOP!M17:X17`,
+`M29:X29`) are the "TRY" rows above them (13 / 25: the rate the contract's bid / ask price implies, simple ACT/360 over
+VKGS days, rows 10 / 22 = the expiry − `VIOP!K3`, Bloomberg's USDTRY spot date) compounded daily over those very days,
+`((1 + TRY/360·VKGS)^(1/VKGS) − 1)·360` - the Forward calculators' "ON Karşılık" (`Forward!AH14`, `extras.on_equivalent`),
+equal to the last bit on the replay data. Replay (03.11.2026's file), the 30.11.2026 contract (26 days): bid 33,58 % → ON
+33,20 %, ask 33,83 % → ON 33,44 %.
+
+**What changed:**
+- **VİOP page:** no row added - a second row of the same numbers would only be a duplicate - and the desk's label "TRY
+  Repo" stays; the note under VIOP BID and VIOP ASK says it is the ON karşılık (which price, which days and basis, the
+  formula, where the desk page shows it).
+- **Masa → VİOP**, "VİOP · kontratlar, ima TRY ve baz" (`MASA!B108:N122`), had the implied rates without it: **ON bid
+  (360)** beside İma bid (360) and **ON ask (360)** beside İma ask (360), each the contract's "TRY Repo" read the way the
+  summary reads the rates (`INDEX(VIOP!$M$17:$X$17, k)`). They sit in `MASA!A109:A121` and `O109:O121`, cells the
+  workbook leaves empty and no formula reads; the panel's `cols` puts each beside its rate. Two decimals (`0.00%`), as
+  the rates beside them (the desk's 25.11 rule).
+
+**Choices made while building it** (ask the desk before changing):
+- **The rate's own basis and days**: ACT/360 over the contract's VKGS days from `VIOP!K3` (Bloomberg's spot date, as
+  before). Not TLREF's business-day O/N (`extras.overnight_bd`), which is the TRY OIS windows' (OIS · PPK, EK_PPK) - a
+  VİOP rate is read from VİOP's prices, neither TRY OIS nor the offshore curve.
+- **Display only.** Neither table takes a typed value per contract, so nothing is kept and nothing moves on a roll:
+  every column is the contract's place, the ON beside its rate (tested on a roll: the day after the November expiry the
+  first row is December's, with its own rate, days and ON).
+- **The label "TRY Repo" is the desk's own** and stays; renaming the row "ON karşılık" on the page is a label change if
+  the desk wants it.
+- **Not done** (not in this request): the Quant · VİOP page's contract table (its alış / satış / orta implied rates)
+  shows no ON; the calendar-spread matrices' "ima TRY" are forward-forward rates between two expiries (their ON would be
+  over the period between them, another number); DEALS, Target and the gold calculator (which has its own two-way ON
+  karşılık) are untouched.
+- **Nothing typed, every number as before**: every value of the shared calculation of book tto (230 571 cells, 28
+  sheets, replay) compared cell for cell with 5ed4eab: none differs; the only new cells are the 26 above.
+- No new Bloomberg request.
+
+Code: `tto/extras.py` ("VİOP ON karşılık": `VIOP_ON_SIDES`, `viop_on_masa`, `_viop_on_check`, `_tto_viop_on`),
+`tto/views/10_masa.json` (B15: its range, `cols`, note), `tto/views/40_viop.json` (B5 / B7 notes). Tests:
+`tests/test_viop_on.py`, the browser test's check "VİOP: ON karşılık …".
