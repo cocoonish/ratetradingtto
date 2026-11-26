@@ -181,7 +181,7 @@ def cmd_run(args) -> int:
         app = create_app(settings=settings)
         shown = "localhost" if settings.host in ("0.0.0.0", "::") else settings.host
         how = ", web paketleri: gömülü kopya (vendor/%s)" % packages["bundled"] if packages["bundled"] else ""
-        print("TTO Masa  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
+        print("TTO Masa v2  ->  http://%s:%d   (mod: %s, veri: %s%s)" % (shown, settings.port, settings.mode, settings.data_dir, how))
         print("Günlük: %s" % logfile)
         logging.getLogger("tto").info("dashboard başlıyor: port %d, mod %s, veri %s", settings.port, settings.mode,
                                       settings.data_dir)
