@@ -535,8 +535,8 @@ put these in one place for every page; the pages' own JSON and modules use them.
 - **The panel's header** (`view.js` `panel`; `app.css` `.vhead`): `button.fold` (▾ / ▸, `it.toggle`, kept as
   `tto.col.*`), `div.ttl` (the title - two lines at most -, the sheet's range, the hover `div.tools` positioned over the
   title's end), then the header's buttons. `header.vhead` (and `.panel.fit > header`) is `width: 0; min-width: 100%`: the
-  panel is as wide as its body, never its header; `.panels > .panel` is at least `min(320px, 100%)`; a folded one is as
-  wide as its header. The columns' "Gizlediğiniz N sütun" chip is moved onto the header's line (columns.js puts it
+  panel is as wide as its body, never its header; a view's panel in a row (`section.panel.vpanel`), a `.fit` one and one
+  in a `.stack` is at least `min(320px, 100%)`; a folded one is as wide as its header. The columns' "Gizlediğiniz N sütun" chip is moved onto the header's line (columns.js puts it
   before the tools). The Kopyala button stays the first `.tools .iconbtn`.
 - **Notes**: `ui.js` `foldNote` (two lines, "devamı" / "kısalt", `.note.clamp` / `.long` / `.open`; a folded panel hides
   its note). A two-way group's note: `Service._panel` sends the note whole and `tw` (the groups' notes in it, one by one -

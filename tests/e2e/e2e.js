@@ -1721,10 +1721,15 @@ async function clipAfter(page, action) {
     await page.waitForTimeout(900);
     const hit = await page.evaluate(() => {
       const el = document.querySelector('.panel[data-panel="B17"]');
+      const c = document.getElementById('content');
       return { top: el.getBoundingClientRect().top, open: !el.classList.contains('collapsed'), hash: window.location.hash,
-        folded: document.querySelectorAll('.panel.collapsed').length };
+        folded: document.querySelectorAll('.panel.collapsed').length, vh: window.innerHeight,
+        atEnd: c.scrollTop + c.clientHeight >= c.scrollHeight - 2 };
     });
-    check('a shortcut opens the page at the table it points to (and unfolds it)', hit.hash === '#/viop?p=B17' && hit.open && hit.top < 400 && hit.top > 0, hit);
+    // (near the top - or, the tab being shorter than the screen since its folded panels sit four to a row (27.11.2026), as
+    // far down as the page scrolls, well in view)
+    check('a shortcut opens the page at the table it points to (and unfolds it)', hit.hash === '#/viop?p=B17' && hit.open && hit.top > 0
+      && (hit.top < 400 || (hit.atEnd && hit.top < hit.vh - 300)), hit);
     check('tables Excel keeps folded start folded', hit.folded >= 14, hit.folded);
     await page.evaluate(() => window.tto.state.page.items.get('B17').toggle(true));
 
@@ -7559,10 +7564,12 @@ async function clipAfter(page, action) {
       const its = [...pg.items.entries()].filter(([, it]) => it.grid && it.grid.data && !it.grow && !it.limit && !it.copy);
       its.sort((a, b) => b[1].grid.data.rows.length - a[1].grid.data.rows.length);
       const [id, it] = its[0];
+      const tabWas = pg.tab;
       pg.showPanel(id);
       const key = 'tto.limit.' + pg.id + '.' + id;
       try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
-      if (it.el.classList.contains('collapsed')) it.toggle(false);
+      const shut = it.el.classList.contains('collapsed');
+      if (shut) it.toggle(false);
       const head = it.el.querySelector('header');
       pg.limitable(it, { id, limit: { rows: 3 } }, head);
       const shown = () => [...it.grid.el.querySelectorAll('tbody > tr')].filter((tr) => getComputedStyle(tr).display !== 'none').length;
@@ -7576,6 +7583,8 @@ async function clipAfter(page, action) {
       it.limit = null;
       it.grid.el.querySelectorAll('tr.limit-hidden').forEach((tr) => tr.classList.remove('limit-hidden'));
       try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+      if (shut) it.toggle(true);                         // (the page as it was: the panel folded, its tab)
+      if (pg.tab !== tabWas) pg.setTab(tabWas);
       return out;
     });
     check('duzenL1: "limit" - a long table opens on its first rows, "Tümü (N)" shows them all (kept), "İlk n" its first rows again',
@@ -7619,16 +7628,16 @@ async function clipAfter(page, action) {
     // a two-way group's note once on the page (Manuel Tahvil: four tables of one group); a folded panel hides its note -
     // the next table says it; a long note two lines, "devamı" the rest
     await open(page, 'manuel');
-    const twShown = () => page.evaluate(() => [...document.querySelectorAll('#content section.panel > .note .tw')]
+    const duzenL1TwShown = () => page.evaluate(() => [...document.querySelectorAll('#content section.panel > .note .tw')]
       .filter((s) => /İki yönlü: temiz fiyat ya da sonuçlardan biri/.test(s.textContent))
       .map((s) => ({ id: s.closest('section.panel').dataset.panel, on: s.offsetParent !== null })));
-    const duzenL1Tw = await twShown();
+    const duzenL1Tw = await duzenL1TwShown();
     const duzenL1TwFirst = (duzenL1Tw.find((x) => x.on) || {}).id || null;
     let duzenL1TwFolded = [];
     let duzenL1FoldedNote = true;
     if (duzenL1TwFirst) {
       await page.evaluate((id) => window.tto.state.page.items.get(id).toggle(true), duzenL1TwFirst);
-      duzenL1TwFolded = await twShown();
+      duzenL1TwFolded = await duzenL1TwShown();
       duzenL1FoldedNote = await page.evaluate((id) => document.querySelector('#content section.panel[data-panel="' + id + '"] > .note').offsetParent !== null, duzenL1TwFirst);
       await page.evaluate((id) => window.tto.state.page.items.get(id).toggle(false), duzenL1TwFirst);
     }
@@ -7639,39 +7648,43 @@ async function clipAfter(page, action) {
       const n = [...document.querySelectorAll('#content section.panel > .note.clamp.long')].find((x) => x.offsetParent !== null);
       if (!n) return null;
       const more = n.querySelector('.note-more');
-      const h0 = n.getBoundingClientRect().height;
+      const cs = getComputedStyle(n);
+      // (its lines: the box less its border and padding)
+      const lines = () => (n.getBoundingClientRect().height - parseFloat(cs.borderTopWidth) - parseFloat(cs.paddingTop)
+        - parseFloat(cs.paddingBottom)) / parseFloat(cs.lineHeight);
+      const h0 = lines();
       more.click();
-      const out = { h0, h1: n.getBoundingClientRect().height, t1: more.textContent };
+      const out = { h0, h1: lines(), t1: more.textContent };
       more.click();
-      return Object.assign(out, { h2: n.getBoundingClientRect().height, t2: more.textContent, lh: parseFloat(getComputedStyle(n).lineHeight) });
+      return Object.assign(out, { h2: lines(), t2: more.textContent });
     });
     check('duzenL1: a long note shows two lines - "devamı" the rest, "kısalt" two lines again', !!duzenL1Note
-      && duzenL1Note.h0 <= 2 * duzenL1Note.lh + 2 && duzenL1Note.h1 > duzenL1Note.h0 + 8 && duzenL1Note.t1 === 'kısalt' && duzenL1Note.t2 === 'devamı'
-      && Math.abs(duzenL1Note.h2 - duzenL1Note.h0) < 1, duzenL1Note);
+      && Math.abs(duzenL1Note.h0 - 2) < 0.1 && duzenL1Note.h1 > 2.5 && duzenL1Note.t1 === 'kısalt' && duzenL1Note.t2 === 'devamı'
+      && Math.abs(duzenL1Note.h2 - 2) < 0.1, duzenL1Note);
     // a laptop's 1366 px: the top bar one row, the search an icon until Ctrl+K, KISAYOLLAR one line with "+N"
     const duzenL1Keep = signedIn[keyOf('Ayşe Yılmaz')];
-    const ctxL1 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
-    const pageL1 = await ctxL1.newPage();
-    pageL1.on('pageerror', (e) => errors.push('pageerror (1366): ' + e.message));
-    await login(pageL1, 'Ayşe Yılmaz');
+    const duzenL1Ctx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+    const duzenL1Page = await duzenL1Ctx.newPage();
+    duzenL1Page.on('pageerror', (e) => errors.push('pageerror (1366): ' + e.message));
+    await login(duzenL1Page, 'Ayşe Yılmaz');
     signedIn[keyOf('Ayşe Yılmaz')] = duzenL1Keep;
-    await open(pageL1, 'masa');
-    await pageL1.waitForTimeout(400);
-    const duzenL1Top = await pageL1.evaluate(() => ({ top: Math.round(document.getElementById('top').getBoundingClientRect().height),
+    await open(duzenL1Page, 'masa');
+    await duzenL1Page.waitForTimeout(400);
+    const duzenL1Top = await duzenL1Page.evaluate(() => ({ top: Math.round(document.getElementById('top').getBoundingClientRect().height),
       find: Math.round(document.getElementById('find').getBoundingClientRect().width), lang: !!document.getElementById('btn-lang'),
       bar: Math.round(document.querySelector('.shortcuts').getBoundingClientRect().height), more: document.getElementById('shortcuts-more').textContent,
       shown: [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length }));
-    await pageL1.keyboard.press('Control+k');
-    await pageL1.waitForTimeout(250);
-    duzenL1Top.open = await pageL1.evaluate(() => Math.round(document.getElementById('find').getBoundingClientRect().width));
-    await pageL1.keyboard.press('Escape');
-    await pageL1.click('#shortcuts-more');
-    duzenL1Top.all = await pageL1.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
-    duzenL1Top.less = await pageL1.textContent('#shortcuts-more');
-    await pageL1.click('#shortcuts-more');
-    duzenL1Top.again = await pageL1.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
-    await shot(pageL1, '99-duzen-1366');
-    await ctxL1.close();
+    await duzenL1Page.keyboard.press('Control+k');
+    await duzenL1Page.waitForTimeout(250);
+    duzenL1Top.open = await duzenL1Page.evaluate(() => Math.round(document.getElementById('find').getBoundingClientRect().width));
+    await duzenL1Page.keyboard.press('Escape');
+    await duzenL1Page.click('#shortcuts-more');
+    duzenL1Top.all = await duzenL1Page.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
+    duzenL1Top.less = await duzenL1Page.textContent('#shortcuts-more');
+    await duzenL1Page.click('#shortcuts-more');
+    duzenL1Top.again = await duzenL1Page.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
+    await shot(duzenL1Page, '99-duzen-1366');
+    await duzenL1Ctx.close();
     check('duzenL1: at 1366 px the top bar is one row (number format, flashing, theme in the user\'s menu), the search an icon until Ctrl+K; '
       + 'KISAYOLLAR one line with "+N" (all of them / one line again)',
       duzenL1Top.top <= 52 && duzenL1Top.find <= 40 && duzenL1Top.open >= 200 && !duzenL1Top.lang && duzenL1Top.bar <= 30
