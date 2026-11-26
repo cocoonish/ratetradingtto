@@ -112,7 +112,8 @@ def test_off_every_value_is_the_one_before(books):
     diff = moved(new, new.engine.shared, old.engine.shared, old)
     ois = sorted(d for d in diff if d.startswith("OIS_MAIN!"))
     motor = {d.split("!")[1] for d in diff if d.startswith("Motor!")}
-    assert [d for d in diff if not d.startswith(("OIS_MAIN!", "Motor!"))] == []
+    # (the OIS-implied date's helper sheet reads the switch's cells - L2, L4: the walk's own builder, merged in v2)
+    assert [d for d in diff if not d.startswith(("OIS_MAIN!", "Motor!", "EK_NORM!"))] == []
     assert set(a.split("!")[1] for a in ois) <= NEW_OIS, ois
     assert motor <= NEW_MOTOR, sorted(motor)[:10]
     assert {"K2", "L2", "A6", "B6"} <= set(a.split("!")[1] for a in ois)          # (the settle date moved)
@@ -188,6 +189,13 @@ def test_on_without_a_gap_every_number_is_the_one_before(books):
     assert (at(new, "OIS_MAIN!M2", on), at(new, "OIS_MAIN!M3", on), at(new, "OIS_MAIN!M5", on)) == (1.0, 20.0, 0.0)
     assert at(new, "OIS_MAIN!L6", on) == "Açık · 20 gün · fark 0 bp" and at(new, "OIS_MAIN!O9", on) == "Spot · normal"
     diff = moved(new, new.engine.shared, on)
+    # (merged in v2: with the switch on the OIS-implied date's walk works - its helper sheet EK_NORM and its block beside
+    # STUB İMA, OIS_MAIN!AO8:AS15 -, and the PPK step tables measure their first window from REF instead of the stub's
+    # O/N (EK_PPK, the step builder's choice): their own tests cover them; everything else as off)
+    walk = {d for d in diff if d.startswith("EK_NORM!") or (d.startswith("OIS_MAIN!A") and d.split("!")[1][:2] in ("AO", "AP", "AQ", "AR", "AS")
+                                                            and 8 <= int("".join(ch for ch in d.split("!")[1] if ch.isdigit())) <= 15)}
+    steps = {d for d in diff if d.startswith("EK_PPK!")}
+    diff = [d for d in diff if d not in walk and d not in steps]
     assert sorted(diff) == sorted(["OIS_MAIN!" + a for a in ("L2", "L4", "L5", "L6", "M2", "M3", "O9")] + ["MASA!B94"]), diff
     assert at(new, "MASA!B94", on) == "Spot · normal"                     # (Masa's copy of the Spot row's label)
 

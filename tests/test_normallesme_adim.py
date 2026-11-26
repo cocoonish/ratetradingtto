@@ -178,7 +178,9 @@ def assert_off(svc, user, bj):
             assert got == want and type(got) is type(want), (user, col, r, got, want)
         w = ex.PPK_WINDOWS[0] + k
         got, want = cell(svc, "OIS_MAIN!BJ%d" % w, user), at_cell(svc, user, "OIS_MAIN", "BJ%d" % w, bj[w])
-        assert got == want and type(got) is float, (user, w)
+        # (merged in v2: the PPK model itself reads M2, so with M2 typed as an error - a test's own doing, M2 is a formula
+        # that never errs - Motor and with it the formula of before are that error too: equal, as off)
+        assert got == want and (type(got) is float or isinstance(want, XlError)), (user, w)
     for k in range(PAIRS):
         r = ex.PPK_FIRST + k
         for col, text in before_pair(r).items():
