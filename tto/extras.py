@@ -4564,6 +4564,62 @@ def _tto_viop_dv01(model: Model) -> None:
         b.set("%s109" % col, '=IFERROR(-100*(%s$98/360)/(1+%s$101*%s$98/360),"")' % (col, col, col), like="%s108" % col)
 
 
+# ---------------------------------------------------------------------------------------------- VİOP: ON karşılık
+#: The desk, 26.11.2026 ("Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek istiyorum. Bu ve bunun gibi
+#: başka önerin olur mu" -> "Bunların da hepsini yap"): the ON equivalent of each VİOP USDTRY contract's implied TRY rate.
+#: The VİOP sheet has it already.  Its BID / ASK tables' "TRY Repo" rows (17 / 29) are their "TRY" rows' (13 / 25: the rate
+#: the contract's bid / ask price implies, simple ACT/360 over VKGS days, rows 10 / 22 = the expiry − VIOP!K3) compounded
+#: daily over those very days, ((1 + TRY/360·VKGS)^(1/VKGS) − 1)·360 - Forward!AH14's "ON Karşılık" (:func:`on_equivalent`;
+#: equal to the last bit on the replay data).  The VİOP page says so under the two tables; nothing of the sheet changes.
+#: The desk page's summary of the contracts (MASA!B108:N122, "VİOP · kontratlar, ima TRY ve baz") showed the implied rates
+#: without it: two columns of its own, on cells the workbook leaves empty (A and O of its rows - the page puts each beside
+#: its rate), each the contract's "TRY Repo", read the way the summary reads the rates.  Display only: no table of these
+#: takes a typed value per contract, so nothing is kept, and on a roll every column stays the contract's place, as the
+#: rates beside it.  (TLREF's business-day O/N, :func:`overnight_bd`, is the TRY OIS windows' - never a VİOP rate's.)
+VIOP_ON_NAME = "VİOP ON karşılık"
+#: The two sides, bid and ask: the VİOP sheet's table rows - the implied rate ("TRY"), its VKGS days, its spot, USD rate
+#: and swap points, its ON ("TRY Repo") - and MASA's summary columns - the rate's (with its caption) and the ON's
+VIOP_ON_SIDES = (
+    {"rate": 13, "days": 10, "spot": 11, "usd": 12, "sp": 14, "on": 17, "col": "F", "head": "İma bid (360)",
+     "on_col": "A", "on_head": "ON bid (360)"},
+    {"rate": 25, "days": 22, "spot": 23, "usd": 24, "sp": 26, "on": 29, "col": "G", "head": "İma ask (360)",
+     "on_col": "O", "on_head": "ON ask (360)"})
+VIOP_ON_FIRST, VIOP_ON_LAST = 110, 121          # MASA's contract rows: contract k (1–12, VIOP!M:X) in row 109 + k
+
+
+def viop_on_masa(row: int, k: int) -> str:
+    """A cell of MASA's summary for contract ``k`` (1–12): row ``row`` of the VİOP sheet in that contract's column, the way
+    the summary reads its rates (``IFERROR(INDEX(VIOP!$M$13:$X$13,1),"")``)."""
+    return '=IFERROR(INDEX(VIOP!$M$%d:$X$%d,%d),"")' % (row, row, k)
+
+
+def _viop_on_check(model: Model) -> None:
+    _need_sheets(model, "VIOP", "MASA")
+    viop, masa = model.sheet("VIOP"), model.sheet("MASA")
+    for s in VIOP_ON_SIDES:
+        if (viop.consts.get(parse_a1("L%(rate)d" % s)), viop.consts.get(parse_a1("L%(on)d" % s))) != ("TRY", "TRY Repo"):
+            raise ValueError("VIOP!L%(rate)d / L%(on)d beklenen başlık değil (TRY / TRY Repo)" % s)
+        for col in VIOP_DV01_COLS:
+            f = {k: "%s%d" % (col, v) for k, v in s.items() if isinstance(v, int)}       # the cells of this contract
+            # the implied rate: simple ACT/360 over the table's VKGS days; its "TRY Repo": that rate over the same days, daily
+            _need_exact_formula(model, "VIOP", f["rate"], "((1+%(sp)s/10000/%(spot)s)*(1+%(usd)s*%(days)s/360)-1)*360/%(days)s" % f)
+            _need_exact_formula(model, "VIOP", f["on"], "((1+%(rate)s/360*%(days)s)^(1/%(days)s)-1)*360" % f)
+        if masa.consts.get(parse_a1("%(col)s109" % s)) != s["head"]:
+            raise ValueError("MASA!%(col)s109 beklenen başlık değil (%(head)s yok)" % s)
+        for k, r in enumerate(range(VIOP_ON_FIRST, VIOP_ON_LAST + 1), 1):
+            _need_exact_formula(model, "MASA", "%s%d" % (s["col"], r), viop_on_masa(s["rate"], k)[1:])
+        _need_empty(model, "MASA", "%s%d:%s%d" % (s["on_col"], VIOP_ON_FIRST - 2, s["on_col"], VIOP_ON_LAST + 1))
+
+
+def _tto_viop_on(model: Model) -> None:
+    b = SheetBuilder(model, "MASA")
+    for s in VIOP_ON_SIDES:
+        b.set("%s%d" % (s["on_col"], VIOP_ON_FIRST - 1), s["on_head"], like="%s%d" % (s["col"], VIOP_ON_FIRST - 1))
+        for k, r in enumerate(range(VIOP_ON_FIRST, VIOP_ON_LAST + 1), 1):
+            # contract k's "TRY Repo", in the look of the rate beside it (a TRY rate with two decimals, 0.00%)
+            b.set("%s%d" % (s["on_col"], r), viop_on_masa(s["on"], k), like="%s%d" % (s["col"], r))
+
+
 # ---------------------------------------------------------------------------------------------- empty by default
 #: inputs the file brings filled in with the desk's choices of the day it was saved; every user starts with them
 #: empty: the scenario step per meeting (S1 / S2 / S3) of the PPK ima tab - a blank step follows the scenario base
@@ -6662,7 +6718,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (RV_TW_NAME, _rv_tw_check, _rv_tw), (SW_TW_NAME, _sw_tw_check, _sw_tw), (MAN_TW_NAME, _man_tw_check, _man_tw),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
-            ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01),
+            ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01), (VIOP_ON_NAME, _viop_on_check, _tto_viop_on),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
             # (the calculators' ways back of 24.11: the bond carry's price -> repo, the implied move's move -> vol)

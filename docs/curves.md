@@ -392,6 +392,11 @@ fill, (F·(P − O) + Q′·O) / P - the "Gereken bitiş bacağı" formula (`ext
   (`Forward!J2`, `L2`, `OIS_MAIN!L2`). Three dates still use it, and no addition patches them: `VIOP!K3` (VİOP's
   implied rates), `ASW!C4` → `T65` (the ASW sheet's curve and the shift of ASW FX's 18M) and the gold spot date
   (`EK_XAU!B9`, when none is typed).
+- **VİOP's ON karşılık** (26.11.2026, [desk-decisions.md](desk-decisions.md), "VİOP: ON karşılık") counts the same
+  days: each contract's implied TRY rate (simple ACT/360 over VKGS = the expiry − `VIOP!K3`, rows 10 / 22) compounded
+  daily over those days on 360 - the VİOP sheet's own "TRY Repo" rows 17 / 29, `extras.on_equivalent`'s formula; the desk
+  page's VİOP summary shows them as ON bid / ON ask. A rate read from VİOP's prices, neither TRY OIS nor the offshore
+  curve - never TLREF's business-day O/N (`extras.overnight_bd`: TRY OIS windows only).
 - The cells counted from the USDTRY spot: `MASA!P94:P99`, `MASA!C171`, `Forward!B200:B205`, `Forward!K130:K134`.
 - The Forward page's two-way tables (24.11.2026) solve a typed outright's TRY rate (`extras.implied_try`, simple
   ACT/360) over the days each table counts: USDTRY from `Forward!I2`, EURTRY from `Forward!K2` (TOPLU FORWARD's and
