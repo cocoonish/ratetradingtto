@@ -170,7 +170,7 @@
    "range": "A17:C17",
    "keep_title": true,
    "hidden": false,
-   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade ve sabit kupon katalogdan (Tüm Kâğıtlar); tip (S / D); kâğıt trading listesindeyse DİBS RV satırından kupon frekansı, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, kullanılan temiz fiyat ve valörü; değilse 6 ayda bir ve Tüm Kâğıtlar'ın bid / ask ortası (yoksa bugünkü son işlemi). Böylece yanındaki Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (satırdaki açıklama hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
+   "note": "ISIN yazınca kâğıdın koşulları ve fiyatı girdilere gelir (DİBS RV satırından ya da Tüm Kâğıtlar'dan; ayrıntısı Girdiler'in altında); yanındaki Hedef → temiz fiyat o kâğıdın fiyatını yazılan getiri, ASW, Z ya da DM'den hemen verir."
   },
   {
    "id": "B5",
@@ -210,7 +210,7 @@
    "title": "Girdiler",
    "range": "A2:C16",
    "hidden": false,
-   "note": "Girdilerin varsayılanı ISIN'in kâğıdından gelir (ISIN tablosu: DİBS RV satırı ya da Tüm Kâğıtlar ve katalog); elle yazdığınız değer önce gelir, silince kâğıdınki döner."
+   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade ve sabit kupon katalogdan (Tüm Kâğıtlar); tip (S / D); kâğıt trading listesindeyse DİBS RV satırından kupon frekansı, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, kullanılan temiz fiyat ve valörü; değilse 6 ayda bir ve Tüm Kâğıtlar'ın bid / ask ortası (yoksa bugünkü son işlemi). Böylece Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (satırdaki açıklama hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
   },
   {
    "id": "B7",
