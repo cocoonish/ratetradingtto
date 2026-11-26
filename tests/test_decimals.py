@@ -146,7 +146,7 @@ def test_a_temporary_copy_has_its_own_decimals(service):
         assert at(cp, y)["dp"] == 4 and at(cp, y)["dpc"] == 1 and at(cp, y)["t"] == with_n(service, y, 4, copy_of=at(cp, y)["v"])
         assert at(table, y) == at(table0, y) and "dp" not in at(table, y)
         assert at(cp, spread)["dpc"] == 1 and re.match(r"^-?[\d.]+,\d\d$", at(cp, spread)["t"])
-        assert "dp" not in at(entry(service.view(u, "masa", panels=["B10D"]), "B10D"), spread)       # (the table's strip)
+        assert "dp" not in at(entry(service.view(u, "masa", panels=["B9"]), "B9"), spread)       # (the page's dates row)
         # the copy's own over the table's, then taken back: the table's again
         service.decimals.change(u, "tto", copy=one["id"], set_={x: 1})
         assert at(entry(service.view(u, "masa"), one["pid"]), x)["dp"] == 1

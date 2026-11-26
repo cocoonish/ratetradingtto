@@ -36,6 +36,10 @@ const BULK_PLACEHOLDER = {
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const signed = (v, d) => (isNum(v) ? (v > 0 && Number(v.toFixed(d)) !== 0 ? '+' : '') + num(Number(v.toFixed(d)) === 0 ? 0 : v, d) : '–');
 const tone = (v, d) => (isNum(v) && Number(v.toFixed(d)) !== 0 ? (v > 0 ? 'pos' : 'neg') : '');
+// a TRY rate (a swap's mid, a bucket's quote, the rate an NPV gives) reads with two decimals - the desk's rule of 25.11.2026
+// for the pricing tables' TRY rates, here since 27.11.2026 ("Hepsini yap"); an FX forward's outright keeps four, a USD / EUR
+// rate its own.  How it reads only: every number is priced on the full value.
+const TRY_DIGITS = 2;
 
 function seg(id, items, onPick) {
   const box = h('div', { class: 'seg', id, role: 'group' });
@@ -119,12 +123,14 @@ export class PricingPage {
       this.bucketNote = h('div', { class: 'note' }));
     this.schedBody = h('div', { class: 'body' });
     this.schedTitle = h('h2', null, 'Ödeme takvimi');
-    this.schedPanel = h('section', { class: 'panel', id: 'pr-schedule-panel' }, h('header', null, this.schedTitle), this.schedBody);
+    this.schedPanel = h('section', { class: 'panel fit', id: 'pr-schedule-panel' }, h('header', null, this.schedTitle), this.schedBody);
     this.notes = h('div', { class: 'body pr-notes', id: 'pr-notes' });
     this.notesPanel = h('section', { class: 'panel wide', id: 'pr-notes-panel' }, h('header', null, h('h2', null, 'Konvansiyonlar ve hesap')), this.notes);
-    this.result = h('div', { class: 'panels', id: 'pr-result' },
+    // the instrument's numbers - the tiles, the schedule - and Toplu fiyatlama in one column beside the DV01 buckets: the
+    // bulk list on the first screen (the desk's layout review, 27.11.2026: "Hepsini yap")
+    this.result = h('div', { class: 'pr-result', id: 'pr-result' },
       h('section', { class: 'panel wide pr-summary' }, h('div', { class: 'pad' }, this.head, this.tiles)),
-      this.bucketPanel, this.schedPanel);
+      this.schedPanel);
     // Toplu fiyatlama: a list of lines priced as the instrument above, off the same curves (its own errors line by line)
     this.bulkIn = h('textarea', { id: 'pr-bulk', class: 'inp pr-bulk-in', rows: '6', spellcheck: 'false', autocomplete: 'off' });
     this.bulkDirty = false;                   // (typed and not sent yet: a refresh leaves it alone)
@@ -141,7 +147,9 @@ export class PricingPage {
       h('header', null, h('h2', null, 'Toplu fiyatlama'), this.bulkInfo),
       h('div', { class: 'pr-bulk-form' }, this.bulkIn, h('div', { class: 'pr-bulk-side' }, run, this.bulkHint)),
       this.bulkBody, this.bulkNote);
-    this.host.appendChild(h('div', { class: 'panels pricing', id: 'pricing' }, form, this.result, this.bulkPanel, this.notesPanel));
+    const main = h('div', { class: 'pr-main', id: 'pr-main' }, this.bucketPanel,
+      h('div', { class: 'pr-col', id: 'pr-col' }, this.result, this.bulkPanel));
+    this.host.appendChild(h('div', { class: 'panels pricing', id: 'pricing' }, form, main, this.notesPanel));
   }
 
   /** The Toplu box sent as it is (the server keeps it with the account, per asset, and prices every line) - once: leaving
@@ -236,6 +244,7 @@ export class PricingPage {
     this.stamp.textContent = new Date().toLocaleTimeString('tr-TR');
     this.errorLine.textContent = d.error || '';
     this.result.classList.toggle('stale', !!d.error);
+    this.bucketPanel.classList.toggle('stale', !!d.error);
     this.notesPanel.classList.toggle('stale', !!d.error);
     this.drawBulk(d);                         // (the lines have their own errors: priced whatever the instrument above says)
     if (d.error || !d.label) return;          // (the last numbers stay on the page, dimmed, under the message)
@@ -256,7 +265,7 @@ export class PricingPage {
     const box = clear(this.tiles);
     const [m1, m2] = d.methods;
     const fx = d.asset === 'fx';
-    const rate = (v) => (isNum(v) ? (fx ? num(v, 4) : pct(v, 4)) : '–');
+    const rate = (v) => (isNum(v) ? (fx ? num(v, 4) : pct(v, TRY_DIGITS)) : '–');
     box.appendChild(tile((fx ? 'Outright · ' : 'Mid · ') + METHOD[m1], rate(d.mid[m1]), { big: true, id: 'pr-mid',
       title: 'Eğriniz (' + METHOD[m1] + ') ile mid' }));
     box.appendChild(tile((fx ? 'Outright · ' : 'Mid · ') + METHOD[m2], rate(d.mid[m2]), { id: 'pr-mid-other',
@@ -295,7 +304,7 @@ export class PricingPage {
             + METHOD[m2] + ': ' + signed(n.upfront[m2], 2) + ' bp' }));
       }
       box.appendChild(tile('Fiyat − mid (' + n.unit + ')', signed(n.dist[m1], fx ? 1 : 2), { id: 'pr-dist',
-        title: (from ? 'Çözülen fiyat ' : 'Yazılan fiyat ') + (fx ? num(n.level, 4) : pct(n.level, 4)) + ' · ' + METHOD[m2] + ' mid\'ine: ' + signed(n.dist[m2], fx ? 1 : 2) }));
+        title: (from ? 'Çözülen fiyat ' : 'Yazılan fiyat ') + rate(n.level) + ' · ' + METHOD[m2] + ' mid\'ine: ' + signed(n.dist[m2], fx ? 1 : 2) }));
     }
   }
 
@@ -313,7 +322,7 @@ export class PricingPage {
       const tr = h('tr', { class: r.pillar ? null : 'soft' });
       tr.dataset.bucket = r.name;
       tr.appendChild(h('td', { class: 'l', title: r.pillar ? (isNum(r.day) ? 'Kotanın günü: ' + serialDate(d.spot + r.day) : '') : d.texts.short }, r.name));
-      tr.appendChild(isNum(r.quote) ? h('td', { class: 'pr-quote' }, pct(r.quote, 4))
+      tr.appendChild(isNum(r.quote) ? h('td', { class: 'pr-quote' }, pct(r.quote, TRY_DIGITS))
         : h('td', { class: 'pr-quote soft', title: d.texts.short || null }, '–'));
       for (const m of [m1, m2]) {
         const v = r.dv01[m];
@@ -399,7 +408,7 @@ export class PricingPage {
     }
     const priced = b.rows.some((r) => r.npv);
     const solved = b.rows.some((r) => r.npv && r.npv.from);
-    const rate = (v) => (isNum(v) ? (fx ? num(v, 4) : pct(v, 4)) : '–');
+    const rate = (v) => (isNum(v) ? (fx ? num(v, 4) : pct(v, TRY_DIGITS)) : '–');
     const other = (what, v) => what + ' · ' + METHOD[m2] + ': ' + v;
     const heads = [['#', ''], ['Satır', 'l'], [fx ? 'Valör' : 'Enstrüman', 'l'], [(fx ? 'Outright · ' : 'Mid · ') + METHOD[m1], ''],
       [(fx ? 'Outright · ' : 'Mid · ') + METHOD[m2], ''], ['PPK − Bootstrap (' + (fx ? 'puan' : 'bp') + ')', ''],

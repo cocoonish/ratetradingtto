@@ -726,6 +726,9 @@ def _tto_ois_spot(model: Model) -> None:
 FWD_SHEET = "EK_FWD"
 FWD_ALL = 4                              # the "Tümü" row: general spreads (bid, ask) and the spot quotes
 FWD_ROWS = (5, 14)                       # 1M, 2M, 3M, 6M, 9M, 12M and four free dates
+#: what the curves of the selector (B2) are, by name and weight: a text right of the matrix's last column (K, "Fwd ask") -
+#: Masa's summary shows it as its note (``note_ref``; 27.11.2026, it stood in K2 and widened Fwd ask by ~500 px there)
+FWD_LEGEND = "L2"
 FWD_BACK = 15                            # rows of the "points -> spread" table = rows of the matrix + 15
 #: rows of the "rate -> spread" table = rows of the matrix + these (USDTRY 133..142, EURTRY 147..156: below the EURTRY
 #: matrix's way back, where no input ever stood - a value a user typed is kept by its cell, see ``RETIRED_INPUTS``)
@@ -848,8 +851,10 @@ def _tto_forward(model: Model) -> None:
     b.set("C2", '=IFERROR(IF(LEFT($B$2,1)="S","= "&INDEX(OIS_MAIN!$P$3:$P$5,MATCH($B$2,OIS_MAIN!$O$3:$O$5,0)),'
                 'IF($B$2="Ağırlıklı","= S1–S3 ağırlıklı","")),"")', bold=True, color=NOTE_COLOR)
     parts = ['"S%d = "&%s&" (%%"&ROUND(%s*100,0)&")"' % (k, scen % ("P", "P", "S%d" % k), scen % ("Q", "Q", "S%d" % k)) for k in (1, 2, 3)]
-    b.set("K2", '=IFERROR("Eğriler: "&' + '&" · "&'.join(parts) + '&" · Ağırlıklı = S1–S3 olasılıklarıyla · MPC ima = kotaların ima ettiği PPK patikası'
-                ' · Bootstrap = kotalardan doğrudan · TLREF sabit = bugünkü TLREF","")', color=NOTE_COLOR)
+    # (in L, right of "Fwd ask": Masa's summary of the matrix ends at Fwd ask - the long text widened that column - and
+    # shows it as its note; the Forward page's matrix runs it over the empty cells of the row, as before)
+    b.set(FWD_LEGEND, '=IFERROR("Eğriler: "&' + '&" · "&'.join(parts) + '&" · Ağırlıklı = S1–S3 olasılıklarıyla · MPC ima = kotaların ima ettiği PPK patikası'
+                      ' · Bootstrap = kotalardan doğrudan · TLREF sabit = bugünkü TLREF","")', color=NOTE_COLOR)
     b.head("A3", ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask", "Fwd bid",
                   "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "USD %", "P/gün bid", "P/gün ask", "RET bid %", "RET ask %",
                   "Bid − RET", "Ask − RET", "Piyasa bid (bp)", "Piyasa ask (bp)"])
@@ -1843,7 +1848,8 @@ def _tto_fwd_eur(model: Model) -> None:
                       'IF($B$%(c)d="Ağırlıklı","= S1–S3 ağırlıklı","")),"")') % {"c": c}, bold=True, color=NOTE_COLOR)
     b.set("G%d" % c, "=" + spot, fmt=DATE)
     b.set("I%d" % c, "=OIS_MAIN!$B$2", fmt=DATE)
-    b.note("K%d" % c, "eğri ve 'Tümü' spread'leri USDTRY matrisinden gelir; EURTRY için ayrıca seçilip yazılabilir")
+    # (right of "Fwd ask", as the USDTRY matrix's legend: Masa's summary ends at Fwd ask, its title says the same)
+    b.note("L%d" % c, "eğri ve 'Tümü' spread'leri USDTRY matrisinden gelir; EURTRY için ayrıca seçilip yazılabilir")
     b.head("A%d" % h, ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask", "Fwd bid",
                        "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "EUR %", "P/gün bid", "P/gün ask", "RET bid %", "RET ask %",
                        "Bid − RET", "Ask − RET", "Piyasa bid (bp)", "Piyasa ask (bp)"])
@@ -5272,6 +5278,78 @@ def _tto_viop_on(model: Model) -> None:
             b.set("%s%d" % (s["on_col"], r), viop_on_masa(s["on"], k), like="%s%d" % (s["col"], r))
 
 
+# ---------------------------------------------------------------------------------------------- the pages' looks
+#: The desk's layout review (27.11.2026: "Hepsini yap"; docs/desk-decisions.md, "Düzen: Masa, OIS · PPK, USD, Fiyatlama,
+#: Swaption"): how some cells of the TRY workbook read - never a value, a formula or an input.
+#: * a direction (YÖN) on the OIS page's lists and on Masa's OIS signals coloured as the USD page colours its own (the USD
+#:   sheet's conditional formats, SOFR_FOMC): a receive (RECEIVE, REC GÖVDE, REC k+1 / PAY k) green, a pay red, a flattener
+#:   navy, a steepener brown;
+#: * the two bp figures the OIS solver works out ("Çözücü ayarları ve durum") with one decimal, as Masa's status row says
+#:   them ("Çözücü: 0,7 / tol 1,0 bp") - they showed every digit ("6,040528679");
+#: * the RET ask in one colour in every chart of the desk page: the purple of the first two (the third drew it red, the RET
+#:   bid's colour).
+LOOK_NAME = "Düzen · renkler ve biçimler"
+#: the YÖN columns: (sheet, the caption above them, the cells that hold a direction)
+LOOK_YON = (("OIS_MAIN", "D8", "D9:D26"), ("OIS_MAIN", "E29", "E30:E44"), ("OIS_MAIN", "E47", "E48:E62"),
+            ("OIS_MAIN", "E65", "E66:E80"), ("OIS_MAIN", "F83", "F84:F99"), ("OIS_MAIN", "D102", "D103:D117"),
+            ("OIS_MAIN", "D132", "D133:D285"), ("OIS_MAIN", "D288", "D289:D332"), ("OIS_MAIN", "D335", "D336:D438"),
+            ("MASA", "E133", "E134:E146"), ("MASA", "L133", "L134:L146"))
+#: the USD sheet's rules for them, in its order (a condition written for the cell itself, its look)
+LOOK_YON_RULES = (('LEFT(%s,3)="REC"', {"color": "006100", "fill": "C6EFCE", "bold": True}),
+                  ('LEFT(%s,3)="PAY"', {"color": "9C0006", "fill": "FFC7CE", "bold": True}),
+                  ('%s="FLATTENER"', {"color": "1F3864", "fill": "DDEBF7", "bold": True}),
+                  ('%s="STEEPENER"', {"color": "833C0B", "fill": "FCE4D6", "bold": True}))
+#: the solver's figures: (caption cell, its text, the figure) - and the format they read in
+LOOK_SOLVER = (("AT4", "Spot→MPC1 stub ort. − TLREF (bp)", "AU4"), ("AT11", "Maks. |kontrol| (bp)", "AU11"))
+LOOK_BP = "0.0"
+#: the desk page's charts that draw the RET ask: (chart, the cell naming the series); the first one's colour is everyone's
+LOOK_RET_ASK = ((0, "MASA!$AH$5"), (1, "MASA!$AR$5"), (2, "MASA!$AR$23"))
+
+
+def _look_series(model: Model, k: int, ref: str) -> Dict[str, Any]:
+    charts = model.sheet("MASA").charts
+    s = next((x for x in (charts[k]["series"] if k < len(charts) else ()) if x.get("name_ref") == ref), None)
+    if s is None or not s.get("color"):
+        raise ValueError("MASA grafiği %d: RET ask serisi yok (%s)" % (k, ref))
+    return s
+
+
+def _look_check(model: Model) -> None:
+    _need_sheets(model, "OIS_MAIN", "MASA")
+    for sheet, head, _ in LOOK_YON:
+        text = model.sheet(sheet).consts.get(parse_a1(head))
+        if not isinstance(text, str) or text.strip().upper() != "YÖN":
+            raise ValueError("%s!%s beklenen başlık değil (YÖN yok)" % (sheet, head))
+    _need_captions(model, [("OIS_MAIN", head, text) for head, text, _ in LOOK_SOLVER])
+    for _, _, addr in LOOK_SOLVER:
+        _need_formula(model, "OIS_MAIN", addr)
+    for k, ref in LOOK_RET_ASK:
+        _look_series(model, k, ref)
+
+
+def _tto_look(model: Model) -> None:
+    for sheet in ("OIS_MAIN", "MASA"):
+        b = SheetBuilder(model, sheet)
+        sqref = " ".join(rng for s, _, rng in LOOK_YON if s == sheet)
+        r1, c1, _, _ = parse_range(sqref.split()[0])
+        first = "%s%d" % (index_to_col(c1), r1)
+        for condition, look in LOOK_YON_RULES:
+            # Excel's conditional format with a look (as the USD sheet's own): the cell's text decides, nothing is written
+            model.dxfs.append(dict(look))
+            b.sheet.cf.append({"sqref": sqref, "type": "expression", "op": None, "text": None, "stop": False,
+                               "priority": max([x.get("priority", 0) for x in b.sheet.cf] + [0]) + 1,
+                               "dxf": len(model.dxfs) - 1, "anchor": r1 * COLS + c1,
+                               "formulas": [to_template(condition % first, r1, c1)]})
+    ois = SheetBuilder(model, "OIS_MAIN")
+    for _, _, addr in LOOK_SOLVER:
+        rc = parse_a1(addr)
+        old = model.xfs[ois.sheet.styles.get(rc, 0)]
+        ois.sheet.styles[rc] = ois._xf(LOOK_BP, bool(old[1]), old[2], old[3], old[4])       # (its other looks kept)
+    purple = _look_series(model, *LOOK_RET_ASK[0])["color"]
+    for k, ref in LOOK_RET_ASK[1:]:
+        _look_series(model, k, ref)["color"] = purple
+
+
 # ---------------------------------------------------------------------------------------------- empty by default
 #: inputs the file brings filled in with the desk's choices of the day it was saved; every user starts with them
 #: empty: the scenario step per meeting (S1 / S2 / S3) of the PPK ima tab - a blank step follows the scenario base
@@ -8144,6 +8222,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01), (VIOP_ON_NAME, _viop_on_check, _tto_viop_on),
+            (LOOK_NAME, _look_check, _tto_look),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),
             (MARKET_NAME, _market_check, _tto_market), (VIOP_ROLL_NAME, _viop_roll_check, _tto_viop_roll),
             # (the calculators' ways back of 24.11: the bond carry's price -> repo, the implied move's move -> vol)

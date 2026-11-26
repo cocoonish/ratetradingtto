@@ -419,10 +419,10 @@
    "type": "table",
    "sheet": "VIOP",
    "range": "Z8:AA11",
-   "hidden": false,
+   "hidden": true,
    "keep_title": true,
-   "title": "Manuel spot  ·  boş = Bloomberg (USDTRY Curncy)",
-   "note": "VİOP sayfasındaki \"Manuel SP\" hücreleri (ortak girdi). Boşken Bloomberg spotu kullanılır.",
+   "title": "Yardımcı · Manuel spot  ·  boş = Bloomberg (USDTRY Curncy)",
+   "note": "VİOP sayfasındaki \"Manuel SP\" hücreleri (ortak girdi). Boşken Bloomberg spotu kullanılır. Üst şeritteki \"Spot kaynağı ✎\" aynı iki hücreyi yazar; tablonun kendisi VİOP → Kontratlar'da.",
    "borrowed": true
   },
   {
@@ -482,7 +482,8 @@
    "type": "table",
    "title": "TARİH ARASI FAİZ  ·  OIS: MPC ima / senaryolar / bootstrap ve spread'li  (sarı hücreler girdi)",
    "range": "B59:N70",
-   "hidden": false
+   "hidden": false,
+   "freeze": 1
   },
   {
    "id": "TAFS",
@@ -490,6 +491,7 @@
    "sheet": "EK_TARIH",
    "range": "B109:I114",
    "hidden": false,
+   "freeze": 1,
    "title": "TARİH ARASI FAİZ → SPREAD · kote faizden her OIS eğrisine spread"
   },
   {
@@ -497,6 +499,8 @@
    "type": "table",
    "sheet": "EK_TARIH",
    "range": "B1:P108",
+   "cols": ["B", "C", "D", "E", "N", "O", "P", "F", "G", "H", "I", "J", "K", "L", "M"],
+   "freeze": 2,
    "hidden": false,
    "wide": true,
    "title": "TOPLU TARİH ARASI FAİZ · 100 tarih çiftine kadar",
@@ -521,9 +525,9 @@
   {
    "id": "B10D",
    "type": "table",
-   "title": "TARİH ARASI  ·  başlangıç, bitiş ve spread (sarı hücreler girdi; Faiz · PPK sekmesindeki tarih arası faizle aynı tarihler)",
+   "title": "TARİH ARASI  ·  başlangıç, bitiş ve spread (sarı hücreler girdi; sayfada TARİH ARASI FAİZ'in ilk satırı - geçici kopyada kopyanın kendi tarihleri)",
    "range": "B60:N60",
-   "hidden": false,
+   "hidden": true,
    "keep_title": true
   },
   {
@@ -531,9 +535,10 @@
    "copyable": true,
    "copy_with": ["B10D"],
    "type": "table",
-   "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread üstteki satırda)",
+   "title": "TARİH ARASI FORWARD  ·  USDTRY, spread'li OIS ile (tarihler ve spread TARİH ARASI FAİZ'in ilk satırında)",
    "range": "P59:AB70",
    "hidden": false,
+   "freeze": 1,
    "client_quote": {"pair": "USDTRY", "title": "forward-forward", "rows": "62:68", "label": "P", "head": "Eğri", "head_en": "Curve",
                     "start": "C60", "end": "E60", "days": "G60", "spot": "Q60",
                     "near": {"src": "S", "label": "Başlangıç forward", "label_en": "Near outright"},
@@ -572,9 +577,10 @@
    "range": "A2:AW14",
    "cols": ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
-   "wide": true,
    "borrowed": true,
    "keep_title": true,
+   "note_ref": "L2",
+   "grow": {"key": "B", "first": 5, "extra": 1, "last": 14},
    "title": "FORWARD KOTASYON  ·  USDTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; tamamı ve puandan spread: Forward → Kotasyon)",
    "client_quote": {"pair": "USDTRY", "title": "forward", "rows": "5:14", "label": "A", "alt": "B", "alt_when": "serbest",
                     "head": "Vade", "head_en": "Tenor", "start": "G2", "spot": ["F4", "G4"], "end": "B", "days": "C",
@@ -589,9 +595,9 @@
    "range": "A101:AW113",
    "cols": ["A", "B", "C", "D", "M", "AV", "E", "N", "AW", "F", "G", "H", "I", "J", "K"],
    "hidden": false,
-   "wide": true,
    "borrowed": true,
    "keep_title": true,
+   "grow": {"key": "B", "first": 104, "extra": 1, "last": 113},
    "title": "FORWARD KOTASYON  ·  EURTRY özeti (OIS + spread = TRY faizi, her spread'in yanında; eğri ve 'Tümü' spread'leri USDTRY'ninkinden gelir, ayrıca yazılabilir; tamamı ve puandan spread: Forward → Kotasyon)",
    "client_quote": {"pair": "EURTRY", "title": "forward", "rows": "104:113", "label": "A", "alt": "B", "alt_when": "serbest",
                     "head": "Vade", "head_en": "Tenor", "start": "G101", "spot": ["F103", "G103"], "end": "B", "days": "C",
@@ -644,6 +650,7 @@
    "hidden": false,
    "borrowed": true,
    "keep_title": true,
+   "grow": {"key": "L", "first": 331, "extra": 1, "last": 338},
    "title": "VİOP TARGET  ·  hedefler: yakın, uzak, yön, hedef tipi, FRA eğrisi ve değeri (sarı hücreler girdi; VİOP sayfasındaki Target tablosuyla aynı girdiler)"
   },
   {
@@ -713,7 +720,8 @@
    "type": "table",
    "title": "PPK  ·  piyasa ima vs anket  (TCMB Piyasa Katılımcıları Anketi + Bloomberg medyan; sarı = girdi, aylık güncell",
    "range": "P154:AB168",
-   "hidden": false
+   "hidden": false,
+   "freeze": 1
   },
   {
    "id": "B22",
@@ -722,6 +730,7 @@
    "title": "KIRIK VADE & KARŞILIK  ·  forward ↔ basit ↔ OIS 3M ↔ XCCY yıllık  (piyasa = eğrilerden mid; sarı = girdi)",
    "range": "B170:N185",
    "hidden": false,
+   "freeze": 1,
    "ppk": "broken",
    "client_quote": {"pair": "USDTRY", "title": "forward", "start": "Forward!I2", "end": "C171", "days": "E171", "spot": "N171",
                     "outright": "G173", "points": "G174",
@@ -795,14 +804,13 @@
    "id": "over",
    "title": "Genel bakış",
    "panels": [
-    "SPOT",
     "B2",
     "B3",
     "B4",
     "chart0",
     "chart1",
-    "B8",
     "chart2",
+    "B8",
     "chart3"
    ]
   },
@@ -812,19 +820,25 @@
    "panels": [
     "EKS",
     "EKSE",
-    "B10D",
-    "B10",
     "B22"
    ],
-   "note": "Forward kotasyon matrislerinin tamamı (USDTRY ve EURTRY, puandan OIS spread'i) Forward sayfasının Kotasyon sekmesindedir; burada iki matrisin özeti durur (sarı hücreler aynı girdilerdir). Tarih arası forward'ın başlangıç, bitiş ve spread'i hemen üstündeki satırdan yazılır; Faiz · PPK sekmesindeki tarih arası faiz de aynı tarihleri kullanır."
+   "note": "Forward kotasyon matrislerinin tamamı (USDTRY ve EURTRY, puandan OIS spread'i) Forward sayfasının Kotasyon sekmesindedir; burada iki matrisin özeti durur (sarı hücreler aynı girdilerdir). Tarih arası forward Tarih arası sekmesinde, tarih arası faizle aynı tarih satırının yanında."
+  },
+  {
+   "id": "tarih",
+   "title": "Tarih arası",
+   "panels": [
+    "B9",
+    "B10",
+    "TAFS",
+    "TAF"
+   ],
+   "note": "TARİH ARASI FAİZ ve TARİH ARASI FORWARD aynı başlangıç, bitiş ve spread'i okur: TARİH ARASI FAİZ'in ilk satırından yazılır (sarı hücreler). TARİH ARASI FAİZ → SPREAD de aynı tarihlerle, TOPLU TARİH ARASI FAİZ her satırın kendi tarihleriyle."
   },
   {
    "id": "rates",
    "title": "Faiz · PPK",
    "panels": [
-    "B9",
-    "TAFS",
-    "TAF",
     "B13",
     "B21",
     "chart4",
@@ -836,28 +850,17 @@
    "title": "VİOP",
    "panels": [
     "B15",
-    "B16D",
-    "B16",
-    "B17D",
-    "B17"
+    ["B16D", "B16"],
+    ["B17D", "B17"]
    ]
   },
   {
    "id": "sig",
    "title": "Sinyaller",
    "panels": [
-    "B18D",
-    "B18",
-    "B19D",
-    "B19",
-    "B23D",
-    "B23"
-   ]
-  },
-  {
-   "id": "macro",
-   "title": "Makro",
-   "panels": [
+    ["B18D", "B18"],
+    ["B19D", "B19"],
+    ["B23D", "B23"],
     "B20"
    ]
   }

@@ -358,6 +358,10 @@ day - `extras.norm_path_readers`, the last of the tto additions so that it finds
 others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
+One addition changes only how cells read, never a value: the layout review's looks (27.11.2026, `LOOK_NAME`,
+`_tto_look`): conditional formats colouring the OIS lists' and Masa's YÖN as the USD sheet does, the OIS solver's two bp
+figures' number format and Masa chart 2's RET ask colour.
+
 ## Module map
 
 | Group | Modules |
@@ -514,7 +518,8 @@ Two kinds of panel key add the dashboard's own columns:
 - the `append` keys (aswfx, rvfair, borsaspread, dibs_live, universe …): see `Service._panel`.
 
 A table's `"cols"` shows only the columns it names, in its order (`Service._pick_columns`; every cell keeps its column
-letter): Masa's forward summaries, and the Forward page's pricing tables whose ON karşılık (26.11.2026) sits right of their
+letter): Masa's forward summaries, TOPLU TARİH ARASI FAİZ and USD's FOMC table (their inputs moved into view, the layout
+review of 27.11.2026), and the Forward page's pricing tables whose ON karşılık (26.11.2026) sits right of their
 stores but shows beside the TRY rate (FORWARD KOTASYON, the value-date tables, SERBEST FORWARD, FORWARD STARTING SWAP,
 ÇAPRAZ FORWARD). A merged cell keeps the columns it covered that still follow it, in order (ÇAPRAZ FORWARD's "Yöntem" row);
 a covered cell it no longer reaches is an empty cell of its own, so a row keeps every column. The dashboard's own columns added to a

@@ -38,7 +38,9 @@ const EDIT_TIP = 'Yazın: bu primi (başabaşı) veren vol bulunur, tablonun ger
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const dash = (s) => (s === '' || s === null || s === undefined ? '–' : s);
-const rate = (v) => dash(isNum(v) ? pct(v, 4) : '');
+// a TRY OIS rate (the forward, the strike, a breakeven, the rate at the expiry) reads with two decimals - the desk's rule
+// of 25.11.2026 for the pricing tables' TRY rates, here since 27.11.2026 ("Hepsini yap"); how it reads only
+const rate = (v) => dash(isNum(v) ? pct(v, 2) : '');
 const signed = (v, d) => (isNum(v) ? (v > 0 && Number(v.toFixed(d)) !== 0 ? '+' : '') + num(Number(v.toFixed(d)) === 0 ? 0 : v, d) : '–');
 const volText = { day: (v) => dash(num(v, 2)), year: (v) => dash(num(v, 1)), black: (v) => dash(isNum(v) ? pct(v, 2) : '') };
 
@@ -142,15 +144,18 @@ export class SwaptionPage {
     this.schedTitle = h('h2', null, 'Dayanak swap');
     this.notes = h('div', { class: 'body swpt-notes', id: 'swpt-notes' });
     this.buildOptions();
+    // the small "Vadede faiz" above Gerçekleşen vol, the two beside the options; the underlying's schedule as wide as its
+    // table (the desk's layout review, 27.11.2026: "Hepsini yap")
     this.result = h('div', { class: 'panels', id: 'swpt-result' },
       h('section', { class: 'panel wide' }, h('div', { class: 'pad' }, this.head, this.noVol, this.tiles)),
       h('section', { class: 'panel', id: 'swpt-options-panel' },
         h('header', null, h('h2', null, 'Payer · Receiver · Straddle (alıcının gözünden)')), this.optBody),
-      h('section', { class: 'panel', id: 'swpt-range-panel' },
-        h('header', null, h('h2', null, 'Vadede faiz (normal model)')), this.rangeBody),
-      h('section', { class: 'panel', id: 'swpt-realized-panel' },
-        h('header', null, h('h2', null, 'Gerçekleşen vol (forward\'ın günlük değişimi)')), this.realBody, this.realNote),
-      h('section', { class: 'panel', id: 'swpt-schedule-panel' }, h('header', null, this.schedTitle), this.schedBody),
+      h('div', { class: 'swpt-col', id: 'swpt-col' },
+        h('section', { class: 'panel', id: 'swpt-range-panel' },
+          h('header', null, h('h2', null, 'Vadede faiz (normal model)')), this.rangeBody),
+        h('section', { class: 'panel', id: 'swpt-realized-panel' },
+          h('header', null, h('h2', null, 'Gerçekleşen vol (forward\'ın günlük değişimi)')), this.realBody, this.realNote)),
+      h('section', { class: 'panel fit', id: 'swpt-schedule-panel' }, h('header', null, this.schedTitle), this.schedBody),
       h('section', { class: 'panel wide', id: 'swpt-notes-panel' }, h('header', null, h('h2', null, 'Model ve konvansiyonlar')), this.notes));
     this.host.appendChild(h('div', { class: 'panels swaption', id: 'swaption' }, form, this.result));
     this.marks();

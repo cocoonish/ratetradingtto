@@ -1953,3 +1953,19 @@ a.golink { text-decoration: none; white-space: nowrap; }
 .fy-panel.fit table.plain.fy { width: auto; }
 .fy-panel.fit .fy-add textarea { min-width: 260px; }
 .dg-fold { margin-left: 6px; white-space: nowrap; }
+/* ---- Düzen L2a (27.11.2026, the desk's layout review: "Hepsini yap"): Fiyatlama and Swaption ------------------------- */
+/* Fiyatlama: the DV01 buckets at their own width; beside them one column - the instrument's tiles, its schedule, then
+   Toplu fiyatlama - so the bulk list is on the first screen.  (A narrow window puts the column under the buckets.) */
+.pricing .pr-main { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; min-width: 0; }
+.pricing .pr-main > #pr-buckets-panel { flex: 0 0 auto; }
+.pricing .pr-col { flex: 1 1 560px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pricing .pr-result { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pricing .pr-col .panel { flex: 0 0 auto; }
+.pricing .pr-result > #pr-schedule-panel { flex: 0 0 auto; align-self: flex-start; }
+.pricing #pr-buckets-panel.stale { opacity: .45; transition: opacity .12s; }
+/* Swaption: the small "Vadede faiz" above Gerçekleşen vol, the two beside the options; the underlying's schedule as wide
+   as its table (it stretched over the whole row) */
+.swaption .swpt-col { flex: 1 1 560px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.swaption .swpt-col > #swpt-range-panel { flex: 0 0 auto; align-self: flex-start; }
+.swaption .swpt-col > #swpt-realized-panel { flex: 0 0 auto; }
+.swaption #swpt-result > #swpt-schedule-panel { flex: 0 1 auto; }

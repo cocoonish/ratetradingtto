@@ -178,14 +178,16 @@
    "id": "cap",
    "type": "notes",
    "title": "USD OIS · FOMC ima patikası ve işlem seçici",
-   "range": "A1:J1"
+   "range": "A1:J1",
+   "hidden": true
   },
   {
    "id": "top",
    "type": "table",
    "title": "En iyi işlemler",
    "ranked": true,
-   "range": "F2:N14"
+   "range": "F2:N14",
+   "grow": {"key": "H", "first": 5, "extra": 1, "last": 14}
   },
   {
    "id": "inp",
@@ -204,6 +206,9 @@
    "type": "table",
    "title": "FOMC ima patikası · senaryo görüşü",
    "range": "A71:AE83",
+   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "AA", "AB", "AC", "AD", "AE", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+            "U", "V", "W", "X", "Y", "Z"],
+   "freeze": 2,
    "wide": true,
    "note": "Pencere OIS → FOMC adımı: bir toplantının penceresinin (etkin gününden sonraki toplantınınkine; İşlem 1'deki pencere) OIS faizini \"Pencere OIS (elle) %\" sütununa yazın (%, ACT/360): O/N eşdeğeri - \"İma O/N %\"nin formülü, faizin kendi iskonto oranıyla: ((1 + r·gün/36000)^(1/gün) − 1)·36000 - ve fiyatladığı FOMC adımı, \"Önceki ima %\"ye göre (önceki toplantının piyasa O/N'si, ilk toplantıda stub O/N): bp olarak ve \"Toplantı adımı %\" gibi Adım (bp) cinsinden. Piyasa pencere faizini yazarsanız İma O/N ve Toplantı adımı aynen çıkar. USD OIS eğrisi (Girdiler'deki Eğri kaynağı). Yazdığınız faiz toplantısıyla gider: takvim değişince o toplantıda kalır."
   },
@@ -254,14 +259,16 @@
    "type": "table",
    "title": "En iyi 10 spread",
    "ranked": true,
-   "range": "F18:N29"
+   "range": "F18:N29",
+   "grow": {"key": "H", "first": 20, "extra": 1, "last": 29}
   },
   {
    "id": "fly",
    "type": "table",
    "title": "En iyi 10 fly",
    "ranked": true,
-   "range": "F32:N43"
+   "range": "F32:N43",
+   "grow": {"key": "H", "first": 34, "extra": 1, "last": 43}
   },
   {
    "id": "crv",
@@ -359,20 +366,19 @@
    "id": "top",
    "title": "Özet",
    "panels": [
-    "cap",
     "top",
-    "inp",
-    "chk",
     "spr",
-    "fly"
+    "fly",
+    "inp",
+    "chk"
    ]
   },
   {
    "id": "fomc",
    "title": "FOMC",
    "panels": [
-    "inp",
     "fomc",
+    "inp",
     "fomc-chart"
    ]
   },
@@ -380,8 +386,8 @@
    "id": "curve",
    "title": "Eğri",
    "panels": [
-    "inp",
     "crv",
+    "inp",
     "curve-chart"
    ]
   },
@@ -389,12 +395,12 @@
    "id": "trades",
    "title": "İşlemler",
    "panels": [
-    "inp",
     "t1",
     "t2",
     "t3",
     "t4",
-    "t5"
+    "t5",
+    "inp"
    ]
   }
  ]

@@ -463,7 +463,8 @@
    "type": "table",
    "title": "IMPLIED RATES",
    "range": "N7:Z89",
-   "hidden": false
+   "hidden": false,
+   "limit": {"rows": 24}
   },
   {
    "id": "chart0",
@@ -509,7 +510,8 @@
    "title": "EN İYİ 15 SPREAD",
    "ranked": true,
    "range": "A28:L44",
-   "hidden": false
+   "hidden": false,
+   "grow": {"key": "B", "first": 30, "extra": 1, "last": 44}
   },
   {
    "id": "B10",
@@ -517,7 +519,8 @@
    "title": "EN İYİ 15 FLY",
    "ranked": true,
    "range": "A46:L62",
-   "hidden": false
+   "hidden": false,
+   "grow": {"key": "B", "first": 48, "extra": 1, "last": 62}
   },
   {
    "id": "B11",
@@ -527,7 +530,9 @@
    "range": "A64:L80",
    "ppk": "fra",
    "append": "fra_buckets",
-   "hidden": false
+   "hidden": false,
+   "freeze": 2,
+   "grow": {"key": "B", "first": 66, "extra": 1, "last": 80}
   },
   {
    "id": "interp",
@@ -712,37 +717,35 @@
    "id": "quotes",
    "title": "Kotalar",
    "panels": [
-    "B2",
     "B3",
+    ["B2", "B18", "B8"],
     "chart3",
     "chart4",
-    "B5",
-    "B8"
-   ]
-  },
-  {
-   "id": "calc",
-   "title": "Hesaplayıcılar",
-   "panels": [
-    "B18"
+    "B5"
    ]
   },
   {
    "id": "mpc",
-   "title": "PPK ima",
+   "title": "MPC ima",
    "panels": [
     "B4",
     "chart0",
     "chart1",
     "B6",
     "B7",
+    "B22"
+   ]
+  },
+  {
+   "id": "mpcis",
+   "title": "MPC işlem",
+   "panels": [
     "B13",
     "PPK1",
     "B14",
     "B15",
     "PPK2",
-    "B16",
-    "B22"
+    "B16"
    ]
   },
   {

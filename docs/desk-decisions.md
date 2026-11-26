@@ -2469,6 +2469,113 @@ Code: `tto/ppkcurve.py` (`norm`, `Norm`, `NORM_*`, `StepCurve.with_stretch`, `wi
 `tto/static/js/pages/broker.js` (the step's tooltip). Tests: `tests/test_normallesme_adim.py`, `tests/test_ppkcurve.py`
 (the module's pieces), `tests/test_ppkters.py` (left out together).
 
+### Düzen: sayfalar tek tek (27.11.2026)
+
+> "Panellerin boyutlarindan da bazi sorunlar yasiyorum, bunlari da kontrol edelim. Gorsel olarak da biraz daha
+> duzenlememiz lazim. Her sayfayi tek tek inceleyip hem akisi kolaylastirmak hem de gorsel duzen icin en az 15-16 oneri
+> bulalim"
+
+> "Hepsini birden pushlayacagiz. Duzenleri inceleyip bana oner"
+
+To the 22 numbered proposals below: **"Hepsini yap"** (27.11.2026). Proposals 19–22 hide numbers shown today; the desk
+approved them with that answer - every hidden number stays one click away (Sütunlar / ▸ / Tümü).
+
+Every page and tab was looked at on a replay copy, at a desk screen (1920×1080) and a laptop (1366×768): pictures and
+measurements of each panel (its width and height, sideways and inner scrolling, cut cells, empty cells), five reviews.
+The proposals, with who built each (six branches, one installer):
+
+| # | Proposal | Built by |
+|---|---|---|
+| 1 | A panel is as wide as its table, not its header's title and its hidden hover tools; the title wraps (all of it in its tooltip), the tools come over it, 320 px at least | L1 (çekirdek) |
+| 2 | A long note inside a table's range wraps in the table's width instead of widening every column | L1 |
+| 3 | The identifier column stays in view when a table scrolls sideways: a view's `"freeze": n` over the workbook's frozen panes, a `freeze` for the tables a page builds; DİBS RV's frozen block without "Ad" | L1 the mechanism; the pages' builders apply it |
+| 4 | Empty rows folded with the existing `"grow"` / bond options (the filled rows and "+ Satır") | L2a, L2b, L5 |
+| 5 | One scrollbar: one panel-body height for the app, a view's `"limit": {"rows": n}` ("Tümü (N)"); the PPK table opens on 24; a jump bar on Ayarlar | L1 the rule and the option; L2a, L4, L3 |
+| 6 | A lighter top: the top bar one row at 1366, the cell colours behind "?", KISAYOLLAR on one line with "+N", pinned panels foldable (OIS Parametreler open by default) | L1 |
+| 7 | Notes two lines with "devamı"; a two-way note once on a page; a folded panel hides its note | L1 |
+| 8 | Narrow tables at their own width, side by side (`.panel.fit`); small panels in a column beside a tall one (a list in a view's tab) | L1 the mechanism; L2a, L4, L3 |
+| 9 | Same decimals and colours (TRY rates 2 decimals, quant levels 3; a rise one colour; AL green / SAT red) | L2a, L2b, L3, L4, L5 |
+| 10 | Quant: coverage and status once, folded; empty panels shrink to their reason; the trade columns first | L3 |
+| 11 | USD · FOMC / Eğri / İşlemler: the main table first, Girdiler beside; Masa · Genel bakış: "Manuel spot" out, charts side by side | L2a |
+| 12 | Bond pages: the panel you act on first | L5 |
+| 13 | No input column off to the side (FOMC, TOPLU TARİH ARASI FAİZ, Borsa at 1366, Hazine İhalesi) | L2a, L2b, L5 |
+| 14 | Together what belongs together (OIS · Nakit Akışı, DV01 carry, the Carry simulator, Spread · fly) | L2b |
+| 15 | VİOP Kontratlar: Kontratlar → DEALS → Target first | L2b |
+| 16 | Tabs regrouped (TARİH ARASI FAİZ + FORWARD, Makro into Sinyaller, PPK ima split; Forward's and VİOP's one-table tabs; Hesaplayıcılar as Faiz / FX-vol / Tahvil) | L2a, L2b, L5 |
+| 17 | Desk tools: İzleme's fired alarms first, Bugün without holes, menu groups fold | L4 |
+| 18 | Eurobond Kotaları: no "#N/A Invalid Security" on the empty add-row; ISIN / Description frozen | L5 |
+| 19 | Default hidden helper columns of the widest tables (one click back under "Sütunlar") | L2a, L5, L3 |
+| 20 | Günlük İşlemler: the Excel summary tables folded; CPT × VADE only counterparties with DV01 | L4 |
+| 21 | Forward · Kotasyon: the four reverse tables folded | L2b |
+| 22 | Spot/FX and FX Vol: the pair table, USDTRY charts and Yöntem once | L4 |
+
+No number changes with any of it: a layout change never changes a value, inputs keep their cells, Bootstrap and every
+curve are untouched, each user's own choices (hidden columns, folded panels, tabs) still win, no new Bloomberg request.
+
+#### L1 (çekirdek): the mechanisms every page uses
+
+**What the desk gets** (measured on the replay copy, 1920 px unless said; before → after):
+- **A panel as wide as its table (1).** The header of a workbook page's panel no longer sets the panel's width: it takes
+  the panel's width and wraps. The title is two lines at most (the whole title in its tooltip); the hover tools
+  ("Kopyala", "Sütunlar", "+ Launchpad", "⧉") come over the title's end and take no width; the header's buttons go under
+  the title when there is no room beside it. A panel in a row is never narrower than **320 px**; a folded one is as wide
+  as its title on one line. VİOP DEALS' input strip 951 → 320 px; the Forward calculators 802–905 → 320–330 px (all five
+  on one row); the folded "Takvim spread matrisleri" panels 384–563 px (ragged) → 320 px each.
+- **A long note in a table wraps (2).** A text of 70 characters or more that runs over the empty cells of its row (a note
+  inside the sheet's range) wraps in the width the table's other cells give it, at least 440 px - it no longer widens
+  every column: DİBS ASW's FX-curve table 7 531 → 1 479 px, FORWARD KOTASYON USDTRY 3 172 → 1 772 px, EURTRY
+  3 702 → 1 770 px. Shorter texts run over the cells to their right as before.
+- **Frozen columns of the page's choosing (3).** A view's `"freeze": n`: the panel's first n columns (as it shows them)
+  stay in view while it scrolls sideways, in place of the workbook's frozen panes (`0`: none); a table of the dashboard's
+  own (DİBS Trading's özet) takes it too, and so does a table a page builds itself (`plainData(…, {freeze: n})`, the
+  Grid's `freeze`). Which tables freeze what is each page's builder's (DİBS RV without "Ad", Eurobond's ISIN /
+  Description, the quant lists).
+- **One body height (5).** A panel's table scrolls inside at one height everywhere: the window less the shell, a tab bar
+  and the panel's own header - `max(72vh, 100vh − 210 px)`: 870 px at 1080, 558 px at 768 (it was 72vh, 64vh, 60vh,
+  46vh, 38vh or 470 px by page). A panel scrolled to its top is on screen whole. A chart is never cut. A view's
+  `"limit": {"rows": n}` opens a long table on its first n rows; "Tümü (N)" in its header shows the rest, "İlk n" folds
+  it again (each browser keeps it, as the tabs).
+- **A lighter top (6).** The top bar is one row at 1366 px (it was two, 159 px): the number format (1.234,56), the
+  flashing (⚡) and the theme (◐) are in the user's menu (top right: your name), with "Sıkışık görünüm"; below 1500 px
+  the search is an icon that opens on a click or Ctrl+K, the valuation date drops its word, favourites keep one line
+  ("+N" the rest). The cell colours' legend is behind "?" (with the page's time). KISAYOLLAR is one line with "+N"
+  (opened, it stays so in that browser). Every panel of a workbook page folds with ▾ / ▸ at the start of its header - the
+  pinned ones too; OIS Parametreler opens unfolded as before.
+- **Notes (7).** A panel's note shows two lines; "devamı" opens the rest, "kısalt" folds it. A two-way table's note is
+  said under the first table on screen that shows its group; the tables after it (the same calculator's other tables, a
+  temporary copy) leave it out - Manuel Tahvil's four copies → one, Hesaplayıcılar' and Forward's identical ones once,
+  DİBS RV's two long ones once. A folded panel hides its note (OIS · Tüm listeler showed a 222 px note under a folded
+  panel) and the next table on screen says the two-way note.
+- **Panels side by side (8).** `.panel.fit`: a panel as wide as its table, never stretched over the row (its plain table
+  at its natural width). In a view's tab an element may be a list of panel ids - `["B3", ["B2", "B8"], "B5"]` - those
+  panels one under the other as one column at that place; a page of its own uses a `div.stack` in its row.
+
+**Choices made while building it** (ask the desk before changing):
+- **320 px** the narrowest panel in a row (a table of two cells, a folded panel) - the reviews proposed 320–360.
+- **`max(72vh, 100vh − 210 px)`** for the body: the top bar, the header strip, a tab bar, the panel's header and the
+  status bar add up to ~210 px; at a laptop's 768 px it is the old 72vh (+5 px).
+- **70 characters** make a run-over text a wrapping note; **440 px** the narrowest a note wraps in (a narrow table's note
+  stays readable).
+- **The hover tools over the title's end**, not on a line of their own: on a 320 px panel they cover the title while the
+  mouse is on the panel (the title is in its tooltip; the header's buttons are never under them).
+- **Once per screen**, not once per page definition: the page leaves a two-way note out where a table above it on the
+  screen says it - a tab's first table that shows the group says it; on "Tümü" once for the page; a launchpad or the
+  side drawer shows each table alone, with its note. The server sends every note whole (`tw` names the groups' notes in
+  it).
+- **The fold ▾ / ▸ at the start of every header** (it was among the hover tools): every panel, the pinned ones too,
+  folds where it can be seen; each browser remembers it as before.
+- **Number format, flashing, theme in the user's menu**: set once, they took ~180 px of the top bar; still per browser.
+- **"Tümü (N)" and KISAYOLLAR's "+N" remembered per browser**, as the tabs and the folded panels (not with the account).
+
+Code: `tto/views/__init__.py` (`flat_ids`, `normalize`, `check_view`, `layout`'s `stacks` / `pinned_stacks`; the options in
+its docstring), `tto/service.py` (`_panel`: `limit`, `fit`, `freeze` → `_freeze_columns`, `tw`), `tto/twoway.py`
+(`notes_for`), `tto/static/js/grid.js` (`prepare`'s `ovw`, `fillText`, `plainData`'s `freeze`, the Grid's `freeze` /
+`wrap` / `onBuild`), `tto/static/js/pages/view.js` (the header, `limitable`, `setNote` / `dedupeNotes`, `layout`'s
+columns, the legend, KISAYOLLAR), `tto/static/js/ui.js` (`fitOneLine`, `watchWidth`, `foldNote`, `menu`'s `{node}` and
+ids), `tto/static/js/main.js` and `index.html` (the top bar, the user's menu), `tto/static/css/app.css` (`--body-max`,
+`.vhead` / `.ttl`, `.panel.fit`, `.stack`, `.note.clamp`, `td.ovw`, the top bar). Tests: `tests/test_duzen_cekirdek.py`;
+the browser test's `duzenL1` checks.
+
 #### Düzen: Quant sayfaları
 
 The 20 Quant pages' part of the 22 layout proposals (the desk, 27.11.2026: "Hepsini yap"; L1's section "Düzen: sayfalar
@@ -2642,113 +2749,6 @@ Code: `tto/static/js/menu.js`; `tto/static/js/pages/` `bugun.js`, `watch.js`, `h
 `history.js`, `vol.js`, `fx.js`, `fxvol.js`, `agenda.js`; `tto/static/css/app.css` (the block "Masa araçları düzen" at its
 end). Tests: `tests/test_duzen_masa.py`; the browser test's duzen-masa checks (and Bugün's block order there).
 
-### Düzen: sayfalar tek tek (27.11.2026)
-
-> "Panellerin boyutlarindan da bazi sorunlar yasiyorum, bunlari da kontrol edelim. Gorsel olarak da biraz daha
-> duzenlememiz lazim. Her sayfayi tek tek inceleyip hem akisi kolaylastirmak hem de gorsel duzen icin en az 15-16 oneri
-> bulalim"
-
-> "Hepsini birden pushlayacagiz. Duzenleri inceleyip bana oner"
-
-To the 22 numbered proposals below: **"Hepsini yap"** (27.11.2026). Proposals 19–22 hide numbers shown today; the desk
-approved them with that answer - every hidden number stays one click away (Sütunlar / ▸ / Tümü).
-
-Every page and tab was looked at on a replay copy, at a desk screen (1920×1080) and a laptop (1366×768): pictures and
-measurements of each panel (its width and height, sideways and inner scrolling, cut cells, empty cells), five reviews.
-The proposals, with who built each (six branches, one installer):
-
-| # | Proposal | Built by |
-|---|---|---|
-| 1 | A panel is as wide as its table, not its header's title and its hidden hover tools; the title wraps (all of it in its tooltip), the tools come over it, 320 px at least | L1 (çekirdek) |
-| 2 | A long note inside a table's range wraps in the table's width instead of widening every column | L1 |
-| 3 | The identifier column stays in view when a table scrolls sideways: a view's `"freeze": n` over the workbook's frozen panes, a `freeze` for the tables a page builds; DİBS RV's frozen block without "Ad" | L1 the mechanism; the pages' builders apply it |
-| 4 | Empty rows folded with the existing `"grow"` / bond options (the filled rows and "+ Satır") | L2a, L2b, L5 |
-| 5 | One scrollbar: one panel-body height for the app, a view's `"limit": {"rows": n}` ("Tümü (N)"); the PPK table opens on 24; a jump bar on Ayarlar | L1 the rule and the option; L2a, L4, L3 |
-| 6 | A lighter top: the top bar one row at 1366, the cell colours behind "?", KISAYOLLAR on one line with "+N", pinned panels foldable (OIS Parametreler open by default) | L1 |
-| 7 | Notes two lines with "devamı"; a two-way note once on a page; a folded panel hides its note | L1 |
-| 8 | Narrow tables at their own width, side by side (`.panel.fit`); small panels in a column beside a tall one (a list in a view's tab) | L1 the mechanism; L2a, L4, L3 |
-| 9 | Same decimals and colours (TRY rates 2 decimals, quant levels 3; a rise one colour; AL green / SAT red) | L2a, L2b, L3, L4, L5 |
-| 10 | Quant: coverage and status once, folded; empty panels shrink to their reason; the trade columns first | L3 |
-| 11 | USD · FOMC / Eğri / İşlemler: the main table first, Girdiler beside; Masa · Genel bakış: "Manuel spot" out, charts side by side | L2a |
-| 12 | Bond pages: the panel you act on first | L5 |
-| 13 | No input column off to the side (FOMC, TOPLU TARİH ARASI FAİZ, Borsa at 1366, Hazine İhalesi) | L2a, L2b, L5 |
-| 14 | Together what belongs together (OIS · Nakit Akışı, DV01 carry, the Carry simulator, Spread · fly) | L2b |
-| 15 | VİOP Kontratlar: Kontratlar → DEALS → Target first | L2b |
-| 16 | Tabs regrouped (TARİH ARASI FAİZ + FORWARD, Makro into Sinyaller, PPK ima split; Forward's and VİOP's one-table tabs; Hesaplayıcılar as Faiz / FX-vol / Tahvil) | L2a, L2b, L5 |
-| 17 | Desk tools: İzleme's fired alarms first, Bugün without holes, menu groups fold | L4 |
-| 18 | Eurobond Kotaları: no "#N/A Invalid Security" on the empty add-row; ISIN / Description frozen | L5 |
-| 19 | Default hidden helper columns of the widest tables (one click back under "Sütunlar") | L2a, L5, L3 |
-| 20 | Günlük İşlemler: the Excel summary tables folded; CPT × VADE only counterparties with DV01 | L4 |
-| 21 | Forward · Kotasyon: the four reverse tables folded | L2b |
-| 22 | Spot/FX and FX Vol: the pair table, USDTRY charts and Yöntem once | L4 |
-
-No number changes with any of it: a layout change never changes a value, inputs keep their cells, Bootstrap and every
-curve are untouched, each user's own choices (hidden columns, folded panels, tabs) still win, no new Bloomberg request.
-
-#### L1 (çekirdek): the mechanisms every page uses
-
-**What the desk gets** (measured on the replay copy, 1920 px unless said; before → after):
-- **A panel as wide as its table (1).** The header of a workbook page's panel no longer sets the panel's width: it takes
-  the panel's width and wraps. The title is two lines at most (the whole title in its tooltip); the hover tools
-  ("Kopyala", "Sütunlar", "+ Launchpad", "⧉") come over the title's end and take no width; the header's buttons go under
-  the title when there is no room beside it. A panel in a row is never narrower than **320 px**; a folded one is as wide
-  as its title on one line. VİOP DEALS' input strip 951 → 320 px; the Forward calculators 802–905 → 320–330 px (all five
-  on one row); the folded "Takvim spread matrisleri" panels 384–563 px (ragged) → 320 px each.
-- **A long note in a table wraps (2).** A text of 70 characters or more that runs over the empty cells of its row (a note
-  inside the sheet's range) wraps in the width the table's other cells give it, at least 440 px - it no longer widens
-  every column: DİBS ASW's FX-curve table 7 531 → 1 479 px, FORWARD KOTASYON USDTRY 3 172 → 1 772 px, EURTRY
-  3 702 → 1 770 px. Shorter texts run over the cells to their right as before.
-- **Frozen columns of the page's choosing (3).** A view's `"freeze": n`: the panel's first n columns (as it shows them)
-  stay in view while it scrolls sideways, in place of the workbook's frozen panes (`0`: none); a table of the dashboard's
-  own (DİBS Trading's özet) takes it too, and so does a table a page builds itself (`plainData(…, {freeze: n})`, the
-  Grid's `freeze`). Which tables freeze what is each page's builder's (DİBS RV without "Ad", Eurobond's ISIN /
-  Description, the quant lists).
-- **One body height (5).** A panel's table scrolls inside at one height everywhere: the window less the shell, a tab bar
-  and the panel's own header - `max(72vh, 100vh − 210 px)`: 870 px at 1080, 558 px at 768 (it was 72vh, 64vh, 60vh,
-  46vh, 38vh or 470 px by page). A panel scrolled to its top is on screen whole. A chart is never cut. A view's
-  `"limit": {"rows": n}` opens a long table on its first n rows; "Tümü (N)" in its header shows the rest, "İlk n" folds
-  it again (each browser keeps it, as the tabs).
-- **A lighter top (6).** The top bar is one row at 1366 px (it was two, 159 px): the number format (1.234,56), the
-  flashing (⚡) and the theme (◐) are in the user's menu (top right: your name), with "Sıkışık görünüm"; below 1500 px
-  the search is an icon that opens on a click or Ctrl+K, the valuation date drops its word, favourites keep one line
-  ("+N" the rest). The cell colours' legend is behind "?" (with the page's time). KISAYOLLAR is one line with "+N"
-  (opened, it stays so in that browser). Every panel of a workbook page folds with ▾ / ▸ at the start of its header - the
-  pinned ones too; OIS Parametreler opens unfolded as before.
-- **Notes (7).** A panel's note shows two lines; "devamı" opens the rest, "kısalt" folds it. A two-way table's note is
-  said under the first table on screen that shows its group; the tables after it (the same calculator's other tables, a
-  temporary copy) leave it out - Manuel Tahvil's four copies → one, Hesaplayıcılar' and Forward's identical ones once,
-  DİBS RV's two long ones once. A folded panel hides its note (OIS · Tüm listeler showed a 222 px note under a folded
-  panel) and the next table on screen says the two-way note.
-- **Panels side by side (8).** `.panel.fit`: a panel as wide as its table, never stretched over the row (its plain table
-  at its natural width). In a view's tab an element may be a list of panel ids - `["B3", ["B2", "B8"], "B5"]` - those
-  panels one under the other as one column at that place; a page of its own uses a `div.stack` in its row.
-
-**Choices made while building it** (ask the desk before changing):
-- **320 px** the narrowest panel in a row (a table of two cells, a folded panel) - the reviews proposed 320–360.
-- **`max(72vh, 100vh − 210 px)`** for the body: the top bar, the header strip, a tab bar, the panel's header and the
-  status bar add up to ~210 px; at a laptop's 768 px it is the old 72vh (+5 px).
-- **70 characters** make a run-over text a wrapping note; **440 px** the narrowest a note wraps in (a narrow table's note
-  stays readable).
-- **The hover tools over the title's end**, not on a line of their own: on a 320 px panel they cover the title while the
-  mouse is on the panel (the title is in its tooltip; the header's buttons are never under them).
-- **Once per screen**, not once per page definition: the page leaves a two-way note out where a table above it on the
-  screen says it - a tab's first table that shows the group says it; on "Tümü" once for the page; a launchpad or the
-  side drawer shows each table alone, with its note. The server sends every note whole (`tw` names the groups' notes in
-  it).
-- **The fold ▾ / ▸ at the start of every header** (it was among the hover tools): every panel, the pinned ones too,
-  folds where it can be seen; each browser remembers it as before.
-- **Number format, flashing, theme in the user's menu**: set once, they took ~180 px of the top bar; still per browser.
-- **"Tümü (N)" and KISAYOLLAR's "+N" remembered per browser**, as the tabs and the folded panels (not with the account).
-
-Code: `tto/views/__init__.py` (`flat_ids`, `normalize`, `check_view`, `layout`'s `stacks` / `pinned_stacks`; the options in
-its docstring), `tto/service.py` (`_panel`: `limit`, `fit`, `freeze` → `_freeze_columns`, `tw`), `tto/twoway.py`
-(`notes_for`), `tto/static/js/grid.js` (`prepare`'s `ovw`, `fillText`, `plainData`'s `freeze`, the Grid's `freeze` /
-`wrap` / `onBuild`), `tto/static/js/pages/view.js` (the header, `limitable`, `setNote` / `dedupeNotes`, `layout`'s
-columns, the legend, KISAYOLLAR), `tto/static/js/ui.js` (`fitOneLine`, `watchWidth`, `foldNote`, `menu`'s `{node}` and
-ids), `tto/static/js/main.js` and `index.html` (the top bar, the user's menu), `tto/static/css/app.css` (`--body-max`,
-`.vhead` / `.ttl`, `.panel.fit`, `.stack`, `.note.clamp`, `td.ovw`, the top bar). Tests: `tests/test_duzen_cekirdek.py`;
-the browser test's `duzenL1` checks.
-
 #### Düzen: tahvil sayfaları, Hesaplayıcılar, Motor
 
 The bond pages, Hesaplayıcılar and Motor of the 22 layout proposals (27.11.2026; the desk: "Hepsini yap" - the section
@@ -2809,3 +2809,80 @@ Manuel's ISIN strip in NAMED), `test_columns.py` (the defaults), `test_extras.py
 "düzen ·" checks, its Kâğıt Fiyatlama width check (the chip first), its DİBS RV default-hidden counts and Kâğıt Fiyat
 Yükleme's "keeps its place" check (the list, under Fiyatlar · t0 now, brought into view before it is measured: the click
 on a row's spread scrolled the page to it).
+#### Düzen: Masa, OIS · PPK, USD, Fiyatlama, Swaption
+
+The desk's answer to the layout proposals (27.11.2026): **"Hepsini yap"** - this part is builder L2a's (proposals 3, 4, 5, 8,
+9, 11, 13, 16 and 19 on these pages). The layout only: no value, formula, input, curve or Bloomberg request changed; every
+panel keeps its id (a panel moved to another tab too), every DOM id stays, and what is hidden is one click away.
+
+- **Masa**
+  - *Genel bakış* opens on Kontrol and ORANLAR: "Manuel spot" (`VIOP!Z8:AA11`, borrowed) is a helper table there - the
+    header strip's "Spot kaynağı ✎" writes the same two cells and the VİOP page shows them. The charts side by side: the
+    three rate charts (Oranlar, O/N eşlenikleri, RET bid–ask ve piyasa) in one row, "RET bandı vs piyasa" beside RET BANDINA
+    GÖRE PİYASA, whose bp columns it draws (it stood alone, ~900 px empty beside it).
+  - **Tarih arası** (a tab of its own, id `tarih`): TARİH ARASI FAİZ, TARİH ARASI FORWARD, TARİH ARASI FAİZ → SPREAD, TOPLU
+    TARİH ARASI FAİZ - **one dates row** (TARİH ARASI FAİZ's first row, `MASA!C60` / `E60` / `I60`) instead of three: the
+    strip that repeated it above the forward (`B10D`) is a helper; a temporary copy of the forward still shows it above
+    itself, the copy's own dates (`copy_with`). *Forward fiyatlama* keeps the two quote summaries and KIRIK VADE; *Faiz ·
+    PPK* the MPC ima path, the survey and the FRA charts.
+  - TOPLU TARİH ARASI FAİZ's columns (`cols`): Başlangıç, Bitiş, Spread, Gün, **Kote %** and what it reads (Kote − the chosen
+    curve, Kote − Bootstrap), then the curves - the Kote % input was 450 px out of view at 1920. (Gün stays between Spread and
+    Kote % so that the settings row above it - Eğri, Gün esası, Genel spread - keeps each caption beside its cell.)
+  - The forward quote summaries: the curves' legend ("Eğriler: S1 = Baz (%60) · …") stood in `EK_FWD!K2`, the summary's last
+    column (Fwd ask), and widened it by ~500 px; it is in `EK_FWD!L2` now (`extras.FWD_LEGEND`), right of Fwd ask - the
+    Forward page's matrix runs it over its empty row as before - and the summary shows it as its note (`note_ref`).
+    EURTRY's line (`K101` → `L101`) the same; the summary's title says it. The free ("serbest") rows past the first empty
+    one are folded (`grow`: "+ Satır", "Tümü"); the panels as wide as their matrix (no longer `wide`).
+  - *VİOP*: DEALS' contract limit above DEALS, the targets' inputs above TARGET (one column each: an array in the tab's
+    list); the targets' empty input rows folded. *Sinyaller*: each strip of inputs above its table, and **Makro** (its
+    one-table tab gone; the "Makro" shortcut opens Sinyaller).
+- **OIS · PPK**
+  - *Kotalar*: OUTRIGHT first; beside it one column - SENARYOLAR, the stub of the one-table *Hesaplayıcılar* tab (STUB – Spot
+    → yarından sonraki ilk MPC; that tab is gone) and Çözücü ayarları ve durum; then the two charts and O/N EŞLENİKLERİ.
+  - *PPK ima* in two, by the names of the desk's own shortcuts (Masa's KISAYOLLAR): **MPC ima** (id `mpc`: IMPLIED RATES,
+    the TLREF path and step charts, STUB İMA, KOTA ARALIKLARI, İMA PPK kontrolü) and **MPC işlem** (id `mpcis`: MPC OIS, MPC
+    OIS → PPK ADIMI, the bucket DV01s, MPC SPREAD, MPC SPREAD → PPK ADIMI). The shortcuts open them. Parametreler stays
+    pinned and open (the TLREF normalization's switch); B1, B6, PPK1, PPK2 and PPKY as they were.
+  - IMPLIED RATES opens on its first 24 meetings (`"limit": {"rows": 24}`; "Tümü (82)"). EN İYİ SPREAD / FLY / FRA fold their
+    empty ranks (FLY had 7, FRA 5 on the recorded day); EN İYİ FRA keeps # and İşlem in view sideways.
+  - **YÖN coloured as on USD**: the USD sheet's own conditional formats - a receive (RECEIVE, REC GÖVDE, REC k+1 / PAY k)
+    green, a pay red, FLATTENER navy, STEEPENER brown - on OUTRIGHT, the best and the full lists, MPC OIS, MPC SPREAD and
+    Masa's OIS signals (`extras.LOOK_YON`: conditional formats added to OIS_MAIN and MASA; the text decides, nothing is
+    written).
+  - Çözücü's two figures the solver works out - Spot→MPC1 stub ort. − TLREF and Maks. |kontrol| (`OIS_MAIN!AU4`, `AU11`) -
+    with one decimal, as Masa's status row says them ("6,040528679" → "6,0"; the value whole).
+- **USD · FOMC**
+  - *Özet*: En iyi işlemler, the spreads and the flies first, Girdiler and Kontroller after them; the caption panel (it
+    repeated the page's title) a helper. *FOMC* and *Eğri*: the table first, Girdiler beside its chart (the table started
+    at y = 610 under Girdiler); *İşlemler*: Girdiler last. The best lists' empty ranks folded.
+  - FOMC ima patikası: "PENCERE OIS → FOMC ADIMI" - the market's window rate and the four two-way inputs (`AA:AE`, "Pencere OIS
+    (elle) %" first) - right after İma O/N % (`cols`; they were 1 199 px out of view); # and Toplantı in view sideways.
+  - **Hidden by default** (proposal 19; "Sütunlar" brings them back, and a user's own choice stands -
+    `Service.DEFAULT_HIDDEN_COLUMNS`): the FOMC table's *Başl. gün*, *Bitiş gün*, *ln DF başl.*, *ln DF bitiş* (`F`, `G`,
+    `I`, `J`: what İma O/N % is worked out from) and the OIS quotes' *Kullan*, *Ay*, *Hafta*, *ln DF*, *SOFR ticker*, *FF
+    ticker* (`G`, `H`, `I`, `M`, `S`, `T`). No rate, quote, step, error or the window's own day count (Gün) among them.
+- **Fiyatlama**: the DV01 buckets at their own width; beside them one column - the tiles, the payment schedule (as wide as
+  its table), **Toplu fiyatlama** - so the bulk list is on the first screen (it started at y ≈ 1 015). TRY rates with **two
+  decimals** (the 25.11 rule): the mids, the rate an NPV / upfront gives, the buckets' quotes, the bulk table; an FX
+  forward's outright keeps four, the USD / EUR rate its own. How they read only: everything is priced on the full value.
+- **Swaption**: the small "Vadede faiz" above Gerçekleşen vol, the two beside the options; Dayanak swap as wide as its table
+  (it stretched to 1 678 px); the forward, the strike, the breakevens and the rates at the expiry with two decimals.
+- **Masa's charts**: the RET ask in one colour in every chart - purple, as in Oranlar and O/N eşlenikleri ("RET bid–ask ve
+  piyasa" drew it red, the RET bid's colour; `extras.LOOK_RET_ASK`).
+- **The identifier column in view** when a wide table scrolls sideways (`"freeze"`): TOPLU TARİH ARASI FAİZ (Başlangıç,
+  Bitiş), TARİH ARASI FAİZ, TARİH ARASI FORWARD, → SPREAD, PPK anket, KIRIK VADE (their first column), FOMC ima patikası
+  (#, Toplantı), EN İYİ FRA (#, İşlem).
+
+**Left as they were** (for the desk to say): EN İYİ SPREAD and EN İYİ FLY miss sharing a row by ~16 px at 1920 (none of their
+columns is a helper); Fiyatlama's and Swaption's convention panels stay open; Masa's TARGET shows one row a target, as before
+(Excel hides its other rows).
+
+Code: `tto/views/10_masa.json`, `20_ois.json`, `80_usd.json` (tabs, `cols`, `grow`, `limit`, `freeze`, `note_ref`, a column
+of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an array read as its ids, in order),
+`tto/service.py` (`DEFAULT_HIDDEN_COLUMNS`), `tto/extras.py` (`FWD_LEGEND`; `LOOK_NAME`: `_look_check`, `_tto_look`),
+`tto/static/js/pages/pricing.js`, `swaption.js`, `tto/static/css/app.css` (the L2a block at its end). Tests:
+`tests/test_duzen_try_a.py`; `tests/test_views.py`, `test_toplufaiz.py`, `test_ppkters.py`, `test_decimals.py`,
+`test_columns.py`, `test_extras.py`, `test_workbook_features.py` (each for the layout, as said there); the browser test's
+`duzenTryA…` checks (Masa's manual spot one click away, "Yardımcı tablolar"; the dialog's cells read on the VİOP page), its
+formula-in-an-input flow on the forward summary's dates (`EK_FWD!B5`, `C5`, `B6`: the date-to-date block left the Forward
+fiyatlama tab) and its Fiyatlama / Swaption checks (two decimals).
