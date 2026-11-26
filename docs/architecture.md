@@ -341,11 +341,13 @@ stores in `Forward!AL:AM`, `Q`; the bond carry's in `_tto_bond_back`, its stores
 ON karşılık (26.11.2026, "VİOP ON karşılık", `_tto_viop_on`: `MASA!A109:A121` ON bid and `O109:O121` ON ask, cells the
 workbook leaves empty - the panel's `cols` puts each beside its implied rate -, each the VİOP sheet's own "TRY Repo" of
 the contract, `VIOP!M17:X17` / `M29:X29`; display only, nothing kept), DİBS RV's yields' O/N equivalents (26.11.2026:
-`DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`), the
-pages' looks of the layout review (27.11.2026, `LOOK_NAME`: conditional formats colouring the OIS lists' and Masa's YÖN as
-the USD sheet does, the OIS solver's two bp figures' number format, Masa chart 2's RET ask colour - how cells read, never a
-value) and others.
+`DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`) and
+others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
+
+One addition changes only how cells read, never a value: the layout review's looks (27.11.2026, `LOOK_NAME`,
+`_tto_look`): conditional formats colouring the OIS lists' and Masa's YÖN as the USD sheet does, the OIS solver's two bp
+figures' number format and Masa chart 2's RET ask colour.
 
 ## Module map
 

@@ -2394,4 +2394,6 @@ of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an
 `tto/static/js/pages/pricing.js`, `swaption.js`, `tto/static/css/app.css` (the L2a block at its end). Tests:
 `tests/test_duzen_try_a.py`; `tests/test_views.py`, `test_toplufaiz.py`, `test_ppkters.py`, `test_decimals.py`,
 `test_columns.py`, `test_extras.py`, `test_workbook_features.py` (each for the layout, as said there); the browser test's
-`duzenTryA…` checks and its Fiyatlama / Swaption checks (two decimals).
+`duzenTryA…` checks (Masa's manual spot one click away, "Yardımcı tablolar"; the dialog's cells read on the VİOP page), its
+formula-in-an-input flow on the forward summary's dates (`EK_FWD!B5`, `C5`, `B6`: the date-to-date block left the Forward
+fiyatlama tab) and its Fiyatlama / Swaption checks (two decimals).

@@ -1817,8 +1817,9 @@ async function clipAfter(page, action) {
     };
     await open(page, 'masa');
     await tab(page, 'fwd');
-    check('the desk page keeps a summary of the USDTRY and the EURTRY quote matrix (the matrices live on the Forward page), the date-to-date forward\'s inputs above it',
-      (await panelsOnPage(page)).join(' ') === 'EKS EKSE B10D B10 B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
+    check('the desk page keeps a summary of the USDTRY and the EURTRY quote matrix (the matrices live on the Forward page), the broken-date converter after them '
+      + '(the date-to-date forward on the Tarih arası tab since 27.11.2026)',
+      (await panelsOnPage(page)).join(' ') === 'EKS EKSE B22' && (await cellText(page, 'EK_FWD!D4')).trim() === '-150', await panelsOnPage(page));
     // each spread with the TRY rate it makes beside it, and that rate's ON karşılık (26.11.2026): Spread bid | TRY bid % |
     // ON bid % | Spread ask | TRY ask % | ON ask % (OIS + spread)
     const headOf = (id) => page.$$eval('#content .panel[data-panel="' + id + '"] tr', (trs) => {
@@ -1876,60 +1877,63 @@ async function clipAfter(page, action) {
     await page.waitForTimeout(300);
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!B11'] });
     await waitCell(page, 'EK_FWD!B11', 't.trim() === ""');
-    // the date-to-date forward: its start / end dates and spread typed right above it, in this tab
+    // the date-to-date forward: its start / end dates and spread typed in TARİH ARASI FAİZ's first row, in its own tab (one
+    // dates row for the two: the desk's layout review, 27.11.2026)
     const days0 = (await cellText(page, 'MASA!G60')).trim();
     await typeInto(page, 'MASA!E60', '01.03.2027');
     await typeInto(page, 'MASA!C60', '01.12.2026');
     await waitCell(page, 'MASA!G60', "t.trim() === '90'");
-    check('the date-to-date forward takes its dates in the forward tab (01.12.2026 → 01.03.2027: 90 days), the tab left as it was',
-      (await panelsOnPage(page)).join(' ') === 'EKS EKSE B10D B10 B22', { days0, panels: await panelsOnPage(page) });
+    const duzenTryATarih = await panelsOnPage(page);
+    check('the date-to-date forward takes its dates in the Tarih arası tab, from TARİH ARASI FAİZ\'s first row beside it (01.12.2026 → 01.03.2027: 90 days)',
+      duzenTryATarih.join(' ') === 'B9 B10 TAFS TAF', { days0, panels: duzenTryATarih });
     for (const ref of ['MASA!C60', 'MASA!E60']) {
       await (await cellHandle(page, ref)).click();
       await page.keyboard.press('Delete');
     }
     await waitCell(page, 'MASA!G60', 't.trim() === ' + JSON.stringify(days0));
     // ------------------------------------------------------------------ a formula in an input cell, as in Excel
-    // "=" in the broken-date converter's value date (KIRIK VADE & KARŞILIK: MASA!C171), a plain click on the start date of
-    // the table above (MASA!C60): its address goes in; "+7", Enter - the value date is the start date + 7, live, with a ƒ
+    // "=" in the broken-date converter's value date (KIRIK VADE & KARŞILIK: MASA!C171), a plain click on the 1M value date of
+    // the forward summary above it (EK_FWD!B5, the same tab): its address goes in; "+7", Enter - the value date is that date +
+    // 7, live, with a ƒ
     const cellSerial = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
     const dayText = (serial) => {                              // an Excel day number as the dashboard writes it (dd.mm.yyyy)
       const t = new Date(Math.round((serial - 25569) * 86400000));
       return String(t.getUTCDate()).padStart(2, '0') + '.' + String(t.getUTCMonth() + 1).padStart(2, '0') + '.' + t.getUTCFullYear();
     };
     const c171 = (await cellText(page, 'MASA!C171')).trim();
-    const c60 = await cellSerial('MASA!C60');
+    const c60 = await cellSerial('EK_FWD!B5');
     await (await cellHandle(page, 'MASA!C171')).click();
     await page.keyboard.type('=');
-    await (await cellHandle(page, 'MASA!C60')).click();
+    await (await cellHandle(page, 'EK_FWD!B5')).click();
     const pointedIn = await page.inputValue('td.editing input');
     await page.keyboard.type('+7');
     await page.keyboard.press('Enter');
     await waitCell(page, 'MASA!C171', 't.trim() === ' + JSON.stringify(dayText(c60 + 7)));
     const fx171 = () => page.evaluate(() => { const td = window.tto.findCell('MASA!C171'); return { ff: td.classList.contains('ff'), title: td.title }; });
     const mark1 = await fx171();
-    check('an input takes a formula as in Excel: "=" in the value date, a plain click on the start date of another table (its address goes in: =C60), '
-      + '"+7", Enter - the start date + 7 shows with a small ƒ, the formula on hover', pointedIn === '=C60' && mark1.ff
-      && mark1.title.startsWith('Formül: =C60+7'), { pointedIn, mark1, c60, c171 });
-    await typeInto(page, 'MASA!C60', '01.12.2026');
+    check('an input takes a formula as in Excel: "=" in the value date, a plain click on a date of another table (its address goes in: =EK_FWD!B5), '
+      + '"+7", Enter - that date + 7 shows with a small ƒ, the formula on hover', pointedIn === '=EK_FWD!B5' && mark1.ff
+      && mark1.title.startsWith('Formül: =EK_FWD!B5+7'), { pointedIn, mark1, c60, c171 });
+    await typeInto(page, 'EK_FWD!B5', '01.12.2026');
     await waitCell(page, 'MASA!C171', "t.trim() === '08.12.2026'");
-    check('... live: the start date typed again (01.12.2026), the value date follows by itself (08.12.2026)', true);
+    check('... live: the date typed again (01.12.2026), the value date follows by itself (08.12.2026)', true);
     await (await cellHandle(page, 'MASA!C171')).click();
     await page.keyboard.press('F2');
     await page.waitForSelector('td.editing input');
     const f2 = await page.inputValue('td.editing input');
     // Ctrl+click puts a reference in wherever the caret is: here over the "7" picked by Shift+←
     await page.keyboard.press('Shift+ArrowLeft');
-    await (await cellHandle(page, 'MASA!G60')).click({ modifiers: ['Control'] });
+    await (await cellHandle(page, 'EK_FWD!C5')).click({ modifiers: ['Control'] });
     const ctrlIn = await page.inputValue('td.editing input');
     await page.keyboard.press('Enter');
-    const e60 = (await cellText(page, 'MASA!E60')).trim();
+    const e60 = dayText((await cellSerial('EK_FWD!B5')) + (await cellSerial('EK_FWD!C5')));
     await waitCell(page, 'MASA!C171', 't.trim() === ' + JSON.stringify(e60));
-    check('... F2 shows the formula (=C60+7); Ctrl+click on the days (MASA!G60) in the middle of it puts the reference in (=C60+G60 → the end date)',
-      f2 === '=C60+7' && ctrlIn === '=C60+G60' && (await fx171()).title.startsWith('Formül: =C60+G60'), { f2, ctrlIn, e60 });
+    check('... F2 shows the formula (=EK_FWD!B5+7); Ctrl+click on the days (EK_FWD!C5) in the middle of it puts the reference in (=EK_FWD!B5+EK_FWD!C5)',
+      f2 === '=EK_FWD!B5+7' && ctrlIn === '=EK_FWD!B5+EK_FWD!C5' && (await fx171()).title.startsWith('Formül: =EK_FWD!B5+EK_FWD!C5'), { f2, ctrlIn, e60 });
     // after a finished reference a plain click ends the typing, as before; a Bloomberg function is refused with the reason
     await (await cellHandle(page, 'MASA!C171')).click();
     await page.keyboard.press('F2');
-    await (await cellHandle(page, 'MASA!E60')).click();
+    await (await cellHandle(page, 'EK_FWD!B6')).click();
     const ended = await page.locator('td.editing').count() === 0;
     await (await cellHandle(page, 'MASA!C171')).click();
     await page.keyboard.type('=BDP("USDTRY Curncy";"PX_LAST")');
@@ -1940,17 +1944,17 @@ async function clipAfter(page, action) {
     await page.keyboard.press('Escape');
     check('... a plain click after a finished reference ends the typing; a Bloomberg function is refused with the reason (the daily data limit), '
       + 'the cell typed into again, its formula kept', ended && refusedIn === '=BDP("USDTRY Curncy";"PX_LAST")'
-      && (await cellText(page, 'MASA!C171')).trim() === e60 && (await fx171()).title.startsWith('Formül: =C60+G60'), { ended, refusedIn });
+      && (await cellText(page, 'MASA!C171')).trim() === e60 && (await fx171()).title.startsWith('Formül: =EK_FWD!B5+EK_FWD!C5'), { ended, refusedIn });
     // a refused formula left with a click on another cell: said, with the formula - the editor is not pulled back to it
     await (await cellHandle(page, 'MASA!C171')).click();
     await page.keyboard.type('=FOO(1)');
-    await (await cellHandle(page, 'MASA!E60')).click();
+    await (await cellHandle(page, 'EK_FWD!B6')).click();
     await page.waitForFunction(() => /=FOO\(1\) kaydedilmedi/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 });
     await page.waitForTimeout(500);
     const away = await page.evaluate(() => ({ editing: !!document.querySelector('td.editing'), addr: document.getElementById('sb-addr').textContent,
       focus: document.activeElement ? document.activeElement.tagName : '' }));
     check('... a refused formula left with a click on another cell: the toast says so with the formula, the selection stays on the clicked cell',
-      !away.editing && away.addr === 'MASA!E60' && away.focus !== 'INPUT' && (await fx171()).title.startsWith('Formül: =C60+G60'), away);
+      !away.editing && away.addr === 'EK_FWD!B6' && away.focus !== 'INPUT' && (await fx171()).title.startsWith('Formül: =EK_FWD!B5+EK_FWD!C5'), away);
     // a cell of another tab: "=", the tab "Faiz · PPK" opened - the formula goes on in a bar of its own -, a click on the
     // survey month there (MASA!S155, the desk's input), "+1", Enter
     const s155 = await cellSerial('MASA!S155');
@@ -1968,7 +1972,7 @@ async function clipAfter(page, action) {
     check('... a cell of another tab: the formula goes on in a bar of its own while the tab is open (=S155), "+1", Enter - the survey month + 1 day',
       docked === '=' && pointedTab === '=S155' && (await fx171()).title.startsWith('Formül: =S155+1'), { docked, pointedTab, s155 });
     await shot(page, '09a-masa-input-formula');
-    for (const ref of ['MASA!C171', 'MASA!C60']) {
+    for (const ref of ['MASA!C171', 'EK_FWD!B5']) {
       await (await cellHandle(page, ref)).click();
       await page.keyboard.press('Delete');
     }
@@ -2314,10 +2318,36 @@ async function clipAfter(page, action) {
     check('VİOP page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
     await open(page, 'masa');
     await tab(page, 'over');
-    check('main page: the manual spot is the first table', /^Manuel spot/.test(await firstPanel()), await firstPanel());
+    // (the desk's layout review, 27.11.2026: Genel bakış without the manual spot - the strip's "Spot kaynağı ✎" below writes
+    // the same two cells, the VİOP page shows them; on Masa a helper table, one click away)
+    const duzenTryAOver = await panelsOnPage(page);
+    check('main page: Genel bakış opens on Kontrol and ORANLAR - the manual spot no table of its own there (the strip\'s "Spot kaynağı ✎" writes it)',
+      /^Kontrol/.test(await firstPanel()) && !duzenTryAOver.includes('SPOT') && duzenTryAOver.slice(0, 3).join(' ') === 'B2 B3 B4',
+      { first: await firstPanel(), panels: duzenTryAOver });
+    const duzenTryATabs = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button[data-tab]')]
+      .map((b) => b.dataset.tab + ':' + b.firstChild.textContent));
+    check('Masa\'s tabs: TARİH ARASI FAİZ and FORWARD on one tab (Tarih arası), Makro in Sinyaller',
+      duzenTryATabs.slice(0, 6).join(' | ') === 'over:Genel bakış | fwd:Forward fiyatlama | tarih:Tarih arası | rates:Faiz · PPK | viop:VİOP | sig:Sinyaller',
+      duzenTryATabs);
     const spotKpi = await page.evaluate(() => (document.querySelector('#kpi-spot') || {}).textContent || '');
     // the file's manual spot (49,997 / 49,9975 of the day it was saved) is nobody's today: the desk starts on Bloomberg's
     check('header strip: "Spot kaynağı" says where the spot comes from - Bloomberg', /Spot kaynağı/.test(spotKpi) && /BBG/.test(spotKpi), spotKpi);
+    // (Masa's manual spot is a helper table now: one click away - "Yardımcı tablolar" -; the dialog's two cells are read on
+    // the VİOP page's first table below)
+    const duzenTryAHelpers = '.page-tools button:has-text("Yardımcı tablolar")';
+    await page.click(duzenTryAHelpers);
+    await page.waitForFunction(() => !!window.tto.state.page.items.get('SPOT'), null, { timeout: 20000 });
+    await page.evaluate(() => window.tto.state.page.focusPanel('SPOT'));
+    await page.waitForFunction(() => { const it = window.tto.state.page.items.get('SPOT'); return !!(it && it.grid && it.grid.data); }, null, { timeout: 20000 });
+    const duzenTryASpot = await page.evaluate(() => ({
+      title: (document.querySelector('#content .panel[data-panel="SPOT"] header h2') || {}).textContent || '',
+      cells: !!window.tto.findCell('VIOP!AA9') && !!window.tto.findCell('VIOP!AA10') }));
+    check('Masa: the manual spot one click away - "Yardımcı tablolar" shows it, the VİOP sheet\'s two cells',
+      /Manuel spot/.test(duzenTryASpot.title) && duzenTryASpot.cells, duzenTryASpot);
+    await page.click(duzenTryAHelpers);
+    await page.waitForFunction(() => !window.tto.state.page.items.get('SPOT'), null, { timeout: 20000 });
+    await open(page, 'viop');
+    await tab(page, 'main');
     await page.click('#kpi-spot');
     await page.waitForSelector('#spot-bid');
     const dlg = { bid: await page.inputValue('#spot-bid'), ask: await page.inputValue('#spot-ask'), src: await page.textContent('#spot-source') };
@@ -2435,7 +2465,7 @@ async function clipAfter(page, action) {
     console.log('Masa: bulk date-to-date rates; VİOP target: a far price');
     const cellV = async (ref) => (await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent(ref))).json.cell.v;
     await open(page, 'masa');
-    await tab(page, 'rates');
+    await tab(page, 'tarih');
     await page.waitForFunction(() => { const it = window.tto.state.page.items.get('TAF'); return !!(it && it.grid && it.grid.data); }, null, { timeout: 20000 });
     const tafRows = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="TAF"] table.grid tbody > tr')]
       .filter((tr) => !tr.classList.contains('grow-hidden')).length);
@@ -2477,8 +2507,8 @@ async function clipAfter(page, action) {
       sameAsBlock.push({ r, ok: [...'EFGHIJKLM'].every((c) => typeof got.v[c] === 'number' && Math.abs(got.v[c] - want.v[c]) < 1e-12)
         && [...'FGHIJKLM'].every((c) => got.t[c] === want.t[c] && /%$/.test(got.t[c])), got, want });
     }
-    check('Masa → Faiz · PPK: TOPLU TARİH ARASI FAİZ right after TARİH ARASI FAİZ (and its box, TARİH ARASI FAİZ → SPREAD), its empty rows '
-      + 'out of the way; two pairs pasted from Excel fill two rows', ratesTab.slice(0, 3).join(' ') === 'B9 TAFS TAF' && taf0 < 10
+    check('Masa → Tarih arası: TOPLU TARİH ARASI FAİZ after TARİH ARASI FAİZ, TARİH ARASI FORWARD and the box (TARİH ARASI FAİZ → SPREAD), its empty rows '
+      + 'out of the way; two pairs pasted from Excel fill two rows', ratesTab.join(' ') === 'B9 B10 TAFS TAF' && taf0 < 10
       && taf1 === taf0 + 2, { ratesTab, taf0, taf1 });
     check('... each pasted row is the desk block for the same dates and spread: days, every curve\'s ACT/360 rate and MPC ima + spread '
       + '(to 1e-12, and as shown)', sameAsBlock.every((x) => x.ok), sameAsBlock);
@@ -2535,7 +2565,7 @@ async function clipAfter(page, action) {
     // ------------------------------------------------------------------ the ways back of 24.11 (items 1, 8, 12)
     console.log('ways back (24.11): a broken-date quote -> its spread over the curves');
     await open(page, 'masa');
-    await tab(page, 'rates');
+    await tab(page, 'tarih');
     // TARİH ARASI FAİZ → SPREAD (the block's box): the block's own MPC ima + spread (360) typed as the quote reads back the
     // block's spread over MPC ima, every curve's spread is the quote less its period rate, and a spread typed into the block
     // gives the quote back
@@ -2553,7 +2583,7 @@ async function clipAfter(page, action) {
       await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto', items: [{ ref: 'MASA!I60', value: x.s }] });
       boxBack[x.c] = await cellV('MASA!F' + (62 + k));
     }
-    check('Masa → Faiz · PPK: TARİH ARASI FAİZ → SPREAD - the block\'s own MPC ima + spread (360) typed as the quote reads its spread over '
+    check('Masa → Tarih arası: TARİH ARASI FAİZ → SPREAD - the block\'s own MPC ima + spread (360) typed as the quote reads its spread over '
       + 'MPC ima (−150 bp), each curve\'s spread is the quote less its period rate, each typed into the block\'s spread gives the quote back (1e-9)',
       Math.abs(boxSpreads[0].s + 150) < 0.51 && /^[+−-]?\d+,\d$/.test(boxSpreads[0].t)
       && boxSpreads.every((x) => typeof x.s === 'number' && Math.abs(x.s - (boxQ - x.d) * 10000) < 1e-9 && Math.abs(boxBack[x.c] - boxQ) < 1e-9),
@@ -3322,7 +3352,8 @@ async function clipAfter(page, action) {
       re, { timeout: 60000 });
     const prType = async (sel, value) => { await page.fill(sel, value); await page.press(sel, 'Enter'); };
     const prApi = async (who) => (await api(page, who || 'ayşe yilmaz', 'GET', '/api/pricing')).json;
-    const prPct = (v) => (v * 100).toFixed(4).replace('.', ',') + '%';
+    // (a TRY rate with two decimals: the desk's 25.11 rule, on Fiyatlama since the layout review of 27.11.2026)
+    const prPct = (v) => (v * 100).toFixed(2).replace('.', ',') + '%';
     const prFix = (v, d) => (v > 0 ? '+' : '') + v.toFixed(d).replace('.', ',');
     // (the DV01 cells of each bucket: after Kova and its quote)
     const prBuckets = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#pr-buckets tr[data-bucket]')]
@@ -3339,6 +3370,18 @@ async function clipAfter(page, action) {
       + '(ON / 1W / 2W no quote of the curve: –)', prMenu[0] === 'ois' && prMenu[1] === 'fiyatlama' && /^TRY OIS 1Y · PAY/.test(await prLabel())
       && Object.keys(prB0).join(' ') === 'ON 1W 2W 1M 2M 3M 6M 9M 1Y 18M 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y' && prB0.ON[0] === '–'
       && prB0['1Y'][0].startsWith('+') && prB0['5Y'][0] === '0,00', { prMenu, prB0 });
+    // the desk's layout review (27.11.2026): the tiles, the schedule and Toplu fiyatlama in one column beside the DV01 buckets -
+    // the bulk list on the first screen; a TRY rate with two decimals
+    const duzenTryAPr = await page.evaluate(() => {
+      const box = (id) => { const r = document.getElementById(id).getBoundingClientRect(); return { l: Math.round(r.left), t: Math.round(r.top),
+        r: Math.round(r.right), b: Math.round(r.bottom) }; };
+      return { buckets: box('pr-buckets-panel'), sched: box('pr-schedule-panel'), bulk: box('pr-bulk-panel'), tiles: box('pr-tiles'),
+        mid: (document.querySelector('#pr-mid .v') || {}).textContent || '', quote: (document.querySelector('#pr-buckets tr[data-bucket="1Y"] .pr-quote') || {}).textContent || '' };
+    });
+    check('Fiyatlama: the tiles, the schedule and Toplu fiyatlama in a column beside the DV01 buckets (the bulk list starts beside them); the mid and '
+      + 'the buckets\' quotes with two decimals', duzenTryAPr.bulk.l >= duzenTryAPr.buckets.r && duzenTryAPr.tiles.l >= duzenTryAPr.buckets.r
+      && duzenTryAPr.bulk.t < duzenTryAPr.buckets.b && duzenTryAPr.tiles.t < duzenTryAPr.sched.t && duzenTryAPr.sched.t < duzenTryAPr.bulk.t
+      && /^\d+,\d\d%$/.test(duzenTryAPr.mid) && /^\d+,\d\d%$/.test(duzenTryAPr.quote), duzenTryAPr);
     // a 2Y3M XCCY received: its coupons counted back from the maturity, the short one first (the desk's rule)
     await page.click('#pr-asset button[data-v="xccy"]');
     await prWait('^XCCY');
@@ -3473,7 +3516,8 @@ async function clipAfter(page, action) {
       re, { timeout: 60000 });
     const swptSource = (re) => page.waitForFunction((s) => new RegExp(s).test((document.querySelector('#swpt-vol-source .v') || {}).textContent || ''),
       re, { timeout: 60000 });
-    const swptPct = (v) => (v * 100).toFixed(4).replace('.', ',') + '%';
+    // (a TRY rate with two decimals: the desk's 25.11 rule, on Swaption since the layout review of 27.11.2026)
+    const swptPct = (v) => (v * 100).toFixed(2).replace('.', ',') + '%';
     const swptTile = (id) => page.textContent('#' + id + ' .v');
     const swptReal = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#swpt-realized tr[data-window]')]
       .map((tr) => [tr.dataset.window, [...tr.children].map((td) => td.textContent)])));
@@ -3491,6 +3535,17 @@ async function clipAfter(page, action) {
       && Object.keys(swptR0).join() === '20,60,120,250' && Object.values(swptR0).every((r) => r[2] === '–')
       && /18M, 2Y, 3Y/.test(await page.textContent('#swpt-novol')) && /18M, 2Y, 3Y/.test(await page.textContent('#swpt-realized-note')),
     { swptMenu, und: swpt0.underlying, swptDates, swptR0 });
+    // the desk's layout review (27.11.2026): the small "Vadede faiz" above Gerçekleşen vol, the two beside the options; the
+    // underlying swap's panel no longer over the whole row
+    const duzenTryASw = await page.evaluate(() => {
+      const box = (id) => { const r = document.getElementById(id).getBoundingClientRect(); return { l: Math.round(r.left), t: Math.round(r.top),
+        r: Math.round(r.right), b: Math.round(r.bottom), w: Math.round(r.width) }; };
+      return { opts: box('swpt-options-panel'), range: box('swpt-range-panel'), real: box('swpt-realized-panel'), sched: box('swpt-schedule-panel'),
+        row: box('swpt-result') };
+    });
+    check('Swaption: "Vadede faiz" above Gerçekleşen vol, both right of the options; Dayanak swap as wide as it needs',
+      Math.abs(duzenTryASw.range.l - duzenTryASw.real.l) <= 2 && duzenTryASw.range.b <= duzenTryASw.real.t && duzenTryASw.range.l >= duzenTryASw.opts.r
+      && duzenTryASw.range.t < duzenTryASw.opts.b && duzenTryASw.sched.w < 0.8 * duzenTryASw.row.w, duzenTryASw);
     // a vol typed in bp/day: the other two units follow, every greek is filled, the payer's breakeven is K + its running premium
     await page.fill('#swpt-vol-day', '5');
     await page.press('#swpt-vol-day', 'Enter');
@@ -4014,7 +4069,14 @@ async function clipAfter(page, action) {
     const ppkSigned = (t) => trNumber(String(t).replace('−', '-'));
     const ppkClear = async (ref) => { await (await cellHandle(page, ref)).click(); await page.keyboard.press('Delete'); };
     await open(page, 'ois');
-    await tab(page, 'mpc');
+    await tab(page, 'mpcis');                      // (MPC işlem: PPK ima's trades tab since 27.11.2026)
+    const duzenTryAOisTabs = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button[data-tab]')]
+      .map((b) => b.dataset.tab + ':' + b.firstChild.textContent));
+    const duzenTryAMpcIs = await panelsOnPage(page);
+    check('OIS · PPK\'s tabs: PPK ima in two by the desk\'s own shortcut names - MPC ima, MPC işlem (MPC OIS and MPC SPREAD with their ways to the '
+      + 'PPK step) -, the stub of the one-table Hesaplayıcılar on Kotalar',
+      duzenTryAOisTabs.slice(0, 5).join(' | ') === 'quotes:Kotalar | mpc:MPC ima | mpcis:MPC işlem | best:En iyi işlemler | all:Tüm listeler'
+      && duzenTryAMpcIs.join(' ') === 'B1 B13 PPK1 B14 B15 PPK2 B16', { tabs: duzenTryAOisTabs, panels: duzenTryAMpcIs });
     await waitCell(page, 'EK_PPK!F3', 't.trim() !== ""');
     const mpcMkt = (await cellText(page, 'EK_PPK!F3')).trim();
     await typeInto(page, 'EK_PPK!G3', mpcMkt.replace('%', ''));
@@ -4087,6 +4149,18 @@ async function clipAfter(page, action) {
     await open(page, 'usd');
     await tab(page, 'fomc');
     await waitCell(page, 'SOFR_FOMC!AA74', 't.trim() !== ""');
+    // the table first, Girdiler beside its chart; "Pencere OIS (elle)" right after İma O/N % - its day counts and ln DFs
+    // hidden by default ("Sütunlar" brings them back)
+    const duzenTryAFomc = await page.evaluate(() => {
+      const it = window.tto.state.page.items.get('fomc');
+      const g = it && it.grid;
+      const shown = g ? g.data.c.filter((c, j) => !g.colHidden(j)) : [];
+      return { panels: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel), shown };
+    });
+    const duzenTryAK = duzenTryAFomc.shown.indexOf('K');
+    check('USD · FOMC → FOMC: the table first, Girdiler beside its chart; "Pencere OIS (elle)" right after İma O/N %, the day counts and ln DFs hidden',
+      duzenTryAFomc.panels.join(' ') === 'fomc inp fomc-chart' && duzenTryAFomc.shown.slice(duzenTryAK, duzenTryAK + 6).join(' ') === 'K AA AB AC AD AE'
+      && !['F', 'G', 'I', 'J'].some((c) => duzenTryAFomc.shown.includes(c)) && duzenTryAFomc.shown.includes('H'), duzenTryAFomc);
     const fomcWinMkt = (await cellText(page, 'SOFR_FOMC!AA74')).trim();
     await typeInto(page, 'SOFR_FOMC!AB74', fomcWinMkt);
     await waitCell(page, 'SOFR_FOMC!AE74', 't.trim() !== ""');
