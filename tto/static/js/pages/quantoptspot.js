@@ -5,7 +5,6 @@
 // the signals' z's, the forecast, whether it prints and why, and every signal's own out-of-sample record - pooled and
 // per pair - so the desk sees which option signals lead the spot, and which way.  Computed in the quant worker's thread.
 import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, groupText, T, N, Z, fmt, pct, sgn, isNum, sideClass } from './quantbase.js';
-import { h } from '../ui.js';
 
 const SIG_TIP = {
   drr1: '25D RR 1A\'nın 5 kapanışlık değişimi ÷ kendi 5 günlük değişimlerinin σ\'sı (son 250 kapanış)',

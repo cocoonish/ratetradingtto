@@ -4,7 +4,6 @@
 // instrument with its record, whether it prints, today's probability and the three features behind it, and the
 // features' share of the trees' gain per group.  Computed in the quant worker's thread; the page reads the result.
 import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, fmt, pct, sgn, isNum, sideClass } from './quantbase.js';
-import { h } from '../ui.js';
 
 const EFFECT_TIP = '↑: bugünkü tahmini yükselişe (yukarı tarafa: AL, pay, steepener, vol al), ↓: düşüşe iten veri; büyüklük sırasıyla';
 

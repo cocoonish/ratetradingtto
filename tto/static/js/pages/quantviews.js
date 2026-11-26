@@ -6,7 +6,7 @@
 import { h, clear } from '../ui.js';
 import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum, REGIME, sideClass,
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum, REGIME,
   BLUE, ORANGE, GREEN, PURPLE, RED, GREY } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
