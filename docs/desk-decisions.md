@@ -2377,4 +2377,6 @@ Code: `tto/views/58_kagitlar.json`, `60_dibs.json`, `60_dibslive.json`, `61_asw.
 `_tto_calc_band`); `Service.DEFAULT_HIDDEN_COLUMNS`; `pages/kagitfiyat.js`, `fiyatyukleme.js`, `dibsgenel.js`; the
 "Tahvil düzen" block at the end of `app.css`. Tests: `tests/test_duzen_tahvil.py`; `test_views.py` (the calculators' tabs,
 Manuel's ISIN strip in NAMED), `test_columns.py` (the defaults), `test_extras.py` (the new addition); the browser test's
-"düzen ·" checks, its Kâğıt Fiyatlama width check (the chip first) and its DİBS RV default-hidden counts.
+"düzen ·" checks, its Kâğıt Fiyatlama width check (the chip first), its DİBS RV default-hidden counts and Kâğıt Fiyat
+Yükleme's "keeps its place" check (the list, under Fiyatlar · t0 now, brought into view before it is measured: the click
+on a row's spread scrolled the page to it).

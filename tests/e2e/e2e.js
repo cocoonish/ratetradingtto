@@ -4643,6 +4643,9 @@ async function clipAfter(page, action) {
     await page.click('#fy-add');
     await page.waitForFunction((n) => document.querySelectorAll('#fy-list-table tr.fy-item').length >= n, fyIn.length + 20, { timeout: 30000 }).catch(() => {});
     const fyRow = await page.evaluate(() => {
+      // (the list stands under Fiyatlar · t0 and the file since 27.11.2026, "Düzen": brought into view first, as a user scrolls
+      // to it - else the click below scrolls the page to the row and the page "moves" before anything is typed)
+      document.getElementById('fy-list').scrollIntoView({ block: 'start' });
       const box = document.querySelector('#fy-list .body');
       box.scrollTop = Math.round((box.scrollHeight - box.clientHeight) / 2);
       const mid = box.getBoundingClientRect().top + box.clientHeight / 2;
