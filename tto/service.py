@@ -3494,8 +3494,10 @@ class Service(object):
     #: DİBS RV's own FX swap columns (BF:BJ, on the offshore ICAP curve of the Forward sheet) - the desk reads a bond's
     #: FX swap side on DİBS ASW's FX swap implied curve (EK_FX: DİBS RV · Genel's "FX swap ASW", DİBS Trading, the card),
     #: and the TRY workbook cannot work it out itself: it holds the quotes (Forward!AO6:AO26, VİOP!C58:C69), not DİBS
-    #: ASW's curve made of them nor its source order (ICPL, then BGN; MID first)
-    DEFAULT_HIDDEN_COLUMNS: Dict[str, Tuple[str, ...]] = {"v/dibs/B3": ("BF", "BG", "BH", "BI", "BJ")}
+    #: ASW's curve made of them nor its source order (ICPL, then BGN; MID first) - and its two helper columns (27.11.2026,
+    #: "Düzen": the widest table, only helpers): Q "İşlemiş (valör)", the accrued interest Kirli (valör) − Kullanılan temiz
+    #: beside it, and BE "Durum", where the bond's cash flows were built (BBG CF / takvim / iskontolu) or why they were not
+    DEFAULT_HIDDEN_COLUMNS: Dict[str, Tuple[str, ...]] = {"v/dibs/B3": ("Q", "BE", "BF", "BG", "BH", "BI", "BJ")}
 
     def columns(self, user: Optional[str]) -> Dict[str, Any]:
         """The columns this user hid, table by table: ``{"tables": {"v/dibs/B5": ["B", "K"], ...}}`` - and, when they

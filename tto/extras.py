@@ -2158,6 +2158,8 @@ def _asw_hist(model: Model) -> None:
 
 # ---------------------------------------------------------------------------------------------- more rows
 BULK_BOND_LAST = 52               # Bulk Bond: the workbook's four rows (3..6) and these more, to row 52
+BULK_BOND_FIRST = 3
+BULK_BOND_ASKS = "BKLMNOPQRSTUV"  # its Bloomberg cells: the description and the six dealers' bid / ask
 BULK_SHEET = "EK_BULK"
 BULK_FIRST, BULK_ROWS = 5, 100    # the bulk forward table here: 100 value dates (the Forward sheet has 20)
 BULK_COLS = "CDEFGHJKNOPQ"        # the formula columns of Forward!B144:Q144 (B: date and L: manual TRY % are typed)
@@ -2212,7 +2214,13 @@ def _bulk_bond_check(model: Model) -> None:
 
 def _tto_bulk_bond(model: Model) -> None:
     """Room for more bonds on the Bulk Bond sheet: the row of the workbook's last bond copied down to row 52,
-    each formula asking nothing while its ISIN is empty (the workbook's own four rows stay as they are)."""
+    each formula asking nothing while its ISIN is empty.
+
+    The workbook's own four rows (3..6) keep their formulas, its Bloomberg cells (B, K..V) wrapped in the same guard
+    (27.11.2026, "Düzen": the empty row under the list - the one the page shows to type a new ISIN into - printed
+    "#N/A Invalid Security" in every cell, widening the dealers' columns, and asked Bloomberg for a security of no
+    ISIN).  A row with an ISIN reads exactly as before; the value Excel saved for the Bloomberg cells of a row whose ISIN
+    the file left empty is not kept (offline that row is empty, as the rows below it)."""
     b = SheetBuilder(model, "Bulk Bond")
     sh = b.sheet
     for col in "BEFGHIJKLMNOPQRSTUV":
@@ -2226,6 +2234,17 @@ def _tto_bulk_bond(model: Model) -> None:
     for col in "ACD":
         for r in range(7, BULK_BOND_LAST + 1):
             b.set("%s%d" % (col, r), None, like="%s6" % col)
+    for r in range(BULK_BOND_FIRST, 7):
+        empty = not str(sh.consts.get(parse_a1("A%d" % r)) or "").strip()
+        for col in BULK_BOND_ASKS:
+            rc = parse_a1("%s%d" % (col, r))
+            if rc not in sh.fml:
+                continue
+            text = formula_of(model, "Bulk Bond", "%s%d" % (col, r))
+            if not text.upper().startswith("IF(TRIM("):
+                b.patch("%s%d" % (col, r), '=IF(TRIM($A%d&"")="","",%s)' % (r, text))
+            if empty:
+                sh.cached.pop(rc, None)
 
 
 def _bulk_forward_check(model: Model) -> None:
@@ -6352,6 +6371,44 @@ def _tw_hub_builders() -> Tuple[Tuple[str, Callable[[Model], None], Callable[[Mo
     return tuple((t.name, functools.partial(_tw_hub_check, t), functools.partial(_tto_tw_hub, t)) for t in TW_HUBS)
 
 
+# ---------------------------------------------------------------------------------------------- Hesaplayıcılar: Ana girdiler
+#: The top band of the Calculators sheet (Hesaplayıcılar → Faiz: "Ana girdiler", Z3:AA12) has three rows the workbook
+#: leaves without a caption - the days between its dates, the forward's difference to the spot and that difference in
+#: points - and shows them in three ways (215 / 9 / 94043,19612: the difference rounded to a whole lira, the points with
+#: every digit).  The captions are written beside them (the names its two-way group gives them) and the difference reads
+#: as the spot and the forward do (4 decimals), the points as the Forward page's (whole points, thousands separated) -
+#: how they read only (27.11.2026, "Düzen"): the values, what is typed and the formulas are the workbook's.
+CALC_BAND_NAME = "Hesaplayıcılar · Ana girdiler başlıkları"
+CALC_BAND_CAPTIONS = (("Z6", "Gün"), ("Z11", "Fark (Forward − Spot)"), ("Z12", "Puan"))
+CALC_BAND_FORMATS = (("AA11", "AA10"), ("AA12", "AA6"))        # a cell, the cell whose number format it takes
+
+
+def _calc_band_check(model: Model) -> None:
+    _need_sheets(model, "Calculators")
+    sh = model.sheet("Calculators")
+    if sh.consts.get(parse_a1("Z10")) != "Forward" or sh.consts.get(parse_a1("Z9")) != "Spot":
+        raise ValueError("Calculators!Z9:Z10 beklenen başlıklar değil")
+    for addr, _ in CALC_BAND_CAPTIONS:
+        rc = parse_a1(addr)
+        if rc in sh.fml or str(sh.consts.get(rc) or "").strip():
+            raise ValueError("Calculators!%s boş değil" % addr)
+    _need_formula(model, "Calculators", "AA6", "AA4-AA3")
+    _need_formula(model, "Calculators", "AA11", "AA10-AA9")
+    _need_formula(model, "Calculators", "AA12", "AA11*10000")
+
+
+def _tto_calc_band(model: Model) -> None:
+    b = SheetBuilder(model, "Calculators")
+    sh = b.sheet
+    for addr, text in CALC_BAND_CAPTIONS:
+        b.set(addr, text, like="Z10")
+    for addr, src in CALC_BAND_FORMATS:
+        rc = parse_a1(addr)
+        xf = sh.styles.get(rc, 0)
+        _, bold, color, fill, align = model.xfs[xf][:5]
+        sh.styles[rc] = b._xf(_numfmt(model, "Calculators", src), bool(bold), color, fill, align)
+
+
 # ---------------------------------------------------------------------------------------------- VİOP target: a far price
 #: The target table of the VİOP sheet (VIOP!K330:Y338) goes from a target rate to the far contract's limit price: "Hedef
 #: tipi" FRA+bp (OIS FRA + bp), FXswap+bp (the FX swap implied rate + bp) or Faiz % (a rate typed), "Hedef değer" its
@@ -7275,7 +7332,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (VFRA_SHEET, _viop_fra_check, _tto_viop_fra),
             # (two-way calculators: Hesaplayıcılar and DV01's scenario P&L - after the market defaults and the way back of
             # the implied move, whose formulas they keep; the VİOP target after its types and the FRA's curve)
-            *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw),
+            *_tw_hub_builders(), (VT_NAME, _viop_tw_check, _tto_viop_tw), (CALC_BAND_NAME, _calc_band_check, _tto_calc_band),
             (RETS_SHEET, _rets_check, _tto_rets), (INTERP_NAME, _interp_check, _tto_interp),
             # (Masa's ORANLAR past 2Y: the XCCY bootstrap's and Motor's zero rates)
             (MASA_OFF_NAME, _masa_off_check, _masa_off)),

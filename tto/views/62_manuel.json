@@ -164,43 +164,13 @@
  ],
  "panels": [
   {
-   "id": "B1",
-   "type": "notes",
-   "title": "MANUEL TAHVİL FİYATLAMA – sabit / TLREF değişken / karma kupon (her dönem S veya D), BIST getiri, OIS ASW / Z ",
-   "range": "A1",
-   "hidden": false
-  },
-  {
-   "id": "B2",
+   "id": "B2i",
    "type": "table",
-   "title": "Girdiler",
-   "range": "A2:C17",
-   "hidden": false,
-   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade ve sabit kupon katalogdan (Tüm Kâğıtlar); tip (S / D); kâğıt trading listesindeyse DİBS RV satırından kupon frekansı, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, kullanılan temiz fiyat ve valörü; değilse 6 ayda bir ve Tüm Kâğıtlar'ın bid / ask ortası (yoksa bugünkü son işlemi). Böylece sağdaki Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (C17 hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
-  },
-  {
-   "id": "B3",
-   "type": "table",
-   "title": "Sonuç",
-   "range": "E2:F16",
-   "hidden": false
-  },
-  {
-   "id": "B4D",
-   "type": "table",
-   "sheet": "OIS_MAIN",
-   "range": "E2:H2",
-   "hidden": false,
-   "borrowed": true,
+   "title": "ISIN",
+   "range": "A17:C17",
    "keep_title": true,
-   "title": "DV01/bacak $ ve yuvarlama  ·  OIS hedge nominali bunlarla (OIS sayfasının girdileri)"
-  },
-  {
-   "id": "B4",
-   "type": "table",
-   "title": "Ek sonuçlar",
-   "range": "H2:I8",
-   "hidden": false
+   "hidden": false,
+   "note": "ISIN yazınca kâğıdın koşulları girdilere varsayılan olarak gelir: vade ve sabit kupon katalogdan (Tüm Kâğıtlar); tip (S / D); kâğıt trading listesindeyse DİBS RV satırından kupon frekansı, TLREF'lide ek getiri, gecikme ve cari dönemin bilinen kuponu ya da gerçekleşen endeksi, kullanılan temiz fiyat ve valörü; değilse 6 ayda bir ve Tüm Kâğıtlar'ın bid / ask ortası (yoksa bugünkü son işlemi). Böylece yanındaki Hedef → temiz fiyat yazılan getiri, ASW, Z ya da DM'nin fiyatını hemen verir (o tablo temiz fiyata bağlı değildir). Bir girdiye elle yazdığınız değer önce gelir (satırdaki açıklama hangilerini söyler); silince kâğıdınki döner. Sabit kuponlu her kâğıt; TLREF'li yalnız trading listesindeyse; bono / kuponsuz, FRN ve TÜFE'li kâğıt nedeniyle reddedilir."
   },
   {
    "id": "B5",
@@ -210,10 +180,49 @@
    "hidden": false
   },
   {
+   "id": "B3",
+   "type": "table",
+   "title": "Sonuç",
+   "range": "E2:F16",
+   "hidden": false
+  },
+  {
+   "id": "B4",
+   "type": "table",
+   "title": "Ek sonuçlar",
+   "range": "H2:I8",
+   "hidden": false
+  },
+  {
+   "id": "B4D",
+   "type": "table",
+   "fit": true,
+   "sheet": "OIS_MAIN",
+   "range": "E2:H2",
+   "hidden": false,
+   "borrowed": true,
+   "keep_title": true,
+   "title": "DV01/bacak $ ve yuvarlama  ·  OIS hedge nominali bunlarla (OIS sayfasının girdileri)"
+  },
+  {
+   "id": "B2",
+   "type": "table",
+   "title": "Girdiler",
+   "range": "A2:C16",
+   "hidden": false,
+   "note": "Girdilerin varsayılanı ISIN'in kâğıdından gelir (ISIN tablosu: DİBS RV satırı ya da Tüm Kâğıtlar ve katalog); elle yazdığınız değer önce gelir, silince kâğıdınki döner."
+  },
+  {
    "id": "B7",
    "type": "table",
    "title": "Dönem tablosu",
    "range": "A22:L63",
+   "grow": {
+    "key": "B",
+    "first": 24,
+    "extra": 1,
+    "last": 63
+   },
    "hidden": false
   },
   {
@@ -221,6 +230,13 @@
    "type": "notes",
    "title": "Yöntem notları",
    "range": "A65:A66",
+   "hidden": false
+  },
+  {
+   "id": "B1",
+   "type": "notes",
+   "title": "MANUEL TAHVİL FİYATLAMA – sabit / TLREF değişken / karma kupon (her dönem S veya D), BIST getiri, OIS ASW / Z ",
+   "range": "A1",
    "hidden": false
   },
   {

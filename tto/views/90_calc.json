@@ -1233,33 +1233,33 @@
  "sections": [
   {
    "id": "conv",
-   "title": "Faiz çevirici",
+   "title": "Faiz",
    "panels": [
     "B7",
-    "B8",
-    "B9",
-    "B24",
     "B5",
     "B6",
-    "B23"
+    "B8",
+    "B9",
+    "B24"
    ]
   },
   {
-   "id": "pos",
-   "title": "Maliyet",
+   "id": "fx",
+   "title": "FX · vol",
    "panels": [
-    "B26"
+    "B23",
+    "B28",
+    "B31",
+    "B32"
    ]
   },
   {
    "id": "bond",
-   "title": "Tahvil · diğer",
+   "title": "Tahvil",
    "panels": [
     "B27",
-    "B28",
-    "B31",
-    "B32",
-    "B33"
+    "B33",
+    "B26"
    ]
   }
  ],

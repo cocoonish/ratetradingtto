@@ -553,14 +553,15 @@ def test_the_live_table_reads_each_value_date_and_the_repo_it_implies(tmp_path):
         assert cell(s, "EK_DIBS!K8") == 100.1
         s.reset_inputs(u, "tto", ["EK_DIBS!K2"], shared=True)
         assert cell(s, "EK_DIBS!K2") == "ISL1"
-        # the page: the table with a card per bond, the day's tape, the helper columns behind
+        # the page: the summary, the day's tape (above the value dates since 27.11.2026, "Düzen"), the table with a card per
+        # bond, the helper columns behind
         view = s.view(u, "dibslive")
-        assert [p["id"] for p in view["panels"]] == ["L0", "L1", "L3"] and view["title"] == "DİBS Trading"
-        main = view["panels"][1]
+        assert [p["id"] for p in view["panels"]] == ["L0", "L3", "L1"] and view["title"] == "DİBS Trading"
+        main = view["panels"][2]
         assert main["title"] == "Valörler · T0 / T1 / T2"
         assert main["card"] == "bond" and main["add"]["ref"] == "DİBS RV!A5:A54" and main["add"]["name"] == "dibs"
         assert main["data"]["c"][-5:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Kart"]
-        assert [p["id"] for p in s.view(u, "dibslive", show_hidden=True)["panels"]] == ["L0", "L1", "L3", "L2"]
+        assert [p["id"] for p in s.view(u, "dibslive", show_hidden=True)["panels"]] == ["L0", "L3", "L1", "L2"]
     finally:
         s.stop()
 
@@ -600,7 +601,7 @@ def test_a_trade_the_dashboard_sees_shows_its_time(tmp_path, monkeypatch):
         assert s.trades_seen("TRT150328T24 @ISL0 ISIN") is None
         s.bump()
         # the page: the T1 last trade at the moment it was seen, Bloomberg's day in the tip; the tape has it
-        summary, main, tape = s.view(u, "dibslive")["panels"][:3]
+        summary, tape, main = s.view(u, "dibslive")["panels"][:3]
         line = next(r for r in summary["data"]["rows"] if r[2].get("t") == "TRT150328T24")
         assert line[9]["t"] == "bugün 10:41:07" and line[9]["cls"] == "fresh"                # the summary says it too
         d = main["data"]

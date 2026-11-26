@@ -173,6 +173,7 @@
    "type": "table",
    "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap ima eğrisi (TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden; fiyatı yoksa OIS)'ne göre ASW",
    "range": "B6:U56",
+   "freeze": 1,
    "keep_title": true,
    "append": "asw_fx",
    "bonds": {

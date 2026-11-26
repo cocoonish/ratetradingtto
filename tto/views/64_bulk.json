@@ -83,6 +83,7 @@
    "type": "table",
    "title": "Kotasyon tablosu",
    "range": "A1:V52",
+   "freeze": 2,
    "hidden": false,
    "grow": {
     "key": "A",

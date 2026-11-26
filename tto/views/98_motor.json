@@ -168,8 +168,7 @@
    "type": "table",
    "title": "TR resmi tatiller (girdi – değiştirilebilir; arife yarım günleri iş günü sayıldı)",
    "range": "A359:B523",
-   "hidden": false,
-   "collapsed": true
+   "hidden": false
   },
   {
    "id": "B16",
@@ -183,8 +182,10 @@
    "type": "table",
    "title": "SONUÇ",
    "range": "A5726:D5878",
-   "hidden": false,
-   "collapsed": true
+   "limit": {
+    "rows": 24
+   },
+   "hidden": false
   },
   {
    "id": "B19",

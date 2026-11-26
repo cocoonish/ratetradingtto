@@ -352,7 +352,7 @@ def test_each_calculator_has_one_home():
     for view, ids in homes.items():
         for pid in ids:
             assert not panel(view, pid).get("hidden") and pid in tabs(view), (view, pid)
-    assert [s["id"] for s in by["calc"]["sections"]] == ["conv", "pos", "bond"] and by["calc"]["sections"][0]["panels"][0] == "B7"
+    assert [s["id"] for s in by["calc"]["sections"]] == ["conv", "fx", "bond"] and by["calc"]["sections"][0]["panels"][0] == "B7"
     # the quote matrices: the Forward page's own sheet now, a summary (borrowed) on the desk page
     kot = next(s for s in by["forward"]["sections"] if s["id"] == "kot")
     assert kot["title"] == "Kotasyon" and kot["panels"] == ["EKF1", "EKF5", "EKF2", "EKF8", "EKF6", "EKF9"]
@@ -556,6 +556,9 @@ NAMED = {
     # pricing sources)
     ("manuel", "B2"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!X2"] + _RV_TYPED),
                        ("Tüm Kâğıtlar", ["EK_EVREN!C2", "EK_EVREN!E2"])],
+    # (its ISIN in a strip of its own, the page's first input - 27.11.2026: C17, what the ISIN filled, reads the same)
+    ("manuel", "B2i"): [("DİBS RV", ["DİBS RV!H5:H54", "DİBS RV!X2"] + _RV_TYPED),
+                        ("Tüm Kâğıtlar", ["EK_EVREN!C2", "EK_EVREN!E2"])],
     # the VİOP target's two-way members typed on the VİOP page (its Hedef değer is in the strip above it, worked out from
     # them when one of them is typed)
     ("masa", "B17"): [("VİOP", ["VIOP!AF331:AI338"])],
