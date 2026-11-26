@@ -271,8 +271,9 @@ def test_a_market_made_from_a_known_path_gives_its_first_step_back(books):
 
 # ============================================================================== per user; the history
 def test_each_users_switch_is_their_own_and_the_history_is_as_before(books, tmp_path):
-    """One user's switch changes their own page only: another user's and the shared calculation keep today's numbers.  The
-    history's MPC machine (no user: the file's "Kapalı") answers a day exactly as without the addition."""
+    """One user's switch changes their own page only: another user's and the shared calculation keep today's numbers, and
+    the user's own Bootstrap is everybody's.  The history's MPC machine (no user: the file's "Kapalı") answers a day
+    exactly as without the addition."""
     from tto.history import MpcMachine
     svc = make_service(tmp_path)
     try:
@@ -285,6 +286,9 @@ def test_each_users_switch_is_their_own_and_the_history_is_as_before(books, tmp_
         assert res["errors"] == []
         assert cell(svc, "OIS_MAIN!M2", ayse) == 1.0 and cell(svc, "OIS_MAIN!L4", ayse) == 0.33
         assert cell(svc, "OIS_MAIN!S9", ayse) == 0.33 and cell(svc, "OIS_MAIN!R10", ayse) != before["OIS_MAIN!R10"]
+        # Bootstrap (Murex's MTM) never moves: the switched-on user's bootstrap is everybody's
+        boot = ["Motor!%s%d" % (col, r) for r in range(88, 131) for col in "FGI"]
+        assert [cell(svc, ref, ayse) for ref in boot] == [cell(svc, ref) for ref in boot]
         for user in (None, veli):
             assert {ref: cell(svc, ref, user) for ref in before} == before, user
             assert cell(svc, "OIS_MAIN!M2", user) == 0.0
