@@ -3494,8 +3494,15 @@ class Service(object):
     #: DİBS RV's own FX swap columns (BF:BJ, on the offshore ICAP curve of the Forward sheet) - the desk reads a bond's
     #: FX swap side on DİBS ASW's FX swap implied curve (EK_FX: DİBS RV · Genel's "FX swap ASW", DİBS Trading, the card),
     #: and the TRY workbook cannot work it out itself: it holds the quotes (Forward!AO6:AO26, VİOP!C58:C69), not DİBS
-    #: ASW's curve made of them nor its source order (ICPL, then BGN; MID first)
-    DEFAULT_HIDDEN_COLUMNS: Dict[str, Tuple[str, ...]] = {"v/dibs/B3": ("BF", "BG", "BH", "BI", "BJ")}
+    #: ASW's curve made of them nor its source order (ICPL, then BGN; MID first).  USD · FOMC's helper columns (the desk's
+    #: layout review, 27.11.2026: "Hepsini yap"): the FOMC table's day counts and ln DFs its İma O/N % is worked out from
+    #: (Başl. gün, Bitiş gün, ln DF başl., ln DF bitiş) and the OIS quotes' helpers (Kullan, Ay, Hafta, ln DF, SOFR / FF
+    #: ticker roots) - never a rate, a step or a quote the desk reads
+    DEFAULT_HIDDEN_COLUMNS: Dict[str, Tuple[str, ...]] = {
+        "v/dibs/B3": ("BF", "BG", "BH", "BI", "BJ"),
+        "v/usd/fomc": ("F", "G", "I", "J"),
+        "v/usd/crv": ("G", "H", "I", "M", "S", "T"),
+    }
 
     def columns(self, user: Optional[str]) -> Dict[str, Any]:
         """The columns this user hid, table by table: ``{"tables": {"v/dibs/B5": ["B", "K"], ...}}`` - and, when they
