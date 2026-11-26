@@ -3072,9 +3072,9 @@ hafta sonu / tatil terimiyle); kotalar çözücünün kendi kotaları (1W TYSO1Z
 ACT/365). Seçili kotaları **en iyi fiyatlayan gün** (eşitlikte en erken) tarihtir; *Normalleşme tarihi* (`L3`) boşken
 *Kullanılan tarih* (`L5`) budur. Tarih bulunamayınca mesaj nedenini söyler: seçili vade sayısı bilinmeyen seviyeden
 (vadelerin içindeki toplantılar) fazla değilse "en az … vade seçin"; en iyi uyum seçili en uzun vadenin sonrasıysa
-"Normalleşme seçili vadelerin sonrasında" (daha uzun bir vade seçin); bir toplantı sonrası seviye farkı karşılayıp
-birçok gün aynı uyuyorsa o günlerin aralığı (en erken gün alınır). Normalleşme kapalıyken blok boştur, sayfa eskisi
-gibidir (tik kutularınız saklanır). Yeni Bloomberg isteği yok; Bootstrap değişmez.
+"Normalleşme seçili vadelerin sonrasında" (daha uzun bir vade seçin). Bir toplantı sonrası seviye farkı karşılayıp
+birçok gün aynı uyuyorsa en erkeni tarih olur, mesaj o günlerin aralığını söyler. Normalleşme kapalıyken blok boştur,
+sayfa eskisi gibidir (tik kutularınız saklanır). Yeni Bloomberg isteği yok; Bootstrap değişmez.
 
 **İki yönlü: tarih arası ve OIS tabloları** (masa, 24.11.2026: "Genel olarak tablolar bu şekilde olmalı karışıklık
 olmaması için", "Bu söylediklerin ve tüm tablolar bu şekilde olmalı, kolay çalışmamız için"). Bu tablolarda birbirine
