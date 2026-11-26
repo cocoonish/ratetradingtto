@@ -67,18 +67,20 @@ export function closeMenu() {
 }
 
 /**
- * items: [{label, action, header, sep, disabled}]; {check: true, on, label, sub, id, action(on)} is a line with a tick
- * box (``id``: the box's) that leaves the menu open (several in a row can be changed); its action returns false to refuse
- * the change.  {choices: [{label, action, on, title, value}], label, id, title} is a line of small buttons side by side
- * (``Ondalık: 0 1 2 3 …``; ``on``: the one in use, ``value``: the button's data-v) - a click acts and closes the menu.
+ * items: [{label, action, header, sep, disabled, id, title}]; {check: true, on, label, sub, id, action(on)} is a line with a
+ * tick box (``id``: the box's) that leaves the menu open (several in a row can be changed); its action returns false to
+ * refuse the change.  {choices: [{label, action, on, title, value}], label, id, title} is a line of small buttons side by
+ * side (``Ondalık: 0 1 2 3 …``; ``on``: the one in use, ``value``: the button's data-v) - a click acts and closes the menu.
+ * {node: Element} is put in as it is (the colours of a page's cells: a legend).  ``cls``: a class of the menu's own.
  */
-export function menu(x, y, items) {
+export function menu(x, y, items, cls) {
   closeMenu();
-  const el = h('div', { class: 'menu', role: 'menu' });
+  const el = h('div', { class: 'menu' + (cls ? ' ' + cls : ''), role: 'menu' });
   for (const it of items) {
     if (!it) continue;
     if (it.sep) { el.appendChild(h('div', { class: 'sep' })); continue; }
     if (it.header) { el.appendChild(h('div', { class: 'mh' }, it.header)); continue; }
+    if (it.node) { el.appendChild(it.node); continue; }
     if (it.choices) {
       const row = h('div', { class: 'mrow', id: it.id || null, title: it.title || null }, h('span', { class: 't' }, it.label));
       for (const c of it.choices) {
@@ -98,7 +100,7 @@ export function menu(x, y, items) {
         it.sub ? h('span', { class: 'sub' }, it.sub) : null));
       continue;
     }
-    const b = h('button', { type: 'button', disabled: !!it.disabled }, it.label);
+    const b = h('button', { type: 'button', disabled: !!it.disabled, id: it.id || null, title: it.title || null }, it.label);
     b.addEventListener('click', () => { closeMenu(); it.action(); });
     el.appendChild(b);
   }
@@ -190,6 +192,75 @@ export async function copyText(text, message = 'Kopyalandı') {
   toast(ok ? message : 'Kopyalanamadı', ok ? 'ok' : 'err', ok ? 2200 : 4000);
   return ok;
 }
+
+/**
+ * A row of chips on one line (a page's KISAYOLLAR, the top bar's favourites): the ones past its end are taken out of view
+ * and ``more`` says how many ("+N"; hidden when all fit) - a click on it is the caller's (the rest in a menu, the row
+ * opened).  A row with the class ``open`` shows them all (``more`` then reads ``less``).  Returns the chips left out.
+ * Called again whenever the row's width changes (``watchWidth``).
+ */
+export function fitOneLine(box, items, more, less = '−') {
+  for (const x of items) x.classList.remove('ovfl');
+  more.classList.remove('hidden');
+  if (box.classList.contains('open')) { more.textContent = less; return []; }
+  const b = box.getBoundingClientRect();
+  if (!b.width) return [];                                          // (not laid out: out of the page, or hidden)
+  if (!items.length || items[items.length - 1].getBoundingClientRect().right <= b.right) {
+    more.classList.add('hidden');                                   // (all of them fit)
+    return [];
+  }
+  more.textContent = '+' + items.length;                          // (its widest: the room it needs)
+  const room = b.right - more.getBoundingClientRect().width - 8;
+  const out = items.filter((x) => x.getBoundingClientRect().right > room);
+  for (const x of out) x.classList.add('ovfl');
+  more.textContent = '+' + out.length;
+  return out;
+}
+
+/** ``fn`` whenever ``el``'s width changes (and once when it is first laid out): a row fitted to one line. */
+export function watchWidth(el, fn) {
+  let w = -1;
+  const run = () => {
+    const now = Math.round(el.getBoundingClientRect().width);
+    if (now === w) return;
+    w = now;
+    fn();
+  };
+  if (window.ResizeObserver) new ResizeObserver(run).observe(el);
+  else window.addEventListener('resize', run);
+  return run;
+}
+
+/**
+ * A panel's note folded to two lines (the desk, 27.11.2026): "devamı" opens the rest, "kısalt" folds it again - shown
+ * only when the note is longer than that.  ``el``: the note's element (its text already in it).  Returns ``check``: call
+ * it when the text changed.
+ */
+export function foldNote(el) {
+  el.classList.add('clamp');
+  const more = h('button', { class: 'note-more', type: 'button', title: 'Notun tamamını göster / kısalt' }, 'devamı');
+  more.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = el.classList.toggle('open');
+    more.textContent = open ? 'kısalt' : 'devamı';
+    if (!open) check();
+  });
+  el.appendChild(more);
+  const check = () => {
+    if (el.classList.contains('open')) return;
+    el.classList.toggle('long', el.scrollHeight > el.clientHeight + 2);
+  };
+  if (noteSizes) noteSizes.observe(el);
+  return { more, check };
+}
+
+// the notes laid out anew (a tab opened, a panel unfolded, the window resized): longer than two lines or not - all of
+// them measured first, then marked (one layout of the page, not one a note)
+const noteSizes = window.ResizeObserver ? new ResizeObserver((entries) => {
+  const els = entries.map((e) => e.target).filter((el) => !el.classList.contains('open'));
+  const over = els.map((el) => el.scrollHeight > el.clientHeight + 2);
+  els.forEach((el, k) => { if (el.classList.contains('long') !== over[k]) el.classList.toggle('long', over[k]); });
+}) : null;
 
 /** True when keyboard / clipboard events should be left to a form control. */
 export function inFormControl(target) {

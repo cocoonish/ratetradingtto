@@ -90,11 +90,23 @@
 * ``sections`` (optional)  the page in tabs: ``[{"id": "calc", "title": "Hesaplayıcılar", "note": "...",
   "panels": ["B7", "B8"]}, ...]`` - the panels of a tab in the order they are listed (a panel may be listed in
   more than one tab).  Every panel that is shown belongs to a tab or to ``pinned``; the helper tables that
-  are not listed are gathered in a last tab of their own.  An element of ``panels`` may be a list of panel ids:
-  small panels stacked in one column beside a tall one (``["B14", ["B14D", "B16"]]``); read in order, the list
-  is flattened (:func:`flat`).
+  are not listed are gathered in a last tab of their own.  An element of ``panels`` may be a list of panel ids
+  (``["B3", ["B2", "B8"], "B5"]``): those panels one under the other, as one column at that place of the row - small
+  panels beside a tall one (the desk, 27.11.2026: proposal 8).  :func:`load_views` flattens it: ``panels`` is the ids in
+  order (what every reader of a tab knows), ``stacks`` the columns (``[["B2", "B8"]]``); the page's answer carries
+  both (:func:`layout`).
 * ``pinned`` (optional)  ids of the panels that stay above the tabs whichever tab is open (the value date of
-  the Forward page)
+  the Forward page); a list in it is a column of panels too (``pinned_stacks``)
+
+Layout options of a panel (the desk, 27.11.2026: "Düzen: sayfalar tek tek", ``docs/desk-decisions.md``):
+
+* ``"freeze": n`` (a table)  its first n columns - as the panel shows them, after ``"cols"`` - stay in view while it
+  scrolls sideways, in place of the workbook's frozen panes (``0``: none); a table of the dashboard's own
+  (``"generated"``) takes it as well.  With the columns Excel hides shown ("Yardımcı tablolar") n counts the others.
+* ``"limit": {"rows": n}`` (a table)  only its first n rows under the captions are shown; "Tümü (N)" in its header shows
+  the rest (each browser remembers it, as the tabs and the folded panels).
+* ``"fit": true``  the panel is as wide as its table, never stretched (``.panel.fit``; in a column of ``sections``, not
+  as wide as the column's widest panel).
 * ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
   anyone else's menu, search or shortcuts, and refused to them
 
@@ -129,17 +141,46 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def flat(ids: List[Any]) -> List[str]:
-    """A tab's panel ids in order, a stacked column (a list of ids) read as its ids one after the other."""
-    out: List[str] = []
-    for p in ids:
-        out.extend(flat(p) if isinstance(p, list) else [p])
-    return out
+def flat_ids(items: Any) -> Tuple[List[str], List[List[str]]]:
+    """A tab's (or the pinned) panel ids, where an element may be a list - a column of panels stacked at that place:
+    the ids in order, and the columns of two panels or more.  Anything else in it (a number, a list in a list) is left
+    out here; :func:`check_view` says so (``tests/test_duzen_cekirdek.py`` runs it on every page)."""
+    flat: List[str] = []
+    stacks: List[List[str]] = []
+    for x in items or ():
+        if isinstance(x, str):
+            flat.append(x)
+        elif isinstance(x, (list, tuple)):
+            ids = [p for p in x if isinstance(p, str)]
+            flat.extend(ids)
+            if len(ids) > 1:
+                stacks.append(ids)
+    return flat, stacks
+
+
+def normalize(v: Dict[str, Any]) -> Dict[str, Any]:
+    """A page's definition as the dashboard reads it (in place; returned): its defaults, and a column of panels in a tab
+    (a list among its ids) flat - the ids as every reader of a tab knows them -, the columns beside them (``stacks``,
+    ``pinned_stacks``): what the page's answer carries for the browser to lay out (:func:`layout`)."""
+    v.setdefault("order", 999)
+    v.setdefault("inputs", [])
+    v.setdefault("panels", [])
+    v.setdefault("sections", [])
+    v.setdefault("pinned", [])
+    for sec in v["sections"]:
+        if isinstance(sec, dict):
+            sec["panels"], stacks = flat_ids(sec.get("panels"))
+            if stacks:
+                sec["stacks"] = stacks
+    v["pinned"], stacks = flat_ids(v["pinned"])
+    if stacks:
+        v["pinned_stacks"] = stacks
+    return v
 
 
 def load_views() -> List[Dict[str, Any]]:
@@ -148,17 +189,55 @@ def load_views() -> List[Dict[str, Any]]:
         if not name.endswith(".json"):
             continue
         with open(os.path.join(HERE, name), encoding="utf-8") as fh:
-            v = json.load(fh)
-        v.setdefault("order", 999)
-        v.setdefault("inputs", [])
-        v.setdefault("panels", [])
-        v.setdefault("sections", [])
-        v.setdefault("pinned", [])
-        for sec in v["sections"]:
-            sec["panels"] = flat(sec.get("panels", []))
-        views.append(v)
+            views.append(normalize(json.load(fh)))
     views.sort(key=lambda v: (v["order"], v["id"]))
     return views
+
+
+def check_view(view: Dict[str, Any], raw: Optional[Dict[str, Any]] = None) -> List[str]:
+    """What is wrong with a page's layout options (empty: nothing) - ``freeze``, ``limit``, ``fit`` and the columns of
+    panels in its tabs; ``raw``: the page's JSON as written (the lists in its tabs before :func:`load_views` flattened
+    them).  The loader takes what it can; the views' test fails on any of these."""
+    out: List[str] = []
+    vid = view.get("id")
+    ids = {p.get("id") for p in view.get("panels", [])}
+    for p in view.get("panels", []):
+        pid = "%s/%s" % (vid, p.get("id"))
+        if "freeze" in p:
+            n = p["freeze"]
+            if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+                out.append("%s: freeze bir sütun sayısı olur (0 ya da daha büyük): %r" % (pid, n))
+            if p.get("type") not in ("table", "generated"):
+                out.append("%s: freeze yalnız tabloda" % pid)
+        if "limit" in p:
+            lim = p["limit"]
+            rows = lim.get("rows") if isinstance(lim, dict) else None
+            if not isinstance(lim, dict) or set(lim) != {"rows"} or isinstance(rows, bool) or not isinstance(rows, int) \
+                    or rows < 1:
+                out.append("%s: limit {\"rows\": n} olur (n en az 1): %r" % (pid, lim))
+            if p.get("type") not in ("table", "generated"):
+                out.append("%s: limit yalnız tabloda" % pid)
+        if "fit" in p and not isinstance(p["fit"], bool):
+            out.append("%s: fit true ya da false olur: %r" % (pid, p["fit"]))
+    src = raw if raw is not None else view
+    tabs = [("sekme %s" % s.get("id"), s.get("panels") or []) for s in src.get("sections") or [] if isinstance(s, dict)]
+    tabs.append(("pinned", src.get("pinned") or []))
+    for where, items in tabs:
+        seen = set()
+        for x in items:
+            group = x if isinstance(x, (list, tuple)) else [x]
+            if isinstance(x, (list, tuple)) and len(x) < 2:
+                out.append("%s/%s: bir sütun en az iki panel olur: %r" % (vid, where, x))
+            for q in group:
+                if not isinstance(q, str):
+                    out.append("%s/%s: panel adı yazı olur (sütun içinde sütun olmaz): %r" % (vid, where, q))
+                    continue
+                if q not in ids:
+                    out.append("%s/%s: böyle bir panel yok: %s" % (vid, where, q))
+                if q in seen:
+                    out.append("%s/%s: %s iki kez" % (vid, where, q))
+                seen.add(q)
+    return out
 
 
 def layout(view: Dict[str, Any], shown: List[str], copies: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
@@ -167,7 +246,9 @@ def layout(view: Dict[str, Any], shown: List[str], copies: Optional[Dict[str, Li
     Returns ``{"pinned": [...], "sections": [{"id", "title", "note", "panels": [...]}, ...]}``; ``sections`` is
     empty for a page without tabs.  Panels that are sent but listed nowhere (helper tables, a chart or picture
     the page definition does not name) go to a last tab, so that nothing is lost.  ``copies``: a table's temporary
-    copies (table id -> their panel ids), placed right after it wherever it is listed.
+    copies (table id -> their panel ids), placed right after it wherever it is listed.  A tab with columns of panels
+    (``stacks`` of the view, or lists among its ids) has ``"stacks"`` too: each column's panels that are sent (a copy
+    with its table), only those of two panels or more; so has the answer (``"pinned_stacks"``) for the pinned ones.
     """
     have = set(shown)
     copies = copies or {}
@@ -179,17 +260,35 @@ def layout(view: Dict[str, Any], shown: List[str], copies: Optional[Dict[str, Li
             out.extend(c for c in copies.get(p, ()) if c in have)
         return out
 
-    pinned = with_copies([p for p in view.get("pinned", []) if p in have])
+    def columns(stacks: List[List[str]]) -> List[List[str]]:
+        out = []
+        for st in stacks:
+            ids = with_copies([p for p in st if p in have])
+            if len(ids) > 1:
+                out.append(ids)
+        return out
+
+    pin_ids, pin_nested = flat_ids(view.get("pinned", []))
+    pinned = with_copies([p for p in pin_ids if p in have])
+    pin_stacks = columns(view.get("pinned_stacks") or pin_nested)
     sections = []
     placed = set(pinned)
     for sec in view.get("sections", []):
-        ids = with_copies([p for p in sec.get("panels", []) if p in have])
+        flat, nested = flat_ids(sec.get("panels", []))
+        ids = with_copies([p for p in flat if p in have])
         placed.update(ids)
         if ids:
-            sections.append({"id": sec["id"], "title": sec["title"], "note": sec.get("note"), "panels": ids})
+            out = {"id": sec["id"], "title": sec["title"], "note": sec.get("note"), "panels": ids}
+            stacks = columns(sec.get("stacks") or nested)
+            if stacks:
+                out["stacks"] = stacks
+            sections.append(out)
     if not sections:
         return {"pinned": [], "sections": []}
     rest = [p for p in shown if p not in placed]
     if rest:
         sections.append({"id": "aux", "title": "Yardımcı tablolar", "note": None, "panels": rest})
-    return {"pinned": pinned, "sections": sections}
+    res = {"pinned": pinned, "sections": sections}
+    if pin_stacks:
+        res["pinned_stacks"] = pin_stacks
+    return res
