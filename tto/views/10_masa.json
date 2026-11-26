@@ -438,6 +438,7 @@
    "title": "ORANLAR  ·  kota ve 360 basit karşılaştırma",
    "range": "B4:N21",
    "hidden": false,
+   "note": "3Y–10Y: ICAP = XCCY (TRYSAQ) bootstrap'ının zero'su, USDTRY spot'undan kotanın vadesine; OIS zero = OIS bootstrap'ının (Motor) zero'su, OIS spot'undan - 2Y gibi 360 basit. Fiyatı olmayan XCCY vadesi boş kalır, OIS'ten doldurulmaz.",
    "trade": {"pair": "USDTRY", "first": 8, "last": 20, "tenor_col": "B", "cells": {"C": "ois", "D": "ret bid", "E": "ret ask"}}
   },
   {
