@@ -25,6 +25,7 @@
   {
    "id": "U1D",
    "type": "table",
+   "fit": true,
    "sheet": "DİBS RV",
    "range": "A2:Z2",
    "cols": ["O", "P", "W", "X"],

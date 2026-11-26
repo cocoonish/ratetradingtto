@@ -25,9 +25,11 @@ const BASE_TIP = 'Mid (varsayılan): iki taraf da mid\'den, spread\'ler iki yan�
   + 'maliyet yok); diğer DİBS ve Eurobond için Hesapla\'da Bloomberg\'e PX_BID / PX_ASK sorulur (kâğıt başına 2 hit, 5 dakika saklanır). '
   + 'Canlı emir yoksa (–), bid = ask ise ya da taraf yoksa satır mid\'den fiyatlanır ve söyler. DİBS\'te BBG modunda, Eurobond\'da her modda.';
 
-function panel(id, title, note) {
+/** A panel of the page: the page's whole width, or (``fit``) as wide as what it holds - the list, the fixed prices, the
+ *  file and the labels are narrow tables, side by side when they fit (27.11.2026, "Düzen"). */
+function panel(id, title, note, fit) {
   const body = h('div', { class: 'body' });
-  const el = h('section', { class: 'panel wide fy-panel', id }, h('header', null, h('h2', null, title)), body,
+  const el = h('section', { class: 'panel fy-panel' + (fit ? ' fit' : ' wide'), id }, h('header', null, h('h2', null, title)), body,
     note ? h('div', { class: 'note' }, note) : null);
   return { el, body };
 }
@@ -108,20 +110,22 @@ export class FiyatYuklemePage {
       + 'Bloomberg\'in mid\'inden; bid getiri = mid + bid spread, ask getiri = mid − ask spread (bp, kendi varsayılanı), fiyatlar Bloomberg\'in '
       + 'mid\'ine çapalı sokak kuralıyla. Satırın spread\'i boşsa varsayılan; eksi değer olur (skew). BBG\'den: Mid (varsayılan) ya da Bid/Ask - bid '
       + 'tarafı Bloomberg\'in bid\'inden, ask tarafı ask\'inden, spread\'ler kendi tarafına (DİBS RV dışındaki kâğıtta Hesapla başına 2 hit); Tümü '
-      + 'hepsini birden değiştirir.');
+      + 'hepsini birden değiştirir.', true);
     this.sabit = panel('fy-sabit', 'Sabit fiyatlar (masanın)',
       'Bu kâğıtlar hesaplanmadan, girildiği gibi yüklenir; liste gibi masanındır, biri değiştirene ya da çıkarana kadar kalır. Yalnız ISIN, bid ve '
       + 'offer gerekir (katalogda olmayan döviz DİBS de olur; vadesi ISIN\'den okunur). Değerler dosyaya yazıldığı birimde: bono ve kuponsuz getiri '
       + '(%, basit), diğerleri temiz fiyat. Aynı ISIN yeniden yapıştırılınca güncellenir. Listede de olan bir kâğıtta sabit fiyat geçerlidir. '
-      + 'Hesaplanan bir satırı "Sabitle" ile buraya alabilirsiniz.');
+      + 'Hesaplanan bir satırı "Sabitle" ile buraya alabilirsiniz.', true);
     this.result_ = panel('fy-result', 'Fiyatlar · t0', 'Getiriler BIST basit getiri (%), fiyatlar t0 valöründe temiz. Her hücre düzenlenebilir: getiri değişince fiyatı, '
       + 'fiyat değişince getirisi aynı kurallarla yeniden hesaplanır. Dosyaya: bono / kuponsuz getiriyle, diğerleri fiyatla yazılır. Sabit fiyatlı satırdaki '
       + 'değişiklik yalnız bu Hesapla içindir.');
     this.buildList();
     this.buildSabit();
-    this.file = panel('fy-file', 'Dosya (Kaydet\'te yazılacak satırlar)');
-    this.labels = panel('fy-labels', 'Tanıtılan ihale etiketleri (masanın)');
-    panels.append(this.ihale.el, this.list.el, this.sabit.el, this.result_.el, this.file.el, this.labels.el);
+    this.file = panel('fy-file', 'Dosya (Kaydet\'te yazılacak satırlar)', null, true);
+    this.labels = panel('fy-labels', 'Tanıtılan ihale etiketleri (masanın)', null, true);
+    // what the morning's work is done in first - the auction text, the prices at t0 and the file -, the desk's list and its
+    // set-up after them (27.11.2026, "Düzen": Fiyatlar · t0 was the fourth of six panels)
+    panels.append(this.ihale.el, this.result_.el, this.file.el, this.list.el, this.sabit.el, this.labels.el);
     this.host.appendChild(panels);
   }
 

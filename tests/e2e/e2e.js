@@ -2680,9 +2680,9 @@ async function clipAfter(page, action) {
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!V57', 'Forward!V58', 'Forward!V61', 'Forward!V62',
       'Forward!V71'] });
     await waitCell(page, 'Forward!V71', 't.trim() === ""');
-    // Hesaplayıcılar → Implied Move: the block's own move, upper bound and pips typed back read its vol
+    // Hesaplayıcılar → Implied Move: the block's own move, upper bound and pips typed back read its vol (its tab: FX · vol)
     await open(page, 'calc');
-    await tab(page, 'conv');
+    await tab(page, 'fx');
     await waitCell(page, 'Calculators!O43', 't.trim() !== ""');
     const moveTyped = { O44: (await cellText(page, 'Calculators!O40')).trim(), O46: (await cellText(page, 'Calculators!O41')).trim(),
       O48: (await cellText(page, 'Calculators!O43')).trim() };
@@ -4588,7 +4588,18 @@ async function clipAfter(page, action) {
     { kfCard, kfCard20 });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
-    // an administrator's width (1–3Y 12 bp): the quote follows; back to 10
+    // an administrator's width (1–3Y 12 bp): the quote follows; back to 10 (the widths' table opens from its chip in the rules
+    // line - 27.11.2026, "Düzen": closed under it, the explanation folded to two lines)
+    const duzenTahvilKf = await page.evaluate(() => ({ folded: document.getElementById('kf-head-line').classList.contains('kf-fold'),
+      more: (document.getElementById('kf-head-more') || {}).textContent || '', closed: document.getElementById('kf-widths').classList.contains('hidden'),
+      chip: (document.getElementById('kf-widths-chip') || {}).textContent || '',
+      first: [...document.querySelectorAll('#content .panel')].filter((p) => p.offsetParent).map((p) => p.id)[0] }));
+    await page.click('#kf-widths-chip');
+    const duzenTahvilKfOpen = await page.evaluate(() => !document.getElementById('kf-widths').classList.contains('hidden')
+      && document.getElementById('kf-widths-chip').classList.contains('on'));
+    check('Kâğıt Fiyatlama (düzen): the desk\'s table first, the explanation folded to two lines ("devamı"), the quote widths a chip of the '
+      + 'rules line - a click opens their table', duzenTahvilKf.folded && duzenTahvilKf.more === 'devamı' && duzenTahvilKf.closed
+      && /^Kotasyon genişliği: .*\d,\d bp ✎$/.test(duzenTahvilKf.chip) && duzenTahvilKf.first === 'kf-panel' && duzenTahvilKfOpen, { duzenTahvilKf, duzenTahvilKfOpen });
     await page.fill('#kf-width-3y', '12');
     await page.click('#kf-widths-save');
     await page.waitForFunction(() => { const td = document.querySelector('#kf-table tr.kf-row[data-isin="TRT150328T24"] td.kf-quote-px');
@@ -4785,6 +4796,9 @@ async function clipAfter(page, action) {
     await page.click('#fy-add');
     await page.waitForFunction((n) => document.querySelectorAll('#fy-list-table tr.fy-item').length >= n, fyIn.length + 20, { timeout: 30000 }).catch(() => {});
     const fyRow = await page.evaluate(() => {
+      // (the list stands under Fiyatlar · t0 and the file since 27.11.2026, "Düzen": brought into view first, as a user scrolls
+      // to it - else the click below scrolls the page to the row and the page "moves" before anything is typed)
+      document.getElementById('fy-list').scrollIntoView({ block: 'start' });
       const box = document.querySelector('#fy-list .body');
       box.scrollTop = Math.round((box.scrollHeight - box.clientHeight) / 2);
       const mid = box.getBoundingClientRect().top + box.clientHeight / 2;
@@ -4850,6 +4864,56 @@ async function clipAfter(page, action) {
       + 'list for both, each one\'s mode their own', fyBy.status === 200 && ((fyBy.json || {}).added || []).includes(fyOther) && /Mehmet/.test(fyWait.desk)
       && !fyWait.there && fyWait.typed === '3' && fyWait.focus && fyAfter.there && /^3,0+$/.test(fyAfter.typed) && fyIsins(fyM) === fyIsins(fyA)
       && fyIsins(fyA).includes(fyOther) && fyM.mode === 'ihale' && fyA.mode === 'bbg', { fyOther, by: fyBy.json && fyBy.json.added, fyWait, fyAfter, modes: [fyM.mode, fyA.mode] });
+
+    // ------------------------------------------------------------------ düzen: the bond pages, Hesaplayıcılar, Motor (27.11.2026)
+    console.log('duzen tahvil');
+    const duzenTahvilFy = await page.evaluate(() => ({ order: [...document.querySelectorAll('#content .panels > .panel')].map((p) => p.id),
+      fit: ['fy-list', 'fy-sabit', 'fy-file', 'fy-labels'].every((id) => document.getElementById(id).classList.contains('fit')) }));
+    check('düzen · Kâğıt Fiyat Yükleme: the auction prices, Fiyatlar · t0 and the file first, the desk\'s list and its set-up after them '
+      + '(the narrow tables at their own width)', duzenTahvilFy.order.join() === 'fy-ihale,fy-result,fy-file,fy-list,fy-sabit,fy-labels'
+      && duzenTahvilFy.fit, duzenTahvilFy);
+    await open(page, 'dibslive');
+    const duzenTahvilLive = (await panelsOnPage(page)).filter((x) => ['L0', 'L1', 'L3'].includes(x));
+    check('düzen · DİBS Trading: the summary, today\'s trades, then the value dates', duzenTahvilLive.join() === 'L0,L3,L1', duzenTahvilLive);
+    await open(page, 'dibs');
+    const duzenTahvilRv = await page.evaluate(() => {
+      const rows = (pid) => [...document.querySelectorAll('#content .panel[data-panel="' + pid + '"] table.grid tbody > tr')];
+      const folded = (pid) => rows(pid).filter((tr) => tr.classList.contains('grow-hidden')).length;
+      const all = (pid) => (document.querySelector('#content .panel[data-panel="' + pid + '"] .grow-all') || {}).textContent || '';
+      return { b3: folded('B3'), b3all: all('B3'), b4: folded('B4'), b4all: all('B4'),
+        order: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel).slice(0, 5) };
+    });
+    check('düzen · DİBS RV: the rows without a bond folded - the main table and SWITCH / PAIR show the rows in use and one more ("Tümü" all) -, '
+      + 'the DV01 strip beside the ASW curve read-outs', duzenTahvilRv.b3 > 10 && /^Tümü \(\d+\)$/.test(duzenTahvilRv.b3all)
+      && duzenTahvilRv.b4 >= 9 && /^Tümü \(\d+\)$/.test(duzenTahvilRv.b4all) && duzenTahvilRv.order.join() === 'B1,B3D,B2,B2b,B3', duzenTahvilRv);
+    await open(page, 'dibs-genel');
+    await page.waitForSelector('#dg-switch table.grid', { timeout: 60000 });
+    const duzenTahvilGenel = await page.evaluate(() => ({ fz: document.querySelectorAll('#dg-grid td.fz').length,
+      folded: document.querySelectorAll('#dg-switch table.grid tr.grow-hidden').length,
+      all: (document.getElementById('dg-fold-switch') || {}).textContent || '' }));
+    check('düzen · DİBS RV · Genel: the bond\'s name stays in view when the table scrolls sideways; the switch / pair rows folded as on DİBS RV',
+      duzenTahvilGenel.fz > 15 && duzenTahvilGenel.folded >= 9 && /^Tümü \(\d+\)$/.test(duzenTahvilGenel.all), duzenTahvilGenel);
+    await open(page, 'manuel');
+    const duzenTahvilMan = await page.evaluate(() => ({ order: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel),
+      periods: document.querySelectorAll('#content .panel[data-panel="B7"] table.grid tr.grow-hidden').length }));
+    check('düzen · Manuel Tahvil: the ISIN first (a strip of its own), "Hedef → temiz fiyat" beside it, the results, then the inputs; the '
+      + 'period table shows its periods and one more', duzenTahvilMan.order.slice(0, 4).join() === 'B2i,B5,B3,B4' && duzenTahvilMan.periods > 20, duzenTahvilMan);
+    await open(page, 'ihale');
+    const duzenTahvilIhale = await page.evaluate(() => document.querySelector('#content .panel[data-panel="H1"] table.grid').__grid.data.c.slice(11, 14).join());
+    check('düzen · Hazine İhalesi: the realized nominal typed after the auction (P) right after the bid\'s result', duzenTahvilIhale === 'L,P,Q', duzenTahvilIhale);
+    await open(page, 'bulk');
+    const duzenTahvilBulk = await page.evaluate(() => [...document.querySelectorAll('#content .panel[data-panel="B1"] table.grid td')]
+      .filter((td) => /Invalid Security/.test(td.textContent)).length);
+    check('düzen · Eurobond Kotaları: the empty row under the list no longer prints "#N/A Invalid Security"', duzenTahvilBulk === 0, duzenTahvilBulk);
+    await open(page, 'calc');
+    const duzenTahvilCalc = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button[role="tab"]')]
+      .map((b) => b.dataset.tab + ':' + b.firstChild.textContent));
+    check('düzen · Hesaplayıcılar: three tabs - Faiz, FX · vol, Tahvil (the one-table Maliyet tab in Tahvil)',
+      duzenTahvilCalc.join('|') === 'conv:Faiz|fx:FX · vol|bond:Tahvil|*:Tümü', duzenTahvilCalc);
+    await open(page, 'motor');
+    const duzenTahvilMotor = await page.evaluate(() => ['B12', 'B18'].map((id) => { const it = window.tto.state.page.items.get(id);
+      return it ? it.el.classList.contains('collapsed') : null; }));
+    check('düzen · Motor: Tatiller (its tab\'s only table) and SONUÇ open - no collapsed stubs', duzenTahvilMotor.join() === 'false,false', duzenTahvilMotor);
 
     // ------------------------------------------------------------------ watch list and alarms
     console.log('watch list and alarms');
@@ -5109,16 +5173,16 @@ async function clipAfter(page, action) {
     // the FX swap side on DİBS ASW's FX swap implied curve - Genel's; the table's note says so)
     const fxCols = await page.evaluate((s) => { const g = document.querySelector(s + ' table.grid').__grid;
       return g.columns.cols.filter((c) => g.columns.hid.has(c.j)).map((c) => c.key); }, rv);
-    check('DİBS RV: its own FX swap columns (BF:BJ) hidden by default, the note pointing to Genel\'s FX swap ASW',
-      fxCols.join() === 'BF,BG,BH,BI,BJ' && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 5 sütun'
+    check('DİBS RV: its own FX swap columns (BF:BJ) and its two helper columns (İşlemiş, Durum - 27.11.2026) hidden by default, the note pointing to Genel\'s FX swap ASW',
+      fxCols.join() === 'Q,BE,BF,BG,BH,BI,BJ' && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 7 sütun'
       && /^BF–BJ .*varsayılan olarak gizli.*Genel/.test(await page.textContent(rv + ' > .note')), fxCols);
     await page.locator(rv + ' tr.hd td', { hasText: 'Kaynak (boş = genel)' }).click({ button: 'right' });
     await page.click('.menu >> text=Sütunu gizle: Kaynak (boş = genel)');
-    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 6 sütun', rv);
+    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 8 sütun', rv);
     check('DİBS RV: a right click on a caption hides its column, the header says so',
-      await colHidden(rv, 1) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 6 sütun');
+      await colHidden(rv, 1) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 8 sütun');
     check('... kept with this user\'s account (by the table and the sheet\'s column), nobody else\'s view changes',
-      JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["BF","BG","BH","BI","BJ","B"]' && (await hiddenOf('mehmet', 'v/dibs/B3')) === undefined);
+      JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["Q","BE","BF","BG","BH","BI","BJ","B"]' && (await hiddenOf('mehmet', 'v/dibs/B3')) === undefined);
     await (await cellHandle(page, 'DİBS RV!A4')).click();
     await (await cellHandle(page, 'DİBS RV!D6')).click({ modifiers: ['Shift'] });
     const visibleCopy = (await page.evaluate(() => window.tto.selectionText(false))).split('\r\n');
@@ -5132,10 +5196,10 @@ async function clipAfter(page, action) {
     check('... and stays hidden when the page is opened again', await colHidden(rv, 1));
     await page.click(rv + ' .colschip');
     await page.locator('.menu label.mcheck').filter({ has: page.locator('.t', { hasText: /^Ad$/ }) }).locator('input').click();
-    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 7 sütun', rv);
+    await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 9 sütun', rv);
     check('"Sütunlar": every column with a tick - untick one and it goes (the list stays open)',
       await colHidden(rv, 2) && await page.locator('.menu label.mcheck').count() >= 60
-      && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["BF","BG","BH","BI","BJ","B","C"]');
+      && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["Q","BE","BF","BG","BH","BI","BJ","B","C"]');
     await page.click('.menu >> text=Tümünü göster');
     await page.waitForFunction((s) => document.querySelector(s + ' .colschip').classList.contains('hidden'), rv);
     check('... "Tümünü göster" brings every column back - the FX swap ones too, and that is kept (the default does not return)',

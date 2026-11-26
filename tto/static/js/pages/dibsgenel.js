@@ -13,6 +13,7 @@ import { num } from '../format.js';
 import { toolsOf } from '../columns.js';
 
 const TAB_TITLE = { dibs: 'RV hesap tablosu', asw: 'ASW hesap tablosu' };
+const FROZEN = 1;                                          // the trading list's columns kept in view: Kâğıt
 
 /** An input of another tab opened there: the page, the panel in view, then the cell selected once the page is ready. */
 export function openInput(ctx, view, panel, ref) {
@@ -50,6 +51,7 @@ export class DibsGenelPage {
     this.charts = {};
     this.mirrorGrids = {};
     this.mirrorHave = {};                                  // key -> {gen, as}: what the browser has of a mirrored panel
+    this.folds = {};                                       // key -> {all, btn}: a mirrored list's rows folded or all shown
     this.build();
   }
 
@@ -142,7 +144,9 @@ export class DibsGenelPage {
     }
   }
 
-  drawTable(data) {
+  drawTable(table) {
+    // (27.11.2026, "Düzen": the bond's name stays in view when the table scrolls sideways - its first column frozen)
+    const data = table && table.rows && !table.fz ? Object.assign({}, table, { fz: FROZEN }) : table;
     if (this.grid) {
       if (!this.grid.update(data)) this.grid.replace(data);
       return;
@@ -194,7 +198,7 @@ export class DibsGenelPage {
   /** A table of a hesap tablosu tab, read-only: a click on one of its inputs opens it in its tab. */
   drawMirror(m, p, e, book) {
     const g = this.mirrorGrids[m.key];
-    if (g) { if (!g.update(e.data)) g.replace(e.data); return; }
+    if (g) { if (!g.update(e.data)) g.replace(e.data); this.foldRows(m, p, g, e.grow); return; }
     clear(p.body);
     const grid = new Grid({ book, data: e.data, editable: false });
     grid.el.classList.add('dg-mirror');
@@ -211,6 +215,39 @@ export class DibsGenelPage {
     const hint = h('div', { class: 'muted dg-hint' }, 'Salt okunur: girdiler (altı çizili hücreler) ' + TAB_TITLE[m.view]
       + ' sekmesinde yazılır - tıklayınca orada açılır.');
     p.body.appendChild(hint);
+    this.foldRows(m, p, grid, e.grow);
+  }
+
+  /**
+   * A mirrored list's rows as its own tab shows them (27.11.2026, "Düzen"): the table's ``grow`` - the switch / pair
+   * rows in use and one empty one (a pair is typed there, in its tab); "Tümü (N)" shows every row, "Dolu satırlar" folds
+   * them again.  Display only: the rows are all there.
+   */
+  foldRows(m, p, grid, spec) {
+    const d = grid.data;
+    if (!spec || !d || !d.c || !d.r) return;
+    const k = this.folds[m.key] || (this.folds[m.key] = { all: false, btn: null });
+    if (!k.btn) {
+      k.btn = h('button', { class: 'iconbtn grow-all dg-fold', type: 'button', id: 'dg-fold-' + m.key,
+        title: 'Bütün satırları göster / yalnızca dolu olanları' });
+      k.btn.addEventListener('click', () => { k.all = !k.all; this.foldRows(m, p, grid, spec); });
+      p.el.querySelector('header').appendChild(k.btn);
+    }
+    const j = d.c.indexOf(spec.key);
+    const first = spec.first || 1;
+    const last = spec.last || Infinity;
+    let filled = first - 1;
+    d.r.forEach((r, i) => {
+      const c = (d.rows[i] || [])[j];
+      if (r >= first && r <= last && c && String(c.t || '').trim()) filled = Math.max(filled, r);
+    });
+    const upto = filled + Math.max(1, spec.extra || 1);
+    const trs = [...grid.el.querySelectorAll('tbody > tr')];
+    trs.forEach((tr, i) => {
+      const r = d.r[i];
+      tr.classList.toggle('grow-hidden', !k.all && typeof r === 'number' && r > upto && r <= last);
+    });
+    k.btn.textContent = k.all ? 'Dolu satırlar' : 'Tümü (' + trs.length + ')';
   }
 
   destroy() {

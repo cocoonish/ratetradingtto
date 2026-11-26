@@ -125,7 +125,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tek OIS spread'i", "Forward hesaplayıcıları iki yönlü", "EK_TARIH", "TARİH ARASI iki yönlü",
                                                    "VİOP hedef fiyatı", "EK_VFRA"] + [
                                                    # (two-way: each calculator by itself, the VİOP target)
-                                                   t.name for t in extras.TW_HUBS] + [extras.VT_NAME,
+                                                   t.name for t in extras.TW_HUBS] + [extras.VT_NAME, extras.CALC_BAND_NAME,
                                                    "EK_RET", "Eğri interpolasyonu", "Masa offshore 2Y sonrası",
                                                    "Normalleşme anahtarı", "Normalleşme kullanılan tarih",
                                                    "Normalleşme PPK modeli",

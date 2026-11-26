@@ -2748,3 +2748,64 @@ columns, the legend, KISAYOLLAR), `tto/static/js/ui.js` (`fitOneLine`, `watchWid
 ids), `tto/static/js/main.js` and `index.html` (the top bar, the user's menu), `tto/static/css/app.css` (`--body-max`,
 `.vhead` / `.ttl`, `.panel.fit`, `.stack`, `.note.clamp`, `td.ovw`, the top bar). Tests: `tests/test_duzen_cekirdek.py`;
 the browser test's `duzenL1` checks.
+
+#### Düzen: tahvil sayfaları, Hesaplayıcılar, Motor
+
+The bond pages, Hesaplayıcılar and Motor of the 22 layout proposals (27.11.2026; the desk: "Hepsini yap" - the section
+above has its words and the list). Where things are and how they read only: no value changes, every input in its own cell,
+panel and DOM ids kept, everything hidden one click away, no new Bloomberg request.
+
+- **The panel acted on first comes first (12).** Kâğıt Fiyat Yükleme: İhale fiyatları (İhale mode), Fiyatlar · t0 and
+  Dosya first, then the desk's list, Sabit fiyatlar and the labels - those four at their natural width (`.fit`), side by
+  side when they fit (it was the 4th of six full-width panels, y=947). Manuel Tahvil: the ISIN a strip of its own
+  (`B2i`, `A17:C17` - Girdiler is `A2:C16` now), the page's first panel, "Hedef → temiz fiyat" beside it, then Sonuç, Ek
+  sonuçlar, the DV01 strip, Girdiler, the period table, the notes (the title note last). DİBS Trading: today's trades
+  (`L3`) above Valörler. Kâğıt Fiyatlama: the desk's table first - the seven-line explanation folded to two lines
+  ("devamı", kept per browser), the quote widths a chip of the rules line ("Kotasyon genişliği: ≤1Y 10,0 · … bp ✎")
+  whose click opens their table (`#kf-widths`, the administrators' boxes and Kaydet) under it.
+- **Identifier columns frozen (3)**, with duzen-cekirdek's `"freeze": n`: DİBS RV's main table 2 (ISIN, Kaynak - "Ad",
+  TURKIYE GOVERNMENT BOND on every row, scrolls now), DİBS ASW's table 1 (ISIN), Eurobond Kotaları 2 (ISIN,
+  Description), DİBS Trading's summary 2 (★, Kâğıt); DİBS RV · Genel's table its first column (Kâğıt; the page's own
+  Grid, `fz`). A user's own column order still wins (the frozen block is what stays first).
+- **Rows without a bond folded (4)** with the existing `"grow"` (the rows in use and one empty row to type into; "+ Satır",
+  "Tümü (N)"): DİBS RV's main table (31 of 50 rows empty; its inner scroll goes at 1920), SWITCH / PAIR (and its copy on
+  Genel, folded the same way by `dibsgenel.js`, "Tümü (N)" in its header), Manuel Tahvil's period table (6 of 40 rows).
+  `"grow"`, not `"bonds"`: the main table keeps the desk's own order and the empty rows between its groups, and an ISIN is
+  still typed into the row after the last bond.
+- **Hazine İhalesi (13):** the three 17-column tables show the realized nominal typed after the auction (`P`) and the one
+  used (`Q`) right after the bid's result (`L`), the comparisons with the auction's average after them (`"cols"`) - `P`
+  was cut off at the right (227 px at 1920).
+- **Eurobond Kotaları (18):** the workbook's own four rows (3..6) ask nothing while their ISIN is empty, as the rows the
+  dashboard added below them (`IF(TRIM($A6&"")="","",…)` around their Bloomberg cells, `B` and `K:V`); the value Excel saved
+  for such a row's Bloomberg cells is not kept (offline the row is empty as the rows below). The empty row under the list -
+  the one the page shows to type a new ISIN into - printed "#N/A Invalid Security" in every cell (the dealers' columns
+  ~131 px wide) and asked Bloomberg for a security of no ISIN ("Corp": the description and twelve dealer quotes, once a
+  day): it is empty now and asks nothing - fewer requests, none new. A row with an ISIN reads exactly as before.
+- **Hesaplayıcılar (16):** three tabs - Faiz (Ana girdiler, Exponential, Simple, Basit → Bileşik, Bileşik → Basit, DF to
+  Rate), FX · vol (Implied Move, Forward Volatility, Yıllık getiriden forward fiyat, İki fiyat arası yıllık getiri), Tahvil
+  (TLREF Spread, TÜFE'ye endeksli, Ağırlıklı ortalama · maliyet) - no more one-table Maliyet tab (the tab ids `conv` and
+  `bond` kept; a user whose open tab was Maliyet gets Faiz). Ana girdiler's three rows without a caption are named as their
+  two-way group names them - Gün (`Z6`), Fark (Forward − Spot) (`Z11`), Puan (`Z12`) - and **read alike (9)**: the
+  difference with 4 decimals as the spot and the forward (it read "9", rounded to a whole lira), the points whole and
+  thousands separated as the Forward page's (it read "94043,19612"). Number formats only (`extras._tto_calc_band`): the
+  values, what is typed and the formulas are the workbook's.
+- **Motor:** Tatiller - its tab's only table - and SONUÇ open (they were collapsed stubs); SONUÇ's first 24 rows with
+  "Tümü" (duzen-cekirdek's `"limit"`).
+- **One-row strips compact:** DİBS RV's DV01 strip right after Ayarlar, beside the two ASW curve read-outs (four one-row
+  panels on two rows instead of three at 1920), and the strips at their natural width (`"fit": true`: DİBS RV's DV01 and
+  ASW curve read-outs, Tüm Kâğıtlar' two settings, Manuel's DV01 strip). Stacking (`sections[].panels` arrays) is not used:
+  DİBS RV and Manuel have no tabs, Hesaplayıcılar' tabs fit by their order.
+- **Columns hidden by default (19)** - DİBS RV's main table (`v/dibs/B3`), the only table of these pages that got any:
+  `Q` İşlemiş (valör) - the accrued interest, Kirli (valör) − Kullanılan temiz beside it - and `BE` Durum - where the
+  bond's cash flows were built (BBG CF / takvim 182g / iskontolu) or why they were not - beside `BF:BJ` (its FX swap side
+  on the offshore ICAP curve, hidden by default before: see the FX swap curve's decision above). Not hidden: every yield, price, spread, ASW, Z, carry, risk figure,
+  range and signal; "Ad"; the value date; the price status. A user who already chose this table's columns keeps the choice.
+
+Code: `tto/views/58_kagitlar.json`, `60_dibs.json`, `60_dibslive.json`, `61_asw.json`, `62_manuel.json`, `63_ihale.json`,
+`64_bulk.json`, `90_calc.json`, `98_motor.json`; `tto/extras.py` (`_tto_bulk_bond`, `BULK_BOND_ASKS`; `CALC_BAND_*`,
+`_tto_calc_band`); `Service.DEFAULT_HIDDEN_COLUMNS`; `pages/kagitfiyat.js`, `fiyatyukleme.js`, `dibsgenel.js`; the
+"Tahvil düzen" block at the end of `app.css`. Tests: `tests/test_duzen_tahvil.py`; `test_views.py` (the calculators' tabs,
+Manuel's ISIN strip in NAMED), `test_columns.py` (the defaults), `test_extras.py` (the new addition); the browser test's
+"düzen ·" checks, its Kâğıt Fiyatlama width check (the chip first), its DİBS RV default-hidden counts and Kâğıt Fiyat
+Yükleme's "keeps its place" check (the list, under Fiyatlar · t0 now, brought into view before it is measured: the click
+on a row's spread scrolled the page to it).

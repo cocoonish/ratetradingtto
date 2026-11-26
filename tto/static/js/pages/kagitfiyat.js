@@ -29,6 +29,16 @@ const HEAD_LINE = 'Fiyatı olmayan kâğıtlara eğriden fiyat: masanın listesi
   + 'trading listesindeki kâğıtlar için tabloda. Getiriler BIST bileşik, fiyat valörde temiz. ▸ ayrıntılar: adil, kota, iyi seviyeler, σ, '
   + 'geri test, piyasa, nasıl fiyatlandı.';
 
+const HEAD_PREF = 'tto.kf.head';                      // "1": the user opened the explanation (kept in the browser)
+
+function pref(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function setPref(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ }
+}
+
 function panel(id, title, note) {
   const body = h('div', { class: 'body' });
   const el = h('section', { class: 'panel wide', id }, h('header', null, h('h2', null, title)), body,
@@ -56,9 +66,28 @@ export class KagitFiyatPage {
     tools.append(h('b', null, 'Kâğıt Fiyatlama'), this.info, h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Öngörülen ufku'), this.ufuk,
       h('span', { class: 'muted', id: 'kf-time' }));
     this.host.appendChild(tools);
-    this.host.appendChild(h('p', { class: 'kf-head-line', id: 'kf-head-line' }, HEAD_LINE));
+    // (27.11.2026, "Düzen": the explanation folded to two lines - "devamı" opens it -, the quote's widths a chip of the
+    // rules line whose click opens their table under it: the desk's table first on the page)
+    const head = h('p', { class: 'kf-head-line', id: 'kf-head-line' }, HEAD_LINE);
+    const more = h('button', { class: 'linkbtn kf-head-more', type: 'button', id: 'kf-head-more' });
+    const fold = (folded) => {
+      head.classList.toggle('kf-fold', folded);
+      more.textContent = folded ? 'devamı' : 'kısalt';
+      more.title = folded ? 'Açıklamanın tamamı' : 'Açıklamayı iki satıra indir';
+    };
+    fold(pref(HEAD_PREF) !== '1');
+    more.addEventListener('click', () => {
+      const folded = !head.classList.contains('kf-fold');
+      fold(folded);
+      setPref(HEAD_PREF, folded ? '0' : '1');
+    });
+    this.host.appendChild(h('div', { class: 'kf-head' }, head, more));
     this.rules = h('div', { class: 'chips kf-rules', id: 'kf-rules' });
     this.host.appendChild(this.rules);
+    this.widths = panel('kf-widths', 'Kotasyon genişliği (bp, bid ile ask arası)');
+    this.widths.el.classList.add('hidden');
+    this.widthsOpen = false;
+    this.host.appendChild(h('div', { class: 'panels kf-widths-box' }, this.widths.el));
     const panels = h('div', { class: 'panels' });
     this.table = panel('kf-panel', 'Masanın kâğıtları · piyasa, eğri, fiyat, öngörülen, OIS ve FX swap\'a göre (▸ ayrıntılar: adil, kotan, iyi seviyeler)',
       'Ayrıntılar (▸): Adil getiri: tabanlar (komşu eğri: trading listesinin diğer sabit kuponlularına uydurulan Nelson-Siegel eğrisi, kâğıt dışarıda; OIS: '
@@ -68,8 +97,7 @@ export class KagitFiyatPage {
       + '(basit yanında), fiyat DİBS RV valöründe temiz (öngörülen: ufkun valöründe). Al: getiri adil + 2σ ya da üstünde (ucuz); Sat: adil − 2σ ya da '
       + 'altında (pahalı); ±1σ gürültü. σ kâğıdın son 60 kapanıştaki sonraki-gün hatası, kovanın tabanıyla. Piyasa: Broker Chat tahtasının en iyi taze '
       + 'bid / offer\'ı ve Bloomberg canlı bid / ask (DİBS RV), adilden σ cinsinden. Hücrelerin üzerine gelince hesabı; ▸ kâğıt kartı.');
-    this.widths = panel('kf-widths', 'Kotasyon genişliği (bp, bid ile ask arası)');
-    panels.append(this.table.el, this.widths.el);
+    panels.append(this.table.el);
     this.host.appendChild(panels);
     bondCardLinks(this.ctx, this.table.body);
   }
@@ -140,6 +168,24 @@ export class KagitFiyatPage {
       title: 'Kova ve ufuk başına, masanın geçmişinde (' + (pj.source || '') + ') "değişmez"i RMSE\'de en az %' + Math.round((pj.beat || 0.05) * 100)
         + ' yenen en iyi model; yenen yoksa eğri ve fark değişmezse. Modeller: ' + Object.entries(pj.models || {}).map(([k, v]) => k + ' ' + v).join(' · ') },
       'Öngörülen (' + hzText + '): ', h('b', null, models.join(' · '))));
+    // the quote's width by bucket (the administrators'): a click opens its table - the boxes and Kaydet for them
+    const wd = d.widths || {};
+    const said = wd.by ? 'Son değişiklik: ' + wd.by + ' · ' + (wd.at || '') : 'Varsayılan: her kovada 10 bp';
+    const chip = h('button', { type: 'button', class: 'chip kf-width-chip' + (this.widthsOpen ? ' on' : ''), id: 'kf-widths-chip',
+      title: 'Kotasyon genişliği: bid ile ask getirisi arası, vade kovası başına (bp). ' + said
+        + (d.admin ? '. Tıklayın: değiştirin' : '. Genişliği yöneticiler değiştirir') },
+    'Kotasyon genişliği: ', h('b', null, (r.buckets || []).map((b) => b.text + ' ' + num(wd[b.key], 1, false)).join(' · ') + ' bp'),
+    d.admin ? ' ✎' : '');
+    chip.addEventListener('click', () => this.showWidths(!this.widthsOpen));
+    this.rules.appendChild(chip);
+  }
+
+  /** The quote's widths' table under the rules line, open or closed (its chip lit while it is open). */
+  showWidths(open) {
+    this.widthsOpen = !!open;
+    this.widths.el.classList.toggle('hidden', !this.widthsOpen);
+    const chip = document.getElementById('kf-widths-chip');
+    if (chip) chip.classList.toggle('on', this.widthsOpen);
   }
 
   /** The main table: every fixed coupon bond, bill and zero coupon bond of the desk's list - Piyasa, Eğri, Fiyat with its

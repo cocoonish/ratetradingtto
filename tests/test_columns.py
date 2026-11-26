@@ -59,12 +59,12 @@ def test_dibs_rvs_own_fx_swap_columns_are_hidden_until_a_user_shows_them(service
     view changes.  Nothing of the sheet changes: the cells are there, their values the workbook's."""
     a = service.login("FX Sütun Ayşe")["user"]
     b = service.login("FX Sütun Mehmet")["user"]
-    assert service.DEFAULT_HIDDEN_COLUMNS["v/dibs/B3"] == ("BF", "BG", "BH", "BI", "BJ")
+    assert service.DEFAULT_HIDDEN_COLUMNS["v/dibs/B3"] == ("Q", "BE", "BF", "BG", "BH", "BI", "BJ")
     assert service.columns(a)["defaults"] == DEFAULTS
     note = next(p for p in service.view(a, "dibs")["panels"] if p["id"] == "B3").get("note") or ""
     assert note.startswith("BF–BJ") and "varsayılan olarak gizli" in note and "Genel" in note and "FX swap ASW" in note
     service.set_columns(a, "v/dibs/B3", DEFAULTS["v/dibs/B3"] + ["B"])                  # (the page sends what it hides now)
-    assert service.columns(a) == _answer({"v/dibs/B3": ["BF", "BG", "BH", "BI", "BJ", "B"]})
+    assert service.columns(a) == _answer({"v/dibs/B3": ["Q", "BE", "BF", "BG", "BH", "BI", "BJ", "B"]})
     service.set_columns(a, "v/dibs/B3", [])
     assert service.columns(a) == _answer({"v/dibs/B3": []}) and service.store.get("cols." + a) == {"v/dibs/B3": []}
     assert service.columns(b) == {"tables": {}, "defaults": DEFAULTS}

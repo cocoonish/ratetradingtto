@@ -178,22 +178,9 @@
    "hidden": false
   },
   {
-   "id": "B2",
-   "type": "table",
-   "title": "ASW eğrisi",
-   "range": "A3:G3",
-   "hidden": false
-  },
-  {
-   "id": "B2b",
-   "type": "table",
-   "title": "ASW eğrisi · FX swap (offshore ICAP eğrisi)",
-   "range": "BF3:BJ3",
-   "keep_title": true
-  },
-  {
    "id": "B3D",
    "type": "table",
+   "fit": true,
    "sheet": "OIS_MAIN",
    "range": "E2:H2",
    "hidden": false,
@@ -202,15 +189,38 @@
    "title": "DV01/bacak $ ve yuvarlama  ·  tablodaki OIS hedge nominali bunlarla (OIS sayfasının girdileri)"
   },
   {
+   "id": "B2",
+   "type": "table",
+   "fit": true,
+   "title": "ASW eğrisi",
+   "range": "A3:G3",
+   "hidden": false
+  },
+  {
+   "id": "B2b",
+   "type": "table",
+   "fit": true,
+   "title": "ASW eğrisi · FX swap (offshore ICAP eğrisi)",
+   "range": "BF3:BJ3",
+   "keep_title": true
+  },
+  {
    "id": "B3",
    "type": "table",
    "title": "DİBS göreli değer tablosu",
    "range": "A4:BQ54",
+   "freeze": 2,
+   "grow": {
+    "key": "A",
+    "first": 5,
+    "extra": 1,
+    "last": 54
+   },
    "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "BO", "U", "BP", "V", "BQ",
             "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR",
             "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH", "BI", "BJ"],
    "hidden": false,
-   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ. ON karşılık % (getirinin yanında; Alış / Satış ON % alış / satış getirisinin yanında): getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde bileşik (ACT/365; hafta sonu ya da tatilde son iş gününün faizi aradaki günler için tek adımda), TLREF ve repoyla doğrudan karşılaştırılır. Getiri önce kendi kuralıyla pencerenin büyümesine çevrilir (bono: basit ACT/365, 100 / fiyat; sabit kuponlu: BIST getirisi, yılda kupon sayısı kadar bileşik, vadeye kalan dönem kadar), sonra o büyümeyi veren ON'a. Sabit kuponlu ve bonoda; TLREF'li, FRN ve TÜFE'lide boş.",
+   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ. Yardımcı iki sütun da varsayılan olarak gizli: İşlemiş (valör) - kirli ile kullanılan temiz fiyatın farkı, Kirli (valör) yanında - ve Durum (kâğıdın nakit akışının nereden kurulduğu: BBG CF, takvim, iskontolu; hesaplanamıyorsa nedeni); Sütunlar'dan bir tıkla gelir. ON karşılık % (getirinin yanında; Alış / Satış ON % alış / satış getirisinin yanında): getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde bileşik (ACT/365; hafta sonu ya da tatilde son iş gününün faizi aradaki günler için tek adımda), TLREF ve repoyla doğrudan karşılaştırılır. Getiri önce kendi kuralıyla pencerenin büyümesine çevrilir (bono: basit ACT/365, 100 / fiyat; sabit kuponlu: BIST getirisi, yılda kupon sayısı kadar bileşik, vadeye kalan dönem kadar), sonra o büyümeyi veren ON'a. Sabit kuponlu ve bonoda; TLREF'li, FRN ve TÜFE'lide boş.",
    "action": "add-isin",
    "add": {
     "list": "A5:A54",
@@ -293,6 +303,12 @@
    "type": "table",
    "title": "SWITCH / PAIR",
    "range": "A62:AA78",
+   "grow": {
+    "key": "A",
+    "first": 64,
+    "extra": 1,
+    "last": 75
+   },
    "hidden": false
   },
   {
