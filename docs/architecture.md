@@ -107,6 +107,15 @@ priority:
 - **Which cells are inputs** is declared by the view JSON's `inputs[]` (`Service._setup`), so editing a view JSON
   changes which cells can be typed in.
 - **Delete in a table** (`grid.js` `clearSelectionValues`) is the same write with blank values, not `/api/reset`.
+- **A tick box** (`"kind": "check"` in the view's `inputs[]`; the first: OIS · PPK's normalization tenors,
+  `OIS_MAIN!AP9:AP13`, 26.11.2026): its value is 1 (ticked) or 0 - `inputs.parse_check` takes 1 / 0, TRUE / FALSE,
+  "evet" / "hayır", "x" / "✓" and refuses the rest; `Renderer.cell` sends it with `ik: "check"`; the grid draws an
+  `input.tick` for it (`grid.js` `fillCell`) and a click - or Enter, F2, Space, a double click on the cell (`toggleTick`)
+  - writes "1" / "0" through `POST /api/inputs`, as a value typed (per user or shared as declared; scenarios, "Girdilerim",
+  pastes as for any input). Give it a formula default (`=1` / `=0`): Delete then takes it back to that default (a constant
+  cell would go blank). **A tick box that reads nothing is not offered** (`Renderer.cell` drops its `i`): a conditional
+  number format ";;;" (`SheetBuilder.number_format_if`) hides it while its block is switched off, and an empty column
+  then leaves the table.
 - **Order:** the browser sends each write at once, without waiting for the one before (a cell typed shows its text
   until the refresh comes). They are applied in the order they reach the engine queue (`tests/test_scenario_order.py`,
   `tests/test_page_after_write.py`).
@@ -327,6 +336,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | EK_PPK | tto | OIS · PPK's ways back: a meeting window's rate / an MPC spread typed -> the PPK step it prices (Broker Chat's implied step, cell for cell). Its typed and computed columns are bands of `meetings.TCMB` (row 3 + k: meeting slot k). Two-way: a window's O/N or step, a pair's later rate, O/N or step typed instead (stores `Y:Z`, `AA:AC`, typed bands too). Formula-only beside it: "FRA ikinci bacak" (`OIS_MAIN!U335:W438`; the FRA list two-way too: the end leg's fill or the FRA, store `OIS_MAIN!BG336:BG438`) and, in book `sofr`, "FOMC pencere OIS'ten adım" (`SOFR_FOMC!AA72:AE83`, bands of `meetings.FED`; two-way: its O/N or step and WIRP's difference typed instead, stores `AG:AJ`) |
 | EK_INTERP | tto, asw | the Bootstrap / PPK switch and the PPK cells (see [curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)) |
 | EK_ISGUNU | tto | the TRY holiday list's pieces of TLREF's weekend / holiday term W, for a window past Motor's daily calendar (OIS spot + 3700 days): each week-day holiday listed once, its p, a Friday's p again (`extras.try_term`: a bond's O/N equivalent, DİBS RV `BO:BQ` - [curves.md](curves.md#meeting-steps-from-a-rate)); shown as a hidden helper table of the DİBS RV page ("isg") |
+| EK_NORM | tto | TLREF's normalization (v2): every business day tried as the day TLREF is normal again against the ticked 1W … 3M OIS quotes, the levels after the meetings inside fitted (`extras._tto_norm_walk`; [curves.md](curves.md#tlref-normalleşmesi-the-date-ois-implies)); no page (the sheet explorer): its result is OIS_MAIN's block right of STUB İMA (`AO8:AS15`, tick boxes `AP9:AP13`), empty while the switch `OIS_MAIN!L2` is off, and the date in use `OIS_MAIN!L5`'s fallback |
 | EK_FX | asw | the offshore rates ASW FX is built on |
 
 Formula-only additions (no sheet) are in `_BUILDERS` too: OIS spot date, FX value dates, DV01, the calculators' ways back

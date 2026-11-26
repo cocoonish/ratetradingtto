@@ -307,6 +307,13 @@
    "label": "'Elle spread (bp)': an MPC spread typed (the later window − the earlier, bp), to read the later window's rate and the PPK step it prices (goes with its meeting; two-way: formula default - the spread the later rate, O/N or step typed in its row gives)"
   },
   {
+   "range": "AP9:AP13",
+   "scope": "user",
+   "group": "ois-norm-walk",
+   "kind": "check",
+   "label": "'Seç' of OIS ima normalleşme (right of STUB İMA, shown while the normalization switch L2 is Açık): the tenor's quote (1W, 2W, 1M, 2M, 3M) is fitted to find the date OIS implies - a tick box: 1 ticked, 0 not (default 1W, 2W, 1M)"
+  },
+  {
    "range": "AE81:AG81",
    "scope": "shared",
    "group": "ois-33",
@@ -479,7 +486,7 @@
    "id": "B6",
    "type": "table",
    "title": "STUB İMA (spot → MPC1)",
-   "range": "AJ8:AN15",
+   "range": "AJ8:AS15",
    "hidden": false
   },
   {

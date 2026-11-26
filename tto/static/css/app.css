@@ -404,6 +404,9 @@ table.grid td.in.ff:not(.nt)::before { content: "ƒ"; position: absolute; top: 1
 table.grid td.in.sh.ff:not(.nt)::before { color: var(--shared-line); }
 table.grid td.in.hand.ff:not(.nt)::before { color: var(--hand-line); }
 table.grid td.in.ff.ffe:not(.nt)::before { color: var(--neg); opacity: 1; }      /* (stopped, or its value an error) */
+/* a tick box ("kind": "check": 1 ticked, 0 not) - a click ticks it; its default as the workbook's, a dot once changed */
+table.grid td.in.check { cursor: pointer; text-align: center; }
+table.grid td.in.check input.tick { margin: 0; cursor: pointer; vertical-align: middle; accent-color: var(--accent); }
 /* a two-way table's row (tto/twoway.py): the value typed (✎ in place of the dot, bold) - the row's others come from it */
 table.grid td.in.anchor { font-weight: 700; }
 table.grid td.in.anchor.mod::after { content: "✎"; top: 0; right: 2px; width: auto; height: auto; border-radius: 0; background: none;

@@ -7526,6 +7526,332 @@ def _tto_norm_ppk(model: Model) -> None:
     masa = SheetBuilder(model, "MASA")
     for addr in NORM_MASA:
         masa.patch(addr, "=" + _NORM_J2.sub("IF(OIS_MAIN!$M$2=1,OIS_MAIN!$M$4,$J$2)", formula_of(model, "MASA", addr)))
+# ---------------------------------------------------------------------------------------------- OIS · PPK: the date OIS implies for TLREF's normalization
+#: TLREF's normalization, v2 (the desk, 26.11.2026; docs/desk-decisions.md, docs/curves.md): TCMB paused its one-week repo
+#: auctions, so TLREF (OIS_MAIN!J2, H) sits above its normal level (OIS_MAIN!L4, L0 - the switch's builder's: the policy
+#: rate − 15 bp until one is typed).  "Ois'in imply ettigi normallesme noktasini da bulacagiz ... gunluk 1w 2w 1m hepsine
+#: bakip gunluk gunluk yurutup bulacagiz" and "implied rate cutlarda 1m-2m'yi secebildigim gibi vadeleri de tikleyip secip
+#: ona gore ilerleyebilmeliyim 1w 2w dahil": the day N on which TLREF is normal again, as the short OIS quotes the user
+#: ticks price it - found by trying every day.
+#:
+#: * **The days tried.** Every TRY business day after the OIS spot (OIS_MAIN!B2; Motor's daily calendar, the TRY holiday
+#:   list) before the end of the longest ticked tenor - and that end itself, "sonrası": the ticked tenors priced with the
+#:   gap all the way (any later N prices them the same, so it stands for all of them).
+#: * **The path for a day N.** The normal path plus the gap H − L0 before N.  The normal path is L0 up to the first PPK
+#:   meeting inside the ticked tenors (its effective day, Motor!C5:C84), then a level of its own after each such meeting
+#:   (``NW_SEGS`` at most) - unknown, set by least squares over the ticked tenors: one Gauss-Newton step from L0 on the
+#:   misses measured on ln G (each weighted by 365/T + q: a rate's miss to the first order), then one on the rate misses
+#:   themselves; a ridge of ``NW_RIDGE`` leaves a level that no ticked tenor sees where it was.
+#: * **Compounding as the MPC ima model's.** ln G over d days at an O/N x = d·ln(1 + x/365) − W·(x/365)², W Motor's Pcum
+#:   (Motor!F528:F4228) at the piece's end − at its start; a tenor is a zero-coupon simple ACT/365 rate, (G − 1)·365/T -
+#:   1W 7 and 2W 14 days as the solver counts them (Motor!B4306 / B4307), 1M-3M OIS_MAIN!E442:E444 - and its quote the
+#:   solver's own (OIS_MAIN!AU13 / AU14, D442:D444).
+#: * **The date.** The day with the smallest sum of squared rate misses - the earliest on a tie (``NW_TIE``: the sums the
+#:   same to (0,0001 bp)²; a tie is said).  None when the ticked tenors are no more than the unknown levels (the message
+#:   says how many to tick), or when "sonrası" fits best: "normalleşme seçili vadelerin sonrasında".
+#:
+#: The helpers are on ``EK_NORM`` (no page: the sheet explorer shows it); the result sits right of STUB İMA (OIS_MAIN!AO8:AS15,
+#: in its panel - no new panel): per tenor its tick box (a per-user input of kind "check", tto/views/__init__.py - default 1W,
+#: 2W, 1M ticked), its quote, the model's rate at the date and the miss (bp); the date; a message.  OIS_MAIN!L5 - the date
+#: in use, the switch's builder's - takes the OIS-implied date when no date is typed (L3).  While the switch OIS_MAIN!L2 is
+#: not "Açık" the block is empty (its tick boxes hidden by a conditional number format: ``Renderer.cell`` offers no tick
+#: box that reads nothing) and nothing reads EK_NORM: no cell of before changes.  Nothing is kept per meeting row: the
+#: meetings are read from Motor's table, so a calendar change moves nothing.  No Bloomberg request of its own.
+NW_SHEET = "EK_NORM"
+NW_NAME = "Normalleşme OIS ima tarihi"
+NW_SWITCH, NW_OPEN = "$L$2", "Açık"          # OIS_MAIN: the switch (Kapalı / Açık) and its "on"
+NW_ON = '%s="%s"' % (NW_SWITCH, NW_OPEN)     # (on OIS_MAIN; EK_NORM reads it as OIS_MAIN!…)
+#: (label, days, quote, ticked by default)
+NW_TENORS = (("1W", 7, "OIS_MAIN!$AU$13", 1), ("2W", 14, "OIS_MAIN!$AU$14", 1),
+             ("1M", "OIS_MAIN!$E$442", "OIS_MAIN!$D$442", 1), ("2M", "OIS_MAIN!$E$443", "OIS_MAIN!$D$443", 0),
+             ("3M", "OIS_MAIN!$E$444", "OIS_MAIN!$D$444", 0))
+#: the block on OIS_MAIN, right of STUB İMA (AJ8:AN15): captions in row 8, a tenor a row from 9, the date, the message
+NW_BLOCK = "AO8:AS15"
+NW_LABEL, NW_TICK, NW_QUOTE, NW_MODEL, NW_MISS = "AO", "AP", "AQ", "AR", "AS"
+NW_HEAD, NW_FIRST_TENOR, NW_DATE_ROW, NW_MSG_ROW = 8, 9, 14, 15
+NW_TICKS = "%s%d:%s%d" % (NW_TICK, NW_FIRST_TENOR, NW_TICK, NW_FIRST_TENOR + len(NW_TENORS) - 1)
+NW_USED = "L5"                               # the date in use (the switch's builder's; the OIS-implied date its fallback)
+NW_SEGS = 3                                  # the meetings inside the ticked tenors whose normal level is fitted, at most
+NW_ROWS = 80                                 # business days tried (3M with a bayram: ~72 before its end)
+NW_RIDGE = "1E-12"
+NW_TIE = ("1E-9", "1E-16")                   # (relative, absolute): misses the same within these are a tie
+# EK_NORM's rows: the parameters (B4:B13) and the result (E4:E13); the tenors (16 …), the segments (24 …: L0's from the
+# spot, then one from each meeting inside the ticked tenors), the days tried (business day k on row 30 + k, "sonrası" last)
+NW_T, NW_S, NW_R = 16, 24, 31
+NW_AFTER = NW_R + NW_ROWS                    # the row of "sonrası"
+#: per segment s (0: L0's, 1-3: after a meeting): the tenor table's columns of its days within the tenor and their W
+NW_SEG_COLS = (("J", "K"), ("L", "M"), ("N", "O"), ("P", "Q"))
+
+
+def _nw_columns() -> Dict[str, List[str]]:
+    """The columns of the days tried, from F: the first step's misses (on ln G) and derivatives (a level's over the five
+    tenors, level by level) and its levels; the second step's growths, misses (rate), derivatives and levels; the model's
+    rates at those levels, the sum of squared misses, the day when it ties the best."""
+    out: Dict[str, List[str]] = {}
+    i = 6
+    for name, n in (("e1", 5), ("j1", 15), ("x1", 3), ("g2", 5), ("e2", 5), ("j2", 15), ("x2", 3), ("rate", 5), ("ssr", 1),
+                    ("tie", 1)):
+        out[name] = [index_to_col(i + k) for k in range(n)]
+        i += n
+    return out
+
+
+NW_COLS = _nw_columns()
+
+
+def _nw_lng(t: int, r: int, xs: Sequence[str]) -> str:
+    """ln G of the tenor on EK_NORM's row ``t`` for the day tried on row ``r`` at the levels ``xs`` (L0's, then the three
+    fitted): each segment's days before N at its level + the gap, the rest at its level, each piece d·LN(1 + x/365) −
+    W·(x/365)² (Motor's compounding; W from Pcum: N's own, ``$E``, or the segment's ends)."""
+    lets = ["n_,$B%d" % r, "g_,$B$8", "m_,MIN(n_,$C$%d)" % t, "p_,IF(n_<$C$%d,$E%d,$H$%d)" % (t, r, t)]
+    terms = []
+    for s in range(NW_SEGS + 1):
+        a, b, pa, pb = ("$%s$%d" % (c, NW_S + s) for c in "BCDE")
+        f = {"s": s, "x": xs[s], "L": "$%s$%d" % (NW_SEG_COLS[s][0], t), "W": "$%s$%d" % (NW_SEG_COLS[s][1], t)}
+        lets.append("d_%d,MAX(0,MIN(%s,m_)-%s)" % (s, b, a))
+        lets.append("w_%d,IF(m_<=%s,0,IF(m_>=%s,%s-%s,p_-%s))" % (s, a, b, pb, pa, pa))
+        terms.append("d_%(s)d*LN(1+(%(x)s+g_)/365)-w_%(s)d*((%(x)s+g_)/365)^2+(%(L)s-d_%(s)d)*LN(1+%(x)s/365)"
+                     "-(%(W)s-w_%(s)d)*(%(x)s/365)^2" % f)
+    return "LET(%s,%s)" % (",".join(lets), "+".join(terms))
+
+
+def _nw_dlng(t: int, r: int, s: int, x: str) -> str:
+    """∂ ln G / ∂ (segment ``s``'s level, at ``x``) of the tenor on row ``t`` for the day tried on row ``r``."""
+    a, b, pa, pb = ("$%s$%d" % (c, NW_S + s) for c in "BCDE")
+    f = {"r": r, "t": t, "a": a, "b": b, "pa": pa, "pb": pb, "x": x, "L": NW_SEG_COLS[s][0], "W": NW_SEG_COLS[s][1]}
+    return ("LET(n_,$B%(r)d,g_,$B$8,m_,MIN(n_,$C$%(t)d),p_,IF(n_<$C$%(t)d,$E%(r)d,$H$%(t)d),d_,MAX(0,MIN(%(b)s,m_)-%(a)s),"
+            "w_,IF(m_<=%(a)s,0,IF(m_>=%(b)s,%(pb)s-%(pa)s,p_-%(pa)s)),x_,%(x)s,"
+            "d_/(365+x_+g_)-2*w_*(x_+g_)/365^2+($%(L)s$%(t)d-d_)/(365+x_)-2*($%(W)s$%(t)d-w_)*x_/365^2)") % f
+
+
+def _nw_step(r: int, jac: Sequence[str], miss: Sequence[str], x_old: str, s: int) -> str:
+    """Level ``s`` (1-3) after a Gauss-Newton step from ``x_old``: (A + λI)·Δ = g, A = JᵀJ and g = Jᵀe over the five
+    tenors (``jac``: the derivatives level by level, ``miss``: the misses e) - solved by A's cofactors."""
+    j1, j2, j3 = ("%s%d:%s%d" % (jac[5 * k], r, jac[5 * k + 4], r) for k in range(3))
+    e = "%s%d:%s%d" % (miss[0], r, miss[4], r)
+    lets = ["a_11,SUMPRODUCT(%s,%s)+$B$13" % (j1, j1), "a_12,SUMPRODUCT(%s,%s)" % (j1, j2), "a_13,SUMPRODUCT(%s,%s)" % (j1, j3),
+            "a_22,SUMPRODUCT(%s,%s)+$B$13" % (j2, j2), "a_23,SUMPRODUCT(%s,%s)" % (j2, j3),
+            "a_33,SUMPRODUCT(%s,%s)+$B$13" % (j3, j3),
+            "g_1,SUMPRODUCT(%s,%s)" % (j1, e), "g_2,SUMPRODUCT(%s,%s)" % (j2, e), "g_3,SUMPRODUCT(%s,%s)" % (j3, e),
+            "c_11,a_22*a_33-a_23^2", "c_12,a_13*a_23-a_12*a_33", "c_13,a_12*a_23-a_13*a_22", "c_22,a_11*a_33-a_13^2",
+            "c_23,a_12*a_13-a_11*a_23", "c_33,a_11*a_22-a_12^2", "dt_,a_11*c_11+a_12*c_12+a_13*c_13"]
+    num = ("c_11*g_1+c_12*g_2+c_13*g_3", "c_12*g_1+c_22*g_2+c_23*g_3", "c_13*g_1+c_23*g_2+c_33*g_3")[s - 1]
+    return "LET(%s,%s-(%s)/dt_)" % (",".join(lets), x_old, num)
+
+
+def _nw_check(model: Model) -> None:
+    """What the walk reads, as the workbook has it: STUB İMA's panel with the empty block right of it, the 1W / 2W quotes
+    and the solver's 1M-3M rows (their T counted on the TRY list), the solver's 1W / 2W days, Motor's meeting days and
+    daily calendar (Pcum, the next business day); OIS_MAIN!L5 empty or the switch builder's date in use (it reads L3)."""
+    _need_sheets(model, "OIS_MAIN", "Motor")
+    if NW_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % NW_SHEET)
+    _need_captions(model, (("OIS_MAIN", "AJ8", "STUB İMA (spot → MPC1)"), ("OIS_MAIN", "AT13", "1W OIS (TYSO1Z) – sadece stub"),
+                           ("OIS_MAIN", "AT14", "2W OIS (TYSO2Z) – sadece stub"), ("OIS_MAIN", "A442", "1M OIS"),
+                           ("OIS_MAIN", "A443", "2M OIS"), ("OIS_MAIN", "A444", "3M OIS"), ("OIS_MAIN", "D441", "Kota"),
+                           ("OIS_MAIN", "E441", "T (gün)"), ("Motor", "C3", "Etkin gün (ertesi iş günü)"),
+                           ("Motor", "C527", "İş günü"), ("Motor", "F527", "Pcum"), ("Motor", "G527", "Sonraki iş günü")))
+    _need_empty(model, "OIS_MAIN", NW_BLOCK)
+    for k, r in enumerate((442, 443, 444)):
+        _need_formula(model, "OIS_MAIN", "E%d" % r, "WORKDAY(EDATE($B$2,C%d)" % r)
+        _need_formula(model, "OIS_MAIN", "D%d" % r, "Motor!$B$%d" % (306 + k))
+    _need_formula(model, "OIS_MAIN", "AU13")                     # (the 1W / 2W quotes - their source the pricing order's)
+    _need_formula(model, "OIS_MAIN", "AU14")
+    _need_formula(model, "OIS_MAIN", "J2", "BISTTREF")
+    _need_formula(model, "Motor", "B4306", "IF(C4306=1,7,")
+    _need_formula(model, "Motor", "B4307", "IF(C4307=1,14,")
+    for slot in (5, 84):
+        _need_formula(model, "Motor", "C%d" % slot, "INDEX($G$528:$G$4228,MIN(OIS_MAIN!P%d-OIS_MAIN!$B$2+1" % (slot + 5))
+    _need_formula(model, "Motor", "B528", "OIS_MAIN!$B$2+A528")
+    _need_formula(model, "Motor", "F529", "F528+E528")
+    _need_formula(model, "Motor", "G528", "IF(C528=1,A528,G529)")
+    sh = model.sheet("OIS_MAIN")
+    rc = parse_a1(NW_USED)
+    if sh.consts.get(rc) not in (None, "") or (rc in sh.fml and "$L$3" not in formula_of(model, "OIS_MAIN", NW_USED).upper()):
+        raise ValueError("OIS_MAIN!%s boş ya da kullanılan normalleşme tarihi değil" % NW_USED)
+
+
+def _tto_norm_walk(model: Model) -> None:
+    """``EK_NORM``: every day tried as TLREF's normalization day against the ticked short OIS quotes; its result right of
+    STUB İMA (OIS_MAIN!AO8:AS15, empty while the switch is off); the date in use (OIS_MAIN!L5) falls back to it."""
+    b = SheetBuilder(model, NW_SHEET)
+    pct, rate = "0.0000%", "0.000%"
+    b.title("A1", "OIS'İN İMA ETTİĞİ NORMALLEŞME TARİHİ · yardımcı hesap (OIS · PPK → STUB İMA'nın sağı)")
+    b.note("A2", "Spot'tan sonraki her TRY iş günü N denenir (ve seçili en uzun vadenin sonu: \"sonrası\"): TLREF spot'tan N'ye "
+                 "normal + (bugünkü − normal), N'den sonra normal; normal seviye vadelerin içindeki ilk PPK'ya kadar L4, her "
+                 "toplantıdan sonra seçili vadelere en küçük karelerle oturan bir seviye. Seçili vadelerin kotalarına en iyi "
+                 "uyan N (eşitlikte en erken) OIS'in ima ettiği tarihtir. Bileşik: MPC ima modelinin (iş günlerinde, Pcum).")
+    # ---- the parameters
+    params = (("Normalleşme açık (L2 = Açık)", "=IF(OIS_MAIN!%s,1,0)" % NW_ON, "0"),
+              ("OIS spot", "=OIS_MAIN!$B$2", DATE),
+              # (an empty cell is no rate: =L4 alone would read it as 0 %)
+              ("TLREF bugün (H, J2)", '=IF(ISNUMBER(OIS_MAIN!$J$2),OIS_MAIN!$J$2,"")', pct),
+              ("Normal TLREF (L0, L4)", '=IF(ISNUMBER(OIS_MAIN!$L$4),OIS_MAIN!$L$4,"")', pct),
+              ("Fark H − L0", '=IF(AND(ISNUMBER($B$6),ISNUMBER($B$7)),$B$6-$B$7,"")', pct),
+              ("Seçili en uzun vade (gün)", "=MAX($I$%d:$I$%d)" % (NW_T, NW_T + 4), "0"),
+              ("Seçili vade sayısı", "=SUM($E$%d:$E$%d)" % (NW_T, NW_T + 4), "0"),
+              ("Bilinmeyen seviye (vadelerin içindeki PPK)",
+               '=IF($B$9>0,COUNTIFS(Motor!$C$5:$C$84,">0",Motor!$C$5:$C$84,"<"&$B$9),0)', "0"),
+              # 0 off; 1 the days are tried; 2 no H / L0; 3 no tenor ticked (with a quote); 4 over three meetings inside;
+              # 5 no more tenors than unknown levels; 6 more business days before the longest tenor's end than rows
+              ("Durum (0 kapalı, 1 hesap, 2-6 neden yok)",
+               '=IF($B$4<>1,0,IF(NOT(ISNUMBER($B$8)),2,IF($B$10=0,3,IF($B$11>%d,4,IF($B$10<=$B$11,5,'
+               'IF(INDEX(Motor!$G$528:$G$4228,MIN($B$%d,3698)+2)<$B$9,6,1))))))' % (NW_SEGS, NW_AFTER - 1), "0"),
+              ("Sırt (λ)", float(NW_RIDGE), "0.0E+00"))
+    for k, (caption, value, fmt) in enumerate(params):
+        b.set("A%d" % (4 + k), caption)
+        b.set("B%d" % (4 + k), value, fmt=fmt)
+    # ---- the tenors (rows NW_T …): tick, days, quote; used; ln G and weight of the quote; P(T); each segment's days in it
+    b.head("A%d" % (NW_T - 1), ["Vade", "Seçili", "Gün (T)", "Kota", "Kullanılan", "ln G (kota)", "Ağırlık 365/T + q", "Pcum(T)",
+                                "T (kullanılan)"] + [x for s in range(NW_SEGS + 1) for x in ("Gün · %d" % s, "W · %d" % s)])
+    for j, (label, days, quote, _) in enumerate(NW_TENORS):
+        t = NW_T + j
+        f = {"t": t}
+        b.set("A%d" % t, label, bold=True)
+        b.set("B%d" % t, "=IF(N(OIS_MAIN!$%s$%d)=1,1,0)" % (NW_TICK, NW_FIRST_TENOR + j), fmt="0")
+        b.set("C%d" % t, days if isinstance(days, int) else "=" + days, fmt="0")
+        b.set("D%d" % t, '=IF(ISNUMBER(%s),%s,"")' % (quote, quote), fmt=pct)
+        b.set("E%d" % t, "=IF(AND($B$4=1,$B%(t)d=1,ISNUMBER($D%(t)d),N($C%(t)d)>0),1,0)" % f, fmt="0")
+        b.set("F%d" % t, "=IF($E%(t)d=1,LN(1+$D%(t)d*$C%(t)d/365),0)" % f, fmt="0.000000000")
+        b.set("G%d" % t, "=IF($E%(t)d=1,365/$C%(t)d+$D%(t)d,0)" % f, fmt="0.0000")
+        b.set("H%d" % t, "=INDEX(Motor!$F$528:$F$4228,MIN(MAX(N($C%(t)d),0),3700)+1)" % f, fmt="0")
+        b.set("I%d" % t, "=IF($E%(t)d=1,$C%(t)d,0)" % f, fmt="0")
+        for s, (lc, wc) in enumerate(NW_SEG_COLS):
+            g = dict(f, sr=NW_S + s)
+            b.set("%s%d" % (lc, t), "=MAX(0,MIN($C$%(sr)d,$C%(t)d)-MIN($B$%(sr)d,$C%(t)d))" % g, fmt="0")
+            b.set("%s%d" % (wc, t), "=IF($C$%(sr)d<$C%(t)d,$E$%(sr)d,$H%(t)d)-IF($B$%(sr)d<$C%(t)d,$D$%(sr)d,$H%(t)d)" % g, fmt="0")
+    # ---- the segments (rows NW_S …): from the spot (L0's), then from each upcoming meeting's effective day (Motor!C: days
+    # from the OIS spot, 0 a meeting past, 99999 none) - the level of each one after the first fitted when it is inside
+    b.head("A%d" % (NW_S - 1), ["Seviye", "Başlangıç (gün)", "Bitiş (gün)", "Pcum başl.", "Pcum bitiş", "Başlangıç tarihi",
+                                "Seçili vadelerin içinde"])
+    for s in range(NW_SEGS + 1):
+        sr = NW_S + s
+        b.set("A%d" % sr, "L0 (spot'tan)" if s == 0 else "%d. toplantıdan" % s, bold=True)
+        b.set("B%d" % sr, 0 if s == 0 else "=IFERROR(SMALL(Motor!$C$5:$C$84,COUNTIF(Motor!$C$5:$C$84,0)+%d),99999)" % s,
+              fmt="0")
+        b.set("C%d" % sr, "=$B$%d" % (sr + 1) if s < NW_SEGS else 99999, fmt="0")
+        b.set("D%d" % sr, "=INDEX(Motor!$F$528:$F$4228,MIN($B%d,3700)+1)" % sr, fmt="0")
+        b.set("E%d" % sr, "=INDEX(Motor!$F$528:$F$4228,MIN($C%d,3700)+1)" % sr, fmt="0")
+        b.set("F%d" % sr, '=IF($B%d<99999,$B$5+$B%d,"")' % (sr, sr), fmt=DATE)
+        if s:
+            b.set("G%d" % sr, "=IF(AND($B%d>0,$B%d<$B$9),1,0)" % (sr, sr), fmt="0")
+    # ---- the days tried (rows NW_R …, "sonrası" on NW_AFTER)
+    c = NW_COLS
+    head = ["k", "N (gün)", "N", "Denenir", "Pcum(N)"]
+    head += ["e¹ " + x[0] for x in NW_TENORS] + ["J¹ %d·%s" % (s, x[0]) for s in (1, 2, 3) for x in NW_TENORS]
+    head += ["x¹ %d" % s for s in (1, 2, 3)] + ["G² " + x[0] for x in NW_TENORS] + ["e² " + x[0] for x in NW_TENORS]
+    head += ["J² %d·%s" % (s, x[0]) for s in (1, 2, 3) for x in NW_TENORS] + ["x² %d" % s for s in (1, 2, 3)]
+    head += ["Model " + x[0] for x in NW_TENORS] + ["Kare toplamı", "En iyiyle eşit (N)"]
+    b.head("A%d" % (NW_R - 1), head)
+    r = NW_R
+    on = "$D%d<>1" % r
+    b.set("B%d" % r, "=INDEX(Motor!$G$528:$G$4228,2)", fmt="0")                 # the first business day after the spot
+    b.set("B%d" % (r + 1), "=INDEX(Motor!$G$528:$G$4228,MIN($B%d,3698)+2)" % r, fmt="0")      # the next one after
+    b.set("C%d" % r, "=$B$5+$B%d" % r, fmt=DATE)
+    b.set("D%d" % r, "=IF(AND($B$12=1,$B%d<$B$9),1,0)" % r, fmt="0")
+    b.set("E%d" % r, '=IF(%s,"",INDEX(Motor!$F$528:$F$4228,MIN($B%d,3700)+1))' % (on, r), fmt="0")
+    level0 = ["$B$7"] * (NW_SEGS + 1)
+    level1 = ["$B$7"] + ["$%s%d" % (x, r) for x in c["x1"]]
+    level2 = ["$B$7"] + ["$%s%d" % (x, r) for x in c["x2"]]
+    for j in range(len(NW_TENORS)):
+        t = NW_T + j
+        used = "$E$%d<>1" % t
+        # the first step: misses on ln G, weighted (365/T + q), and their derivatives, at L0
+        b.set("%s%d" % (c["e1"][j], r), '=IF(%s,"",IF(%s,0,$G$%d*(%s-$F$%d)))' % (on, used, t, _nw_lng(t, r, level0), t),
+              fmt="0.000000000")
+        # the second: the growth at the first step's levels, the rate's miss and its derivatives
+        b.set("%s%d" % (c["g2"][j], r), '=IF(%s,"",IF(%s,0,EXP(%s)))' % (on, used, _nw_lng(t, r, level1)), fmt="0.00000000")
+        b.set("%s%d" % (c["e2"][j], r), '=IF(%s,"",IF(%s,0,($%s%d-1)*365/$C$%d-$D$%d))' % (on, used, c["g2"][j], r, t, t),
+              fmt="0.000000000")
+        for s in (1, 2, 3):
+            k = 5 * (s - 1) + j
+            b.set("%s%d" % (c["j1"][k], r), '=IF(%s,"",IF(%s,0,$G$%d*%s))' % (on, used, t, _nw_dlng(t, r, s, "$B$7")),
+                  fmt="0.000000")
+            b.set("%s%d" % (c["j2"][k], r), '=IF(%s,"",IF(%s,0,365/$C$%d*$%s%d*%s))'
+                  % (on, used, t, c["g2"][j], r, _nw_dlng(t, r, s, level1[s])), fmt="0.000000")
+        # the model's rate at the levels of the second step
+        b.set("%s%d" % (c["rate"][j], r), '=IF(%s,"",IF(%s,"",(EXP(%s)-1)*365/$C$%d))' % (on, used, _nw_lng(t, r, level2), t),
+              fmt=rate)
+    for s in (1, 2, 3):
+        b.set("%s%d" % (c["x1"][s - 1], r), '=IF(%s,"",%s)' % (on, _nw_step(r, c["j1"], c["e1"], "$B$7", s)), fmt=pct)
+        b.set("%s%d" % (c["x2"][s - 1], r), '=IF(%s,"",%s)' % (on, _nw_step(r, c["j2"], c["e2"], level1[s], s)), fmt=pct)
+    b.set("%s%d" % (c["ssr"][0], r), '=IF(%s,"",%s)' % (on, "+".join(
+        "IF($E$%d=1,($%s%d-$D$%d)^2,0)" % (NW_T + j, c["rate"][j], r, NW_T + j) for j in range(len(NW_TENORS)))), fmt="0.00E+00")
+    b.set("%s%d" % (c["tie"][0], r), '=IF(%s,"",IF($%s%d<=$E$5,$B%d,""))' % (on, c["ssr"][0], r, r), fmt="0")
+    # every row as the first (the business days one after another), "sonrası" after them: the longest tenor's end
+    for col in ["C", "E"] + [x for k in ("e1", "j1", "x1", "g2", "e2", "j2", "x2", "rate", "ssr", "tie") for x in c[k]]:
+        b.fill_down("%s%d" % (col, r), NW_AFTER)
+    b.fill_down("B%d" % (r + 1), NW_AFTER - 1)
+    b.fill_down("D%d" % r, NW_AFTER - 1)
+    for k in range(NW_ROWS):
+        b.set("A%d" % (r + k), k + 1, fmt="0")
+    b.set("A%d" % NW_AFTER, "sonrası", bold=True)
+    b.set("B%d" % NW_AFTER, "=$B$9", fmt="0")
+    b.set("D%d" % NW_AFTER, "=IF($B$12=1,1,0)", fmt="0")
+    # ---- the result (E4:E13)
+    ssr, tie = ("$%s$%d:$%s$%d" % (c[k][0], NW_R, c[k][0], NW_AFTER) for k in ("ssr", "tie"))
+    when = 'TEXT(%s,"dd.mm.yyyy")'
+    result = (("En küçük kare toplamı", '=IF(COUNT(%s)=0,"",MIN(%s))' % (ssr, ssr), "0.00E+00"),
+              ("Eşitlik eşiği", '=IF(ISNUMBER($E$4),$E$4*(1+%s)+%s,"")' % NW_TIE, "0.00E+00"),
+              ("En iyi N (gün)", '=IF(COUNT(%s)=0,"",MIN(%s))' % (tie, tie), "0"),
+              ("En iyiyle eşit gün sayısı", "=COUNT(%s)" % tie, "0"),
+              ("Eşitlerin sonuncusu (gün)", '=IF($E$7=0,"",MAX(%s))' % tie, "0"),
+              ("En iyi satır", '=IF(ISNUMBER($E$6),MATCH($E$6,%s,0),"")' % tie, "0"),
+              ("Sonrası (1)", '=IF(ISNUMBER($E$9),IF($E$9=%d,1,0),"")' % (NW_ROWS + 1), "0"),
+              ("OIS ima tarihi", '=IF(AND($B$12=1,ISNUMBER($E$9),N($E$10)=0),$B$5+$E$6,"")', DATE),
+              ("Mesaj", '=IF($B$12=0,"",IF($B$12=2,"Normal TLREF (L4) ya da bugünkü TLREF (J2) yok: tarih aranamıyor.",'
+                        'IF($B$12=3,"Tarih için kotası olan en az bir vade seçin.",'
+                        'IF($B$12=4,"Seçili vadelerin içinde %(segs)d\'ten çok PPK toplantısı var: daha kısa vadeler seçin.",'
+                        'IF($B$12=5,"Seçili vadeler tarihi belirleyemiyor: "&$B$10&" vade, "&$B$11&" bilinmeyen seviye '
+                        '(vadelerin içindeki PPK toplantılarından sonraki normal TLREF) - en az "&($B$11+1)&" vade seçin.",'
+                        'IF($B$12=6,"Seçili en uzun vadede denenecek iş günü çok: tarih aranamıyor.",'
+                        'IF(N($E$10)=1,"Normalleşme seçili vadelerin sonrasında: TLREF, seçili en uzun vadenin ("&$E$13&", "&'
+                        '%(end)s&") sonuna kadar bugünkü farkla fiyatlanıyor - daha uzun bir vade seçin.",'
+                        'IF($E$7>1,"En iyi uyum "&%(first)s&IF($E$8>=$B$9," ve sonrasındaki"," – "&%(last)s&" arasındaki")'
+                        '&" her günde aynı: seçili vadeler tarihi tek başına belirlemiyor (toplantı sonrası seviyeler farkı '
+                        'karşılıyor) - en erken gün alındı.",'
+                        '"Seçili vadelere en iyi uyan iş günü: spot + "&$E$6&" gün (her gün denendi; spot\'tan bu güne '
+                        'TLREF = normal + bugünkü fark)."))))))))'
+               % {"segs": NW_SEGS, "end": when % "$B$5+$B$9", "first": when % "$E$11", "last": when % "$B$5+$E$8"}, None),
+              ("Seçili en uzun vade", '=IF($B$9>0,INDEX($A$%d:$A$%d,MATCH($B$9,$I$%d:$I$%d,0)),"")'
+               % (NW_T, NW_T + 4, NW_T, NW_T + 4), None))
+    for k, (caption, value, fmt) in enumerate(result):
+        b.set("D%d" % (4 + k), caption)
+        b.set("E%d" % (4 + k), value, fmt=fmt)
+    # ---- the block on OIS_MAIN, right of STUB İMA: empty while the switch is off
+    o = SheetBuilder(model, "OIS_MAIN")
+
+    def shown(text: str) -> str:
+        return '=IF(%s,"%s","")' % (NW_ON, text)
+
+    for col, text in zip((NW_LABEL, NW_TICK, NW_QUOTE, NW_MODEL, NW_MISS), ("OIS ima normalleşme", "Seç", "Kota", "Model",
+                                                                          "Fark bp")):
+        o.set("%s%d" % (col, NW_HEAD), shown(text), like="AK8")
+    for j, (label, _, _, ticked) in enumerate(NW_TENORS):
+        r, t = NW_FIRST_TENOR + j, NW_T + j
+        f = {"r": r, "t": t, "on": NW_ON, "q": NW_QUOTE, "m": NW_MODEL, "rate": c["rate"][j], "R": NW_R, "A": NW_AFTER}
+        o.set("%s%d" % (NW_LABEL, r), shown(label), like="AJ9")
+        # the tick box: the user's own (an input of kind "check"); its default ticked or not
+        o.input("%s%d" % (NW_TICK, r), "=%d" % ticked, fmt="0", align="center")
+        o.set("%s%d" % (NW_QUOTE, r), '=IF(%(on)s,EK_NORM!$D$%(t)d,"")' % f, like="AM9")
+        o.set("%s%d" % (NW_MODEL, r), ('=IF(AND(%(on)s,EK_NORM!$E$%(t)d=1,ISNUMBER(EK_NORM!$E$9)),'
+                                       'INDEX(EK_NORM!$%(rate)s$%(R)d:$%(rate)s$%(A)d,EK_NORM!$E$9),"")') % f, like="AM9")
+        o.set("%s%d" % (NW_MISS, r), '=IF(AND(ISNUMBER($%(m)s%(r)d),ISNUMBER($%(q)s%(r)d)),($%(m)s%(r)d-$%(q)s%(r)d)*10000,"")' % f,
+              fmt="0.0", align="center")
+    # a tick box hidden while the switch is off (a conditional number format; the page offers no tick box that reads nothing)
+    o.number_format_if(NW_TICKS, '%s<>"%s"' % (NW_SWITCH, NW_OPEN), ";;;")
+    d = NW_DATE_ROW
+    o.set("%s%d" % (NW_LABEL, d), shown("OIS ima tarihi"), like="AJ9")
+    o.set("%s%d" % (NW_QUOTE, d), '=IF(%s,IF(ISNUMBER(EK_NORM!$E$11),EK_NORM!$E$11,"–"),"")' % NW_ON, fmt=DATE, bold=True,
+          align="center")
+    o.set("%s%d" % (NW_MODEL, d), '=IF(ISNUMBER($%s%d),"spot + "&EK_NORM!$E$6&" gün","")' % (NW_QUOTE, d), align="center")
+    o.set("%s%d" % (NW_LABEL, NW_MSG_ROW), '=IF(%s,EK_NORM!$E$12,"")' % NW_ON, color=NOTE_COLOR)
+    # the date in use (the switch's builder writes it: the date typed): with none typed, the OIS-implied date
+    used = '=IF(%s,IF(ISNUMBER($L$3),$L$3,EK_NORM!$E$11),"")' % NW_ON
+    if parse_a1(NW_USED) in o.sheet.fml:
+        o.patch(NW_USED, used)
+    else:
+        o.set(NW_USED, used, fmt=DATE, align="center")
 
 
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
@@ -7584,7 +7910,9 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # (TLREF normalleşmesi: the switch, the date in use - its own addition, the OIS-implied date's after it -
             # and the PPK model with the stretch; last, after every addition that reads the PPK paths)
             (NORM_NAME, _norm_switch_check, _tto_norm_switch), (NORM_USED_NAME, _norm_used_check, _tto_norm_used),
-            (NORM_PPK_NAME, _norm_ppk_check, _tto_norm_ppk)),
+            (NORM_PPK_NAME, _norm_ppk_check, _tto_norm_ppk),
+            # (TLREF's normalization: the date OIS implies - after the switch's builder, whose date in use it extends)
+            (NW_NAME, _nw_check, _tto_norm_walk)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
 }
 

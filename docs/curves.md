@@ -458,6 +458,43 @@ bond's (1 + y/f)^n, n its maturity's periods in DİBS RV's yield sum `LV:MS`), t
 daily calendar from the OIS spot, a T+0 valör's days to the spot added, and past the calendar's last day (spot + 3700) the
 TRY list itself (`extras.try_term`, `EK_ISGUNU`). Fixed coupon bonds and bills only.
 
+## TLREF normalleşmesi: the date OIS implies
+
+v2, builder B (the desk, 26.11.2026; [desk-decisions.md](desk-decisions.md#tlref-normalleşmesi-oisin-ima-ettiği-tarih-26112026)):
+the day N TLREF is normal again, as the short TRY OIS quotes the user ticks price it (`extras._tto_norm_walk`, helper sheet
+`EK_NORM`; the result right of STUB İMA, `OIS_MAIN!AO8:AS15`). It only reads: H = today's TLREF (`OIS_MAIN!J2`), L0 = the
+normal TLREF (`OIS_MAIN!L4`), the switch (`L2` = "Açık"), the quotes and Motor's calendar - never the PPK solver (the solver
+reads the date in use, `L5`, which falls back to this date: no cycle).
+
+- **The quotes and their days** - the solver's own: 1W `OIS_MAIN!AU13` (7 days) and 2W `AU14` (14: `Motor!B4306` /
+  `B4307`), 1M-3M `OIS_MAIN!D442:D444` (`E442:E444`). Each a zero-coupon simple ACT/365 rate, (G − 1)·365/T. A tenor is
+  used when ticked (`OIS_MAIN!AP9:AP13`, per user, a tick box) and quoted.
+- **The days tried**: every TRY business day after the OIS spot before the end of the longest ticked tenor (Motor's daily
+  calendar: `Motor!G` the next business day, from `B2`), one a row of EK_NORM (80 rows; 3M has about 63), and that end itself -
+  "sonrası": every ticked tenor priced with the gap all the way, which any later N prices the same.
+- **The path for N**: the normal path + (H − L0) before N. The normal path is L0 from the spot to the first PPK meeting
+  inside the ticked tenors (`Motor!C5:C84`: its effective day, days from the OIS spot), then a level of its own from each
+  meeting inside (three at most), unknown.
+- **Compounding - the MPC ima model's**: a piece of d days at an O/N x adds d·ln(1 + x/365) − W·(x/365)² to ln G, W = Pcum
+  at its end − at its start (`Motor!F528:F4228`); each segment between meetings is split at N into its part at level + gap
+  and the rest at level. (Exact under the model's own formula also with a meeting inside the stretch: each piece at its
+  own rate, not the E(m) shortcut of the PPK model's.)
+- **The unknown levels**: least squares over the ticked tenors - a Gauss-Newton step from L0 on the misses measured on
+  ln G, each weighted by dR/d ln G = 365/T + q (the rate's miss to the first order; ln G is nearly linear in the levels),
+  then one on the rate misses themselves; A = JᵀJ + λI, λ = 1e-12 (a level no ticked tenor sees stays where it was),
+  solved by A's cofactors (`_nw_step`). The best day comes out exact; a day far off (misses of tens of bp) to 1e-4 bp.
+- **The score and the date**: the sum of the squared rate misses; the date the day with the smallest, the earliest among
+  those within 1e-9 (relative) + 1e-16 (the misses the same to 0,0001 bp). Said in the block's message:
+  - fewer ticked (quoted) tenors than unknown levels + 1: no date ("en az K + 1 vade seçin"); none ticked; L0 or H missing;
+  - "sonrası" best: no date, "normalleşme seçili vadelerin sonrasında";
+  - a tie (the levels after a meeting take the gap up, so every day from the first fits as well - 1M + 2M + 3M with two
+    meetings inside, N past 1M's end): the earliest day, the span said.
+- **What fixes N**: a ticked tenor that ends after N and has no unknown level inside fixes it to the day (1W, 2W, 1M before
+  the first meeting); a tenor with a meeting inside adds an unknown, so it fixes N only with one more such tenor.
+- **Off** (`L2` not "Açık"): the block's cells are "" and its tick boxes read nothing (a conditional number format ";;;" -
+  `Renderer.cell` offers no tick box that reads nothing), so the panel drops their columns and is the old one cell for
+  cell; nothing reads EK_NORM; `L5` is "".
+
 ## Spot and value dates
 
 | Pair / use | Spot | Holidays |

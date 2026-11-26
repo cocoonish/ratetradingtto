@@ -25,7 +25,7 @@ class InputDef(object):
                  aliases: Optional[Dict[str, str]] = None, tenor: Optional[Dict[str, str]] = None):
         self.scope = scope            # "user" (personal / scenario) or "shared" (whole desk)
         self.group = group
-        self.kind = kind              # auto | number | amount | pct | date | text | list (one of the options only)
+        self.kind = kind              # auto | number | amount | pct | date | text | list (one of the options only) | check (1 / 0)
         self.label = label
         self.options = options
         self.view = view

@@ -3,11 +3,14 @@
 ``{"id", "title", "group", "book", "sheet", "order", "inputs": [...], "panels": [...]}``
 
 * ``inputs``  cells the user may type into: ``{"range": "W33:X47", "scope": "user"|"shared", "group": "...",
-  "kind": "auto|number|amount|pct|date|text|list", "label": "..."}`` (ranges without a sheet refer to the page's sheet);
-  ``"options": ["B", "S"]`` offers a list (``"kind": "list"``: nothing else is taken) and ``"aliases": {"Sat": "S"}``
-  names words that mean one of its items.  ``"kind": "amount"`` is what makes a cell take the desk's amounts ("5m",
+  "kind": "auto|number|amount|pct|date|text|list|check", "label": "..."}`` (ranges without a sheet refer to the page's
+  sheet); ``"options": ["B", "S"]`` offers a list (``"kind": "list"``: nothing else is taken) and ``"aliases": {"Sat":
+  "S"}`` names words that mean one of its items.  ``"kind": "amount"`` is what makes a cell take the desk's amounts ("5m",
   "250k", "1,5mn", "2b" / "2mr": tto/inputs.py) - a number format cannot tell an amount from swap points (both
-  ``#,##0``), so a size not declared one keeps the plain parsing.
+  ``#,##0``), so a size not declared one keeps the plain parsing.  ``"kind": "check"`` is a tick box: 1 ticked, 0 not
+  (``inputs.parse_check``: "evet" / "hayır", TRUE / FALSE, "x" / "✓" too; nothing else) - the page draws a box a click
+  ticks, written as a value typed; give the cell a formula default (``=1`` / ``=0``) so that Delete brings it back, and a
+  box that reads nothing (a conditional number format ";;;" hiding it while its block is off) is not offered at all.
   A date input (``"kind": "date"``, or a cell formatted as a date) takes the desk's date shortcuts as well - "1A" /
   "1M", "3A", "1Y", "2H" / "2W", "ON", "TN", "SN", "ay sonu", "IMM", "+5" (tto/shortcuts.py); the date they stand for
   is stored.  ``"tenor"`` says how they count there: ``{"pair": "USDTRY"}`` - the calendar and the spot convention
