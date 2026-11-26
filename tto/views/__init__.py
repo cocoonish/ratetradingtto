@@ -87,7 +87,9 @@
 * ``sections`` (optional)  the page in tabs: ``[{"id": "calc", "title": "Hesaplayıcılar", "note": "...",
   "panels": ["B7", "B8"]}, ...]`` - the panels of a tab in the order they are listed (a panel may be listed in
   more than one tab).  Every panel that is shown belongs to a tab or to ``pinned``; the helper tables that
-  are not listed are gathered in a last tab of their own.
+  are not listed are gathered in a last tab of their own.  An element of ``panels`` may be an array of panel ids:
+  one column of panels stacked beside the others (``["B3", ["B2", "B8"], "B5"]``, the layout of 27.11.2026); read here
+  as the ids in that order.
 * ``pinned`` (optional)  ids of the panels that stay above the tabs whichever tab is open (the value date of
   the Forward page)
 * ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
@@ -141,6 +143,9 @@ def load_views() -> List[Dict[str, Any]]:
         v.setdefault("panels", [])
         v.setdefault("sections", [])
         v.setdefault("pinned", [])
+        for sec in v["sections"]:
+            # a column of panels stacked one under another (an array in the list): its ids, in order
+            sec["panels"] = [x for p in sec.get("panels", []) for x in (p if isinstance(p, list) else [p])]
         views.append(v)
     views.sort(key=lambda v: (v["order"], v["id"]))
     return views
