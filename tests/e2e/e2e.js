@@ -1769,8 +1769,9 @@ async function clipAfter(page, action) {
       p.querySelector('.body').scrollLeft = 700;
       return { before, after: at(), scrolled: p.querySelector('.body').scrollLeft };
     });
-    check('columns frozen in Excel stay in view when the table scrolls sideways',
-      frozen.before.length === 3 && frozen.scrolled > 300 && JSON.stringify(frozen.before) === JSON.stringify(frozen.after), frozen);
+    // (the page's own choice since the layout work, 27.11.2026: ISIN and Kaynak - "Ad", the same name on every row, scrolls)
+    check('columns frozen on DİBS RV (ISIN, Kaynak) stay in view when the table scrolls sideways',
+      frozen.before.length === 2 && frozen.scrolled > 300 && JSON.stringify(frozen.before) === JSON.stringify(frozen.after), frozen);
 
     await open(page, 'usd');
     await tab(page, '*');
