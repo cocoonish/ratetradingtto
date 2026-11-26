@@ -2319,3 +2319,59 @@ frozen columns kept when its own order keeps them first), `tto/dibsgenel.py` (`c
 (B3's `cols`, the group's member, the helper table "on"), `58_kagitlar.json` (U1's `cols`), `60_dibslive.json` (the note).
 Tests: `tests/test_kagit_on.py`; `tests/test_kagit_twoway.py`, `tests/test_rvfair.py`, `tests/test_dibsgenel.py` (the new
 member, the summary's and Genel's column); the browser test's "DİBS: getirinin ON karşılığı" checks.
+
+#### Düzen: Quant sayfaları
+
+The 20 Quant pages' part of the 22 layout proposals (the desk, 27.11.2026: "Hepsini yap"; L1's section "Düzen: sayfalar
+tek tek" has their words and the list). Only where and how things are shown: no value, signal, level or Bloomberg request
+changes; DOM ids kept; each user's own choices (columns, folded panels) win.
+
+- **One order on every page (10):** signals → the picked line's card → the tables you trade from → analysis → secondary.
+  PCA / RV opens with rich / cheap, flies and spreads and FRA against the path (it opened with three tables that trade
+  nothing); Eğri Adil Değeri with the best bond, the quote and the switch (they were under two 830-px fits); Korelasyon
+  with its pairs before the matrix; İma Patikası with its kinks; Gün İçi's bar record last; WIRP's meeting table first.
+- **Coverage and status once (10):** "Veri kapsamı" and "Hesap durumu" only at Sinyaller's foot, folded (they took 45–62 %
+  of every page). Every page has one line above instead - "Veri kapsamı: 12 seri · 2 kısa · son kapanış …", the short /
+  filling series named in its tooltip, a click opens Sinyaller's table - beside the existing "Hesap …" line.
+- **Empty = title + reason (10):** an empty signal list and an empty card show their title and why (the read line and the
+  note hidden); a page with no line says so in its card. **The first line's card opens on every page** (only Sinyaller
+  and Trend did); **a row click brings the card into view** when its top is not on the upper part of the screen (Eğri's
+  DİBS rows, PCA's tables updated a card off screen).
+- **Trade columns first (10, 9):** every signal list starts İşlem (AL / receive green, SAT / pay red - Günlük İşlemler's
+  RECEIVE / PAY colours) · Giriş · Hedef · Stop · Beklenen K/Z · Ödül / risk · İsabet (n), then Birim, Trades, z, Güç,
+  Tutma, Carry / hf, Carry % / yıl, Geri test, Aile (Grup on Sinyaller), the secondary statistics, Bileşik / neden, Saat -
+  the same 21 columns as before. Trend's table and DİBS switch's switches start with the trade too (Trend's row now
+  carries its line's reward / risk). Rankings colour AL and SAT apart (they were the same colour): Carry + momentum's
+  "Sepette", DİBS switch's "Switch'te", Eğri's best bond, ML's and Opsiyon → spot's "Olasılık".
+- **One column setting for the 19 signal lists (10, 19):** Sinyaller's list, its box and every analysis page's list share
+  `quant/signals` (each page kept its own before; a choice saved on one analysis page's list alone is no longer read -
+  Sinyaller's, the one most likely made, now applies everywhere). **Hidden by default**, one click back under "Sütunlar",
+  for a user who never chose: **Varlık, Yarı ömür (g), Rejim, Uyum, Kapılar** - the asset class (the trade names it), the
+  half-life (the holding is shown), the regime, the families agreeing and the gates (the card shows all four; a held
+  line's reason stays in "Bileşik / neden"). Never the trade, its levels, P&L, record (İsabet, Geri test) or carry.
+- **Widths (8):** `panel()` no longer makes every panel the page's width: a table is as wide as itself and narrow ones
+  sit side by side; the signal list, the card and a panel with a chart stay the whole row.
+- **Heights (5):** the quant pages are no longer `.volpage` (46vh table areas): their tables follow the app's one rule;
+  the card is never capped.
+- **Frozen identifier (3):** the first column stays in view in tables that scroll sideways at 1366 px - the signal lists
+  (# and İşlem on Sinyaller), Eğri's DİBS (406 px), Öncü-Takipçi's scan (group and pair, 297 px), İma Patikası's
+  consecutive meetings (286 px; "Okuma" now wraps instead of being cut), Opsiyon → spot's pairs (204 px), VİOP's
+  contracts (180 px), Opsiyon's tables (pair and tenor) and a few more. Through the grid's frozen panes (`data.fz`, the
+  workbook tables' freeze) with `freeze` passed as the contract names it.
+- **Three decimals (9):** VİOP's implied rates (contracts, the order levels and their titles, the days' lows and highs)
+  and DİBS switch's yields and funding rates, as every quant level (the desk, 25.11.2026).
+- **Each thing once:** DİBS switch's reason for no ranking only in its switches' head line (it was printed five times);
+  a Carry + momentum basket's reason only in its card (twice); a basket's leg table folded ("Bacaklar (N)": each leg is a
+  line of the list above); Tahmin Modeli names its columns as Makine öğrenmesi does ("Basılıyor", "Olasılık (yukarı)").
+- **Folded secondary panels and jump links:** every quant panel folds (▾ / ▸; a folded one opens from its title; kept in
+  the browser). Folded until opened: Sinyaller's settings, alarm subscription, coverage and status; PCA's periods,
+  stability and window loadings; İma Patikası's meeting-by-meeting calibration and the grid settings (WIRP's too);
+  Opsiyon's smile fit; VİOP's seven secondary panels; Öncü-Takipçi's cross-correlations; DİBS switch's bonds left out.
+  The long pages (Sinyaller, Carry + momentum, PCA / RV, Eğri, İma Patikası, WIRP, Opsiyon, VİOP) list their panels in a
+  bar above them. VİOP's contract selector moved into the panel of the levels it chooses, right above them (it was ~850 px above them).
+
+Code: `tto/static/js/pages/quantbase.js` (`panel`, `GridBox`, `signalRows` / `signalHead` / `SIGNAL_HEAD`, `sideClass`,
+`SIGNALS_TABLE`, `coverageLine`, `showSignals`, `firstPick`, `revealCard`, `jumpBar`, `showPanel`), the page modules
+`quant*.js`, `tto/static/js/pageboxes.js` (the box's header), the "Quant düzen" block at the end of `app.css`,
+`Service.DEFAULT_HIDDEN_COLUMNS["quant/signals"]`, `tto/quanttrend.py` (the row's `rr`). Tests: `tests/test_duzen_quant.py`,
+`tests/test_columns.py` (the defaults read from the service), the browser test's "Düzen" checks.
