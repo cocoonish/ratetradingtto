@@ -152,6 +152,10 @@ def test_a_bulk_row_of_either_pair(service):
         assert got["Q"]["value"] == "3.456" and got["U"]["value"] == "40,9876"
         assert "valör tarihi yok" in str(refused(service, "forward", "BK1", "P8", "59,5", user=u))
         assert "fiyat değil" in str(refused(service, "forward", "BK1", "G7", "41,0", user=u))
+        # (nor its ON karşılık %, Spread (bp) or P/gün, 26.11.2026 - no forward's price: İşleme al books the rate they give,
+        # as the value-date tables' P/gün is no price either)
+        for ref, text in (("M7", "33,39"), ("I7", "25,0"), ("AO7", "425,8"), ("AP7", "501,4")):
+            assert "fiyat değil" in str(refused(service, "forward", "BK1", ref, text, user=u)), ref
         assert "fiyat değil" in str(refused(service, "forward", "BK1", "N4", "1", user=u))
         # the browser gets its price cells with the table, the pairs stay the server's
         bk = next(p for p in service.view(u, "forward")["panels"] if p["id"] == "BK1")

@@ -3885,6 +3885,77 @@ async function clipAfter(page, action) {
       ftBulk.n.t === ftFwd && ftBulk.n.anchor && /Yazdığınız değer/.test(ftBulk.n.tip) && !ftBulk.l.anchor && /Hesaplanan/.test(ftBulk.l.tip)
       && trNumber(ftBulk.l.t) > trNumber(ftBulk.g) && ftBulk.p.t !== ftP5 && /tek TRY faiziyle/.test(ftNote)
       && ftBack.n.t === ftN5 && !ftBack.n.anchor && ftBack.p === ftP5, { ftBulk, ftN5, ftP5, ftNote, ftBack });
+    // TOPLU FORWARD's ON karşılık % (the desk, 26.11.2026: "Toplu forward fiyatlama kısımlarında ON karşılıklarını da
+    // görmek istiyorum"): the O/N equivalent of the rate that prices the row - the Forward calculators' ON Karşılık,
+    // 360·((1 + r·g/360)^(1/g) − 1) over the row's Gün -; an ON typed stays (✎), the Manuel TRY % is the rate it gives
+    // (the exact inverse) and the USDTRY fwd follows; Delete on it: the row back to RET mid
+    const onOf = (r, g) => 36000 * ((1 + r / 100 * g / 360) ** (1 / g) - 1);
+    const rateOfOn = (on, g) => ((1 + on / 36000) ** g - 1) * 36000 / g;
+    const onDays = trNumber(await cellText(page, 'EK_BULK!C5'));
+    const onG = trNumber(await cellText(page, 'EK_BULK!G5'));
+    const onShown = (await cellText(page, 'EK_BULK!M5')).trim();
+    const onHead = String((await cellText(page, 'EK_BULK!M4')) || '').trim();
+    const onTyped = (trNumber(onShown) + 0.75).toFixed(2).replace('.', ',');
+    await typeInto(page, 'EK_BULK!M5', onTyped);
+    await waitCell(page, 'EK_BULK!L5', 't.trim() !== ""');
+    await page.waitForFunction(() => window.tto.findCell('EK_BULK!M5').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const onRow = { m: await ftOne('EK_BULK!M5'), l: await ftOne('EK_BULK!L5'), n: (await cellText(page, 'EK_BULK!N5')).trim() };
+    await (await cellHandle(page, 'EK_BULK!M5')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_BULK!L5', 't.trim() === ""');
+    const onBack = { m: await ftOne('EK_BULK!M5'), n: (await cellText(page, 'EK_BULK!N5')).trim() };
+    check('TOPLU FORWARD: ON karşılık % - the row\'s RET mid\'s O/N (the calculators\' ON Karşılık over its Gün), two decimals; an ON typed stays (✎), the Manuel TRY % is the rate it gives and the USDTRY fwd follows; Delete on it: the row back to RET mid',
+      onHead === 'ON karşılık %' && /^\d+,\d{2}$/.test(onShown) && Math.abs(trNumber(onShown) - onOf(onG, onDays)) < 0.011
+      && onRow.m.t === onTyped && onRow.m.anchor && /Yazdığınız değer/.test(onRow.m.tip) && !onRow.l.anchor && /Hesaplanan/.test(onRow.l.tip)
+      && Math.abs(trNumber(onRow.l.t) - rateOfOn(trNumber(onTyped), onDays)) < 0.006 && onRow.n !== ftN5
+      && !onBack.m.anchor && onBack.m.t === onShown && onBack.n === ftN5,
+      { onDays, onG, onShown, onHead, onTyped, onRow, onBack, ftN5 });
+    // ... and the rest of the desk's TOPLU FORWARD list of 26.11.2026 ("Bunların da hepsini yap"): Spread (bp) in I, then
+    // right of the hidden block ON − RET ON, the period from the filled row above, both P/gün and the ON of every rate,
+    // with Valör and Gün frozen; a spread typed (RET mid + spread / 100), a USDTRY P/gün typed (puan = P/gün · Gün) and the
+    // table's general spread (rows with nothing typed at RET mid + it) - each Delete back to RET mid
+    const nwHead = {};
+    for (const c of ['I', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR', 'AS', 'AT', 'AU']) nwHead[c] = String((await cellText(page, 'EK_BULK!' + c + '4')) || '').trim();
+    const nw = {};
+    for (const c of ['C5', 'C6', 'G5', 'G6', 'M5', 'AT5', 'AM5', 'AM6', 'AN5', 'AL5', 'I5', 'O5', 'AO5']) nw[c] = String((await cellText(page, 'EK_BULK!' + c)) || '').trim();
+    const nwFrozen = await page.evaluate(() => ['EK_BULK!B5', 'EK_BULK!C5', 'EK_BULK!D5'].map((r) => { const td = window.tto.findCell(r); return td ? td.classList.contains('fz') : null; }));
+    const nwHidden = await page.evaluate(() => ['EK_BULK!Z5', 'EK_BULK!AD5', 'EK_BULK!AI5', 'EK_BULK!AK5'].every((r) => !window.tto.findCell(r)));
+    const nwG5 = trNumber(nw.G5), nwD5 = trNumber(nw.C5), nwD6 = trNumber(nw.C6);
+    const nwFwdFwd = ((1 + trNumber(nw.G6) / 100 * nwD6 / 360) / (1 + nwG5 / 100 * nwD5 / 360) - 1) * 360 / (nwD6 - nwD5) * 100;
+    check('TOPLU FORWARD\'s new columns: Spread (bp) in I; right of the hidden block ON − RET ON (bp), Dönem TRY % / ON %, USDTRY / EURTRY P/gün, the ON of every rate - the first row\'s period its own rate, the second\'s the fwd-fwd from the first, ON · RET mid % the row\'s ON karşılık; Valör and Gün frozen, the helpers not on the page',
+      nwHead.I === 'Spread (bp)' && nwHead.AL === 'ON − RET ON (bp)' && nwHead.AM === 'Dönem TRY %' && nwHead.AN === 'Dönem ON %'
+      && nwHead.AO === 'USDTRY P/gün' && nwHead.AP === 'EURTRY P/gün' && nwHead.AQ === 'ON · Offshore mid %' && nwHead.AU === 'ON · RET ask %'
+      && nw.AM5 === nw.G5 && nw.AN5 === nw.M5 && nw.AT5 === nw.M5 && Math.abs(trNumber(nw.AM6) - nwFwdFwd) < 0.02
+      && /^-?\d+,\d$/.test(nw.AL5) && nw.I5 === '0,0' && Math.abs(trNumber(nw.AO5) - trNumber(nw.O5) / nwD5) < 0.06
+      && nwFrozen[0] === true && nwFrozen[1] === true && nwFrozen[2] === false && nwHidden,
+      { nwHead, nw, nwFrozen, nwHidden, nwFwdFwd });
+    await typeInto(page, 'EK_BULK!I5', '40');
+    await waitCell(page, 'EK_BULK!L5', 't.trim() !== ""');
+    await page.waitForFunction(() => window.tto.findCell('EK_BULK!I5').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const nwSpread = { i: await ftOne('EK_BULK!I5'), l: (await cellText(page, 'EK_BULK!L5')).trim(), n: (await cellText(page, 'EK_BULK!N5')).trim() };
+    await (await cellHandle(page, 'EK_BULK!I5')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_BULK!L5', 't.trim() === ""');
+    await typeInto(page, 'EK_BULK!AO5', '150');
+    await waitCell(page, 'EK_BULK!L5', 't.trim() !== ""');
+    await page.waitForFunction(() => window.tto.findCell('EK_BULK!AO5').classList.contains('anchor'), null, { timeout: 20000 }).catch(() => {});
+    const nwPpd = { ao: await ftOne('EK_BULK!AO5'), o: (await cellText(page, 'EK_BULK!O5')).trim(), n: (await cellText(page, 'EK_BULK!N5')).trim() };
+    await (await cellHandle(page, 'EK_BULK!AO5')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_BULK!L5', 't.trim() === ""');
+    await typeInto(page, 'EK_BULK!C2', '25');
+    await waitCell(page, 'EK_BULK!I5', 't.trim() === "25,0"');
+    const nwAll = {};
+    for (const c of ['C2', 'I5', 'I6', 'L5', 'N5']) nwAll[c] = (await cellText(page, 'EK_BULK!' + c)).trim();
+    await (await cellHandle(page, 'EK_BULK!C2')).click();
+    await page.keyboard.press('Delete');
+    await waitCell(page, 'EK_BULK!I5', 't.trim() === "0,0"');
+    const nwBack = (await cellText(page, 'EK_BULK!N5')).trim();
+    check('TOPLU FORWARD: a spread typed (40 bp) - ✎, Manuel TRY % = RET mid + 0,40, the forward follows; a USDTRY P/gün typed (150) - ✎, puan = 150 · Gün; the general spread (25 bp) - rows with nothing typed at RET mid + it (Spread 25,0, the forward up, Manuel TRY % blank); each Delete back to RET mid',
+      nwSpread.i.t === '40,0' && nwSpread.i.anchor && Math.abs(trNumber(nwSpread.l) - (nwG5 + 0.40)) < 0.006 && nwSpread.n !== ftN5
+      && nwPpd.ao.t === '150,0' && nwPpd.ao.anchor && Math.abs(trNumber(nwPpd.o) - 150 * nwD5) < 1 && nwPpd.n !== ftN5
+      && nwAll.C2 === '25,0' && nwAll.I5 === '25,0' && nwAll.I6 === '25,0' && nwAll.L5 === '' && trNumber(nwAll.N5) > trNumber(ftN5)
+      && nwBack === ftN5, { nwSpread, nwPpd, nwAll, nwBack, ftN5 });
     const ftQ = trNumber(await cellText(page, 'Forward!Q200'));
     const ftCross = (ftQ + 0.1).toFixed(4).replace('.', ',');
     await typeInto(page, 'Forward!Q200', ftCross);

@@ -4658,16 +4658,18 @@ class Service(object):
             raise ServiceError("TOPLU FORWARD tablosu yok (çalışma kitabına uymadığı için dışarıda bırakıldı)", 404)
         calc = self._calc(user, book)
         si = book.model.sheet_index[ex.BULK_SHEET]
-        cols = {"date": "B", "ret_mid": "G", "manual": "L", "usd_fwd": "N", "eur_fwd": "P", "usd_typed": "R", "eur_typed": "T",
-                "pair": ex.BULK_PAIR, "dir": ex.BULK_DIR, "amount": ex.BULK_AMOUNT, "cpt": ex.BULK_CPT}
-        # the row's typed value (its two-way group, twoway.py): which of Manuel TRY % / USDTRY fwd, puan / EURTRY fwd, puan
+        cols = {"date": "B", "ret_mid": "G", "manual": "L", "rate": ex.BULK_RATE, "usd_fwd": "N", "eur_fwd": "P", "usd_typed": "R",
+                "eur_typed": "T", "pair": ex.BULK_PAIR, "dir": ex.BULK_DIR, "amount": ex.BULK_AMOUNT, "cpt": ex.BULK_CPT}
+        spread_all = calc.get(si, *divmod(parse_a1(ex.BULK_SPREAD_ALL), COLS))          # (the table's general spread)
+        # the row's typed value (its two-way group, twoway.py): which of Manuel TRY % / Spread / ON karşılık % / USDTRY fwd,
+        # puan, P/gün / EURTRY fwd, puan, P/gün
         group = self.twoway.groups.get(ex.BULK_TW_ID)
         overlay = self._overlay(user, book)
         rows = []
         for k in range(ex.BULK_ROWS):
             r = ex.BULK_FIRST + k
             row: Dict[str, Any] = {key: calc.get(si, r, col_to_index(col)) for key, col in cols.items()}
-            row.update(n=k + 1, ref="%s!%s%d" % (ex.BULK_SHEET, ex.BULK_AMOUNT, r))
+            row.update(n=k + 1, ref="%s!%s%d" % (ex.BULK_SHEET, ex.BULK_AMOUNT, r), spread_all=spread_all)
             if group is not None:
                 m = group.anchor(k, overlay, book.engine.input_value)
                 row["anchor"] = index_to_col(m.cells[k][1] % COLS) if m is not None else None      # (its column)

@@ -4,8 +4,8 @@ The new inputs (Parite, Yön, Tutar, Karşı taraf) on cells no input ever stood
 yapıştır reads (``entry.bulk_forward_paste``: the price each row shows, the rows left out, the error rows); the booked
 forward equal to the row's own - USDTRY at its TRY rate (the workbook's own bulk row prices it: the same formula),
 EURTRY and a typed forward at the outright; the save in one go, with notes saying where each trade came from; the Tutar
-emptied after it as the browser does (the kept rows' Tutar cells reset), so that a second press finds them no more; over
-HTTP."""
+emptied after it as the browser does (the kept rows' Tutar cells reset), so that a second press finds them no more; a row
+whose typed value is its ON karşılık % (26.11.2026) at the TRY rate it gives; over HTTP."""
 from __future__ import annotations
 
 import pytest
@@ -78,9 +78,10 @@ def test_the_new_inputs_stand_where_no_input_ever_stood(service):
         bad = service.set_inputs(u, "tto", [{"ref": bulk("V", 2), "value": "GBPTRY"}, {"ref": bulk("W", 3), "value": "pay"},
                                             {"ref": bulk("X", 3), "value": "on milyon"}])["errors"]
         assert len(bad) == 3 and "listede yok" in bad[0] and "tutar anlaşılamadı" in bad[2]
-        # the panel takes them in: the range to Y, "İşleme al" in its header
+        # the panel takes them in: the range past Y (to the 26.11 columns right of the hidden block), "İşleme al" in its
+        # header
         bk = next(p for p in service.view(u, "forward")["panels"] if p["id"] == "BK1")
-        assert bk["range"] == "B1:Y106" and bk["action"] == "toplu-islem"
+        assert bk["range"] == "B1:AU106" and bk["action"] == "toplu-islem"
     finally:
         service.reset_inputs(u, "tto")
 
@@ -127,6 +128,27 @@ def test_the_rows_as_a_paste():
     assert "Tutar'ı yazılı 6 satır · Tutar'ı boş 1 satır alınmadı" in p["said"]
     assert entry.bulk_forward_price(ROWS[0]) == ("try_rate", 41.0712345678901, "RET mid %")
     assert entry.bulk_forward_price(ROWS[1]) == ("forward", 61.1234567890123, "Manuel TRY %")
+    # an ON karşılık % typed (anchor M; 26.11.2026) is no booking price: USDTRY at the Manuel TRY % it gives, EURTRY at
+    # its EURTRY fwd - the note names the ON
+    assert entry.bulk_forward_price(row(10, date=D1, ret_mid=41.0, manual=35.4246085717721, anchor="M")) == (
+        "try_rate", 35.4246085717721, "ON karşılık %")
+    assert entry.bulk_forward_price(row(11, date=D2, ret_mid=41.0, manual=35.4, eur_fwd=62.048, pair="EURTRY", anchor="M")) == (
+        "forward", 62.048, "ON karşılık %")
+    # (26.11.2026) a P/gün typed books as its pair's puan: USDTRY's - the USDTRY row at its USDTRY fwd; EURTRY's - the
+    # USDTRY row at the rate it gives; a Spread typed at the rate it gives; nothing typed under a general spread: RET mid
+    # + it (the rate that prices the row, when the table sends it)
+    assert entry.bulk_forward_price(row(12, date=D1, manual=35.1, usd_fwd=55.5, anchor=ex.BULK_USD_PPD)) == (
+        "forward", 55.5, "USDTRY P/gün")
+    assert entry.bulk_forward_price(row(13, date=D1, manual=35.1, usd_fwd=55.5, anchor=ex.BULK_EUR_PPD)) == (
+        "try_rate", 35.1, "EURTRY P/gün")
+    assert entry.bulk_forward_price(row(14, date=D1, ret_mid=35.0, manual=35.4, anchor=ex.BULK_SPREAD)) == (
+        "try_rate", 35.4, "Spread (bp)")
+    assert entry.bulk_forward_price(row(15, date=D1, ret_mid=35.0, rate=35.25, spread_all=25.0, anchor=None)) == (
+        "try_rate", 35.25, "RET mid % + genel spread")
+    assert entry.bulk_forward_price(row(16, date=D1, ret_mid=35.0, spread_all=25.0)) == ("try_rate", 35.0 + 25.0 / 100,
+                                                                                       "RET mid % + genel spread")
+    assert entry.bulk_forward_price(row(17, date=D1, ret_mid=35.0, eur_fwd=61.5, pair="EURTRY", spread_all=25.0, anchor=None)) == (
+        "forward", 61.5, "RET mid % + genel spread")
     # English numbers for a user who works in English
     en = entry.bulk_forward_paste(ROWS[:3], "en")["text"].split("\n")
     assert en[1].split("\t")[3:6] == ["10,000,000", "15.01.2027", "41.0712345678901%"] and en[3].split("\t")[3] == "1,234,567.5"
@@ -226,6 +248,81 @@ def test_the_rows_kept_are_saved_in_one_go_and_their_tutar_emptied(desk):
     # a second press: only the two rows still to fix; the booked ones are priced rows without a Tutar now
     again = svc.bulk_from_forward(u)
     assert (again["taken"], again["skipped"], sorted(again["amounts"])) == (2, 7, ["8", "9"])
+
+
+def test_a_row_whose_typed_value_is_its_on_books_the_try_rate_it_gives(module_service):
+    """An ON karşılık % typed (the desk, 26.11.2026: "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek
+    istiyorum"; the table is two-way): an ON is no booking price - the USDTRY row books the TRY rate the row shows, its
+    Manuel TRY % worked out from the ON (the blotter prices the row's own USDTRY fwd from it, to the last bits; that rate's
+    ON over the row's Gün is the ON typed), the EURTRY row its EURTRY fwd as before; the note: "· ON karşılık %"."""
+    svc = module_service
+    u = svc.login("Toplu ON")["user"]
+    try:
+        put(svc, u, {bulk("B", 1): "15.03.2027", bulk("B", 2): "15.06.2027", bulk("V", 2): "EURTRY", bulk("W", 1): "AL",
+                     bulk("W", 2): "SAT", bulk("X", 1): "5m", bulk("X", 2): "2m"})
+        put(svc, u, {bulk("M", 1): "33,75", bulk("M", 2): "34,125"})
+        src = svc.bulk_from_forward(u)
+        assert (src["taken"], src["skipped"]) == (2, 0)
+        lines = {x.split("\t")[0]: x.split("\t") for x in src["text"].split("\n")[1:]}
+        assert lines["1"][5:7] == [entry._plain(cell(svc, bulk("L", 1), u), "tr") + "%", ""]
+        assert lines["2"][5:7] == ["", entry._plain(cell(svc, bulk("P", 2), u), "tr")]
+        assert lines["1"][8] == lines["2"][8] == "TOPLU FORWARD · ON karşılık %"
+        p = svc.bulk_preview(u, "fwd", src["text"])
+        assert (p["valid"], p["invalid"]) == (2, 0), p
+        by_row = {int(r["cells"][0]): r["trade"] for r in p["rows"]}
+        one, two = by_row[1], by_row[2]
+        assert (one["pair"], one["dir"], one["basis"], one["note"]) == ("USDTRY", "B", "TRY", "TOPLU FORWARD · ON karşılık %")
+        assert one["try_rate"] * 100 == pytest.approx(cell(svc, bulk("L", 1), u), abs=1e-12)
+        assert abs(one["forward"] - cell(svc, bulk("N", 1), u)) < 1e-12
+        days = cell(svc, bulk("C", 1), u)
+        assert 36000 * ((1 + one["try_rate"] * days / 360) ** (1 / days) - 1) == pytest.approx(33.75, abs=1e-9)
+        assert (two["pair"], two["dir"], two["basis"], two["note"]) == ("EURTRY", "S", "FWD", "TOPLU FORWARD · ON karşılık %")
+        assert two["forward"] == pytest.approx(cell(svc, bulk("P", 2), u), abs=1e-9)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_rows_with_a_p_gun_or_a_spread_typed_and_the_general_spread_book_as_they_show(module_service):
+    """(the desk, 26.11.2026: "Bunların da hepsini yap") A USDTRY P/gün typed books like a USDTRY puan typed - the USDTRY
+    row at the row's USDTRY fwd (Forward kur), note "USDTRY P/gün"; an EURTRY P/gün typed like an EURTRY puan typed - the
+    EURTRY row at its EURTRY fwd, the USDTRY row at the TRY rate it gives; a Spread (bp) typed: the TRY rate RET mid +
+    spread / 100, note "Spread (bp)"; rows with nothing typed under the table's general spread: USDTRY at RET mid + it -
+    the blotter's forward the row's own, to the last bits -, EURTRY at its EURTRY fwd, note "RET mid % + genel spread"."""
+    svc = module_service
+    u = svc.login("Toplu P/gün")["user"]
+    try:
+        dates = ["15.03.2027", "15.04.2027", "14.05.2027", "15.06.2027", "15.07.2027", "16.08.2027"]
+        cells = {bulk("B", k): d for k, d in enumerate(dates, 1)}
+        cells.update({bulk("W", k): "AL" for k in range(1, 7)})
+        cells.update({bulk("X", k): "1m" for k in range(1, 7)})
+        cells.update({bulk("V", k): "EURTRY" for k in (2, 6)})
+        cells.update({"EK_BULK!" + ex.BULK_SPREAD_ALL: "25"})
+        put(svc, u, cells)
+        put(svc, u, {bulk(ex.BULK_USD_PPD, 1): "120", bulk(ex.BULK_EUR_PPD, 2): "150", bulk(ex.BULK_EUR_PPD, 3): "150",
+                     bulk(ex.BULK_SPREAD, 4): "40"})
+        src = svc.bulk_from_forward(u)
+        assert (src["taken"], src["skipped"]) == (6, 0)
+        p = svc.bulk_preview(u, "fwd", src["text"])
+        assert (p["valid"], p["invalid"]) == (6, 0), p
+        by_row = {int(r["cells"][0]): r["trade"] for r in p["rows"]}
+        want = {1: ("USDTRY", "FWD", "N", "USDTRY P/gün"), 2: ("EURTRY", "FWD", "P", "EURTRY P/gün"),
+                3: ("USDTRY", "TRY", "N", "EURTRY P/gün"), 4: ("USDTRY", "TRY", "N", "Spread (bp)"),
+                5: ("USDTRY", "TRY", "N", "RET mid % + genel spread"), 6: ("EURTRY", "FWD", "P", "RET mid % + genel spread")}
+        for k, (pair, basis, col, source) in want.items():
+            t = by_row[k]
+            assert (t["pair"], t["basis"], t["note"]) == (pair, basis, "TOPLU FORWARD · " + source), k
+            assert t["forward"] == pytest.approx(cell(svc, bulk(col, k), u), abs=1e-9), k
+        days = cell(svc, bulk("C", 1), u)
+        assert by_row[1]["forward"] == cell(svc, "Forward!F2", u) + 120 * days / 10000            # (as the row shows it)
+        for k in (3, 4, 5):
+            assert by_row[k]["try_rate"] * 100 == pytest.approx(cell(svc, bulk(ex.BULK_RATE, k), u), abs=1e-12), k
+            assert abs(by_row[k]["forward"] - cell(svc, bulk("N", k), u)) < 1e-12, k
+        g = {k: cell(svc, bulk("G", k), u) for k in (4, 5)}
+        assert cell(svc, bulk("L", 4), u) == g[4] + 40 / 100 and cell(svc, bulk(ex.BULK_RATE, 5), u) == g[5] + 25 / 100
+        assert cell(svc, bulk("L", 5), u) == ""                                     # (nothing typed: no Manuel TRY %)
+        assert "RET mid % + genel spread" in src["said"] and "P/gün'ü yazılmışsa o forward" in src["said"]
+    finally:
+        svc.reset_inputs(u, "tto")
 
 
 def test_over_http(desk):

@@ -4,8 +4,11 @@ olmalı karışıklık olmaması için" - "Bu söylediklerin ve tüm tablolar bu
 row's (and side's) linked values any can be typed, the one typed last stands, the others are worked out from it with the
 table's own formulas and their exact inverses (``extras.implied_try``).
 
-* TOPLU FORWARD (``EK_BULK``): Manuel TRY % (in place), USDTRY fwd / puan, EURTRY fwd / puan - one TRY rate prices both
-  pairs; "İşleme al" books a USDTRY fwd / puan typed as the outright, the price the row shows;
+* TOPLU FORWARD (``EK_BULK``): Manuel TRY % (in place), ON karşılık % (26.11.2026: the O/N equivalent of the row's TRY
+  rate, the Forward calculators' own), USDTRY fwd / puan, EURTRY fwd / puan, and (26.11.2026, "Bunların da hepsini
+  yap") Spread (bp) over RET mid and both pairs' P/gün - one TRY rate prices both pairs; the table's general spread; the
+  display columns (ON − RET ON, the period from the filled row above, the ON of every rate column); "İşleme al" books a
+  USDTRY fwd / puan typed as the outright, the price the row shows;
 * the value-date tables USDTRY / EURTRY FORWARD (``EK_FWD`` rows 47–51 / 58–62): per row and side TRY % (in place),
   outright, puan, P/gün; the EURTRY table's TRY rates follow the USDTRY table's; a value typed stays when the value date
   changes;
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 
@@ -30,10 +34,13 @@ from tto.xl.model import COLS, parse_a1
 
 #: the groups: id -> (sheet, [(member name, member range, store range or None)])
 GROUPS = {
-    "toplu-forward": ("EK_BULK", [("Manuel TRY %", "L5:L104", None), ("USDTRY fwd", "N5:N104", "Z5:Z104"),
-                                  ("USDTRY puan", "O5:O104", "AA5:AA104"), ("EURTRY fwd", "P5:P104", "AB5:AB104"),
-                                  ("EURTRY puan", "Q5:Q104", "AC5:AC104")]),
-    # (the ON karşılık of 26.11.2026: the last member of each but TOPLU FORWARD's - test_fwd_on.py)
+    "toplu-forward": ("EK_BULK", [("Manuel TRY %", "L5:L104", None), ("Spread (bp)", "I5:I104", "AF5:AF104"),
+                                  ("ON karşılık %", "M5:M104", "AE5:AE104"), ("USDTRY fwd", "N5:N104", "Z5:Z104"),
+                                  ("USDTRY puan", "O5:O104", "AA5:AA104"), ("USDTRY P/gün", "AO5:AO104", "AG5:AG104"),
+                                  ("EURTRY fwd", "P5:P104", "AB5:AB104"), ("EURTRY puan", "Q5:Q104", "AC5:AC104"),
+                                  ("EURTRY P/gün", "AP5:AP104", "AH5:AH104")]),
+    # (the ON karşılık of 26.11.2026: the last member of each but TOPLU FORWARD's - test_fwd_on.py; TOPLU FORWARD's sits
+    # beside its Manuel TRY %, its column M - the tests below)
     "fwdrate-usd-bid": ("EK_FWD", [("TRY bid %", "B47:B51", None), ("USDTRY bid", "E47:E51", "N47:N51"),
                                    ("Puan bid", "H47:H51", "O47:O51"), ("P/gün bid", "K47:K51", "P47:P51"),
                                    ("ON bid %", "V47:V51", "Y47:Y51")]),
@@ -144,18 +151,39 @@ def test_nothing_typed_every_value_as_before(svc):
         [cell(svc, "Forward!%s" % a) * 100 for a in ("I22", "O25", "C18", "W48")], rel=1e-15)
     assert [cell(svc, "EK_FWD!B%d" % (eur + 3 + k)) for k in range(5)] == [cell(svc, "EK_FWD!B%d" % (usd + 3 + k)) for k in range(5)]
     assert cell(svc, "EK_BULK!L5") == "" and cell(svc, "EK_BULK!N5") == "" and cell(svc, "EK_BULK!AD5") == ""
+    assert cell(svc, "EK_BULK!M5") == "" and cell(svc, "EK_BULK!M4") == "ON karşılık %" and cell(svc, "EK_BULK!AE5") is None
+    assert all(cell(svc, "EK_BULK!%s5" % c) == "" for c in ("I", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AU"))
     assert cell(svc, "Forward!C169") == "" and cell(svc, "Forward!D179") == "" and cell(svc, "Forward!AA179") == ""
     assert all(cell(svc, "Forward!%s%d" % (c, r)) == "" for r in range(200, 215) for c in "FV")
 
 
 # ---------------------------------------------------------------------------------------------- TOPLU FORWARD
 D1, D2 = "15.01.2027", "15.04.2027"
-BULK = ("L", "N", "O", "P", "Q")
+#: the group's members, by column: Manuel TRY %, Spread (bp), ON karşılık %, USDTRY fwd / puan / P/gün, EURTRY fwd / puan /
+#: P/gün - and where what is typed into each is kept (Manuel TRY %: in place)
+BULK = ("L", "I", "M", "N", "O", "AO", "P", "Q", "AP")
+BULK_STORE = {"L": "L", "I": ex.BULK_TW_SPREAD, "M": ex.BULK_TW_ON, "N": "Z", "O": "AA", "AO": ex.BULK_TW_USD_PPD, "P": "AB",
+              "Q": "AC", "AP": ex.BULK_TW_EUR_PPD}
 
 
 def bulk(svc, user, r):
-    """(Manuel TRY %, USDTRY fwd, puan, EURTRY fwd, puan) of a row."""
-    return get(svc, user, *("EK_BULK!%s%d" % (c, r) for c in BULK))
+    """A row's members, by column."""
+    return dict(zip(BULK, get(svc, user, *("EK_BULK!%s%d" % (c, r) for c in BULK))))
+
+
+def typed_cols(svc, user):
+    """The columns of the cells a user keeps on the table's rows (stores and in-place values), valör aside."""
+    return {k for k in stored(svc, user, "EK_BULK") if not k.startswith("B") and k != ex.BULK_SPREAD_ALL}
+
+
+def on_of(rate, days):
+    """The Forward calculators' "ON Karşılık" (``Forward!AH14``: 360·((1 + TRY·g/360)^(1/g) − 1)) of a rate in %, in %."""
+    return 360 * ((1 + rate / 100 * days / 360) ** (1 / days) - 1) * 100
+
+
+def rate_of_on(on, days):
+    """Its exact inverse, the simple rate over ``days`` an O/N rate gives (``Forward!AH52``: ((1 + ON/360)^g − 1)·360/g), in %."""
+    return ((1 + on / 100 / 360) ** days - 1) * 360 / days * 100
 
 
 def bulk_market(svc, user, r):
@@ -167,12 +195,15 @@ def bulk_market(svc, user, r):
 
 
 def bulk_from_rate(svc, user, r, rate, shown=None):
-    """The row off a TRY rate, worked out here: N = F2·(1 + TRY·g/360)/(1 + USD·g/360), P = G2·(...EUR days, EUR %),
-    puan = (fwd − spot)·10000."""
-    days, eur_days, usd, eur, s_usd, s_eur, _ = bulk_market(svc, user, r)
+    """The row off a TRY rate, worked out here: Spread = (TRY − RET mid)·100, its ON over the row's Gün (USDTRY's days),
+    N = F2·(1 + TRY·g/360)/(1 + USD·g/360), P = G2·(...EUR days, EUR %), puan = (fwd − spot)·10000, P/gün = puan / the
+    pair's days."""
+    days, eur_days, usd, eur, s_usd, s_eur, g = bulk_market(svc, user, r)
     n = s_usd * (1 + rate / 100 * days / 360) / (1 + usd / 100 * days / 360)
     p = s_eur * (1 + rate / 100 * eur_days / 360) / (1 + eur / 100 * eur_days / 360)
-    return [rate if shown is None else shown, n, (n - s_usd) * 10000, p, (p - s_eur) * 10000]
+    return {"L": rate if shown is None else shown, "I": (rate - g) * 100, "M": on_of(rate, days), "N": n,
+            "O": (n - s_usd) * 10000, "AO": (n - s_usd) * 10000 / days, "P": p, "Q": (p - s_eur) * 10000,
+            "AP": (p - s_eur) * 10000 / eur_days}
 
 
 def implied(fwd, spot, major, days):
@@ -187,32 +218,51 @@ def bulk_user(svc):
 
 
 def test_bulk_each_member_typed_gives_the_others(svc, bulk_user):
-    """A Manuel TRY %, a USDTRY fwd or puan, an EURTRY fwd or puan typed: that one exactly, the others from the TRY rate
-    it gives - one rate prices both pairs, so a USDTRY forward typed moves the row's EURTRY forward and the other way
-    round; the other rows keep theirs."""
+    """A Manuel TRY %, a USDTRY fwd, puan or P/gün, an EURTRY fwd, puan or P/gün, an ON karşılık %, a Spread (bp) typed:
+    that one exactly, the others from the TRY rate it gives - one rate prices both pairs, so a USDTRY forward typed moves
+    the row's EURTRY forward and the other way round; the ON is the rate's over the row's Gün, an ON typed gives the rate
+    by the exact inverse; a spread typed gives RET mid + spread / 100; a P/gün typed gives puan = P/gün · the pair's days,
+    fwd = spot + puan / 10000 and the rate that outright implies (EURTRY on its own days); the other rows keep theirs."""
     u = bulk_user
     for r in (5, 6):
         days, eur_days, usd, eur, s_usd, s_eur, g = bulk_market(svc, u, r)
         assert bulk(svc, u, r) == pytest.approx(bulk_from_rate(svc, u, r, g, ""), abs=1e-9)      # nothing typed: RET mid
         put(svc, u, {"EK_BULK!L%d" % r: "41,5"})
         assert bulk(svc, u, r) == pytest.approx(bulk_from_rate(svc, u, r, 41.5), abs=1e-9)
-        fwd = round(bulk_from_rate(svc, u, r, g)[1] + 0.0521, 4)
+        fwd = round(bulk_from_rate(svc, u, r, g)["N"] + 0.0521, 4)
         put(svc, u, {"EK_BULK!N%d" % r: fwd})
         got = bulk(svc, u, r)
-        assert got[1] == fwd and got == pytest.approx(bulk_from_rate(svc, u, r, implied(fwd, s_usd, usd, days)), abs=1e-9)
+        assert got["N"] == fwd and got == pytest.approx(bulk_from_rate(svc, u, r, implied(fwd, s_usd, usd, days)), abs=1e-9)
         pts = 12345.5
         put(svc, u, {"EK_BULK!O%d" % r: pts})
         got = bulk(svc, u, r)
-        assert got[2] == pts and got[1] == s_usd + pts / 10000
+        assert got["O"] == pts and got["N"] == s_usd + pts / 10000
         assert got == pytest.approx(bulk_from_rate(svc, u, r, implied(s_usd + pts / 10000, s_usd, usd, days)), abs=1e-9)
-        eur_fwd = round(bulk_from_rate(svc, u, r, g)[3] - 0.0377, 4)
+        eur_fwd = round(bulk_from_rate(svc, u, r, g)["P"] - 0.0377, 4)
         put(svc, u, {"EK_BULK!P%d" % r: eur_fwd})
         got = bulk(svc, u, r)
-        assert got[3] == eur_fwd and got == pytest.approx(bulk_from_rate(svc, u, r, implied(eur_fwd, s_eur, eur, eur_days)), abs=1e-9)
+        assert got["P"] == eur_fwd and got == pytest.approx(bulk_from_rate(svc, u, r, implied(eur_fwd, s_eur, eur, eur_days)), abs=1e-9)
         put(svc, u, {"EK_BULK!Q%d" % r: 9999})
         got = bulk(svc, u, r)
-        assert got[4] == 9999.0 and got[3] == s_eur + 9999 / 10000
+        assert got["Q"] == 9999.0 and got["P"] == s_eur + 9999 / 10000
         assert got == pytest.approx(bulk_from_rate(svc, u, r, implied(s_eur + 0.9999, s_eur, eur, eur_days)), abs=1e-9)
+        put(svc, u, {"EK_BULK!M%d" % r: "33,25"})
+        got = bulk(svc, u, r)
+        assert got["M"] == 33.25 and got["L"] == pytest.approx(rate_of_on(33.25, days), abs=1e-12)
+        assert got == pytest.approx(bulk_from_rate(svc, u, r, rate_of_on(33.25, days)), abs=1e-9)
+        put(svc, u, {"EK_BULK!I%d" % r: "40"})
+        got = bulk(svc, u, r)
+        assert got["I"] == 40.0 and got["L"] == g + 40 / 100
+        assert got == pytest.approx(bulk_from_rate(svc, u, r, g + 40 / 100), abs=1e-9)
+        put(svc, u, {"EK_BULK!AO%d" % r: "120,5"})
+        got = bulk(svc, u, r)
+        assert got["AO"] == 120.5 and got["O"] == 120.5 * days and got["N"] == s_usd + 120.5 * days / 10000
+        assert got == pytest.approx(bulk_from_rate(svc, u, r, implied(s_usd + 120.5 * days / 10000, s_usd, usd, days)), rel=1e-12, abs=1e-9)
+        put(svc, u, {"EK_BULK!AP%d" % r: "150,5"})
+        got = bulk(svc, u, r)
+        assert got["AP"] == 150.5 and got["Q"] == 150.5 * eur_days and got["P"] == s_eur + 150.5 * eur_days / 10000
+        assert got == pytest.approx(bulk_from_rate(svc, u, r, implied(s_eur + 150.5 * eur_days / 10000, s_eur, eur, eur_days)),
+                                    rel=1e-12, abs=1e-9)
     # (row 7, the same date, nothing typed: RET mid)
     assert bulk(svc, u, 7) == pytest.approx(bulk_from_rate(svc, u, 7, cell(svc, "EK_BULK!G7", u), ""), abs=1e-9)
     # the "elle" columns stay as they were: their own way back, beside
@@ -220,32 +270,83 @@ def test_bulk_each_member_typed_gives_the_others(svc, bulk_user):
     days, _, usd, _, s_usd, _, _ = bulk_market(svc, u, 5)
     assert cell(svc, "EK_BULK!S5", u) == pytest.approx(implied(52.0, s_usd, usd, days), abs=1e-12)
     assert stored(svc, u, "EK_BULK") == {"B5": cell(svc, "EK_BULK!B5", u), "B6": cell(svc, "EK_BULK!B6", u),
-                                         "B7": cell(svc, "EK_BULK!B7", u), "AC5": 9999.0, "AC6": 9999.0, "R5": 52.0}
-    svc.reset_inputs(u, "tto", ["EK_BULK!L5:AD6", "EK_BULK!R5"])
+                                         "B7": cell(svc, "EK_BULK!B7", u), "AH5": 150.5, "AH6": 150.5, "R5": 52.0}
+    svc.reset_inputs(u, "tto", ["EK_BULK!I5:AP6", "EK_BULK!R5"])
+
+
+def test_bulk_on_is_the_forward_calculators_on_of_the_rate_that_prices_the_row(svc, bulk_user):
+    """ON karşılık % (the desk, 26.11.2026: "Toplu forward fiyatlama kısımlarında ON karşılıklarını da görmek
+    istiyorum"): the O/N equivalent of the TRY rate the row's N / P take - Manuel TRY % if any, else RET mid % - over the
+    row's Gün (value date − USDTRY spot), exactly as the Forward calculator's "ON Karşılık" (Forward!AH14) gives it for
+    the same rate and days (calendar days on 360); the integrator's check values (120 days: 35,30 % → 33,3884 %,
+    35,0135 % → 33,1317 %); blank without a valör and at Gün 0 (a valör at the spot: no period - an ON typed there
+    stays, it gives no rate); every digit kept, two decimals shown."""
+    u = bulk_user
+    try:
+        days, _, _, _, _, _, g = bulk_market(svc, u, 5)
+        assert days == cell(svc, "EK_BULK!B5", u) - cell(svc, "Forward!I2", u)
+        assert cell(svc, "EK_BULK!M5", u) == pytest.approx(on_of(g, days), abs=1e-12)
+        # the calculator (Interest 2 SP, USDTRY): from the spot to the row's valör, at the row's rate
+        put(svc, u, {"Forward!AH5": cell(svc, "Forward!I2", u), "Forward!AH6": cell(svc, "EK_BULK!B5", u), "Forward!AH10": g / 100})
+        assert cell(svc, "Forward!AH7", u) == days
+        assert cell(svc, "EK_BULK!M5", u) == pytest.approx(cell(svc, "Forward!AH14", u) * 100, abs=1e-12)
+        # Manuel TRY % typed: its ON (the other rows still RET mid's)
+        put(svc, u, {"EK_BULK!B8": cell(svc, "Forward!I2", u) + 120, "EK_BULK!L8": "35,30", "EK_BULK!B9": cell(svc, "Forward!I2", u) + 120,
+                     "EK_BULK!L9": "35,0135"})
+        assert [cell(svc, "EK_BULK!C%d" % r, u) for r in (8, 9)] == [120.0, 120.0]
+        assert [round(cell(svc, "EK_BULK!M%d" % r, u), 4) for r in (8, 9)] == [33.3884, 33.1317]
+        assert cell(svc, "EK_BULK!M8", u) == pytest.approx(on_of(35.30, 120), abs=1e-12)
+        assert cell(svc, "EK_BULK!M6", u) == pytest.approx(on_of(cell(svc, "EK_BULK!G6", u), cell(svc, "EK_BULK!C6", u)), abs=1e-12)
+        # no valör, no ON; the page: two decimals, the value every digit
+        assert cell(svc, "EK_BULK!M10", u) == ""
+        _, m = panel(svc, u, "BK1")
+        assert m["M8"]["t"] == "33,39" and m["M8"]["v"] == cell(svc, "EK_BULK!M8", u) and m["M4"]["t"] == "ON karşılık %"
+        # a valör at the spot: Gün 0 - no ON (blank, not #DIV/0!), nor any ON or period column; an ON typed there stays
+        put(svc, u, {"EK_BULK!B10": cell(svc, "Forward!I2", u)})
+        assert cell(svc, "EK_BULK!C10", u) == 0.0 and cell(svc, "EK_BULK!N10", u) == cell(svc, "Forward!F2", u)
+        assert [cell(svc, "EK_BULK!%s10" % c, u) for c in ["M", "AM", "AN", "AO"] + [x for x, _, _ in ex.BULK_ON_OF]] == [""] * 9
+        put(svc, u, {"EK_BULK!M10": "33"})
+        assert cell(svc, "EK_BULK!M10", u) == 33.0 and cell(svc, "EK_BULK!L10", u) == ""
+        # (a valör before the spot: no period either - every Forward table's ON is blank there, extras.on_rate)
+        put(svc, u, {"EK_BULK!B11": cell(svc, "Forward!I2", u) - 3})
+        assert cell(svc, "EK_BULK!C11", u) == -3.0 and [cell(svc, "EK_BULK!%s11" % c, u) for c in ("M", "AM", "AQ", "AU")] == [""] * 4
+    finally:
+        svc.reset_inputs(u, "tto", ["Forward!AH5:AH10", "EK_BULK!B8:AP11"])
 
 
 @pytest.mark.parametrize("kind", BULK)
 def test_bulk_a_computed_value_typed_back_gives_the_same_row(svc, bulk_user, kind):
-    """Round trips: one typed, each value it gives typed back as its own kind - the same row (1e-9), one value kept."""
+    """Round trips: one typed, each value it gives typed back as its own kind - the same row (1e-9), one value kept; the
+    ON, the spread and both P/gün among them (worked out from any member and typed back, or typed and each value it gives
+    typed back).  Through the ON the row is the same to 1e-11 relative: its exact inverse raises (1 + ON/360) to the
+    row's days, so the last bits of a puan of 20 000-85 000 points (a few 1e-9 points, the outright's 1e-13) are the
+    power's rounding (at most ~1e-12 relative up to 800 days); a puan by way of a P/gün and back to 1e-12 relative."""
     u = bulk_user
     r = 6
     g = cell(svc, "EK_BULK!G%d" % r, u)
-    start = {"L": round(g + 0.77, 4), "N": round(bulk_from_rate(svc, u, r, g)[1] + 0.31, 4), "O": 21000.0,
-             "P": round(bulk_from_rate(svc, u, r, g)[3] - 0.2, 4), "Q": 26000.0}[kind]
-    put(svc, u, {"EK_BULK!%s%d" % (kind, r): start})
-    want = bulk(svc, u, r)
-    for k, col in enumerate(BULK):
-        put(svc, u, {"EK_BULK!%s%d" % (col, r): want[k]})
-        assert bulk(svc, u, r) == pytest.approx(want, abs=1e-9), (kind, col)
-        store = "L" if col == "L" else ex.BULK_TW_STORES["NOPQ".index(col)]
-        assert {k2 for k2 in stored(svc, u, "EK_BULK") if not k2.startswith("B")} == {"%s%d" % (store, r)}
-    put(svc, u, {"EK_BULK!%s%d" % (kind, r): ""})
-    assert {k2 for k2 in stored(svc, u, "EK_BULK") if not k2.startswith("B")} == set()
+    start = {"L": round(g + 0.77, 4), "I": 55.5, "M": round(on_of(g, cell(svc, "EK_BULK!C%d" % r, u)) - 0.66, 4),
+             "N": round(bulk_from_rate(svc, u, r, g)["N"] + 0.31, 4), "O": 21000.0, "AO": 140.25,
+             "P": round(bulk_from_rate(svc, u, r, g)["P"] - 0.2, 4), "Q": 26000.0, "AP": 160.75}[kind]
+    try:
+        put(svc, u, {"EK_BULK!%s%d" % (kind, r): start})
+        want = bulk(svc, u, r)
+        for col in BULK:
+            put(svc, u, {"EK_BULK!%s%d" % (col, r): want[col]})
+            tol = ({"rel": 1e-11, "abs": 1e-9} if "M" in (kind, col) else
+                   {"rel": 1e-12, "abs": 1e-9} if {kind, col} & {"AO", "AP"} else {"abs": 1e-9})
+            assert bulk(svc, u, r) == pytest.approx(want, **tol), (kind, col)
+            assert typed_cols(svc, u) == {"%s%d" % (BULK_STORE[col], r)}
+        put(svc, u, {"EK_BULK!%s%d" % (kind, r): ""})
+        assert typed_cols(svc, u) == set()
+    finally:
+        svc.reset_inputs(u, "tto", ["EK_BULK!I%d:AP%d" % (r, r)])
 
 
 def test_bulk_last_typed_wins_delete_and_a_pasted_column(svc, bulk_user):
     """Typing one clears the row's other typed value; Delete on the typed one or on a computed one takes the row back to
-    RET mid; a column of USDTRY forwards pasted from Excel: each row's typed value."""
+    RET mid; a column of USDTRY forwards (or of ON rates) pasted from Excel: each row's typed value.  The ON, the spread
+    and the P/gün alike: typed over a Manuel TRY % or a fwd typed it stands, they typed over it stand; Delete on it, or on
+    a member worked out from it, takes the row back to RET mid."""
     u = bulk_user
     put(svc, u, {"EK_BULK!L5": "40"})
     put(svc, u, {"EK_BULK!P5": 59.0})
@@ -253,7 +354,43 @@ def test_bulk_last_typed_wins_delete_and_a_pasted_column(svc, bulk_user):
     put(svc, u, {"EK_BULK!N5": ""})                                                 # Delete on a computed member
     assert "AB5" not in stored(svc, u, "EK_BULK")
     assert bulk(svc, u, 5) == pytest.approx(bulk_from_rate(svc, u, 5, cell(svc, "EK_BULK!G5", u), ""), abs=1e-9)
-    fwds = [round(bulk_from_rate(svc, u, r, 40.0)[1], 4) for r in (5, 6, 7)]
+    # the ON: over a Manuel TRY %, under a fwd typed, again over it; Delete on it and on the Manuel TRY % it gives
+    days, g = cell(svc, "EK_BULK!C5", u), cell(svc, "EK_BULK!G5", u)
+    put(svc, u, {"EK_BULK!L5": "40"})
+    put(svc, u, {"EK_BULK!M5": "33"})
+    assert typed_cols(svc, u) == {"AE5"}
+    assert bulk(svc, u, 5) == pytest.approx(bulk_from_rate(svc, u, 5, rate_of_on(33.0, days)), abs=1e-9)
+    fwd = round(bulk_from_rate(svc, u, 5, g)["N"] + 0.04, 4)
+    put(svc, u, {"EK_BULK!N5": fwd})
+    assert typed_cols(svc, u) == {"Z5"}
+    assert cell(svc, "EK_BULK!M5", u) == pytest.approx(on_of(cell(svc, "EK_BULK!L5", u), days), abs=1e-12)
+    put(svc, u, {"EK_BULK!M5": "33"})
+    assert typed_cols(svc, u) == {"AE5"} and cell(svc, "EK_BULK!N5", u) != fwd
+    put(svc, u, {"EK_BULK!M5": ""})                                                 # Delete on the ON typed
+    assert typed_cols(svc, u) == set()
+    assert bulk(svc, u, 5) == pytest.approx(bulk_from_rate(svc, u, 5, g, ""), abs=1e-9)
+    put(svc, u, {"EK_BULK!M5": "33"})
+    put(svc, u, {"EK_BULK!L5": ""})                                                 # Delete on the rate it gives
+    assert typed_cols(svc, u) == set()
+    assert bulk(svc, u, 5) == pytest.approx(bulk_from_rate(svc, u, 5, g, ""), abs=1e-9)
+    # a spread, then a P/gün over it; Delete on the spread worked out from the P/gün
+    put(svc, u, {"EK_BULK!I5": "35"})
+    assert typed_cols(svc, u) == {"AF5"} and cell(svc, "EK_BULK!L5", u) == g + 35 / 100
+    put(svc, u, {"EK_BULK!AO5": "100"})
+    assert typed_cols(svc, u) == {"AG5"}
+    assert cell(svc, "EK_BULK!I5", u) == pytest.approx((cell(svc, "EK_BULK!L5", u) - g) * 100, abs=1e-9)
+    put(svc, u, {"EK_BULK!I5": ""})
+    assert typed_cols(svc, u) == set()
+    assert bulk(svc, u, 5) == pytest.approx(bulk_from_rate(svc, u, 5, g, ""), abs=1e-9)
+    # a column of ON rates pasted
+    res = svc.paste(u, "tto", "EK_BULK!M5", "33,1\n33,2\n33,3")
+    assert res["errors"] == [] and res["applied"] == 3
+    assert [cell(svc, "EK_BULK!M%d" % r, u) for r in (5, 6, 7)] == [33.1, 33.2, 33.3]
+    assert [cell(svc, "EK_BULK!L%d" % r, u) for r in (5, 6, 7)] == pytest.approx(
+        [rate_of_on(x, cell(svc, "EK_BULK!C%d" % r, u)) for r, x in zip((5, 6, 7), (33.1, 33.2, 33.3))], abs=1e-12)
+    svc.reset_inputs(u, "tto", ["EK_BULK!M5:M7"])
+    assert typed_cols(svc, u) == set()
+    fwds = [round(bulk_from_rate(svc, u, r, 40.0)["N"], 4) for r in (5, 6, 7)]
     res = svc.paste(u, "tto", "EK_BULK!N5", "\n".join(("%.4f" % x).replace(".", ",") for x in fwds))
     assert res["errors"] == [] and res["applied"] == 3
     assert [cell(svc, "EK_BULK!N%d" % r, u) for r in (5, 6, 7)] == fwds
@@ -261,7 +398,112 @@ def test_bulk_last_typed_wins_delete_and_a_pasted_column(svc, bulk_user):
     assert svc.reset_inputs(u, "tto", ["EK_BULK!O6"])["reset"] == 1                  # "Kendi girdimi sil" on its puan
     assert "Z6" not in stored(svc, u, "EK_BULK") and "Z5" in stored(svc, u, "EK_BULK")
     svc.reset_inputs(u, "tto", ["EK_BULK!N5:N7"])
-    assert [k for k in stored(svc, u, "EK_BULK") if not k.startswith("B")] == []
+    assert typed_cols(svc, u) == set()
+
+
+def test_bulk_the_general_spread_prices_the_rows_with_nothing_typed(svc):
+    """Genel spread (bp) (the desk, 26.11.2026; ``EK_BULK!C2``, each user's own, in the table's title area on a cell no
+    input ever stood on, its label beside it): a row with nothing typed is priced at RET mid + it - N / P and their puan /
+    P/gün, the ON and every column off the row's rate (the hidden "Fiyatlayan TRY %"), the Spread column shows it; a row
+    with a value typed keeps its own; blank: RET mid itself (G, not G + 0), every value as before, to the last bit."""
+    u = svc.login("iy genel spread")["user"]
+    book = svc.books["tto"]
+    d = book.inputs[book.cell("EK_BULK!" + ex.BULK_SPREAD_ALL)]
+    assert (d.scope, d.kind, d.group) == ("user", "number", "bulk100-spread-all")
+    assert cell(svc, "EK_BULK!B2") == "Genel spread (bp)" and cell(svc, "EK_BULK!" + ex.BULK_SPREAD_ALL) is None
+    try:
+        put(svc, u, {"EK_BULK!B5": D1, "EK_BULK!B6": D2, "EK_BULK!L6": "41"})
+        before = {r: bulk(svc, u, r) for r in (5, 6)}
+        rest = {r: get(svc, u, *("EK_BULK!%s%d" % (c, r) for c in ("AI", "AL", "AM", "AN", "AQ", "AU"))) for r in (5, 6)}
+        g = cell(svc, "EK_BULK!G5", u)
+        assert cell(svc, "EK_BULK!AI5", u) == g and before[5] == pytest.approx(bulk_from_rate(svc, u, 5, g, ""), abs=1e-9)
+        put(svc, u, {"EK_BULK!" + ex.BULK_SPREAD_ALL: "25"})
+        assert cell(svc, "EK_BULK!AI5", u) == g + 25 / 100
+        got = bulk(svc, u, 5)
+        assert got == pytest.approx(bulk_from_rate(svc, u, 5, g + 25 / 100, ""), abs=1e-9) and got["L"] == ""
+        assert got["I"] == pytest.approx(25.0, abs=1e-9) and cell(svc, "EK_BULK!AM5", u) == g + 25 / 100
+        assert bulk(svc, u, 6) == before[6]                                         # (a Manuel TRY % typed: its own)
+        put(svc, u, {"EK_BULK!" + ex.BULK_SPREAD_ALL: ""})
+        assert {r: bulk(svc, u, r) for r in (5, 6)} == before
+        assert {r: get(svc, u, *("EK_BULK!%s%d" % (c, r) for c in ("AI", "AL", "AM", "AN", "AQ", "AU"))) for r in (5, 6)} == rest
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_bulk_the_period_from_the_filled_row_above(svc):
+    """Dönem TRY % / Dönem ON % (26.11.2026): the forward-forward rate from the nearest filled row above (its valör) to
+    this row's - ((1 + r2·d2/360) / (1 + r1·d1/360) − 1)·360 / (d2 − d1), r the TRY rate that prices each row, d its Gün -
+    and its ON over d2 − d1 days; the first filled row runs from the spot: its own rate (its ON its ON karşılık); an empty
+    row between is passed over; blank where the dates do not increase and at Gün 0.  The last filled row's Gün and rate
+    are carried down the hidden helper columns, one cell each per row (no lookup over the table)."""
+    u = svc.login("iy dönem")["user"]
+    try:
+        spot = cell(svc, "Forward!I2", u)
+        put(svc, u, {"EK_BULK!B5": spot + 70, "EK_BULK!B7": spot + 160, "EK_BULK!B8": spot + 130, "EK_BULK!B9": spot + 220,
+                     "EK_BULK!L9": "38,5", "EK_BULK!B10": spot, "EK_BULK!B11": spot + 45})
+
+        def at(c, r):
+            return cell(svc, "EK_BULK!%s%d" % (c, r), u)
+
+        def fwd_fwd(r1, d1, r2, d2):
+            return ((1 + r2 / 100 * d2 / 360) / (1 + r1 / 100 * d1 / 360) - 1) * 360 / (d2 - d1) * 100
+
+        assert at("AM", 5) == at("AI", 5) == at("G", 5) and at("AN", 5) == pytest.approx(at("M", 5), abs=1e-12)
+        assert (at("AM", 6), at("AN", 6), at("AJ", 6), at("AK", 6)) == ("", "", 70.0, at("AI", 5))   # (an empty row: passed over)
+        want = fwd_fwd(at("AI", 5), 70, at("AI", 7), 160)
+        assert at("AM", 7) == pytest.approx(want, abs=1e-12) and at("AN", 7) == pytest.approx(on_of(want, 90), abs=1e-12)
+        assert at("AM", 8) == "" and at("AN", 8) == ""                              # (130 days after 160: no period)
+        want = fwd_fwd(at("AI", 8), 130, 38.5, 220)                                 # (from row 8, the nearest filled row)
+        assert at("AI", 9) == 38.5 and at("AM", 9) == pytest.approx(want, abs=1e-12)
+        assert at("AN", 9) == pytest.approx(on_of(want, 90), abs=1e-12)
+        assert at("AM", 10) == "" and at("AJ", 10) == 0.0                          # (Gün 0: no period, but a filled row)
+        assert at("AM", 11) == pytest.approx(at("AI", 11), abs=1e-12)              # (from the spot again)
+        _, m = panel(svc, u, "BK1")
+        assert re.match(r"^\d+,\d{2}$", m["AM7"]["t"]) and m["AM7"]["v"] == at("AM", 7)
+    finally:
+        svc.reset_inputs(u, "tto")
+
+
+def test_bulk_the_on_of_every_rate_and_the_on_less_ret_on(svc, bulk_user):
+    """ON · Offshore mid / OIS mid / RET bid / mid / ask %: each rate column's ON through the calculators' formula on 360
+    over the row's Gün - OIS mid too, not TLREF's business-day one: the table shows these rates side by side as % rates,
+    and MASA's own "O/N EŞLENİKLERİ · 360 bazında" compares OIS and offshore O/N on 360 as well; ON − RET ON (bp): the
+    row's ON karşılık less today's RET ON mid (AVERAGE(Forward!W33:X33), decimals), in bp with one decimal."""
+    u = bulk_user
+    days = cell(svc, "EK_BULK!C5", u)
+    for col, src, head in ex.BULK_ON_OF:
+        assert cell(svc, "EK_BULK!%s4" % col) == head
+        assert cell(svc, "EK_BULK!%s5" % col, u) == pytest.approx(on_of(cell(svc, "EK_BULK!%s5" % src, u), days), abs=1e-12)
+    assert cell(svc, "EK_BULK!AT5", u) == cell(svc, "EK_BULK!M5", u)              # (nothing typed: RET mid's ON is the row's)
+    ret_on = (cell(svc, "Forward!W33") + cell(svc, "Forward!X33")) / 2
+    assert cell(svc, "EK_BULK!AL5", u) == pytest.approx((cell(svc, "EK_BULK!M5", u) - ret_on * 100) * 100, abs=1e-9)
+    try:
+        put(svc, u, {"EK_BULK!M5": "36,15"})
+        assert cell(svc, "EK_BULK!AL5", u) == pytest.approx((36.15 - ret_on * 100) * 100, abs=1e-9)
+        _, m = panel(svc, u, "BK1")
+        assert re.match(r"^-?\d+,\d$", m["AL5"]["t"]) and re.match(r"^\d+,\d{2}$", m["AR5"]["t"])
+    finally:
+        svc.reset_inputs(u, "tto", ["EK_BULK!M5"])
+
+
+def test_bulk_the_hidden_block_and_the_frozen_valor_and_gun(svc, bulk_user):
+    """On the page: the hidden block (the stores and helpers, Z:AK) hidden as Excel hides a column - out of TOPLU
+    FORWARD, shown in its helper table -, the new columns right of it in the desk's order, Valör and Gün frozen while the
+    page scrolls right, the general spread's label and box in the title area; Spread (bp) in I."""
+    p, m = panel(svc, bulk_user, "BK1")
+    cols = p["data"]["c"]
+    hidden = ["Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK"]
+    shown = ["AL", "AM", "AN", "AO", "AP", "AQ", "AR", "AS", "AT", "AU"]
+    assert p["range"] == "B1:AU106" and cols[cols.index("Y") + 1:] == shown and not set(cols) & set(hidden)
+    assert (p["data"]["fz"], p["data"]["hc"], cols[:2]) == (2, len(hidden), ["B", "C"])
+    assert [m["%s4" % c]["t"] for c in shown] == ["ON − RET ON (bp)", "Dönem TRY %", "Dönem ON %", "USDTRY P/gün", "EURTRY P/gün",
+                                                  "ON · Offshore mid %", "ON · OIS mid %", "ON · RET bid %", "ON · RET mid %",
+                                                  "ON · RET ask %"]
+    assert m["I4"]["t"] == "Spread (bp)" and m["B2"]["t"] == "Genel spread (bp)" and m["C2"]["i"] == "u"
+    q, h = panel(svc, bulk_user, "BK2", helpers=True)
+    assert q["data"]["c"] == hidden and [h["%s4" % c]["t"] for c in hidden[5:]] == [
+        "Yazılan ON karşılık %", "Yazılan Spread (bp)", "Yazılan USDTRY P/gün", "Yazılan EURTRY P/gün", "Fiyatlayan TRY %",
+        "Son dolu satırın Gün'ü", "Son dolu satırın TRY %'si"]
 
 
 def test_bulk_books_each_row_at_the_price_it_shows(svc):
@@ -278,8 +520,8 @@ def test_bulk_books_each_row_at_the_price_it_shows(svc):
     cells.update({"EK_BULK!V%d" % r: "EURTRY" for r in (9, 10, 11, 12)})
     put(svc, u, cells)
     g = {r: cell(svc, "EK_BULK!G%d" % r, u) for r in dates}
-    usd_fwd = {r: round(bulk_from_rate(svc, u, r, g[r])[1] + 0.0333, 4) for r in (5, 9)}
-    eur_fwd = {r: round(bulk_from_rate(svc, u, r, g[r])[3] + 0.0444, 4) for r in (7, 11)}
+    usd_fwd = {r: round(bulk_from_rate(svc, u, r, g[r])["N"] + 0.0333, 4) for r in (5, 9)}
+    eur_fwd = {r: round(bulk_from_rate(svc, u, r, g[r])["P"] + 0.0444, 4) for r in (7, 11)}
     put(svc, u, {"EK_BULK!N5": usd_fwd[5], "EK_BULK!O6": 15000, "EK_BULK!P7": eur_fwd[7], "EK_BULK!Q8": 18000,
                  "EK_BULK!N9": usd_fwd[9], "EK_BULK!O10": 15500, "EK_BULK!P11": eur_fwd[11], "EK_BULK!L12": "41,25"})
     src = svc.bulk_from_forward(u)
@@ -306,7 +548,7 @@ def test_bulk_books_each_row_at_the_price_it_shows(svc):
     # the paste says so
     rows = {line.split("\t")[0]: line.split("\t") for line in src["text"].split("\n")[1:]}
     assert rows["1"][5:7] == ["", entry._plain(usd_fwd[5], "tr")] and rows["3"][5].endswith("%") and rows["3"][6] == ""
-    assert "USDTRY fwd ya da puanı yazılmışsa o forward" in src["said"]
+    assert "USDTRY fwd, puanı ya da P/gün'ü yazılmışsa o forward" in src["said"]
     svc.reset_inputs(u, "tto")
 
 
@@ -321,8 +563,20 @@ def test_bulk_values_typed_before_read_as_before(svc):
     days, _, usd, _, s_usd, _, _ = bulk_market(svc, u, 6)
     assert cell(svc, "EK_BULK!N6", u) == 52.5 and cell(svc, "EK_BULK!L6", u) == pytest.approx(implied(52.5, s_usd, usd, days), abs=1e-12)
     _, m = panel(svc, u, "BK1")
-    assert m["N6"]["an"] == "Manuel TRY %, USDTRY puan, EURTRY fwd, EURTRY puan" and m["L6"]["ao"] == "USDTRY fwd · N6"
+    assert m["N6"]["an"] == ("Manuel TRY %, Spread (bp), ON karşılık %, USDTRY puan, USDTRY P/gün, EURTRY fwd, EURTRY puan, "
+                             "EURTRY P/gün") and m["L6"]["ao"] == "USDTRY fwd · N6"
     assert m["L5"]["an"] and m["L5"]["m"] == 1 and m["P5"]["ao"] == "Manuel TRY % · L5"
+    assert m["M6"]["ao"] == m["I6"]["ao"] == m["AO6"]["ao"] == m["AP6"]["ao"] == "USDTRY fwd · N6"
+    # an ON typed: marked, the others worked out from it; the hidden helper table shows it in its store
+    put(svc, u, {"EK_BULK!M5": "33,5"})
+    _, m = panel(svc, u, "BK1")
+    assert m["M5"]["an"] == ("Manuel TRY %, Spread (bp), USDTRY fwd, USDTRY puan, USDTRY P/gün, EURTRY fwd, EURTRY puan, "
+                             "EURTRY P/gün")
+    assert m["L5"]["ao"] == m["N5"]["ao"] == "ON karşılık % · M5"
+    _, h = panel(svc, u, "BK2", helpers=True)
+    assert h["AE4"]["t"] == "Yazılan ON karşılık %" and h["AE5"]["v"] == 33.5
+    assert h["AD5"]["v"] == pytest.approx(cell(svc, "EK_BULK!L5", u), abs=1e-15) and h["AI5"]["v"] == h["AD5"]["v"]
+    svc.reset_inputs(u, "tto")
 
 
 # ---------------------------------------------------------------------------------------------- the value-date tables
