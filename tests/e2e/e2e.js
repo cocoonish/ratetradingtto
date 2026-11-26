@@ -7366,6 +7366,7 @@ async function clipAfter(page, action) {
       const masa = [...document.querySelectorAll('#nav .nav-group')].find((g) => (g.querySelector('.gt') || {}).textContent === 'Masa');
       const has = (id) => !!document.getElementById(id);
       return { cards: [...document.querySelectorAll('#bugun .bugun-card')].map((c) => c.id),
+        cols: [...document.querySelectorAll('#bugun > .bugun-col')].map((c) => [...c.children].map((x) => x.id.replace('bugun-', ''))),
         menu: masa ? [...masa.querySelectorAll('.nav-item')].slice(0, 2).map((a) => a.dataset.page) : [],
         ret: document.getElementById('bugun-ret-state').textContent,
         each: ['trades', 'quant', 'dibs', 'chat'].map((k) => has('bugun-' + k + '-table') || has('bugun-' + k + '-none')),
@@ -7373,8 +7374,11 @@ async function clipAfter(page, action) {
     });
     const bgStatus = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json;
     const retToday = !!(bgStatus.ret && bgStatus.ret.updated_at && bgStatus.ret.updated_at.slice(0, 10) === bgStatus.server_date);
-    check('Bugün: in the Masa group right under Masa; six blocks, each with its content or a plain "nothing"',
-      bgSeen.menu.join() === 'masa,bugun' && bgSeen.cards.join() === 'bugun-ret,bugun-trades,bugun-quant,bugun-dibs,bugun-chat,bugun-agenda'
+    // (the to-dos first, in columns - the desk, 27.11.2026: RET, the chat's trades not entered, the agenda, then the trades,
+    // the quant's lines, the DİBS bonds)
+    check('Bugün: in the Masa group right under Masa; six blocks in columns, the things to do first, each with its content or a plain "nothing"',
+      bgSeen.menu.join() === 'masa,bugun' && bgSeen.cards.join() === 'bugun-ret,bugun-chat,bugun-agenda,bugun-trades,bugun-quant,bugun-dibs'
+      && bgSeen.cols.length >= 1 && bgSeen.cols[0].slice(0, 3).join() === 'ret,chat,agenda'
       && bgSeen.each.every(Boolean) && bgSeen.agenda && bgSeen.errs === 0, bgSeen);
     check('... the RET block says what the header\'s dot says (loaded today or not)', /^Bugün yüklendi/.test(bgSeen.ret) === retToday,
       { ret: bgSeen.ret, retToday });
@@ -7416,6 +7420,102 @@ async function clipAfter(page, action) {
     check('... "Açılış sayfası yap": the dashboard opens on Bugün without an address', await page.evaluate(() => window.location.hash) === '#/bugun'
       && /Açılış sayfanız/.test(await page.textContent('#bugun-landing')));
     await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { landing: '' });
+    // ------------------------------------------------------------------ the desk tools' layout (duzen-masa; the desk, 27.11.2026:
+    // "Hepsini yap" to the layout proposals): the menu's groups, the status bar's hint, Günlük İşlemler's sheet tables and
+    // CPT × VADE, İzleme, Ayarlar's jump bar, Spot / FX ↔ FX Vol İzleme
+    {
+      const duzenMasaMenu = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-group')].map((g) => ({
+        t: (g.querySelector('.gt') || {}).textContent || '', items: [...g.querySelectorAll('.nav-item')].map((a) => a.dataset.page) })));
+      const duzenMasaGroup = (t) => duzenMasaMenu.find((g) => g.t === t) || { items: [] };
+      check('duzen-masa: a group of one entry joins its neighbour - DV01 Risk closes TRY Faiz, USD · FOMC closes FX ("FX · USD")',
+        !duzenMasaMenu.some((g) => g.t === 'Risk' || g.t === 'USD Faiz') && duzenMasaGroup('TRY Faiz').items.slice(-1)[0] === 'dv01'
+        && duzenMasaGroup('FX · USD').items.join() === 'fx,fxvol,usd', duzenMasaMenu.map((g) => g.t + ':' + g.items.length));
+      const duzenMasaTahvil = () => page.evaluate(() => {
+        const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Tahvil');
+        return g ? { folded: g.classList.contains('folded'), shown: [...g.querySelectorAll('.nav-item')].filter((a) => a.offsetParent !== null).length,
+          all: g.querySelectorAll('.nav-item').length, n: g.querySelector('.gt').dataset.n } : null;
+      });
+      const duzenMasaFlip = () => page.evaluate(() => [...document.querySelectorAll('#nav .nav-group .gt')].find((x) => x.textContent === 'Tahvil').click());
+      await duzenMasaFlip();
+      const duzenMasaFolded = await duzenMasaTahvil();
+      await page.reload();
+      await page.waitForFunction(() => document.querySelectorAll('#nav .nav-item').length > 5, null, { timeout: 60000 });
+      const duzenMasaKept = await duzenMasaTahvil();
+      await duzenMasaFlip();
+      const duzenMasaOpen = await duzenMasaTahvil();
+      check('... a group folds by its title: its pages leave the menu (their count beside it), kept after a reload, opened again by a click',
+        duzenMasaFolded && duzenMasaFolded.folded && duzenMasaFolded.shown === 0 && Number(duzenMasaFolded.n) === duzenMasaFolded.all
+        && duzenMasaKept && duzenMasaKept.folded && duzenMasaOpen && !duzenMasaOpen.folded && duzenMasaOpen.shown === duzenMasaOpen.all,
+        [duzenMasaFolded, duzenMasaKept, duzenMasaOpen]);
+      // the status bar's "Ctrl+C kopyala · …" only where a table takes it
+      const duzenMasaHint = () => page.evaluate(() => ({ shown: getComputedStyle(document.getElementById('sb-hint')).display !== 'none',
+        grid: !!document.querySelector('#app table.grid, #app table.calc-grid') }));
+      await open(page, 'bugun');
+      const duzenMasaHintBugun = await duzenMasaHint();
+      await open(page, 'masa');
+      const duzenMasaHintMasa = await duzenMasaHint();
+      check('... the status bar\'s "Ctrl+C kopyala" hint only while a table is on the screen (Bugün has none, Masa has)',
+        duzenMasaHintBugun.shown === duzenMasaHintBugun.grid && duzenMasaHintMasa.grid && duzenMasaHintMasa.shown, [duzenMasaHintBugun, duzenMasaHintMasa]);
+      // Günlük İşlemler: the sheet's own tables folded until opened; CPT × VADE with the counterparties holding a DV01
+      await open(page, 'blotter');
+      await page.waitForSelector('#blotter-sheet-cpt', { timeout: 30000 });
+      const duzenMasaSheets = await page.evaluate(() => [...document.querySelectorAll('#blotter-sheets > .panel')].map((p) => p.id + (p.classList.contains('collapsed') ? ':folded' : '')));
+      const duzenMasaCpt = () => page.evaluate(() => {
+        const trs = [...document.querySelectorAll('#blotter-sheet-cpt table.grid tr')];
+        const s = (window.tto.state.page.sheetData || []).find((x) => x.id === 'cpt');
+        return { shown: trs.length, all: s ? s.data.rows.length : 0, btn: document.getElementById('blotter-cpt-all').textContent,
+          open: !document.getElementById('blotter-sheet-cpt').classList.contains('collapsed'),
+          last: trs.length ? trs[trs.length - 1].children[0].textContent.trim() : '' };
+      });
+      await page.click('#blotter-sheet-cpt button.fold');
+      const duzenMasaCpt1 = await duzenMasaCpt();
+      await page.click('#blotter-cpt-all');
+      await page.waitForFunction(() => /^DV01'i olanlar/.test(document.getElementById('blotter-cpt-all').textContent), null, { timeout: 10000 }).catch(() => null);
+      const duzenMasaCpt2 = await duzenMasaCpt();
+      await page.click('#blotter-cpt-all');
+      await page.click('#blotter-sheet-cpt button.fold');
+      check('Günlük İşlemler: the sheet\'s own tables folded until opened; CPT × VADE opened: the counterparties with a DV01 and GENEL TOPLAM, "Tümü" every row',
+        duzenMasaSheets.length === 4 && duzenMasaSheets.every((x) => /:folded$/.test(x)) && duzenMasaCpt1.open && duzenMasaCpt1.shown < duzenMasaCpt1.all
+        && duzenMasaCpt1.last === 'GENEL' && /^Tümü \(\d+\)$/.test(duzenMasaCpt1.btn) && duzenMasaCpt2.shown === duzenMasaCpt2.all,
+        { sheets: duzenMasaSheets, cpt: [duzenMasaCpt1, duzenMasaCpt2] });
+      // İzleme: what fired today first; the system alarms' settings folded
+      await open(page, 'watch');
+      const duzenMasaWatch = await page.evaluate(() => ({ first: (document.querySelector('.watch-panels > .panel') || {}).id,
+        form: !!document.querySelector('#desk-settings-fold #desk-settings'), open: (document.getElementById('desk-settings-fold') || {}).open }));
+      check('İzleme: what fired today first; the system alarms\' settings folded (one click opens them)',
+        duzenMasaWatch.first === 'watch-fired' && duzenMasaWatch.form && duzenMasaWatch.open === false, duzenMasaWatch);
+      // Ayarlar: a chip per panel; a folded reference list opened by its chip, in view
+      await open(page, 'settings');
+      await page.waitForSelector('#settings-jump .chip');
+      const duzenMasaJump0 = await page.evaluate(() => ({ chips: [...document.querySelectorAll('#settings-jump .chip')].map((b) => b.dataset.p),
+        series: document.querySelector('.panel[data-panel="series"]').classList.contains('collapsed') }));
+      await page.click('#settings-jump .chip[data-p="series"]');
+      await page.waitForTimeout(900);
+      const duzenMasaJump1 = await page.evaluate(() => {
+        const p = document.querySelector('.panel[data-panel="series"]');
+        const r = p.getBoundingClientRect();
+        return { open: !p.classList.contains('collapsed'), top: Math.round(r.top), h: window.innerHeight };
+      });
+      check('Ayarlar: a chip per panel over the page; "Tarihçe serileri" folded until opened - its chip opens it and brings it into view',
+        duzenMasaJump0.chips.length === 9 && duzenMasaJump0.series && duzenMasaJump1.open && duzenMasaJump1.top >= 0 && duzenMasaJump1.top < duzenMasaJump1.h,
+        [duzenMasaJump0, duzenMasaJump1]);
+      // Spot / FX ↔ FX Vol İzleme: one "Yöntem" for both; the pairs' table folded on Spot / FX (its pair box instead)
+      await open(page, 'fxvol');
+      await page.waitForSelector('#fxvol-method-link', { timeout: 60000 });
+      const duzenMasaFxv = await page.evaluate(() => ({ href: document.getElementById('fxvol-method-link').getAttribute('href'),
+        own: !!document.getElementById('fxvol-method') }));
+      await page.click('#fxvol-method-link');
+      await page.waitForFunction(() => window.tto.state.pageId === 'fx' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
+      await page.waitForFunction(() => { const m = document.getElementById('fx-method'); return m && !m.classList.contains('collapsed'); }, null, { timeout: 30000 })
+        .catch(() => null);
+      const duzenMasaFx = await page.evaluate(() => ({ method: !document.getElementById('fx-method').classList.contains('collapsed'),
+        both: /FX Vol İzleme/.test(document.getElementById('fx-method').textContent), board: document.getElementById('fx-board').classList.contains('collapsed'),
+        pair: (document.getElementById('fx-pair') || {}).value || '' }));
+      check('Spot / FX ↔ FX Vol İzleme: one "Yöntem" (FX Vol\'s link opens Spot / FX\'s, with FX Vol\'s part); the pairs\' table folded there, a pair box instead',
+        duzenMasaFxv.href === '#/fx?p=fx-method' && !duzenMasaFxv.own && duzenMasaFx.method && duzenMasaFx.both && duzenMasaFx.board && !!duzenMasaFx.pair,
+        [duzenMasaFxv, duzenMasaFx]);
+      await open(page, 'bugun');                       // (where the scenario goes on)
+    }
     // Ctrl+K "işlem gir usdtry 1m 10mn": first a command; Günlük İşlemler's form filled - the value date from the pair's
     // own spot, as the form reads a tenor -, nothing saved
     const blotterBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
