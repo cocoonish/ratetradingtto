@@ -172,9 +172,10 @@ def test_the_money_market_and_bond_dates_stay_on_the_try_list(desk):
     assert cell(desk, "EK_FWD!C5") == b5 - cell(desk, "Forward!I2") and cell(desk, "EK_FWD!X5") == b5 - cell(desk, "OIS_MAIN!B2")
     assert cell(desk, "EK_FWD!X5") == cell(desk, "EK_FWD!C5") + 1          # ... its OIS days from the OIS spot, one more
     assert cell(desk, "MASA!BL175") == 1.0                                  # broken date: FX spot − OIS spot
-    assert cell(desk, "OIS_MAIN!K2") == "Bloomberg valörü" and day_of(desk, "OIS_MAIN!L2") == D(2026, 11, 4)
+    # (in the parameters' last row since 26.11.2026, A6:B6: K2:L2 is the TLREF normalization switch's)
+    assert cell(desk, "OIS_MAIN!A6") == "Bloomberg valörü" and day_of(desk, "OIS_MAIN!B6") == D(2026, 11, 4)
     params = next(p for p in desk.view(None, "ois")["panels"] if p["id"] == "B1")["data"]
-    assert params["c"][-2:] == ["K", "L"] and [c["t"] for c in params["rows"][0][-2:]] == ["Bloomberg valörü", "04.11.2026"]
+    assert params["c"][:2] == ["A", "B"] and [c["t"] for c in params["rows"][-1][:2]] == ["Bloomberg valörü", "04.11.2026"]
 
 
 # ---------------------------------------------------------------------------------------------- tenors

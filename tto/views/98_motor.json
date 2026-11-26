@@ -217,8 +217,8 @@
   {
    "id": "B13",
    "type": "table",
-   "title": "Günlük takvim: iş günü, p = gün − son iş günü, Pcum = Σp (W = Σ g(g−1)/2 düzeltmesi), sonraki iş günü",
-   "range": "A526:G4228",
+   "title": "Günlük takvim: iş günü, p = gün − son iş günü, Pcum = Σp (W = Σ g(g−1)/2 düzeltmesi), sonraki iş günü; E(gün): TLREF normalleşmesinin ln G'ye kattığı (OIS_MAIN!M2:M5)",
+   "range": "A526:H4228",
    "hidden": true
   },
   {
