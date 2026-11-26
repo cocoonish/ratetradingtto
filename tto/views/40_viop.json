@@ -393,7 +393,7 @@
    "title": "VIOP BID",
    "range": "K7:X18",
    "hidden": false,
-   "note": "TRY Repo = ON karşılık: TRY satırındaki ima faizin (kontratın bid fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON bid."
+   "note": "ON karşılık (Excel'deki adı TRY Repo): TRY satırındaki ima faizin (kontratın bid fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON bid."
   },
   {
    "id": "B7",
@@ -401,7 +401,7 @@
    "title": "VIOP ASK",
    "range": "K19:X29",
    "hidden": false,
-   "note": "TRY Repo = ON karşılık: TRY satırındaki ima faizin (kontratın ask fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON ask."
+   "note": "ON karşılık (Excel'deki adı TRY Repo): TRY satırındaki ima faizin (kontratın ask fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON ask."
   },
   {
    "id": "B32",

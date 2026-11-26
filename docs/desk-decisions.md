@@ -2103,8 +2103,9 @@ equal to the last bit on the replay data. Replay (03.11.2026's file), the 30.11.
 - **Display only.** Neither table takes a typed value per contract, so nothing is kept and nothing moves on a roll:
   every column is the contract's place, the ON beside its rate (tested on a roll: the day after the November expiry the
   first row is December's, with its own rate, days and ON).
-- **The label "TRY Repo" is the desk's own** and stays; renaming the row "ON karşılık" on the page is a label change if
-  the desk wants it.
+- **The label**: asked whether "TRY Repo" should read "ON karşılık" on the page, the desk (26.11.2026): **"Evet"**. The
+  two rows read "ON karşılık" on the VİOP page (`extras.VIOP_ON_LABEL`: the label cells `VIOP!L17` / `L29` only); the
+  workbook keeps its own label "TRY Repo", which the addition's check still requires.
 - **Not done** (not in this request): the Quant · VİOP page's contract table (its alış / satış / orta implied rates)
   shows no ON; the calendar-spread matrices' "ima TRY" are forward-forward rates between two expiries (their ON would be
   over the period between them, another number); DEALS, Target and the gold calculator (which has its own two-way ON
@@ -2152,7 +2153,8 @@ BGN) on every one of its 528 days since 07.11.2024, and that day's `DAYS_TO_MTY`
 - **Each curve on its own days**, as at 2Y: offshore from the USDTRY spot (T+1, TRY+USD) to the XCCY ticker's maturity, OIS
   from the OIS spot (T+1, TRY) to Motor's node - a day or two apart at some tenors (replay: 3Y one day, 2Y two).
 - **The chart "Oranlar (360 basit)" stays at 2Y on purpose** (`MASA!AF6:AK16`, the workbook's): 360-simple zero rates at
-  long tenors would squash its axis (the O/N chart runs to 10Y already).
+  long tenors would squash its axis (the O/N chart runs to 10Y already). Asked whether to extend it to 10Y, the desk
+  (26.11.2026): **"Hayır"**.
 - **The table's own remark** (`MASA!B21`, the workbook's) is as it was; the panel's note says where 3Y–10Y come from.
 - No new Bloomberg request; no Bootstrap number moves. On MASA and Forward nothing else changed: every formula, constant
   and format, and every value but these cells and what reads them (`L17:L18`, `AI17:AJ20`) - cell for cell against
@@ -2303,8 +2305,8 @@ on TLREF's convention, so it compares directly with TLREF and repo" -, answered:
 - **Kâğıt Fiyat Yükleme is left as it is**: its yields are the upload file's quotes (t0 on its own value date, its own
   coupon schedule, written to the txt in BIST simple yields), every cell there is editable - an O/N column would be a
   two-way column of its own on that page (JavaScript and its `cevir` route) and a second implementation of the
-  convention on its schedule; the same bonds' O/N at the market is on DİBS RV, DİBS Trading and Tüm Kâğıtlar. A question
-  for the desk.
+  convention on its schedule; the same bonds' O/N at the market is on DİBS RV, DİBS Trading and Tüm Kâğıtlar. Asked
+  whether to add it anyway, the desk (26.11.2026): **"Hayır"**.
 - No new Bloomberg request; nothing typed, every existing value unchanged (checked cell for cell against 5ed4eab on DİBS RV,
   Tüm Kâğıtlar, DİBS Trading's sheet, EK_PPK, Motor, OIS_MAIN, Manuel Tahvil and MASA - 107 078 cells, the shared
   calculation and a user with a manual price, yields, an ASW, a repo, a carry and a PPK rate and spread typed -, and the

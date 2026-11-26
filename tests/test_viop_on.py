@@ -5,7 +5,7 @@ contract's implied TRY rate" - "Bunların da hepsini yap").
 The VİOP sheet has it already: its BID / ASK tables' "TRY Repo" rows (17 / 29) are their "TRY" rows (13 / 25, the rate the
 contract's bid / ask price implies, simple ACT/360 over VKGS days: the expiry − VIOP!K3) compounded daily over those very
 days on 360 - the Forward calculators' "ON Karşılık" (``extras.on_equivalent``).  The VİOP page names it under the two
-tables; the desk page's summary of the contracts shows it beside each implied rate (``extras.VIOP_ON_SIDES``,
+tables and in the rows' label, "ON karşılık" (the desk, 26.11.2026, of renaming "TRY Repo": "Evet"); the desk page's summary of the contracts shows it beside each implied rate (``extras.VIOP_ON_SIDES``,
 ``_tto_viop_on``: MASA's A / O, cells the workbook leaves empty).  Display only: no table of these takes a typed value per
 contract - nothing is kept, and on a roll each ON stays beside its contract's rate.  Checked against a calculation of its
 own off the cells' rates and days."""
@@ -61,7 +61,7 @@ def test_the_viop_sheets_try_repo_is_each_contracts_on_karsilik(svc):
     spot = cell(svc, "VIOP!M8")
     assert spot == (k3 if isinstance(k3, float) else float(date_to_serial(dt.datetime.strptime(k3, "%d.%m.%Y").date())))
     for side, (rate_row, days_row, on_row) in SIDES.items():
-        assert cell(svc, "VIOP!L%d" % on_row) == "TRY Repo" and cell(svc, "VIOP!L%d" % rate_row) == "TRY"
+        assert cell(svc, "VIOP!L%d" % on_row) == ex.VIOP_ON_LABEL == "ON karşılık" and cell(svc, "VIOP!L%d" % rate_row) == "TRY"
         for col in CONTRACTS:
             rate, days, on = (cell(svc, "VIOP!%s%d" % (col, r)) for r in (rate_row, days_row, on_row))
             assert days == cell(svc, "VIOP!%s%d" % (col, days_row - 1)) - spot > 0, (side, col)
@@ -75,15 +75,15 @@ def test_the_viop_sheets_try_repo_is_each_contracts_on_karsilik(svc):
 
 
 def test_the_viop_page_names_it_under_the_bid_and_ask_tables(svc):
-    """The two tables show "TRY Repo" two decimals wide, as their TRY rows; the note under each says it is the ON karşılık,
+    """The two tables show the row - "ON karşılık" on the page, "TRY Repo" in the workbook - two decimals wide, as their TRY rows; the note under each says it is the ON karşılık,
     of which price, on which days and basis - and where the desk page shows it."""
     for pid, side, row in (("B5", "bid", 17), ("B7", "ask", 29)):
         p = panel(svc, None, "viop", pid)
-        assert "TRY Repo = ON karşılık" in p["note"] and "360·((1 + TRY·VKGS/360)^(1/VKGS) − 1)" in p["note"], pid
+        assert "ON karşılık (Excel'deki adı TRY Repo)" in p["note"] and "360·((1 + TRY·VKGS/360)^(1/VKGS) − 1)" in p["note"], pid
         assert ("kontratın %s fiyatından" % side) in p["note"] and "ON %s" % side in p["note"], pid
         d = p["data"]
         cells = dict(zip(d["c"], d["rows"][d["r"].index(row)]))
-        assert cells["L"]["t"] == "TRY Repo"
+        assert cells["L"]["t"] == "ON karşılık"                     # (the desk, 26.11.2026: "Evet" to the rename)
         assert all(TWO_DECIMALS.match(cells[c]["t"]) for c in CONTRACTS), [cells[c]["t"] for c in CONTRACTS]
 
 
@@ -170,8 +170,8 @@ def test_on_a_roll_each_on_stays_beside_its_contracts_rate(svc, tmp_path):
 # ============================================================================== what the addition writes, and when it does not
 def test_the_addition_writes_its_own_cells_only(monkeypatch):
     """The workbook with every addition but this one, against all of them: the same sheets, formulas, values and looks
-    everywhere but MASA's A109:A121 and O109:O121 - empty in the workbook, read by no formula - so nothing shown before
-    changes."""
+    everywhere but MASA's A109:A121 and O109:O121 - empty in the workbook, read by no formula - and the VİOP sheet's two
+    labels L17 / L29, "TRY Repo" -> "ON karşılık" (the desk, 26.11.2026: "Evet"), so no number shown before changes."""
     full = raw_model()
     assert ex.apply("tto", full) == []
     without = raw_model()
@@ -185,8 +185,15 @@ def test_the_addition_writes_its_own_cells_only(monkeypatch):
         return out
 
     new = {(r * COLS + col) for col in (1, 15) for r in range(ex.VIOP_ON_FIRST - 1, ex.VIOP_ON_LAST + 1)}      # A, O
+    renamed = {parse_a1("L%(on)d" % s) for s in ex.VIOP_ON_SIDES}             # VIOP!L17 / L29: the rows' label
     for a, b in zip(full.sheets, without.sheets):
         ca, cb = cells(full, a), cells(without, b)
+        if a.name == "VIOP":
+            assert {rc: v for rc, v in ca.items() if rc not in renamed} == {rc: v for rc, v in cb.items() if rc not in renamed}
+            assert [ca[rc] for rc in sorted(renamed)] == [("c", "ON karşılık")] * 2
+            assert [cb[rc] for rc in sorted(renamed)] == [("c", "TRY Repo")] * 2
+            assert a.styles == b.styles and a.comments == b.comments
+            continue
         if a.name != "MASA":
             assert ca == cb and a.styles == b.styles and a.comments == b.comments, a.name
             continue

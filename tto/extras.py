@@ -5043,13 +5043,17 @@ def _tto_viop_dv01(model: Model) -> None:
 #: The VİOP sheet has it already.  Its BID / ASK tables' "TRY Repo" rows (17 / 29) are their "TRY" rows' (13 / 25: the rate
 #: the contract's bid / ask price implies, simple ACT/360 over VKGS days, rows 10 / 22 = the expiry − VIOP!K3) compounded
 #: daily over those very days, ((1 + TRY/360·VKGS)^(1/VKGS) − 1)·360 - Forward!AH14's "ON Karşılık" (:func:`on_equivalent`;
-#: equal to the last bit on the replay data).  The VİOP page says so under the two tables; nothing of the sheet changes.
+#: equal to the last bit on the replay data).  The VİOP page says so under the two tables, and names the two rows
+#: ``VIOP_ON_LABEL`` (the desk, 26.11.2026, asked whether "TRY Repo" should read "ON karşılık" on the page: "Evet") - the
+#: label cells L17 / L29 only; the check still wants the workbook's own label, "TRY Repo".
 #: The desk page's summary of the contracts (MASA!B108:N122, "VİOP · kontratlar, ima TRY ve baz") showed the implied rates
 #: without it: two columns of its own, on cells the workbook leaves empty (A and O of its rows - the page puts each beside
 #: its rate), each the contract's "TRY Repo", read the way the summary reads the rates.  Display only: no table of these
 #: takes a typed value per contract, so nothing is kept, and on a roll every column stays the contract's place, as the
 #: rates beside it.  (TLREF's business-day O/N, :func:`overnight_bd`, is the TRY OIS windows' - never a VİOP rate's.)
 VIOP_ON_NAME = "VİOP ON karşılık"
+#: what the VİOP sheet's "TRY Repo" rows (17 / 29) read on the page (the desk, 26.11.2026: "Evet")
+VIOP_ON_LABEL = "ON karşılık"
 #: The two sides, bid and ask: the VİOP sheet's table rows - the implied rate ("TRY"), its VKGS days, its spot, USD rate
 #: and swap points, its ON ("TRY Repo") - and MASA's summary columns - the rate's (with its caption) and the ON's
 VIOP_ON_SIDES = (
@@ -5085,6 +5089,9 @@ def _viop_on_check(model: Model) -> None:
 
 
 def _tto_viop_on(model: Model) -> None:
+    v = SheetBuilder(model, "VIOP")
+    for s in VIOP_ON_SIDES:
+        v.set("L%(on)d" % s, VIOP_ON_LABEL, like="L%(on)d" % s)             # "TRY Repo" -> "ON karşılık", in its own look
     b = SheetBuilder(model, "MASA")
     for s in VIOP_ON_SIDES:
         b.set("%s%d" % (s["on_col"], VIOP_ON_FIRST - 1), s["on_head"], like="%s%d" % (s["col"], VIOP_ON_FIRST - 1))

@@ -2344,7 +2344,7 @@ async function clipAfter(page, action) {
       && (await cellText(page, 'VIOP!AA10')).trim() === '', [await cellText(page, 'VIOP!AA9'), await cellText(page, 'VIOP!AA10')]);
 
     // ---- VİOP: each contract's ON karşılık (the desk, 26.11.2026: "Bunların da hepsini yap") - the BID / ASK tables' own
-    //      "TRY Repo" rows, named in the notes under them, and beside each implied rate in the desk page's summary
+    //      "TRY Repo" rows - "ON karşılık" on the page -, named in the notes under them, and beside each implied rate in the desk page's summary
     console.log('VİOP: ON karşılık');
     const viopOnGrid = async (id) => {
       await page.evaluate((p) => window.tto.state.page.focusPanel(p), id);
@@ -2366,9 +2366,9 @@ async function clipAfter(page, action) {
       return { bid: side('B5', 13, 10, 17), ask: side('B7', 25, 22, 29) };
     });
     const viopOnOf = (rate, days) => 360 * (Math.pow(1 + rate * days / 360, 1 / days) - 1);    // simple ACT/360 -> compounded daily
-    const viopOnSide = (s) => s.label === 'TRY Repo' && s.cells.length === 12 && s.cells.every((x) => typeof x.on === 'number'
-      && Math.abs(x.on - viopOnOf(x.rate, x.days)) < 1e-12 && /^\d+,\d\d%$/.test(x.t)) && /^TRY Repo = ON karşılık/.test(s.note);
-    check('VİOP page: each contract\'s ON karşılık is the BID / ASK tables\' own "TRY Repo" row (the TRY row compounded daily over its VKGS days on 360), two decimals, named in the note under each table',
+    const viopOnSide = (s) => s.label === 'ON karşılık' && s.cells.length === 12 && s.cells.every((x) => typeof x.on === 'number'
+      && Math.abs(x.on - viopOnOf(x.rate, x.days)) < 1e-12 && /^\d+,\d\d%$/.test(x.t)) && /^ON karşılık \(Excel'deki adı TRY Repo\)/.test(s.note);
+    check('VİOP page: each contract\'s ON karşılık is the BID / ASK tables\' own row of it ("TRY Repo" in the workbook, "ON karşılık" on the page: the TRY row compounded daily over its VKGS days on 360), two decimals, named in the note under each table',
       viopOnSide(viopOn.bid) && viopOnSide(viopOn.ask) && /bid fiyatından/.test(viopOn.bid.note) && /ask fiyatından/.test(viopOn.ask.note),
       { bid: viopOn.bid.cells[0], ask: viopOn.ask.cells[0], label: viopOn.bid.label, notes: [viopOn.bid.note.slice(0, 50), viopOn.ask.note.slice(0, 50)] });
     await open(page, 'masa');
@@ -2380,7 +2380,7 @@ async function clipAfter(page, action) {
       return { c: d.c.join(' '), head: row(109), rows: [110, 111, 121].map(row),
         note: ((document.querySelector('#content .panel[data-panel="B15"] .note') || {}).textContent || '') };
     });
-    check('Masa → VİOP: ON bid / ON ask beside İma bid / İma ask in the contracts\' summary - the VİOP page\'s TRY Repo, as it reads there',
+    check('Masa → VİOP: ON bid / ON ask beside İma bid / İma ask in the contracts\' summary - the VİOP page\'s ON karşılık row, as it reads there',
       masaOn.c === 'B C D E F A G O H I J K L M N' && masaOn.head.slice(4, 8).join('|') === 'İma bid (360)|ON bid (360)|İma ask (360)|ON ask (360)'
       && [[0, 0], [1, 1], [2, 11]].every(([i, k]) => masaOn.rows[i][4] === viopOn.bid.cells[k].rt && masaOn.rows[i][5] === viopOn.bid.cells[k].t
         && masaOn.rows[i][6] === viopOn.ask.cells[k].rt && masaOn.rows[i][7] === viopOn.ask.cells[k].t) && /ON karşılığı/.test(masaOn.note),

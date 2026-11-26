@@ -614,7 +614,7 @@
    "range": "A108:O122",
    "cols": ["B", "C", "D", "E", "F", "A", "G", "O", "H", "I", "J", "K", "L", "M", "N"],
    "hidden": false,
-   "note": "ON bid / ON ask: ima faizin ON karşılığı, 360·((1 + ima·gün/360)^(1/gün) − 1) - aynı gün ve 360 bazında, günlük bileşik (VİOP sayfasındaki VIOP BID / ASK tablolarının TRY Repo satırı, VIOP!M17:X17 / M29:X29).",
+   "note": "ON bid / ON ask: ima faizin ON karşılığı, 360·((1 + ima·gün/360)^(1/gün) − 1) - aynı gün ve 360 bazında, günlük bileşik (VİOP sayfasındaki VIOP BID / ASK tablolarının ON karşılık satırı - Excel'deki adı TRY Repo -, VIOP!M17:X17 / M29:X29).",
    "trade": {"first": 110, "last": 121, "why": "VİOP kontratı – Günlük İşlemler'de VİOP yok", "cells": {"D": "none", "E": "none"}}
   },
   {

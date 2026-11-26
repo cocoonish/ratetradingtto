@@ -411,8 +411,8 @@ TRY list itself (`extras.try_term`, `EK_ISGUNU`). Fixed coupon bonds and bills o
   (`EK_XAU!B9`, when none is typed).
 - **VİOP's ON karşılık** (26.11.2026, [desk-decisions.md](desk-decisions.md), "VİOP: ON karşılık") counts the same
   days: each contract's implied TRY rate (simple ACT/360 over VKGS = the expiry − `VIOP!K3`, rows 10 / 22) compounded
-  daily over those days on 360 - the VİOP sheet's own "TRY Repo" rows 17 / 29, `extras.on_equivalent`'s formula; the desk
-  page's VİOP summary shows them as ON bid / ON ask. A rate read from VİOP's prices, neither TRY OIS nor the offshore
+  daily over those days on 360 - the VİOP sheet's own "TRY Repo" rows 17 / 29 ("ON karşılık" on the page),
+  `extras.on_equivalent`'s formula; the desk page's VİOP summary shows them as ON bid / ON ask. A rate read from VİOP's prices, neither TRY OIS nor the offshore
   curve - never TLREF's business-day O/N (`extras.overnight_bd`: TRY OIS windows only).
 - The cells counted from the USDTRY spot: `MASA!P94:P99`, `MASA!C171`, `Forward!B200:B205`, `Forward!K130:K134`.
 - The Forward page's two-way tables (24.11.2026) solve a typed outright's TRY rate (`extras.implied_try`, simple
