@@ -279,6 +279,28 @@ def test_a_tie_is_said_and_the_earliest_day_taken(svc):
     assert msg.startswith("En iyi uyum 04.12.2026 ve sonrasındaki her günde aynı") and "en erken gün alındı" in msg
 
 
+def test_a_meeting_added_to_the_calendar_is_read_where_it_lands(svc):
+    """Nothing is kept per meeting row: an extraordinary PPK meeting on Friday 20.11.2026 (the calendar's rows move) takes
+    effect on Monday 23.11 (day 19) - inside 1M now, a level of its own fitted after it; the day is found as before."""
+    h = svc.history
+    start = h.meetings()
+    quotes = synthetic(svc, 9, [0.33, 0.3, 0.3], [19, 37, 79])
+    u = case(svc, "takvim", ["1W", "2W", "1M"], None, quotes)
+    miss = "OIS_MAIN!%s%d" % (ex.NW_MISS, ex.NW_FIRST_TENOR + 2)                             # 1M's (bp)
+    assert cell(svc, "EK_NORM!B11", u) == 0.0 and abs(cell(svc, miss, u)) > 10         # (without it: no step, 1M missed)
+    try:
+        res = h.set_calendar(u, ["20.11.2026"] + start[:-1])
+        assert res["parked"]["meetings"] == []
+        assert cell(svc, "Motor!C5", u) == 19.0 and cell(svc, "EK_NORM!B25", u) == 19.0
+        assert cell(svc, "EK_NORM!B11", u) == 1.0 and cell(svc, "EK_NORM!E11", u) == day(svc, 9) and cell(svc, "EK_NORM!E7", u) == 1.0
+        assert abs(cell(svc, miss, u)) < 1e-6
+        last = int(cell(svc, "EK_NORM!E9", u)) + ex.NW_R - 1
+        assert cell(svc, "EK_NORM!%s%d" % (ex.NW_COLS["x2"][0], last), u) == pytest.approx(0.33, abs=1e-10)
+    finally:
+        h.set_calendar(u, start)
+    assert cell(svc, "Motor!C5", u) == 37.0
+
+
 def test_the_date_in_use_falls_back_to_the_ois_implied_date(svc):
     """L5 (the date in use): the date typed (L3) when there is one; with L3 blank the OIS-implied date; switched off,
     nothing - whatever is typed."""

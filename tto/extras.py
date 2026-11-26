@@ -7247,8 +7247,8 @@ def _masa_off(model: Model) -> None:
 #:   1W 7 and 2W 14 days as the solver counts them (Motor!B4306 / B4307), 1M-3M OIS_MAIN!E442:E444 - and its quote the
 #:   solver's own (OIS_MAIN!AU13 / AU14, D442:D444).
 #: * **The date.** The day with the smallest sum of squared rate misses - the earliest on a tie (``NW_TIE``: the sums the
-#:   same to (0,0001 bp)²; a tie is said).  None when the ticked tenors are no more than the unknown levels ("say so"), or
-#:   when "sonrası" fits best: "normalleşme seçili vadelerin sonrasında".
+#:   same to (0,0001 bp)²; a tie is said).  None when the ticked tenors are no more than the unknown levels (the message
+#:   says how many to tick), or when "sonrası" fits best: "normalleşme seçili vadelerin sonrasında".
 #:
 #: The helpers are on ``EK_NORM`` (no page: the sheet explorer shows it); the result sits right of STUB İMA (OIS_MAIN!AO8:AS15,
 #: in its panel - no new panel): per tenor its tick box (a per-user input of kind "check", tto/views/__init__.py - default 1W,
