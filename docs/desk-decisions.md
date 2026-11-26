@@ -2319,3 +2319,64 @@ frozen columns kept when its own order keeps them first), `tto/dibsgenel.py` (`c
 (B3's `cols`, the group's member, the helper table "on"), `58_kagitlar.json` (U1's `cols`), `60_dibslive.json` (the note).
 Tests: `tests/test_kagit_on.py`; `tests/test_kagit_twoway.py`, `tests/test_rvfair.py`, `tests/test_dibsgenel.py` (the new
 member, the summary's and Genel's column); the browser test's "DİBS: getirinin ON karşılığı" checks.
+
+#### Düzen: Forward, VİOP, Borsa, Carry, OIS · Nakit Akışı, DV01
+
+The desk's answer to the 22 layout proposals (27.11.2026): **"Hepsini yap"**. This part: proposals 4, 9, 13, 14, 15, 16 and
+21, and 3 / 7 / 8 applied on these six pages. Layout only: no value, formula, input or Bloomberg request changed; every
+panel id stays (a panel taken off a tab is among the helper tables, "Yardımcı tablolar"); each user's own choices
+(folded panels, hidden columns, the open tab) win.
+
+- **Forward** (16, 21, 4, 3, 8): the one-table "Ticker'lar" tab is the last table of "Eğriler" (its note says so).
+  "Forward fiyatları": Forward DV01 before the gold forward, the two stacked beside "TRY FAİZLERİ VADELERE GÖRE" (Forward
+  DV01 sat alone with 1,135 px empty). "Kotasyon": the four ways back (PUAN → OIS SPREAD, FAİZ → SPREAD; USDTRY and EURTRY)
+  start **folded** and at their own width (no longer `wide`) - ▸ opens one, the user's choice is kept. The matrices' four
+  "serbest" rows (and the ways back's, which show the same dates) and ÇAPRAZ FORWARD's nine free valör rows grow: the rows
+  with a "Valör" (B) and one empty more, "+ Satır" / "Tümü". Frozen identifier columns (`"freeze"`, the core layout's
+  mechanism): the curve label of the value-date tables (1), Vade + Valör of the matrices and of FAİZ → SPREAD (2), the
+  first column of FORWARD STARTING SWAP and ÇAPRAZ FORWARD (1).
+- **VİOP** (15, 16, 4, 3, 8): "Kontratlar" opens with Kontratlar → DEALS → Target, then VIOP BID / ASK / OIS / ICAP, the
+  manual spot last (the header strip's "Spot kaynağı ✎" writes the same two cells; the panel keeps its place first in the
+  page definition's panel list). The merged column K that only repeats a table's name (VIOP BID, OIS, DEALS, Target, the
+  history tables, the 15 calendar spread matrices) is left out with `cols` from L - the panel's title is that cell's text;
+  the contracts' own table keeps its K (K3, the spot value date, is an input). Target: its filled rows and one more
+  (`"grow"`, key "Yakın"), Yakın + Uzak frozen; the history tables' row names frozen. The "Hesaplayıcılar" tab only repeated
+  the XAUTRY calculator of "Altın": gone, the calculator's one home is "Altın" (its note now says what the old tab's said);
+  a saved choice of that tab opens the first tab. "Altın": the XAUTRY calendar spread (B11b) stacked under the XAUUSD
+  table, beside the XAUTRY bid / ask tables it is made of (it sat alone at the bottom).
+- **Borsa Swap** (13, 9, 3): BID % / ASK % side by side and right after them the four spreads to the OIS and the offshore
+  mid, then the two mid zero rates, then size, points, points per day and O/N in the sheet's order (at 1366 px the four
+  spreads were exactly what scrolled away). The spreads are the dashboard's own columns (`tto/borsaspread.py`): a page's
+  `"cols"` names them by their caption (a second pass of `cols` after the added columns, `Service._panel`; a page that names
+  none keeps them on the right). Valör frozen. "ON kur"'s O/N swap points (`Sheet1!AE19`, TRYON BGN MID) read "415,50", not
+  "415,50000000".
+- **Carry & Roll** (14, 7, 8): the closing simulator's result beside its inputs (B8, B10, then B9 - its 18 intermediate
+  values - folded); "Spread · fly" opens with both tables open (the tab held nothing else); the notes panel that only said
+  the title and the path (the pinned CARRY PATİKASI says it) among the helper tables; each horizon's strip stacked above its
+  own outright table (Ufuk B's strip sat beside Ufuk A's table).
+- **OIS · Nakit Akışı** (14, 4, 7): the schedule's inputs (A:E) and each period's market leg (F:J) are **one table**
+  (`A9:J34`, panel B4): every period's results beside its dates; the periods with a "Dönem başı" and one empty more show
+  (96 % of the input table was empty). The old right half (B5) and the notes panel that repeated the page title (B1) are
+  among the helper tables (ids kept).
+- **DV01 Risk** (14, 9, 8): the carry / roll-down table with the bucket column (`B5:Y27`, `cols` B, Q:Y) - its rows were
+  matched to the bucket table only by counting. "Pozisyon": the paste table, beside it the how-to (B1, it says where to
+  paste - not only a title) above Özet; "Hedge": the hedge table, beside it "Yuvarlama TL" (2 cells, 758 px alone) above
+  "Hedge etkisi". Günlük P&L's TLREF and quotes (`G112`, `I112`, `D115:F134`) with two decimals as the rates of every other
+  tab (35,8159 % read 35,82 %; a user's own decimals, right click, still win).
+- **Number formats** (9): the Forward sheet's O/N eşlenikleri day columns (`K101:K119`, `M101:M119`) as whole days
+  ("1.097", not "1.097,00"). Built in `tto/extras.py` (`SheetBuilder.number_format`, `_tto_layout_formats`,
+  `_borsa_formats`: the cell's format only, the rest of its look kept).
+- **Not done - for the desk:** the XAUTRY calculator's rates (USD %, TRY %, ON karşılık, the implied rates) are numbers in
+  per cent and read without a % sign. Showing "34,04%" there would invite "34,5%" typed - which the input rules read as
+  0,345 (a trailing % divides by 100 in a cell that is not a percent cell) - and the dashboard's own "Kopyala" would paste
+  back the same way; a % on those cells needs an input rule first ("a % typed into a cell that shows one is its unit").
+  The row labels say "%".
+- **Stacked columns in my branch:** a list inside a tab's `panels` is read flat by `tto/views/__init__.py` (`flat`) until
+  the core layout's stacking is merged; `"freeze"` waits for the same.
+
+Code: `tto/views/30_forward.json`, `40_viop.json`, `46_borsa.json`, `50_carry.json`, `55_tmois.json`, `70_dv01.json`;
+`tto/views/__init__.py` (`flat`); `tto/service.py` (`_panel`: `cols` after the added columns); `tto/extras.py`
+(`SheetBuilder.number_format`, `FMT_NAME`, `_tto_layout_formats`, `_borsa_formats`). Tests: `tests/test_duzen_try_b.py`;
+`tests/test_views.py`, `tests/test_service.py`, `tests/test_server.py` (VİOP's and Forward's tabs), `tests/test_viopfra.py`
+(Target from L), `tests/test_extras.py` (the additions left out on another workbook); the browser test's Forward, Kotasyon,
+VİOP and Borsa checks.
