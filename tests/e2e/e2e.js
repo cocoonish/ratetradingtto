@@ -3894,7 +3894,7 @@ async function clipAfter(page, action) {
     const onDays = trNumber(await cellText(page, 'EK_BULK!C5'));
     const onG = trNumber(await cellText(page, 'EK_BULK!G5'));
     const onShown = (await cellText(page, 'EK_BULK!M5')).trim();
-    const onHead = String((await cellText(page, 'EK_BULK!M4')) || '').trim();
+    const bulkOnHead = String((await cellText(page, 'EK_BULK!M4')) || '').trim();
     const onTyped = (trNumber(onShown) + 0.75).toFixed(2).replace('.', ',');
     await typeInto(page, 'EK_BULK!M5', onTyped);
     await waitCell(page, 'EK_BULK!L5', 't.trim() !== ""');
@@ -3905,11 +3905,11 @@ async function clipAfter(page, action) {
     await waitCell(page, 'EK_BULK!L5', 't.trim() === ""');
     const onBack = { m: await ftOne('EK_BULK!M5'), n: (await cellText(page, 'EK_BULK!N5')).trim() };
     check('TOPLU FORWARD: ON karşılık % - the row\'s RET mid\'s O/N (the calculators\' ON Karşılık over its Gün), two decimals; an ON typed stays (✎), the Manuel TRY % is the rate it gives and the USDTRY fwd follows; Delete on it: the row back to RET mid',
-      onHead === 'ON karşılık %' && /^\d+,\d{2}$/.test(onShown) && Math.abs(trNumber(onShown) - onOf(onG, onDays)) < 0.011
+      bulkOnHead === 'ON karşılık %' && /^\d+,\d{2}$/.test(onShown) && Math.abs(trNumber(onShown) - onOf(onG, onDays)) < 0.011
       && onRow.m.t === onTyped && onRow.m.anchor && /Yazdığınız değer/.test(onRow.m.tip) && !onRow.l.anchor && /Hesaplanan/.test(onRow.l.tip)
       && Math.abs(trNumber(onRow.l.t) - rateOfOn(trNumber(onTyped), onDays)) < 0.006 && onRow.n !== ftN5
       && !onBack.m.anchor && onBack.m.t === onShown && onBack.n === ftN5,
-      { onDays, onG, onShown, onHead, onTyped, onRow, onBack, ftN5 });
+      { onDays, onG, onShown, bulkOnHead, onTyped, onRow, onBack, ftN5 });
     // ... and the rest of the desk's TOPLU FORWARD list of 26.11.2026 ("Bunların da hepsini yap"): Spread (bp) in I, then
     // right of the hidden block ON − RET ON, the period from the filled row above, both P/gün and the ON of every rate,
     // with Valör and Gün frozen; a spread typed (RET mid + spread / 100), a USDTRY P/gün typed (puan = P/gün · Gün) and the
