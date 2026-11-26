@@ -936,7 +936,14 @@
    "scope": "user",
    "group": "bulk100-try",
    "kind": "number",
-   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid; boş başlar; two-way: or the TRY % a USDTRY / EURTRY fwd or puan or an ON karşılık % typed gives)"
+   "label": "toplu forward 'Manuel TRY %' (boşsa RET mid + genel spread; boş başlar; two-way: or the TRY % a value typed in the row gives - USDTRY / EURTRY fwd, puan or P/gün, ON karşılık %, Spread (bp))"
+  },
+  {
+   "range": "EK_BULK!C2",
+   "scope": "user",
+   "group": "bulk100-spread-all",
+   "kind": "number",
+   "label": "toplu forward 'Genel spread (bp)': satırına bir şey yazılmamış satırlar RET mid + bu spread'le fiyatlanır (boş = RET mid, eskisi gibi)"
   },
   {
    "range": "EK_BULK!R5:R104",
@@ -1330,19 +1337,25 @@
    "id": "toplu-forward",
    "sheet": "EK_BULK",
    "label": "TOPLU FORWARD",
-   "note": "İki yönlü: Manuel TRY %, ON karşılık %, USDTRY fwd / puan ya da EURTRY fwd / puan - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner). Satırın iki paritesi tek TRY faiziyle fiyatlanır: USDTRY forward'ını yazınca EURTRY forward'ı da değişir, tersi de. ON karşılık % o faizin günlük bileşik karşılığıdır (Forward hesaplayıcılarının ON Karşılık'ı, 360 gün bazı, satırın Gün'ü): yazılan ON'dan TRY faizi tersiyle bulunur. Elle fwd sütunları ayrıca durur.",
+   "note": "İki yönlü: Manuel TRY %, Spread (bp), ON karşılık %, USDTRY fwd / puan / P/gün ya da EURTRY fwd / puan / P/gün - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır (✎ yazılan değer; silince satır varsayılana döner). Satırın iki paritesi tek TRY faiziyle fiyatlanır: USDTRY forward'ını yazınca EURTRY forward'ı da değişir, tersi de. Spread (bp) RET mid'in üstü: yazılınca TRY faizi = RET mid + spread/100. Genel spread (bp) yazılıysa satırına bir şey yazılmamış satırlar RET mid + genel spread'le fiyatlanır. ON karşılık % o faizin günlük bileşik karşılığıdır (Forward hesaplayıcılarının ON Karşılık'ı, 360 gün bazı, satırın Gün'ü): yazılan ON'dan TRY faizi tersiyle bulunur. P/gün yazılınca puan = P/gün · gün. Elle fwd sütunları ayrıca durur.",
    "members": [
     {"name": "Manuel TRY %", "range": "L5:L104"},
+    {"name": "Spread (bp)", "range": "I5:I104", "store": "AF5:AF104",
+     "label": "toplu forward 'Spread (bp)' typed (two-way: the row's TRY rate = RET mid + spread / 100 is the Manuel TRY %; the USDTRY / EURTRY fwd, puan and P/gün follow)"},
     {"name": "ON karşılık %", "range": "M5:M104", "store": "AE5:AE104",
      "label": "toplu forward 'ON karşılık %' typed (two-way: the TRY rate it gives - the Forward calculators' ON on 360 over the row's Gün, inverted - is the Manuel TRY %; the USDTRY / EURTRY fwd and puan follow)"},
     {"name": "USDTRY fwd", "range": "N5:N104", "store": "Z5:Z104",
      "label": "toplu forward 'USDTRY fwd' typed (two-way: its puan, Manuel TRY % and the EURTRY fwd / puan follow)"},
     {"name": "USDTRY puan", "range": "O5:O104", "store": "AA5:AA104",
      "label": "toplu forward 'USDTRY puan' typed (two-way: fwd = spot + puan / 10000; the Manuel TRY % and EURTRY follow)"},
+    {"name": "USDTRY P/gün", "range": "AO5:AO104", "store": "AG5:AG104",
+     "label": "toplu forward 'USDTRY P/gün' typed (two-way: puan = P/gün · Gün, fwd = spot + puan / 10000; the Manuel TRY % and EURTRY follow)"},
     {"name": "EURTRY fwd", "range": "P5:P104", "store": "AB5:AB104",
      "label": "toplu forward 'EURTRY fwd' typed (two-way: its puan, Manuel TRY % and the USDTRY fwd / puan follow)"},
     {"name": "EURTRY puan", "range": "Q5:Q104", "store": "AC5:AC104",
-     "label": "toplu forward 'EURTRY puan' typed (two-way: fwd = spot + puan / 10000; the Manuel TRY % and USDTRY follow)"}
+     "label": "toplu forward 'EURTRY puan' typed (two-way: fwd = spot + puan / 10000; the Manuel TRY % and USDTRY follow)"},
+    {"name": "EURTRY P/gün", "range": "AP5:AP104", "store": "AH5:AH104",
+     "label": "toplu forward 'EURTRY P/gün' typed (two-way: puan = P/gün · EURTRY's days, fwd = spot + puan / 10000; the Manuel TRY % and USDTRY follow)"}
    ]
   },
   {
@@ -2039,7 +2052,7 @@
    "id": "BK1",
    "type": "table",
    "sheet": "EK_BULK",
-   "range": "B1:Y106",
+   "range": "B1:AU106",
    "hidden": false,
    "wide": true,
    "title": "TOPLU FORWARD FİYATLAMA · 100 valöre kadar",
@@ -2077,9 +2090,9 @@
    "id": "BK2",
    "type": "table",
    "sheet": "EK_BULK",
-   "range": "Z4:AE104",
+   "range": "Z4:AK104",
    "hidden": true,
-   "title": "Yardımcı · TOPLU FORWARD: iki yönlü hücrelere yazılanlar (USDTRY / EURTRY fwd ve puan, ON karşılık %) ve verdikleri TRY %",
+   "title": "Yardımcı · TOPLU FORWARD: iki yönlü hücrelere yazılanlar (USDTRY / EURTRY fwd, puan ve P/gün, ON karşılık %, Spread) ve verdikleri TRY %, satırı fiyatlayan TRY % ve dönem için son dolu satır",
    "keep_title": true
   },
   {

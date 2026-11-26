@@ -2092,6 +2092,26 @@ BULK_TW_RATE = "AD"
 #: two-way group too, an ON typed kept in BULK_TW_ON, the TRY rate it gives (:func:`on_simple`) in BULK_TW_RATE.  Both
 #: columns on cells no input ever stood on (M: the workbook's own header Forward!M143 is blank)
 BULK_ON, BULK_TW_ON = "M", "AE"
+#: more of TOPLU FORWARD (the desk, 26.11.2026: "Bunların da hepsini yap"), on cells no input ever stood on:
+#: * Spread (bp) in I - the workbook's header Forward!I143 is blank -: the row's TRY rate − RET mid, two-way (a spread
+#:   typed gives RET mid + spread / 100); and one "Genel spread (bp)" for the table in its title area (BULK_SPREAD_ALL,
+#:   its label beside it): a row with nothing typed is priced at RET mid + it - blank, at RET mid as before;
+#: * the points per day of both pairs (USDTRY puan / Gün, EURTRY puan / its own days), two-way;
+#: * display only: the ON of the row's rate less today's RET ON mid, the period's TRY rate and its ON from the filled row
+#:   above, the ON of each rate column.
+#: The stores and helpers continue the hidden block after BULK_TW_ON (BULK_HIDDEN, Excel-hidden: the page leaves it out
+#: of TOPLU FORWARD and shows it in its helper table); the new columns the page shows stand to its right.
+BULK_SPREAD, BULK_SPREAD_ALL = "I", "C2"
+BULK_TW_SPREAD, BULK_TW_USD_PPD, BULK_TW_EUR_PPD = "AF", "AG", "AH"      # a Spread / USDTRY P/gün / EURTRY P/gün typed
+BULK_RATE = "AI"                 # the TRY rate that prices the row: Manuel TRY % (L), else RET mid (+ the general spread)
+BULK_PREV_DAYS, BULK_PREV_RATE = "AJ", "AK"    # the Gün and the pricing rate of the last filled row at or above
+BULK_HIDDEN = ("Z", "AK")
+BULK_ON_RET = "AL"                               # ON karşılık − RET ON mid (bp)
+BULK_TERM_RATE, BULK_TERM_ON = "AM", "AN"        # Dönem TRY %, Dönem ON %
+BULK_USD_PPD, BULK_EUR_PPD = "AO", "AP"          # USDTRY P/gün, EURTRY P/gün (two-way)
+BULK_ON_OF = (("AQ", "D", "ON · Offshore mid %"), ("AR", "E", "ON · OIS mid %"), ("AS", "F", "ON · RET bid %"),
+              ("AT", "G", "ON · RET mid %"), ("AU", "H", "ON · RET ask %"))
+BULK_RET_ON = "AVERAGE(Forward!$W$33:$X$33)"     # today's RET ON mid (the RET table's ON row, bid / ask in decimals)
 _ABSOLUTE = re.compile(r"(?<![A-Za-z0-9_!$.':])\$[A-Z]{1,3}\$\d+(?::\$[A-Z]{1,3}\$\d+)?(?![A-Za-z0-9_(])")
 
 
@@ -2126,30 +2146,44 @@ def _bulk_forward_check(model: Model) -> None:
     _need_sheets(model, "Forward")
     for col in BULK_COLS:
         _need_formula(model, "Forward", "%s144" % col)
-    _need_formula(model, "Forward", "N144", "ISNUMBER(L144),L144,G144")
+    # the rate N / P price with: its choice (Manuel TRY %, else RET mid) is the helper BULK_RATE's here
+    _need_formula(model, "Forward", "N144", _BULK_RATE_CHOICE)
+    _need_formula(model, "Forward", "P144", _BULK_RATE_CHOICE)
     # the outrights the way back (R..U) inverts: USDTRY on $F$2, USD % (J) and the days (C); EURTRY on $G$2, EUR % (K) and
     # the days from the EURTRY spot date
     _need_formula(model, "Forward", "N144", "$F$2*(1+")
     _need_formula(model, "Forward", "N144", "/(1+J144/100*$C144/360)")
     _need_formula(model, "Forward", "P144", "$G$2*(1+")
     _need_formula(model, "Forward", "P144", "/(1+K144/100*($B144-$K$2)/360)")
+    # today's RET ON (BULK_RET_ON): the RET table's first row
+    if model.sheet("Forward").consts.get(parse_a1("V33")) != "ON":
+        raise ValueError("Forward!V33 RET tablosunun ON satırı değil")
+
+
+_BULK_RATE_CHOICE = "IF(ISNUMBER(L144),L144,G144)"      # (N144's / P144's choice of the TRY rate, as the workbook writes it)
 
 
 def _bulk_twoway(col: str, r: int, body: str) -> str:
     """A TOPLU FORWARD cell of row ``r`` as the two-way table has it (without "="): the USDTRY / EURTRY fwd and puan show
-    what is typed into them (``BULK_TW_STORES``) - a puan typed gives fwd = spot + puan / 10000 -, else the sheet's own
-    formula (``body``) off the row's TRY rate: Manuel TRY % - typed, or the one a fwd / puan / ON typed gives - else RET
-    mid.  Every other column as it is."""
+    what is typed into them (``BULK_TW_STORES``) - a puan typed gives fwd = spot + puan / 10000, a P/gün typed (its
+    store) puan = P/gün · the pair's days -, else the sheet's own formula (``body``) off the row's TRY rate
+    (``BULK_RATE``: Manuel TRY % - typed, or the one a value typed gives - else RET mid, plus the general spread).  Every
+    other column as it is."""
     su, sp, se, sq = BULK_TW_STORES
-    f = {"r": r, "body": body, "su": su, "sp": sp, "se": se, "sq": sq}
+    f = {"r": r, "body": body, "su": su, "sp": sp, "se": se, "sq": sq, "ud": BULK_TW_USD_PPD, "ed": BULK_TW_EUR_PPD,
+         "eur": "($B%d-Forward!$K$2)" % r}
     if col == "N":
-        return 'IF(ISBLANK($%(su)s%(r)d),IF(ISBLANK($%(sp)s%(r)d),%(body)s,IF($C%(r)d="","",Forward!$F$2+$%(sp)s%(r)d/10000)),$%(su)s%(r)d)' % f
+        return ('IF(ISBLANK($%(su)s%(r)d),IF(ISBLANK($%(sp)s%(r)d),IF(ISBLANK($%(ud)s%(r)d),%(body)s,'
+                'IF($C%(r)d="","",Forward!$F$2+$%(ud)s%(r)d*$C%(r)d/10000)),'
+                'IF($C%(r)d="","",Forward!$F$2+$%(sp)s%(r)d/10000)),$%(su)s%(r)d)') % f
     if col == "O":
-        return "IF(ISBLANK($%(sp)s%(r)d),%(body)s,$%(sp)s%(r)d)" % f
+        return 'IF(ISBLANK($%(sp)s%(r)d),IF(ISBLANK($%(ud)s%(r)d),%(body)s,IF($C%(r)d="","",$%(ud)s%(r)d*$C%(r)d)),$%(sp)s%(r)d)' % f
     if col == "P":
-        return 'IF(ISBLANK($%(se)s%(r)d),IF(ISBLANK($%(sq)s%(r)d),%(body)s,IF($C%(r)d="","",Forward!$G$2+$%(sq)s%(r)d/10000)),$%(se)s%(r)d)' % f
+        return ('IF(ISBLANK($%(se)s%(r)d),IF(ISBLANK($%(sq)s%(r)d),IF(ISBLANK($%(ed)s%(r)d),%(body)s,'
+                'IF($C%(r)d="","",Forward!$G$2+$%(ed)s%(r)d*%(eur)s/10000)),'
+                'IF($C%(r)d="","",Forward!$G$2+$%(sq)s%(r)d/10000)),$%(se)s%(r)d)') % f
     if col == "Q":
-        return "IF(ISBLANK($%(sq)s%(r)d),%(body)s,$%(sq)s%(r)d)" % f
+        return 'IF(ISBLANK($%(sq)s%(r)d),IF(ISBLANK($%(ed)s%(r)d),%(body)s,IF($C%(r)d="","",$%(ed)s%(r)d*%(eur)s)),$%(sq)s%(r)d)' % f
     return body
 
 
@@ -2166,49 +2200,138 @@ def _tto_bulk_forward(model: Model) -> None:
 
     ON karşılık % (``BULK_ON``; the desk, 26.11.2026): the O/N equivalent of the row's TRY rate, the Forward calculators'
     (:func:`on_equivalent` on 360 over the row's Gün; rates in % here, decimals there) - a member of the group too: an ON
-    typed gives the row's TRY rate by :func:`on_simple`, the other members follow from it."""
+    typed gives the row's TRY rate by :func:`on_simple`, the other members follow from it.
+
+    And (26.11.2026, "Bunların da hepsini yap"): Spread (bp) over RET mid and both pairs' P/gün, members of the group (a
+    spread typed: RET mid + spread / 100; a P/gün typed: puan = P/gün · the pair's days, then the rate the outright
+    implies); the table's general spread (``BULK_SPREAD_ALL``: a row with nothing typed is priced at RET mid + it, blank
+    at RET mid as before - the row's rate is the helper ``BULK_RATE``, which N / P read where the workbook's formula
+    chose between Manuel TRY % and RET mid); display only: ON − RET ON mid (bp), the period's TRY rate and its ON from the
+    nearest filled row above (its Gün and rate carried down the hidden ``BULK_PREV_*``: one cell each per row), and the
+    ON of the offshore / OIS / RET rates - every ON and period column blank at Gün 0 (valör at spot)."""
+    from .xl.tokenizer import col_to_index
     b = SheetBuilder(model, BULK_SHEET)
-    b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid)")
+    b.title("B1", "TOPLU FORWARD FİYATLAMA  ·  100 valöre kadar (B sütununa valör tarihi; TRY faizi: manuel boşsa RET mid + genel spread)")
+    # the table's general spread (the desk, 26.11.2026), its label beside it
+    b.set("B2", "Genel spread (bp)", bold=True, align="right")
+    b.input(BULK_SPREAD_ALL, None, fmt=_BULK_BP)
+    spread_all = re.sub(r"^([A-Z]+)(\d+)$", r"$\1$\2", BULK_SPREAD_ALL)
     heads = [model.sheet("Forward").consts.get(parse_a1("%s143" % c)) for c in "BCDEFGHIJKLMNOPQ"]
     b.head("B4", [h if isinstance(h, str) else None for h in heads])
-    b.head(BULK_ON + "4", ["ON karşılık %"])           # (the workbook's own header of this column is blank)
+    # (the workbook's own headers of these two columns are blank)
+    b.head(BULK_SPREAD + "4", ["Spread (bp)"])
+    b.head(BULK_ON + "4", ["ON karşılık %"])
     templates = {}
     for col in BULK_COLS:
-        text = formula_of(model, "Forward", "%s144" % col)
-        templates[col] = _ABSOLUTE.sub(lambda m: "Forward!" + m.group(0), text)       # the curves stay on the Forward sheet
+        text = _ABSOLUTE.sub(lambda m: "Forward!" + m.group(0), formula_of(model, "Forward", "%s144" % col))  # (curves on Forward)
+        if col in "NP":
+            # the TRY rate N / P price with: the row's BULK_RATE - the workbook's choice, Manuel TRY % else RET mid, with
+            # the general spread on RET mid (blank: the same value as the workbook's choice)
+            text, n = re.subn(re.escape(_BULK_RATE_CHOICE), "$%s144" % BULK_RATE, text, flags=re.I)
+            if n != 1:
+                raise ValueError("Forward!%s144: TRY faizinin seçimi (%s) bulunamadı" % (col, _BULK_RATE_CHOICE))
+        templates[col] = text
     # the way back (the desk, 23.11.2026: "Toplu fiyatlama kısmında da forward rate'lerden faizi de toplu olarak
     # bulabilmeliyim"): an outright typed or pasted -> the TRY rate it implies, N's / P's own formula solved for the TRY
     # rate - the same spot, USD / EUR % and days
     b.head("R4", ["USDTRY fwd (elle)", "İma TRY %", "EURTRY fwd (elle)", "İma TRY %"])
     # a row as a trade (the desk, 24.11.2026: "3 ekle"): what "İşleme al" books it as - the price is the row's own
     b.head(BULK_PAIR + "4", ["Parite", "Yön", "Tutar", "Karşı taraf"])
+    # the hidden block: what is typed into the two-way cells, the rate it gives, the helpers
     b.head(BULK_TW_STORES[0] + "4", ["Yazılan USDTRY fwd", "Yazılan USDTRY puan", "Yazılan EURTRY fwd", "Yazılan EURTRY puan",
                                      "Yazılandan TRY %"])
-    b.head(BULK_TW_ON + "4", ["Yazılan ON karşılık %"])
+    for col, head in ((BULK_TW_ON, "Yazılan ON karşılık %"), (BULK_TW_SPREAD, "Yazılan Spread (bp)"),
+                      (BULK_TW_USD_PPD, "Yazılan USDTRY P/gün"), (BULK_TW_EUR_PPD, "Yazılan EURTRY P/gün"),
+                      (BULK_RATE, "Fiyatlayan TRY %"), (BULK_PREV_DAYS, "Son dolu satırın Gün'ü"),
+                      (BULK_PREV_RATE, "Son dolu satırın TRY %'si")):
+        b.head(col + "4", [head])
+    # the columns the page shows right of the hidden block
+    for col, head in ((BULK_ON_RET, "ON − RET ON (bp)"), (BULK_TERM_RATE, "Dönem TRY %"), (BULK_TERM_ON, "Dönem ON %"),
+                      (BULK_USD_PPD, "USDTRY P/gün"), (BULK_EUR_PPD, "EURTRY P/gün")) + tuple((c, h) for c, _, h in BULK_ON_OF):
+        b.head(col + "4", [head])
+    # the hidden block hidden as Excel hides a column (the page leaves it out of the table; its helper table shows it);
+    # Valör and Gün frozen, as Excel's panes: they stay in view while the page scrolls right
+    hidden = [col_to_index(BULK_HIDDEN[0]), col_to_index(BULK_HIDDEN[1])]
+    if hidden not in b.sheet.hidden_cols:
+        b.sheet.hidden_cols.append(hidden)
+    b.sheet.freeze = [0, col_to_index("C")]
+    su, sp, se, sq = BULK_TW_STORES
+    stores = BULK_TW_STORES + (BULK_TW_ON, BULK_TW_SPREAD, BULK_TW_USD_PPD, BULK_TW_EUR_PPD)
     for k in range(BULK_ROWS):
         r = BULK_FIRST + k
         b.input("B%d" % r, None, fmt=DATE)
         usd, eur = "$C%d" % r, "($B%d-Forward!$K$2)" % r           # the days of USDTRY and of EURTRY (from its spot date)
+        rate = "$%s%d" % (BULK_RATE, r)
+
+        def at_days(expr: str) -> str:
+            """``expr`` on a row with a valör after the spot: blank without one and at Gün 0 (no period to compound)."""
+            return 'IF($C%d="","",IF($C%d=0,"",%s))' % (r, r, expr)
+
+        def on_of(pct: str, days: str = usd) -> str:
+            """The calculators' ON of a rate in % over ``days``, in % (their rates are decimals)."""
+            return "%s*100" % on_equivalent("%s/100" % pct, days)
+
         for col in BULK_COLS:
             body = re.sub(r"(?<![A-Za-z0-9_$!])(\$?[A-Z]{1,3})144(?!\d)", lambda m: "%s%d" % (m.group(1), r), templates[col])
             b.set("%s%d" % (col, r), "=" + _bulk_twoway(col, r, body), like=None, fmt=_BULK_FMT.get(col, NUM4))
-        # two-way: the Manuel TRY % where it always was (in place) - its default the TRY rate a fwd / puan / ON typed gives
-        su, sp, se, sq = BULK_TW_STORES
-        f = {"r": r, "su": su, "sp": sp, "se": se, "sq": sq, "so": BULK_TW_ON, "hub": BULK_TW_RATE}
-        none = ("AND(ISBLANK($%(su)s%(r)d),ISBLANK($%(sp)s%(r)d),ISBLANK($%(se)s%(r)d),ISBLANK($%(sq)s%(r)d),"
-                "ISBLANK($%(so)s%(r)d))" % f)
-        typed_usd = "IF(ISBLANK($%(su)s%(r)d),Forward!$F$2+$%(sp)s%(r)d/10000,$%(su)s%(r)d)" % f
-        typed_eur = "IF(ISBLANK($%(se)s%(r)d),Forward!$G$2+$%(sq)s%(r)d/10000,$%(se)s%(r)d)" % f
-        typed_on = "%s*100" % on_simple("$%(so)s%(r)d/100" % f, usd)          # (the calculators' rates are decimals)
-        b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(IF(ISBLANK($%s%d),IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,%s),%s),NA())))'
-              % (none, r, BULK_TW_ON, r, su, r, sp, r, implied_try(typed_eur, "Forward!$G$2", "$K%d" % r, eur),
-                 implied_try(typed_usd, "Forward!$F$2", "$J%d" % r, usd), typed_on), fmt="0.0000")
+        # two-way: the Manuel TRY % where it always was (in place) - its default the TRY rate a value typed gives: an ON (the
+        # calculators' inverse), a spread over RET mid, a P/gün (puan = P/gün · days, fwd = spot + puan / 10000), a fwd / puan
+        none = "AND(%s)" % ",".join("ISBLANK($%s%d)" % (s, r) for s in stores)
+        typed_usd = "IF(ISBLANK($%s%d),Forward!$F$2+$%s%d/10000,$%s%d)" % (su, r, sp, r, su, r)
+        typed_eur = "IF(ISBLANK($%s%d),Forward!$G$2+$%s%d/10000,$%s%d)" % (se, r, sq, r, se, r)
+        back = "IF(AND(ISBLANK($%s%d),ISBLANK($%s%d)),%s,%s)" % (su, r, sp, r, implied_try(typed_eur, "Forward!$G$2", "$K%d" % r, eur),
+                                                               implied_try(typed_usd, "Forward!$F$2", "$J%d" % r, usd))
+        for store, gives in ((BULK_TW_EUR_PPD, implied_try("(Forward!$G$2+$%s%d*%s/10000)" % (BULK_TW_EUR_PPD, r, eur), "Forward!$G$2",
+                                                           "$K%d" % r, eur)),
+                             (BULK_TW_USD_PPD, implied_try("(Forward!$F$2+$%s%d*%s/10000)" % (BULK_TW_USD_PPD, r, usd), "Forward!$F$2",
+                                                           "$J%d" % r, usd)),
+                             (BULK_TW_SPREAD, "$G%d+$%s%d/100" % (r, BULK_TW_SPREAD, r)),
+                             (BULK_TW_ON, "%s*100" % on_simple("$%s%d/100" % (BULK_TW_ON, r), usd))):
+            back = "IF(ISBLANK($%s%d),%s,%s)" % (store, r, back, gives)
+        b.set("%s%d" % (BULK_TW_RATE, r), '=IF(%s,"",IF($C%d="","",IFERROR(%s,NA())))' % (none, r, back), fmt="0.0000")
         b.input("L%d" % r, '=IF(%s,"",IF(ISNUMBER($%s%d),$%s%d,""))' % (none, BULK_TW_RATE, r, BULK_TW_RATE, r), fmt=TRY_PCT)
-        # ON karşılık %: the O/N equivalent of the TRY rate that prices the row - N / P's own choice -, or the ON typed
-        rate = "IF(ISNUMBER($L%d),$L%d,$G%d)" % (r, r, r)
-        b.set("%s%d" % (BULK_ON, r), '=IF(ISBLANK($%s%d),IF($C%d="","",%s),$%s%d)'
-              % (BULK_TW_ON, r, r, "%s*100" % on_equivalent("%s/100" % rate, usd), BULK_TW_ON, r), fmt=TRY_PCT)
-        for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0), (BULK_TW_ON, "0.0000")):
+        # the TRY rate that prices the row: Manuel TRY % (typed, or the one a value typed gives), else RET mid plus the
+        # general spread - blank: RET mid itself (G, not G + 0)
+        b.set(rate.lstrip("$"), '=IF($C%d="","",IF(ISNUMBER($L%d),$L%d,IF(ISNUMBER(%s),$G%d+%s/100,$G%d)))'
+              % (r, r, r, spread_all, r, spread_all, r), fmt="0.0000")
+        # Spread (bp): the row's rate over RET mid, or the spread typed
+        b.set("%s%d" % (BULK_SPREAD, r), '=IF(ISBLANK($%s%d),IF($C%d="","",(%s-$G%d)*100),$%s%d)'
+              % (BULK_TW_SPREAD, r, r, rate, r, BULK_TW_SPREAD, r), fmt=_BULK_BP)
+        # ON karşılık %: the O/N equivalent of the TRY rate that prices the row, or the ON typed
+        b.set("%s%d" % (BULK_ON, r), '=IF(ISBLANK($%s%d),%s,$%s%d)' % (BULK_TW_ON, r, at_days(on_of(rate)), BULK_TW_ON, r),
+              fmt=TRY_PCT)
+        # ... less today's RET ON mid, in bp
+        b.set("%s%d" % (BULK_ON_RET, r), '=IF(ISNUMBER($%s%d),($%s%d-%s*100)*100,"")' % (BULK_ON, r, BULK_ON, r, BULK_RET_ON),
+              fmt=_BULK_BP)
+        # the period from the nearest filled row above (its Gün d1 and rate r1, carried down - one cell each per row, no
+        # lookup over the table): fwd-fwd = ((1 + r2·d2/360) / (1 + r1·d1/360) − 1)·360 / (d2 − d1); the first filled row
+        # runs from the spot - its own rate; blank where the dates do not increase
+        if r == BULK_FIRST:
+            prev_d = prev_r = '""'
+            term = 'IF($C%d="","",IF($C%d<=0,"",%s))' % (r, r, rate)
+            length = usd
+        else:
+            prev_d, prev_r = "$%s%d" % (BULK_PREV_DAYS, r - 1), "$%s%d" % (BULK_PREV_RATE, r - 1)
+            fwd_fwd = ("((1+%(rate)s/100*%(d2)s/360)/(1+%(r1)s/100*%(d1)s/360)-1)*360/(%(d2)s-%(d1)s)*100"
+                       % {"rate": rate, "d2": usd, "r1": prev_r, "d1": prev_d})
+            term = 'IF($C%d="","",IF($C%d<=N(%s),"",IF(%s="",%s,%s)))' % (r, r, prev_d, prev_d, rate, fwd_fwd)
+            length = "(%s-N(%s))" % (usd, prev_d)
+        b.set("%s%d" % (BULK_PREV_DAYS, r), '=IF(ISNUMBER($C%d),$C%d,%s)' % (r, r, prev_d), fmt=INT0)
+        b.set("%s%d" % (BULK_PREV_RATE, r), '=IF(ISNUMBER($C%d),%s,%s)' % (r, rate, prev_r), fmt="0.0000")
+        b.set("%s%d" % (BULK_TERM_RATE, r), "=" + term, fmt=TRY_PCT)
+        b.set("%s%d" % (BULK_TERM_ON, r), '=IF(ISNUMBER($%s%d),%s,"")' % (BULK_TERM_RATE, r, on_of("$%s%d" % (BULK_TERM_RATE, r), length)),
+              fmt=TRY_PCT)
+        # P/gün of both pairs, or the one typed (the value-date tables' own: puan / the pair's days)
+        b.set("%s%d" % (BULK_USD_PPD, r), '=IF(ISBLANK($%s%d),IF($C%d="","",IFERROR($O%d/%s,"")),$%s%d)'
+              % (BULK_TW_USD_PPD, r, r, r, usd, BULK_TW_USD_PPD, r), fmt=_BULK_PPD)
+        b.set("%s%d" % (BULK_EUR_PPD, r), '=IF(ISBLANK($%s%d),IF($C%d="","",IFERROR($Q%d/%s,"")),$%s%d)'
+              % (BULK_TW_EUR_PPD, r, r, r, eur, BULK_TW_EUR_PPD, r), fmt=_BULK_PPD)
+        # the ON of each rate column (OIS mid too: the same 360 formula - the table compares them as % rates side by
+        # side, as MASA's "O/N EŞLENİKLERİ · 360 bazında" does; TLREF's business-day O/N is OIS · PPK's)
+        for col, src, _ in BULK_ON_OF:
+            b.set("%s%d" % (col, r), "=" + at_days(on_of("$%s%d" % (src, r))), fmt=TRY_PCT)
+        for col, fmt in ((su, NUM4), (sp, INT0), (se, NUM4), (sq, INT0), (BULK_TW_ON, "0.0000"), (BULK_TW_SPREAD, _BULK_BP),
+                         (BULK_TW_USD_PPD, _BULK_PPD), (BULK_TW_EUR_PPD, _BULK_PPD)):
             b.input("%s%d" % (col, r), None, fmt=fmt)
         b.input("R%d" % r, None, fmt=NUM4)
         b.set("S%d" % r, '=IFERROR(IF(OR($C%d="",NOT(ISNUMBER($R%d))),"",%s),"")' % (r, r, implied_try("$R%d" % r, "Forward!$F$2", "$J%d" % r, usd)),
@@ -2223,10 +2346,16 @@ def _tto_bulk_forward(model: Model) -> None:
            "Forward sayfasındaki toplu fiyatlama tablosunun aynı formülleri, 100 satır: eğriler, spot ve faizler Forward sayfasından. "
            "Valör ve manuel TRY faizi boş başlar; yazdıklarınız sizin kalır (Excel'den bir sütun da yapıştırabilirsiniz). "
            "Elle forward (USDTRY / EURTRY) yazın ya da yapıştırın: yanındaki İma TRY %, USDTRY / EURTRY fwd'nin tersi - aynı spot, USD / EUR "
-           "faizi ve gün. ON karşılık %: satırı fiyatlayan TRY faizinin (Manuel TRY %, boşsa RET mid) günlük bileşik karşılığı - Forward "
-           "hesaplayıcılarının ON Karşılık'ı, 360·((1 + faiz·Gün/360)^(1/Gün) − 1), takvim günleriyle. "
+           "faizi ve gün. ON karşılık %: satırı fiyatlayan TRY faizinin (Manuel TRY %, boşsa RET mid + genel spread) günlük bileşik "
+           "karşılığı - Forward hesaplayıcılarının ON Karşılık'ı, 360·((1 + faiz·Gün/360)^(1/Gün) − 1), takvim günleriyle; sağdaki "
+           "ON · sütunları offshore / OIS / RET faizlerininki, aynı formülle. Genel spread (bp): satırına bir şey yazılmamış satırlar RET mid "
+           "+ genel spread'le fiyatlanır (boşsa RET mid). Dönem TRY % / ON %: üstteki en yakın dolu satırın valöründen bu satırınkine "
+           "forward-forward faiz ve ON'u (ilk dolu satır spottan: kendi faizi). "
            "İşlem: satıra Parite (boş = USDTRY), Yön (AL / SAT) ve Tutar (paritenin ilk dövizinde: 10m) yazıp \"İşleme al\"a "
            "basın - Tutar'ı yazılı satırlar Günlük İşlemler'in Excel'den yapıştır penceresinde açılır; kaydedilen satırların Tutar'ı silinir.")
+
+
+_BULK_BP, _BULK_PPD = "0.0", "#,##0.0"            # bp with one decimal; P/gün as the value-date tables read it
 
 
 #: TOPLU FORWARD's formats: its TRY rates (offshore / OIS mid, RET bid / mid / ask) TRY_PCT, USD % / EUR % as they were

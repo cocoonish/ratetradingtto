@@ -360,6 +360,10 @@ The ways back of 24.11.2026 ([desk-decisions.md](desk-decisions.md#ways-back-rat
   360·((1 + r·g/360)^(1/g) − 1) (`Forward!AH14`'s "ON Karşılık", `extras.on_equivalent` / `on_simple`): the
   calculators, VİOP's gold calculator and TOPLU FORWARD's ON karşılık % (`EK_BULK!M`, g = the row's Gün; 26.11.2026).
   TLREF's business-day one above is TRY OIS's (EK_PPK, Broker Chat); the two are never mixed.
+- **Rates compared side by side as % rates: every one on 360.** TOPLU FORWARD's ON · columns (`EK_BULK!AQ:AU`, 26.11.2026)
+  take the offshore, OIS and RET mid / bid / ask rates of a row through that same 360 formula - OIS mid too, not
+  TLREF's business-day O/N -, as MASA's own "O/N EŞLENİKLERİ · 360 bazında" (`MASA!P4:AB21`) compares OIS, offshore and
+  RET O/N on 360. A meeting window's step and Broker Chat's are where TLREF's business-day O/N belongs.
 
 **USD (SOFR / FF OIS) - a FOMC window's rate → the step** (`SOFR_FOMC!AA:AE`): the window from a meeting's effective day
 to the next active meeting's (`F:H`); its rate simple **ACT/360** (İşlem 1's `E` = (exp(ln DF start − ln DF end) − 1)·36000 /

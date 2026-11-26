@@ -141,6 +141,13 @@ def test_free_forward_bulk_and_cross_show_their_try_rates_with_two_decimals(serv
         assert l6["t"] == "36,12" and l6["v"] == 36.1234
         m7, l7 = reads(bulk, "M7", TWO), reads(bulk, "L7", TWO)                # (an ON typed; the rate it gives)
         assert m7["t"] == "33,12" and m7["v"] == 33.123456 and l7["v"] != round(l7["v"], 2)
+        # (26.11.2026) the period's rates and every ON with two decimals; Spread and ON − RET ON in bp with one; P/gün as
+        # the value-date tables read it (one decimal)
+        one = re.compile(r"^-?\d{1,3}(\.\d{3})*,\d$")
+        for c in ("AM", "AN", "AQ", "AR", "AS", "AT", "AU"):
+            assert reads(bulk, "%s5" % c, TWO)["v"] == cell(service, "EK_BULK!%s5" % c, u), c
+        for c in ("I", "AL", "AO", "AP"):
+            assert reads(bulk, "%s6" % c, one)["v"] == cell(service, "EK_BULK!%s6" % c, u), c
         cross = rows_of(service, u, "forward", "B36")
         s200 = reads(cross, "S200", TWO)
         assert s200["v"] == cell(service, "Forward!S200", u) and s200["v"] != round(s200["v"], 2)
