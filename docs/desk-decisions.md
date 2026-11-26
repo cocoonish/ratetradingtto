@@ -2421,3 +2421,50 @@ Code: `tto/extras.py` (`_tto_norm_walk`, `_nw_check`, `_nw_lng`, `_nw_dlng`, `_n
 `tto/views/20_ois.json` (B6's range, the tick boxes' input), `tto/inputs.py` (`parse_check`), `tto/render.py` (a tick box
 that reads nothing is not offered), `tto/static/js/grid.js` (`fillCell`, `toggleTick`). Tests:
 `tests/test_normallesme_walk.py`; the browser test's "normalleşme · OIS ima" checks.
+
+#### TLREF normalleşmesi: adım tabloları, Broker Chat ve PPK basamak (26.11.2026)
+
+What turns rates into PPK steps, and the PPK basamak curve, follow the user's switch on OIS · PPK ("Burada tlref'e geri
+gelecek gibi hesap yapacagiz"). They read it only from the switch's interface cells `OIS_MAIN!M2:M5` (ON, n, REF,
+gap · ON) and today's TLREF `OIS_MAIN!J2` ([curves.md](curves.md#meeting-steps-from-a-rate),
+[curves.md](curves.md#interpolation-bootstrap-murex-and-ppk-basamak)).
+
+**What follows the switch:**
+- **MPC OIS / MPC SPREAD → PPK ADIMI** (`EK_PPK`) **and Broker Chat's step**: a window's rate - typed or the market's -
+  is taken to the normal path first: its part of the stretch's growth, E(min(end, n)) − E(min(start, n)) with E(m) =
+  m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²], comes off its ln G before its O/N is found, and
+  goes back on the way back (a step or an O/N typed gives the actual window's rate). The bases are normal too.
+- **"İma oran (model)"** (`OIS_MAIN!BJ`): the model's actual window rate - Motor's (normal) TLREF compounded over the
+  window plus the window's part -, so typed back as a window's rate it still gives the model's TLREF as its O/N.
+- **PPK basamak**: the path is the model's normal path + the gap before N (a knot at N), calibrated as before.
+
+**Choices made while building it** (ask the desk before changing):
+- **The first window's base is REF**, the normal TLREF, not the stub's O/N taken to the normal path - the design's
+  anchor, as the model's first step is measured from REF. So with the switch on and no gap (L0 typed at today's TLREF)
+  the one change from off is that base: today's TLREF instead of the stub's O/N (replay, 03.11.2026: 0.6 bp). Every
+  other number - O/Ns, later bases, BJ, the PPK curve - is then off's, bit for bit.
+- **E is the model's**, in the sheet's own order of operations in both places (EK_PPK's helper cells `AE:AG`, `AJ3:AJ8`;
+  `ppkcurve.Norm` in Python): the page and the chat agree to the bit, not only to the bp's last digit.
+- **The PPK basamak path is the O/N path normal + gap**, not normal + E: the curve is a step curve of O/Ns (the two
+  differ by ~1e-9 of ln G a day where the normal path is not flat at L0 over the stretch; the calibration takes it).
+  Every quote still reprices, so the gap shows only inside the quote stretch that holds N - Motor's node pars and the
+  pages that read them stay unless an unquoted node lies there.
+- **The offshore PPK twin and the ASW book's PPK cells take the same path** (the same-shape rule of PPK basamak; Motor's
+  path is the normal one while the switch is on, so "the path as it was" no longer exists there). The offshore curve
+  itself (Bootstrap, `OFF_GUN` / `OFF_LNDF`) never reads the switch.
+- **Off is the formula of before**: every cell the switch touches is `IF(EK_PPK!$AJ$3=1, …, the formula of before)` -
+  off, the same number, bit for bit (checked against dc96cf3: every formula cell of EK_PPK, OIS_MAIN, EK_INTERP, MASA and
+  Motor's first 200 rows - 20 726 -, Bootstrap and both PPK curves at 900 days, the badge and the chat's steps, for nobody,
+  a user with values typed across both tables and a PPK basamak user with the same). ON is 0 for an error in `M2` or a
+  missing n / REF / gap / H; n before the spot counts as 0 (no stretch).
+- **Shown**: EK_INTERP's status and the top bar's badge ("Eğri: PPK basamak · normalleşme açık") for a PPK user with the
+  switch on; Broker Chat's step tooltip (the date, the gap, the base). Calculations without a user (the desk's PPK
+  cells, alarms, quant, history, Günlük İşlemler) see the switch off.
+- No new Bloomberg request; Bootstrap (Murex's MTM) never moves.
+
+Code: `tto/ppkcurve.py` (`norm`, `Norm`, `NORM_*`, `StepCurve.with_stretch`, `window_overnight` / `window_rate`'s `extra`,
+`read`'s `norm`), `tto/extras.py` (`PPK_NORM*`, `_ppk_norm_cells`, `_norm_if`, `overnight_bd_norm`, `overnight_bd_back_norm`,
+`_tto_ppk_back`; `NORM_BJ_NAME` / `_norm_bj_check` / `_tto_norm_bj`; the status in `_tto_interp`), `tto/blotter.py`
+(`OisMarket.mpc_norm`, `pcum_at`, `mpc_stretch`), `tto/service.py` (`_mpc_implied`), `tto/interp.py` (`badge`),
+`tto/static/js/pages/broker.js` (the step's tooltip). Tests: `tests/test_normallesme_adim.py`, `tests/test_ppkcurve.py`
+(the module's pieces), `tests/test_ppkters.py` (left out together).

@@ -157,6 +157,15 @@ The setting is Ayarlar → "Eğri interpolasyonu", per user:
 - A flat overnight shift on each stretch between quoted maturities makes every quote reprice exactly.
 - Offshore uses the same path shape, seen from the FX spot, plus a flat basis between the offshore quotes.
 - A PPK curve that cannot be built falls back to Bootstrap, and the sheet and the badge say so.
+- **TLREF's normalization on** (the user's switch on OIS · PPK, read from `OIS_MAIN!M2:M5`; 26.11.2026,
+  [desk-decisions.md](desk-decisions.md#tlref-normalleşmesi-adım-tabloları-broker-chat-ve-ppk-basamak-26112026)): Motor's
+  path is then the model's *normal* path, and the PPK path is it + the gap (H − L0, `M5`) up to the normalization date N - a
+  knot at n (`M3`, days from the OIS spot; `ppkcurve.norm`, `StepCurve.with_stretch`; a meeting before N moves both). It
+  is calibrated as always, so every quote still reprices: the gap only moves the curve where no quote pins it - inside the
+  quote stretch that holds N (and whatever reads a discount factor there). The offshore twin and the ASW book's PPK cells
+  take the same path (the same-shape rule). Off - the default, and every calculation without a user - the path is Motor's
+  as it is, bit for bit; with no gap or N not after the spot, too. EK_INTERP's status (`C2`) and the top bar's badge say
+  "normalleşme açık". Bootstrap never reads the switch.
 
 **What a PPK user's setting changes** (`tto/interp.py`, extras' `INTERP_SHEET` section):
 - Motor's node pars (`F89:F130`), so everything that reads `BOOT_*` follows: OIS pages, Masa (its date-to-date block's
@@ -417,6 +426,24 @@ The ways back of 24.11.2026 ([desk-decisions.md](desk-decisions.md#ways-back-rat
 - Step = the rate's O/N − the O/N of the market's rate for the period before (the window before, with its own term; for
   the first window the bootstrap's stub from the OIS spot, ln DF 0 there, term `Motor!J5 − J4`). An MPC spread typed: the
   later window's rate = the earlier window's market + the spread, on the same base.
+- **TLREF's normalization on** (the user's switch on OIS · PPK, 26.11.2026: "Burada tlref'e geri gelecek gibi hesap
+  yapacagiz"; [desk-decisions.md](desk-decisions.md#tlref-normalleşmesi-adım-tabloları-broker-chat-ve-ppk-basamak-26112026)):
+  steps are measured on the normal path. TLREF is the normal path + gap (H − L0) before N; as the model compounds it the
+  stretch adds, to ln G from the OIS spot to day t, m = min(t, n): **E(m) = m·[ln(1 + H/365) − ln(1 + L0/365)] −
+  Pcum(m)·[(H/365)² − (L0/365)²]** (H `OIS_MAIN!J2`, L0 = REF `M4`, n `M3`; Pcum Motor's daily calendar).
+  - A window's rate (typed or the market's) is taken to the normal path first: its part, E(min(end, n)) − E(min(start,
+    n)), comes off its ln G before the O/N steps (`EK_PPK!AG`: E at its start / end in `AE` / `AF`, the switch's values
+    in `AJ3:AJ8`; `extras.overnight_bd_norm`; `ppkcurve.window_overnight`'s `extra`). The way back adds it again
+    (`overnight_bd_back_norm`, `window_rate`'s `extra`): the two-way inverses stay exact.
+  - The first window's base is **REF**, the normal TLREF, instead of the stub's O/N; a later window's base the window
+    before's market rate taken to the normal path. Broker Chat does the same (`Service._mpc_implied`,
+    `OisMarket.mpc_norm` / `mpc_stretch`, the same order of operations: page and chat agree to the bit) and says so
+    (`implied.norm`). With no gap (L0 = H) every part is 0: the only change from off is that first base (REF = H).
+  - **"İma oran (model)"** (`OIS_MAIN!BJ`): Motor solves the normal path, so the model's window rate is its growth + the
+    window's part - the actual window rate; typed back it gives Motor's TLREF as its O/N (1e-12), and "Boot − İma" (`M`)
+    compares the market with it.
+  - Off (the default; an error in `M2` too) every cell is its formula of before (`IF(EK_PPK!$AJ$3=1, …, before)`), bit
+    for bit; nothing reads the switch beyond `M2`. A calculation without a user is off.
 - **Until 25.11.2026 every calendar day compounded alone**, 365·((1 + r·d/365)^(1/d) − 1), in both the page and the chat;
   for the same rate that O/N is 1.3–2.5 bp below TLREF's on the replay windows (the model's window rates read 1.3–2.5 bp
   under the model's TLREF). The market's step moved by −0.87 … +0.95 bp (replay, 03.11.2026; a step typed stays the step,

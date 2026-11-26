@@ -46,6 +46,9 @@ ABOUT = {BOOT: "Bugünkü eğri, Murex'in MTM'i: OIS par kotaları aylara göre 
                "günlere göre doğrusal; offshore eğri FX swap ima (≤9A) + XCCY bootstrap'ı.",
          PPK: "TLREF PPK toplantıları arasında sabit (PPK çözücüsünün ima patikası, MPC ima), iki kotalı vade arasında sabit bir "
               "O/N kaydırmayla bütün kotalara aynen oturur; offshore'da aynı patika + kotalar arasında sabit baz."}
+#: what the badge's tip adds while the user's TLREF normalization is on (OIS · PPK)
+NORM_ABOUT = ("TLREF normalleşmesi açık (OIS · PPK): patika modelin normal patikası + normalleşme tarihine kadar fark (bugünkü "
+              "TLREF − normal TLREF); kotalara yine aynen oturur.")
 #: the engine-level groups of the PPK cells (one dependency bit each: the OIS nodes, the offshore table, the ASW nodes)
 GROUP_OIS, GROUP_OFF, GROUP_ASW, GROUP_MIRROR = "interp-ppk-ois", "interp-ppk-off", "interp-ppk-asw", "interp-mode-asw"
 #: ... and of the desk's list (Motor's node pars on the list, the offshore table on it, each curve's flag)
@@ -131,6 +134,10 @@ class Interp(object):
                               for r in range(ex.INTERP_OFF_FIRST, ex.INTERP_OFF_LAST + 1)]
             self.status_cells = {k: (si, parse_a1(a)) for k, a in (("on", ex.INTERP_ON), ("off", ex.INTERP_OFF_ON),
                                                                        ("text", ex.INTERP_STATUS))}
+            # TLREF's normalization (the user's switch on OIS · PPK): its ON cell - on, the PPK path is the normal one +
+            # the gap up to the normalization date (ppkcurve.read), and the badge says so
+            sheet, row, col = pk.NORM_ON
+            self.norm_cell = (m.sheet_index[sheet], row * COLS + col) if sheet in m.sheet_index else None
             # the desk's list of points: each curve's flag, Motor's node pars and the offshore table on the list, the
             # tickers of its ticker points
             pc = parse_a1(ex.LIST_PAR_COL + "1") % COLS
@@ -612,11 +619,18 @@ class Interp(object):
 
         on = at("on") == 1.0
         text = at("text")
-        return {"mode": PPK, "on": on, "off": at("off") == 1.0, "label": "Eğri: PPK basamak" if on else "Eğri: PPK (kurulamadı)",
-                "tip": (text if isinstance(text, str) else "") + "\n" + ABOUT[PPK] + "\nAyarlar → Eğri interpolasyonu: "
-                       "sayfaların, Trades'in MTM'inin bu eğriyle; Günlük İşlemler ve masanın kayıtları (MTM / kapanış "
-                       "kayıtlarının Bootstrap'ı, alarmlar, quant, tarihçe) Bootstrap'ta. Sizin ayarınız: başkaları Bootstrap "
-                       "görebilir."}
+        # (TLREF's normalization on: the curve's path is the normal one + the gap up to the normalization date)
+        norm = on and self.norm_cell is not None and calc.get(*self._cell3(self.norm_cell)) == 1.0
+        label = ("Eğri: PPK basamak · normalleşme açık" if norm else "Eğri: PPK basamak") if on else "Eğri: PPK (kurulamadı)"
+        out = {"mode": PPK, "on": on, "off": at("off") == 1.0, "label": label,
+               "tip": (text if isinstance(text, str) else "") + "\n" + ABOUT[PPK] + "\nAyarlar → Eğri interpolasyonu: "
+                      "sayfaların, Trades'in MTM'inin bu eğriyle; Günlük İşlemler ve masanın kayıtları (MTM / kapanış "
+                      "kayıtlarının Bootstrap'ı, alarmlar, quant, tarihçe) Bootstrap'ta. Sizin ayarınız: başkaları Bootstrap "
+                      "görebilir."}
+        if norm:
+            out["norm"] = True
+            out["tip"] += "\n" + NORM_ABOUT
+        return out
 
     def settings(self, user: Optional[str]) -> Dict[str, Any]:
         """Ayarlar → Eğri interpolasyonu: the user's choice, what it is, what follows it and what does not."""

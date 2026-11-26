@@ -533,19 +533,27 @@ def test_left_out_when_the_tables_are_not_what_they_read():
     """Each way back is the exact inverse of a formula of the workbook: written otherwise, that addition is left out (the
     rest of the dashboard stays); a cell it takes that holds something leaves it out too."""
     path = os.path.join(ROOT, "models", "tto.json.gz")
+    # (EK_PPK left out takes TLREF's normalization of "İma oran (model)" with it: it reads EK_PPK's helper cells)
+    bj_too = "%s: sayfa yok: %s" % (ex.NORM_BJ_NAME, ex.PPK_SHEET)
     tto = Model.load(path)
     ex.SheetBuilder(tto, "OIS_MAIN").patch("D90", "=(EXP(BK90-BL90)-1)*360/(C90-B90)")       # a window on ACT/360
-    assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!D90 beklenen formül değil ((EXP(BK90-BL90)-1)*365/(C90-B90) yok)"]
+    assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!D90 beklenen formül değil ((EXP(BK90-BL90)-1)*365/(C90-B90) yok)", bj_too]
     assert ex.PPK_SHEET not in tto.sheet_index and "EK_TARIH" in tto.sheet_index
     tto = Model.load(path)
     ex.SheetBuilder(tto, "OIS_MAIN").patch("C86", "=$B$2+Motor!$C$9")                         # a window over two meetings
-    assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!C86 beklenen formül değil ($B$2+Motor!$C$8 değil)"]
+    assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!C86 beklenen formül değil ($B$2+Motor!$C$8 değil)", bj_too]
     tto = Model.load(path)
     ex.SheetBuilder(tto, "OIS_MAIN").patch("B110", "=ROUND((D92-D91)*100,2)")                 # a spread in another unit
-    assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!B110 beklenen formül değil (ROUND((D92-D91)*10000,2) yok)"]
+    assert ex.apply("tto", tto) == ["EK_PPK: OIS_MAIN!B110 beklenen formül değil (ROUND((D92-D91)*10000,2) yok)", bj_too]
     tto = Model.load(path)
     ex.SheetBuilder(tto, "Motor").patch("J9", "=INDEX($F$528:$F$4228,C9)")                   # the model's term read a day off
-    assert ex.apply("tto", tto) == ["EK_PPK: Motor!J9 beklenen formül değil (INDEX($F$528:$F$4228,MIN(C9,3700)+1) değil)"]
+    assert ex.apply("tto", tto) == ["EK_PPK: Motor!J9 beklenen formül değil (INDEX($F$528:$F$4228,MIN(C9,3700)+1) değil)", bj_too]
+    tto = Model.load(path)
+    before = ex.formula_of(tto, "OIS_MAIN", "BJ84")
+    ex.SheetBuilder(tto, "OIS_MAIN").patch("BJ90", "=(EXP((C90-B90)*LN(1+Motor!$K$11/365))-1)*365/(C90-B90)")   # no term
+    problems = ex.apply("tto", tto)                       # (the model's window rate as it is: EK_PPK stays)
+    assert len(problems) == 1 and problems[0].startswith("%s: OIS_MAIN!BJ90 beklenen formül değil" % ex.NORM_BJ_NAME)
+    assert ex.PPK_SHEET in tto.sheet_index and ex.formula_of(tto, "OIS_MAIN", "BJ84") == before
     tto = Model.load(path)
     ex.SheetBuilder(tto, "OIS_MAIN").patch("S400", "=(R400*P400-Q400*O400)/(P400-O400)")       # fills without the market
     problems = ex.apply("tto", tto)

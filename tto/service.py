@@ -8643,21 +8643,29 @@ class Service(object):
         from the OIS spot for the first one).  ``model``: the bootstrap's own step for the meeting.  The overnight
         equivalent is TLREF's as the MPC ima model compounds it - on business days, the period's weekend / holiday term
         the model's (:func:`tto.ppkcurve.window_overnight`, :meth:`OisMarket.mpc_term`; the desk, 25.11.2026: "B") -,
-        EK_PPK's to the bp's last digit."""
+        EK_PPK's to the bp's last digit.  With the user's TLREF normalization on (OIS · PPK; :meth:`OisMarket.mpc_norm`)
+        as EK_PPK has it then: every level taken to the normal path first (its period's stretch part off its ln G,
+        :meth:`OisMarket.mpc_stretch`), the first meeting's base the normal TLREF (REF) - ``norm`` says so."""
         items = [(q, ("bid", "ask", "price")) for q in rows] + [(r, ("bid", "ask", "last", "best_bid", "best_ask")) for r in board or ()]
         items = [(q, f) for q, f in items if q.get("kind") == "mpc" and (q.get("mpc") or {}).get("start") and (q.get("mpc") or {}).get("meeting")]
         mkt = self._broker_market(user) if items else None
         if mkt is None:
             return
         try:
-            days = sorted(mkt.mpc_table()["lndf"])
+            table = mkt.mpc_table()
+            days, spot = sorted(table["lndf"]), table["spot"]
+            nm = mkt.mpc_norm() if spot is not None else None
         except Exception:  # noqa: BLE001 - a workbook without the table
             return
 
         def overnight(rate: float, a: float, b: float) -> Optional[float]:
             term = mkt.mpc_term(a, b)
             try:
-                return None if term is None else pk.window_overnight(rate, b - a, term)
+                if term is None:
+                    return None
+                if nm is None:
+                    return pk.window_overnight(rate, b - a, term)
+                return pk.window_overnight(rate, b - a, term, mkt.mpc_stretch(nm, a, b))
             except (ValueError, OverflowError):
                 return None
 
@@ -8667,14 +8675,22 @@ class Service(object):
                 continue                                    # several periods, or days the table does not have
             p = days[days.index(s) - 1]
             prev, model = mkt.mpc_span(p, s), mkt.mpc_span(s, e)
-            base = None if prev is None else overnight(prev, p, s)
-            if base is None:
+            first = p == spot                               # (the period before is the stub from the OIS spot)
+            if nm is not None and first:
+                base: Optional[float] = nm.ref              # (normalization on: the normal TLREF, not the stub's O/N)
+            else:
+                base = None if prev is None else overnight(prev, p, s)
+            if base is None or prev is None:
                 continue
             on_model = None if model is None else overnight(model, s, e)
             out: Dict[str, Any] = {"kind": "mpc", "meeting": q["mpc"]["meeting"], "days": e - s, "prev": prev * 100.0,
                                    "prev_on": base * 100.0, "prev_from": serial_to_date(p).isoformat(), "prev_to": q["mpc"]["start"],
                                    "model": None if on_model is None else (on_model - base) * 1e4,
                                    "model_level": None if model is None else model * 100.0}
+            if nm is not None:
+                # TLREF's normalization: the normalization date, the gap (bp), whether the base is the normal TLREF
+                out["norm"] = {"date": serial_to_date(spot + nm.days).isoformat(), "gap": nm.gap * 1e4,
+                               "ref": nm.ref * 100.0, "base_ref": first}
             for f in fields:
                 if type(q.get(f)) is float:
                     on = overnight(q[f] / 100.0, s, e)

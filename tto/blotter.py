@@ -583,6 +583,26 @@ class OisMarket(object):
             return None
         return pcum[end] - pcum[start]
 
+    def mpc_norm(self) -> Optional[pk.Norm]:
+        """TLREF's normalization as this calculation has it (the user's switch on OIS · PPK, :func:`tto.ppkcurve.norm`):
+        ``None`` off - nothing more is read then."""
+        idx = self.book.model.sheet_index
+        if "OIS_MAIN" not in idx:
+            return None
+        return pk.norm(lambda sheet, r, c: self.calc.get(idx[sheet], r, c))
+
+    def pcum_at(self, day: float) -> float:
+        """Motor's Pcum at ``day`` (days from the OIS spot; its daily calendar Motor!F528:F4228 at MIN(day, 3700), as its
+        readers take it) - 0 where the calendar has no number."""
+        v = self.value("Motor!F%d" % (pk.PCUM_ROWS[0] + int(min(max(day, 0.0), pk.PCUM_LAST))))
+        return v if type(v) is float else 0.0
+
+    def mpc_stretch(self, nm: pk.Norm, start: float, end: float) -> float:
+        """The normalization stretch's part of the period between two days (serials) of the 'MPC OIS' table: E at its end
+        − E at its start, days from the OIS spot (:meth:`tto.ppkcurve.Norm.stretch`; EK_PPK's AG)."""
+        spot = self.mpc_table()["spot"]
+        return nm.stretch(start - spot, end - spot, self.pcum_at)
+
     def between(self, start: float, end: float) -> Dict[str, Any]:
         """A swap from one date to another, paid once at the end - how a meeting-dated OIS trades.  The numbers
         are those of OIS_MAIN's 'İKİ TARİH ARASI SIMPLE RATE' block with the two dates typed into it: the
