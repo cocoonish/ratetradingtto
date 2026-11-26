@@ -4,8 +4,7 @@
 // chart of a picked one (its out-of-sample probability below as z(p)), every pair with today's quotes, their moves and
 // the signals' z's, the forecast, whether it prints and why, and every signal's own out-of-sample record - pooled and
 // per pair - so the desk sees which option signals lead the spot, and which way.  Computed in the quant worker's thread.
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, groupText, T, N, Z, fmt, pct, sgn, isNum } from './quantbase.js';
-import { h } from '../ui.js';
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, groupText, T, N, Z, fmt, pct, sgn, isNum, sideClass } from './quantbase.js';
 
 const SIG_TIP = {
   drr1: '25D RR 1A\'nın 5 kapanışlık değişimi ÷ kendi 5 günlük değişimlerinin σ\'sı (son 250 kapanış)',
@@ -26,20 +25,20 @@ class OptSpotPage extends QuantPage {
 
   build() {
     this.tools([]);
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-optspot-signals', 'Opsiyon → spot · sinyaller');
+    const page = this.pageEl();
+    const sp = panel('quant-optspot-signals', 'Opsiyon → spot · sinyaller', { wide: true });
     sp.note.textContent = 'Yalnızca örneklem dışı kaydı tutan (isabet ≥ model eşiği, en az test sayısı) ve bugünkü olasılığı girişi geçen pariteler. '
       + 'İşlem satırı: işlemi açan opsiyon sinyali, yön, parite, büyüklük, isabet (test). Satıra tıklayın: kartta düz anlatım ve tahmini en çok '
       + 'oynatan sinyaller; grafikte spotun altında örneklem dışı olasılık gün gün (z(p) = (p − 0,5) ÷ 0,05).';
-    this.boxes.sig = new GridBox(sp, 'quant/optspot/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-optspot-chart', 'Seçili parite');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-optspot-chart', 'Seçili parite', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     this.pairs = panel('quant-optspot-pairs', 'Pariteler · bugünkü opsiyon sinyalleri ve önümüzdeki 5 iş günü');
-    this.boxes.pairs = new GridBox(this.pairs, 'quant/optspot/pairs', (sid) => this.pick(sid));
+    // (19 columns: the pair stays in view while the table scrolls sideways at 1366)
+    this.boxes.pairs = new GridBox(this.pairs, 'quant/optspot/pairs', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.leads = panel('quant-optspot-leads', 'Opsiyon sinyalleri spotu öncülüyor mu? · örneklem dışı kayıt');
     this.boxes.leads = new GridBox(this.leads, 'quant/optspot/leads');
     page.append(sp.el, cp.el, this.pairs.el, this.leads.el);
-    this.addStatus(page);
     this.host.appendChild(page);
   }
 
@@ -56,13 +55,8 @@ class OptSpotPage extends QuantPage {
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Şu an basılan satır yok: paritenin örneklem dışı isabeti, test sayısı ve bugünkü olasılık birlikte tutmalı '
-      + '(aşağıdaki tabloda her paritenin nedeni).', this.picked);
+    this.showSignals('Şu an basılan satır yok: paritenin örneklem dışı isabeti, test sayısı ve bugünkü olasılık birlikte tutmalı '
+      + '(aşağıdaki tabloda her paritenin nedeni).');
   }
 
   fillPage() {
@@ -99,7 +93,8 @@ class OptSpotPage extends QuantPage {
         Z(x.rrz, entry, { tip: SIG_TIP.rrz }), Z(x.div, entry, { tip: SIG_TIP.div }), Z(x.vrr, entry, { tip: SIG_TIP.vrr }),
         T(isNum(r.bfz) ? sgn(r.bfz, 1) + (isNum(r.f_bf) && Math.abs(r.f_bf - 1) > 0.005 ? ' (×' + fmt(r.f_bf, 2) + ')' : '') : '',
           { tip: 'Kanatlar: 25D BF 3A\'nın 1 yıla göre z\'si; yön vermez, seviyeleri çarpanla genişletir / daraltır' }),
-        T(isNum(r.prob) ? (r.verb ? r.verb + ' ' : '') + '%' + fmt(r.prob * 100, 0) : '', { tip: isNum(r.mu) ? 'μ ' + sgn(r.mu, 2) + 'σ (haftanın)' : '' }),
+        T(isNum(r.prob) ? (r.verb ? r.verb + ' ' : '') + '%' + fmt(r.prob * 100, 0) : '', Object.assign({ tip: isNum(r.mu) ? 'μ ' + sgn(r.mu, 2) + 'σ (haftanın)' : '' },
+          sideClass(r.verb) ? { cls: sideClass(r.verb) } : {})),
         Z(r.z, entry), T(r.prints ? '✓' : (r.why || '—'), { cls: r.prints ? 'thru' : 'soft' }), T(r.driver || '', { tip: r.driver || '' }),
         N(r.tests, 0, { tip: isNum(r.days) ? r.days + ' örneklem dışı gün; 5 günlük ufuklar örtüştüğü için test = gün ÷ 5' : '' }),
         { t: pct(r.hit, 1), v: r.hit, k: isNum(r.hit) ? 'n' : '', cls: isNum(r.hit) && r.hit >= hitMin ? 'thru' : '' },

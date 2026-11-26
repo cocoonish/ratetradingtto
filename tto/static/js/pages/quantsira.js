@@ -6,7 +6,7 @@
 // Sinyaller list) and the chart of a picked one; the backtest per set.  Computed in the quant worker's thread.
 import { h, clear } from '../ui.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, fmt, sgn, pct, isNum, money, levelText } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, fmt, sgn, pct, isNum, money, levelText, sideClass } from './quantbase.js';
 
 // a set's panel: its id on the page (literal: quantread.js has a read line for each) and its title
 const SET_TITLES = {
@@ -23,13 +23,13 @@ class SiraPage extends QuantPage {
 
   build() {
     this.tools();
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-' + this.what + '-signals', 'Carry + momentum · sepetlerin satırları');
+    const page = this.pageEl();
+    const sp = panel('quant-' + this.what + '-signals', 'Carry + momentum · sepetlerin satırları', { wide: true });
     sp.note.textContent = 'Her sepetin her bacağı bir satır (Sinyaller listesinde de, kendi grubunda): ne yapılacağı ve büyüklüğü, giriş / hedef / stop '
       + 'bacağın kendi fiyatıyla, beklenen K/Z haftalık (FX\'te 1 mn baz döviz başına). "sıra" 2 sepetin o tarafının en güçlüsü, 1 en zayıfı; '
       + 'kapı yok: bir sepetin bacakları her zaman satırdır. Satıra tıklayın: işlemin düz anlatımı ve serisi aşağıda.';
-    this.boxes.sig = new GridBox(sp, 'quant/sira/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-' + this.what + '-chart', 'Seçili satır');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-' + this.what + '-chart', 'Seçili satır', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     page.append(sp.el, cp.el);
     // (one panel a set, each id literal)
@@ -37,7 +37,7 @@ class SiraPage extends QuantPage {
     const add = (id, p) => {
       const card = h('div', { class: 'qbasket', id: p.el.id + '-card' });
       p.el.insertBefore(card, p.body);
-      this.sets[id] = { p, card, box: new GridBox(p, 'quant/sira/' + id, (sid) => this.pick(sid)) };
+      this.sets[id] = { p, card, box: new GridBox(p, 'quant/sira/' + id, (sid, click) => this.pick(sid, click)) };
       page.appendChild(p.el);
     };
     add('g10', panel('quant-sira-g10', SET_TITLES.g10));
@@ -53,8 +53,8 @@ class SiraPage extends QuantPage {
       + 'Sinyaller sayfasının geri test tablosu aileyi bu haftalık geri testle verir.';
     this.boxes.bt = new GridBox(this.bt, 'quant/sira/backtest');
     page.appendChild(this.bt.el);
-    this.addStatus(page);
     this.host.appendChild(page);
+    this.addJumps(page);
   }
 
   fill() {
@@ -70,9 +70,8 @@ class SiraPage extends QuantPage {
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => signalRows([s], { gated: !!s.gated })[0]),
-      list.map((s) => s.id), 'Bu hafta sepet yok: geçmiş yetersiz (aşağıda her sepetin nedeni).', this.picked);
+    // (a basket's legs are lines whatever their gates say: none greyed)
+    this.showSignals('Bu hafta sepet yok: geçmiş yetersiz (aşağıda her sepetin nedeni).', false);
   }
 
   fillPage() {
@@ -82,6 +81,7 @@ class SiraPage extends QuantPage {
       const own = this.sets[s.id];
       if (!own) continue;
       own.p.note.textContent = s.note || '';
+      own.p.el.classList.toggle('qsaid', !s.ok);          // (the card says why there is no basket: the ranking says no more)
       this.fillCard(own.card, s);
       this.fillRanking(own.box, s);
     }
@@ -128,7 +128,9 @@ class SiraPage extends QuantPage {
         h('td', null, lv(l.entry)), h('td', null, lv(l.now)), h('td', null, money(isNum(l.so_far_now) ? l.so_far_now : l.so_far, ccy) || '0'),
         h('td', null, isNum(l.exp) ? money(l.exp, ccy) : '—'), h('td', null, isNum(l.target) ? money(l.target, ccy) : '—'), h('td', null, money(l.stop, ccy))));
     }
-    card.append(h('div', { class: 'qplain' }, head, h('div', { class: 'qcols' }, kv, legs)));
+    // (each leg is a line of the list above; its entry at the basket's close and its P&L so far here, one click away)
+    const legsBox = h('details', { class: 'qlegsfold' }, h('summary', null, 'Bacaklar (' + (s.legs || []).length + ') · kuruluştaki giriş, şimdi, şimdiye kadar K/Z'), legs);
+    card.append(h('div', { class: 'qplain' }, head, h('div', { class: 'qcols' }, kv, legsBox)));
   }
 
   /** A set's ranking at the basket's close: carry, momentum (DİBS: cheapness too), the composite, the rank, the side. */
@@ -139,9 +141,9 @@ class SiraPage extends QuantPage {
       dibs ? ['Ucuzluk z'] : [], [s.mode === 'best' ? 'Skor (+ ' + (cols.way || '') + ')' : 'Bileşik', 'Sepette', 'Büyüklük', 'sıra']);
     const rows = (s.rows || []).map((r) => [N(r.rank, 0), T(r.label + (r.tier === 'uzun' ? ' · uzun' : ''), { b: 1 }), N(r.carry, 2, { sign: true })]
       .concat(fx ? [] : vol ? [N(r.iv, 2), N(r.rv, 2)] : [N(r.cv, 2, { sign: true })], [N(r.mom, 2, { sign: true })], dibs ? [N(r.cheap, 2, { sign: true })] : [],
-        [N(r.composite, 2, { sign: true, b: 1 }), T(r.verb || '', { b: 1, cls: r.side > 0 ? 'thru' : r.side < 0 ? 'thru' : 'soft' }), T(r.size || ''),
+        [N(r.composite, 2, { sign: true, b: 1 }), T(r.verb || '', { b: 1, cls: sideClass(r.verb) || (r.side ? 'thru' : 'soft') }), T(r.size || ''),
           N(r.z, 2, { sign: true })]));
-    box.set(head, rows, (s.rows || []).map((r) => r.sid), s.why || 'Sıralama yok', this.picked);
+    box.set(head, rows, (s.rows || []).map((r) => r.sid), s.ok ? (s.why || 'Sıralama yok') : 'Sıralama yok', this.picked);
   }
 }
 

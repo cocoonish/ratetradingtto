@@ -185,43 +185,104 @@ export function keep(key, value) {
   try { localStorage.setItem(key, String(value)); } catch (e) { /* not kept */ }
 }
 
+// ------------------------------------------------------------------------------------------------ the pages' layout
+// (Düzen, 27.11.2026 - the desk: "Hepsini yap"): a panel is as wide as its table, narrow ones side by side (``wide``: the
+// whole row - the signal list, the card, a panel with a chart); every panel folds (▾ / ▸ among its tools, its title
+// while folded; the choice kept in the browser), a long page's secondary panels folded until opened (``folded``); an
+// empty panel is its title and its reason (``qempty``); the long pages list their panels in a jump bar.
+const FOLD_PREF = 'tto.quant.fold.';
+
 /**
- * A panel with a title, its tools (copy), a body and its two explanations: ``{el, body, note, read, setTitle}``. ``read``,
- * above the body, says in the desk's words what the table tells and which number means a trade (``quantread.js``);
- * ``note``, below it, how it is computed - labelled "Yöntem" when the panel has a read line, unless its note is live
- * information rather than a method (``isInfo``).
+ * A panel with a title, its tools (copy, fold), a body and its two explanations: ``{el, body, note, read, tools,
+ * setTitle, toggle}``. ``read``, above the body, says in the desk's words what the table tells and which number means a
+ * trade (``quantread.js``); ``note``, below it, how it is computed - labelled "Yöntem" when the panel has a read line,
+ * unless its note is live information rather than a method (``isInfo``). ``opts.wide``: the page's whole width (else as
+ * wide as its table); ``opts.folded``: folded until the user opens it (their choice kept, either way).
  */
 export function panel(id, title, opts = {}) {
   const body = h('div', { class: 'body' });
   const said = readLine(id);
   const read = h('div', { class: 'qread', id: id + '-read' }, said || null);
   const note = h('div', { class: 'muted qnote' + (said && !isInfo(id) ? ' qmethod' : '') });
-  const head = h('h2', null, title);
+  const head = h('h2', { title }, title);                  // (a narrow panel's title may end in "…": whole in its tooltip)
   const tools = h('div', { class: 'tools' });
-  const el = h('section', { class: 'panel wide' + (opts.cls ? ' ' + opts.cls : ''), id },
-    h('header', null, head, h('span', { class: 'grow' }), ...(opts.right || []), tools), read, opts.top || null, body, note);
-  return { el, body, note, read, tools, setTitle: (t) => { head.textContent = t; } };
+  const key = FOLD_PREF + id;
+  const folded = pref(key, opts.folded ? '1' : '0') === '1';
+  const fold = h('button', { class: 'iconbtn qfold', type: 'button', title: 'Daralt / aç' }, folded ? '▸' : '▾');
+  tools.appendChild(fold);
+  const header = h('header', null, head, h('span', { class: 'grow' }), ...(opts.right || []), tools);
+  const el = h('section', { class: 'panel ' + (opts.wide ? 'wide' : 'fit') + (opts.cls ? ' ' + opts.cls : '') + (folded ? ' collapsed' : ''), id },
+    header, read, opts.top || null, body, note);
+  const toggle = (now) => {
+    el.classList.toggle('collapsed', now);
+    fold.textContent = now ? '▸' : '▾';
+    keep(key, now ? '1' : '0');
+  };
+  fold.addEventListener('click', () => toggle(!el.classList.contains('collapsed')));
+  // (a folded panel opens from its title too: the tools show only under the pointer)
+  header.addEventListener('click', (e) => {
+    if (el.classList.contains('collapsed') && !e.target.closest('button, select, input, a, label')) toggle(false);
+  });
+  el.__open = () => { if (el.classList.contains('collapsed')) toggle(false); };
+  return { el, body, note, read, tools, setTitle: (t) => { head.textContent = t; head.title = t; }, toggle };
 }
 
+/** Bring a panel of the page into view, opened if it was folded (a jump link, ``#/quant?p=<panel id>``). */
+export function showPanel(el) {
+  if (!el) return;
+  if (el.__open) el.__open();
+  el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  el.classList.remove('focus');
+  void el.offsetWidth;                                     // (the mark again, when it is still on)
+  el.classList.add('focus');
+}
+
+/** A long page's panels as links above them: a click opens the panel (folded ones say ▸) and brings it into view. */
+export function jumpBar(page, id) {
+  const bar = h('nav', { class: 'qjump', id: id || null, 'aria-label': 'Bu sayfadaki tablolar' });
+  const panels = [...page.querySelectorAll(':scope > section.panel')];
+  const titles = panels.map((el) => ((el.querySelector(':scope > header h2') || {}).textContent || el.id).split(' · '));
+  const first = titles.map((t) => t[0]);
+  panels.forEach((el, i) => {
+    // (a title's first part; two panels starting alike - "Sinyal kaydı · …" - with their second part too)
+    const name = first.indexOf(first[i]) !== first.lastIndexOf(first[i]) ? titles[i].slice(0, 2).join(' · ') : first[i];
+    const a = h('a', { href: '#', title: 'Tabloya git' + (el.classList.contains('collapsed') ? ' (açılır)' : '') },
+      name + (el.classList.contains('collapsed') ? ' ▸' : ''));
+    a.dataset.panel = el.id;
+    a.addEventListener('click', (e) => { e.preventDefault(); showPanel(el); a.textContent = name; });
+    bar.appendChild(a);
+  });
+  return bar;
+}
+
+/** The name the 19 signal lists share for their columns (the desk, Düzen 27.11.2026: one "Sütunlar" choice for all of
+ * them - the Sinyaller list's, its box's and every analysis page's; the server hides the secondary statistics of a user
+ * who never chose: Service.DEFAULT_HIDDEN_COLUMNS). */
+export const SIGNALS_TABLE = 'quant/signals';
+
 /**
- * A table of the dashboard's grid in a panel body: rows can be clicked (``onPick(key)``), the picked one is marked,
- * the copy button puts it on the clipboard (Excel).
+ * A table of the dashboard's grid in a panel body: rows can be clicked (``onPick(key, true)``), the picked one is
+ * marked, the copy button puts it on the clipboard (Excel). ``opts.freeze``: its first columns stay in view while it
+ * scrolls sideways (the identifier: the trade, the bond, the contract). With no rows the panel is its title and the
+ * reason (``qempty``).
  */
 export class GridBox {
-  constructor(p, name, onPick) {
+  constructor(p, name, onPick, opts = {}) {
     this.p = p;
     this.name = name;
     this.onPick = onPick;
+    this.freeze = opts.freeze || 0;
     this.grid = null;
     this.keys = [];
     const copy = h('button', { class: 'iconbtn', type: 'button', title: 'Tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');
     copy.addEventListener('click', () => { if (this.grid) copyGrid(this.grid); });
-    p.tools.appendChild(copy);
+    p.tools.insertBefore(copy, p.tools.querySelector('.qfold'));
   }
 
   set(header, rows, keys, empty, picked) {
     this.keys = keys || [];
     const body = this.p.body;
+    this.p.el.classList.toggle('qempty', !rows.length);
     if (!rows.length) {
       clear(body);
       this.grid = null;
@@ -232,9 +293,11 @@ export class GridBox {
       ? row.map((c) => (c && typeof c === 'object' ? (c.sk ? c : Object.assign({}, c, { cls: ((c.cls || '') + ' pick').trim() })) : { t: c == null ? '' : String(c), k: 's', cls: 'pick' }))
       : row));
     const data = plainData(header, marked);
+    // (the grid's frozen panes - a workbook table's freeze - for a table of our own: the identifier column)
+    if (this.freeze) data.fz = this.freeze;
     if (this.grid) { this.grid.replace(data); return; }
     clear(body);
-    const g = new Grid({ data, editable: false, name: this.name, tools: toolsOf(body) });
+    const g = new Grid({ data, editable: false, name: this.name, tools: toolsOf(body), freeze: this.freeze || undefined });
     if (this.onPick) {
       g.el.classList.add('pickable');
       g.el.addEventListener('click', (e) => {
@@ -242,7 +305,7 @@ export class GridBox {
         const td = e.target.closest('td');
         if (!td || td.__i === undefined || td.__i < 1) return;
         const k = this.keys[td.__i - 1];
-        if (k) this.onPick(k);
+        if (k) this.onPick(k, true);
       });
     }
     this.grid = g;
@@ -294,9 +357,29 @@ export class SignalChart {
     this.empty.textContent = 'Yükleniyor…';
     this.empty.classList.remove('hidden');
     this.plots.classList.add('hidden');
+    this.mark(false);
+  }
+
+  /** No line to draw (the page has none now): the card is its title and why - a click on a row draws one. */
+  idle(text) {
+    this.titleEl.textContent = '';
+    this.statEl.textContent = '';
+    clear(this.lead);
+    clear(this.details);
+    this.empty.textContent = text;
+    this.empty.classList.remove('hidden');
+    this.plots.classList.add('hidden');
+    this.mark(true);
+  }
+
+  /** The card's panel (on a page) as empty - its title and the reason - or not. */
+  mark(empty) {
+    const p = this.host.closest ? this.host.closest('.panel') : null;
+    if (p) p.classList.toggle('qempty', empty);
   }
 
   show(d) {
+    this.mark(false);
     const m = d.monitor || {};
     const s = d.signal;
     const hist = d.history || {};
@@ -637,8 +720,31 @@ export function gateText(s) {
   return (s.gates || []).map((g) => (g.ok ? '✓' : '✗') + ' ' + g.name).join(' · ');
 }
 
-/** ``opts.rank`` a first column with the line's number, ``opts.group`` one with its group (Sinyaller's list and its
- * box); a signal a gate holds says "düşük güven" for its strength and its reason in the last column. */
+/** Which way a trade's words go, for its colour - AL green, SAT red, as Günlük İşlemler's RECEIVE / PAY (Düzen,
+ * 27.11.2026): the first word of the trade (AL / Buy / receive / vol al … - after a Trend line's "YENİ · " and an option
+ * line's "… → "); "" for a trade both ways at once (a steepener, a switch "AL A / SAT B") or no trade. */
+export function sideClass(text) {
+  let t = String(text || '');
+  const arrow = t.lastIndexOf('→');
+  if (arrow >= 0) t = t.slice(arrow + 1);
+  t = t.replace(/^\s*YENİ\s*·\s*/, '').trim().split(' · ')[0];
+  const buy = /^(AL|Buy|Receive|receive|vol al|RR al|BF al)(\s|$|\()/, sell = /^(SAT|Sell|Pay|pay|vol sat|RR sat|BF sat)(\s|$|\()/;
+  const side = buy.test(t) ? 'buy' : sell.test(t) ? 'sell' : '';
+  if (side && / \/ (AL|SAT|Buy|Sell|Receive|Pay|receive|pay) /.test(t)) return '';      // (both ways: a switch's pair)
+  return side;
+}
+
+/** A line's side for its colour: an FX line's by its direction (its trade is the instrument's price), else its words. */
+export function tradeSide(s) {
+  if (s.px && isNum(s.direction) && s.direction !== 0) return s.direction > 0 ? 'buy' : 'sell';
+  return sideClass(s.line || s.expression || '');
+}
+
+/** The rows of a signal list. Every list starts with the trade (Düzen, 27.11.2026): İşlem (AL green / SAT red) · Giriş ·
+ * Hedef · Stop · Beklenen K/Z · Ödül / risk · İsabet (n) - then the unit, "İşleme al", the score, the holding, the carry,
+ * the record, the model; the secondary statistics last (hidden until "Sütunlar" shows them: SIGNALS_TABLE).
+ * ``opts.rank`` a first column with the line's number, ``opts.group`` one with its group after the model (Sinyaller's
+ * list and its box); a signal a gate holds says "düşük güven" for its strength and its reason in "Bileşik / neden". */
 export function signalRows(list, opts = {}) {
   return list.map((s, i) => {
     const row = [];
@@ -657,27 +763,30 @@ export function signalRows(list, opts = {}) {
       return N(s[k], s.digits, Object.assign({ tip: sheetText(s, s[k]).trim() || undefined }, trail));
     };
     const rr = isNum(s.rr) ? s.rr : (px && isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
+    const side = tradeSide(s);
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
-    if (opts.group) row.push(T(groupText(s), Object.assign({ tip: s.tag ? s.tag + ': masanın offshore işlem limiti dar' : (s.group || '') },
-      s.tag ? { cls: 'qtag' } : {})));
-    // (a line's model: its family, or a family's own name of it - "Carry + momentum · G10 spot sepeti"; a systematic
-    // family's line - Trend's - in the plan's one-line format: "SAT USDTRY 1A forward · 1 mn USD · giriş … · model: Trend")
-    row.push(T(((s.info || {}).model || s.family_label) + (s.intraday ? ' · gün içi' : '')), T(s.asset),
-      T(s.line || s.expression, { b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }),
+    // (a systematic family's line - Trend's - in the plan's one-line format: "SAT USDTRY 1A forward · 1 mn USD · giriş … · model: Trend")
+    row.push(T(s.line || s.expression, Object.assign({ b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '')
+      + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }, side ? { cls: side } : {})),
+      lvCell('entry'), lvCell('target'), lvCell('stop'),
+      pnlCell(s),
+      ...levelCells(s, rr),
+      T(px ? px.label : q ? q.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : q ? { tip: q.inst + ' · ' + gapsText(q) } : {}),
       bookCell(s),
       Z(s.z, s.entry_z, { tip: (s.score_name || 'z') + ' · giriş eşiği ' + fmt(s.entry_z, 2) }),
       T(s.gated ? LOW : s.strength, Object.assign({ cls: 'qs-' + (s.gated ? 'elendi' : (s.strength || '').toLowerCase()) }, s.gated ? { tip: s.gated } : {})),
-      lvCell('entry'), lvCell('target'), lvCell('stop'),
-      T(px ? px.label : q ? q.label : s.unit, px ? { tip: px.inst + ' (' + px.unit + ')' } : q ? { tip: q.inst + ' · ' + gapsText(q) } : {}),
-      pnlCell(s),
-      ...levelCells(s, rr),
-      N(s.half_life, 1), T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),
+      T(isNum(s.hold) ? fmt(s.hold, 0) + (s.horizon_unit && s.horizon_unit !== 'gün' ? ' ' + s.horizon_unit : '') : ''),
       N(s.carry_week, 2, { sign: true, tip: s.fx ? 'Forward primi, işlemin yönünde, haftalık (%)' : 'Carry + roll, işlemin yönünde, haftalık (' + (pu || 'bp') + ')' }),
       N(s.carry_yr, 1, { sign: true, tip: 'FX: forward primi, işlemin yönünde, yıllık % (forward\'ların ima ettiği)' }),
-      T(s.regime || '—'), T(s.agree + (s.conflict ? ' / −' + s.conflict : ''), { tip: (s.agree_with || []).join(', ') + (s.conflict ? '\nters: ' + s.conflict_with.join(', ') : '') }),
-      T(gateText(s), { cls: 'qgate', tip: (s.gates || []).map((g) => (g.ok ? '✓ ' : '✗ ') + g.name + ': ' + (g.text || '')).join('\n') }),
       T(btShort(s.bt), { tip: s.bt ? s.bt.text + (isNum(s.bt.sharpe) ? ' · Sharpe ' + fmt(s.bt.sharpe, 2) : '')
-        + (isNum(s.bt.max_dd) ? ' · en büyük düşüş ' + fmt(s.bt.max_dd, 1) + 'σ' : '') : 'geri test henüz yok' }));
+        + (isNum(s.bt.max_dd) ? ' · en büyük düşüş ' + fmt(s.bt.max_dd, 1) + 'σ' : '') : 'geri test henüz yok' }),
+      // (a line's model: its family, or a family's own name of it - "Carry + momentum · G10 spot sepeti")
+      T(((s.info || {}).model || s.family_label) + (s.intraday ? ' · gün içi' : '')));
+    if (opts.group) row.push(T(groupText(s), Object.assign({ tip: s.tag ? s.tag + ': masanın offshore işlem limiti dar' : (s.group || '') },
+      s.tag ? { cls: 'qtag' } : {})));
+    row.push(T(s.asset), N(s.half_life, 1), T(s.regime || '—'),
+      T(s.agree + (s.conflict ? ' / −' + s.conflict : ''), { tip: (s.agree_with || []).join(', ') + (s.conflict ? '\nters: ' + s.conflict_with.join(', ') : '') }),
+      T(gateText(s), { cls: 'qgate', tip: (s.gates || []).map((g) => (g.ok ? '✓ ' : '✗ ') + g.name + ': ' + (g.text || '')).join('\n') }));
     if (opts.gated || s.gated) row.push(T(s.gated, { cls: 'soft' }));
     else row.push(N(s.composite, 2, { b: 1, tip: '|z| ' + fmt(s.parts.z, 2) + ' × rejim ' + fmt(s.parts.regime, 2) + ' × yarı ömür ' + fmt(s.parts.hl, 2) + ' × carry ' + fmt(s.parts.carry, 2) }));
     row.push(T((s.live ? '● ' : '') + (s.time || ''), { tip: s.live ? 'canlı değerle' : 'son kapanışla' }));
@@ -685,8 +794,18 @@ export function signalRows(list, opts = {}) {
   });
 }
 
-export const SIGNAL_HEAD = ['Aile', 'Varlık', 'İşlem', 'Trades', 'z', 'Güç', 'Giriş', 'Hedef', 'Stop', 'Birim', 'Beklenen K/Z', 'Ödül / risk', 'İsabet', 'Yarı ömür (g)', 'Tutma',
-  'Carry / hf', 'Carry % / yıl', 'Rejim', 'Uyum', 'Kapılar', 'Geri test'];
+// <SIGNAL_HEAD>
+export const SIGNAL_HEAD = ["İşlem", "Giriş", "Hedef", "Stop", "Beklenen K/Z", "Ödül / risk", "İsabet", "Birim", "Trades", "z", "Güç", "Tutma",
+  "Carry / hf", "Carry % / yıl", "Geri test", "Aile", "Varlık", "Yarı ömür (g)", "Rejim", "Uyum", "Kapılar"];
+// </SIGNAL_HEAD>
+
+/** A signal list's captions as ``signalRows`` gives its rows (``opts.rank`` "#" first, ``opts.group`` "Grup" after "Aile"),
+ * the composite / reason and the time last. */
+export function signalHead(opts = {}) {
+  const head = SIGNAL_HEAD.slice();
+  if (opts.group) head.splice(head.indexOf('Aile') + 1, 0, 'Grup');
+  return (opts.rank ? ['#'] : []).concat(head, ['Bileşik / neden', 'Saat']);
+}
 
 /** Where the quant worker is (tto/progress.py: the status' ``progress`` while the fit or the backtest runs), for a line:
  *  ": Quant 14/26 · ML 240/480 · ~3 dk – şu an Makine öğrenmesi"; "" when nothing runs. */
@@ -708,6 +827,24 @@ export function statusRows(st) {
   for (const [k, v] of Object.entries(t)) rows.push([T('  · ' + k), N(v, 0, { unit: 'ms' })]);
   for (const [k, v] of Object.entries(st.errors || {})) rows.push([T('  ! ' + k), T(v, { cls: 'soft' })]);
   return rows;
+}
+
+/** A page's data coverage in a line (its series; Sinyaller: all of them): "Veri kapsamı: 12 seri · 2 kısa · son kapanış
+ * 26.11.2026", the series that are short, filling or without history named in the tooltip with their days. */
+export function coverageLine(cov, minObs) {
+  const short = cov.filter((c) => c.state === 'var' && c.n < minObs);
+  const filling = cov.filter((c) => c.state === 'geçmiş doluyor');
+  const none = cov.filter((c) => c.state !== 'var' && c.state !== 'geçmiş doluyor');
+  const last = cov.reduce((a, c) => (c.last && c.last > a ? c.last : a), '');
+  const parts = [cov.length + ' seri'];
+  if (short.length) parts.push(short.length + ' kısa');
+  if (filling.length) parts.push(filling.length + ' doluyor');
+  if (none.length) parts.push(none.length + ' geçmişsiz');
+  const named = (lst, what) => (lst.length ? '\n' + what + ': ' + lst.slice(0, 12).map((c) => c.label + ' (' + c.n + ' gün)').join(', ')
+    + (lst.length > 12 ? ' … +' + (lst.length - 12) : '') : '');
+  return { text: 'Veri kapsamı: ' + parts.join(' · ') + (last ? ' · son kapanış ' + isoToTr(last) : ''),
+    tip: 'Bu sayfanın analizlerinin okuduğu günlük kapanışlar (en az ' + minObs + ' gün)' + named(short, 'Kısa') + named(filling, 'Geçmişi doluyor')
+      + named(none, 'Geçmişi yok') + '\nTıklayın: bütün serilerin tablosu (Sinyaller → Veri kapsamı).' };
 }
 
 // ------------------------------------------------------------------------------------------------ the shared page frame
@@ -780,8 +917,14 @@ export class QuantPage {
     for (const c of Object.values(this.charts || {})) if (c) c.destroy();
   }
 
-  /** Tools row: the status line and "Şimdi hesapla". */
+  /** Tools row: the data coverage in a line, the status line and "Şimdi hesapla" (the coverage and status tables are
+   * Sinyaller's, folded at its foot: Düzen, 27.11.2026). */
   tools(extra = []) {
+    this.covLine = h('a', { class: 'muted qcov', id: 'quant-coverage-line', href: '#/quant?p=signals-coverage' });
+    this.covLine.addEventListener('click', (e) => {
+      const own = document.getElementById('signals-coverage');
+      if (own && this.host.contains(own)) { e.preventDefault(); showPanel(own); }
+    });
     this.statusLine = h('span', { class: 'muted', id: 'quant-status' });
     const again = h('button', { class: 'btn', type: 'button', id: 'quant-recompute', title: 'Bütün analizleri şimdi yeniden hesapla (ayrı iş parçacığında)' }, 'Şimdi hesapla');
     again.addEventListener('click', async () => {
@@ -793,8 +936,59 @@ export class QuantPage {
       } catch (e) { errorToast(e); } finally { again.disabled = false; }
     });
     this.banner = h('div', { class: 'banner hidden', id: 'quant-banner' });
-    this.host.appendChild(h('div', { class: 'page-tools' }, ...extra, h('span', { class: 'grow' }), this.statusLine, again));
+    this.host.appendChild(h('div', { class: 'page-tools' }, ...extra, h('span', { class: 'grow' }), this.covLine, this.statusLine, again));
     this.host.appendChild(this.banner);
+  }
+
+  /** The page's panels: a wrapping row (``.qpage``; ``.quantpage`` the quant look, shared with the card's box). */
+  pageEl() {
+    return h('div', { class: 'quantpage qpage' });
+  }
+
+  /** A long page: its panels in a jump bar above them (built once they are all on the page). */
+  addJumps(page) {
+    page.parentNode.insertBefore(jumpBar(page, 'quant-jump'), page);
+  }
+
+  /** ``#/quant…?p=<panel id>``: that panel opened and in view; ``sig:<id>`` a signal's card. */
+  focusPanel(p) {
+    if (!p) return;
+    if (p.startsWith('sig:')) { this.pick(p.slice(4), true); return; }
+    showPanel(this.host.querySelector('#' + CSS.escape(p)));
+  }
+
+  /** The page's own signal list (``this.boxes.sig``: the 19 lists share their columns, SIGNALS_TABLE) and, when nothing
+   * is picked yet, its first line's card. ``soft``: a line a gate holds greyed (the families that keep every line,
+   * Carry + momentum and DİBS switch, do not). */
+  showSignals(empty, soft = true) {
+    const list = (this.data && this.data.signals) || [];
+    this.boxes.sig.set(signalHead(), list.map((s) => {
+      const row = signalRows([s], { gated: !!s.gated })[0];
+      if (soft && s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
+      return row;
+    }), list.map((s) => s.id), empty, this.picked);
+    this.firstPick(list);
+  }
+
+  /** The first line's card, opened when the page shows (on every page: Düzen, 27.11.2026); with no line the card is its
+   * title and why. ``list``: lines (``id``) or rows (``sid``). */
+  firstPick(list, why) {
+    if (!this.chart || this.picked) return;
+    const first = (list || []).find((s) => s && (s.id || s.sid));
+    if (first) { this.pick(first.id || first.sid); return; }
+    this.chart.idle(why || 'Bu sayfada şu an sinyal yok: tablolardan bir satıra tıklayınca serisi ve seviyeleri burada çizilir.');
+  }
+
+  /** The card in view after a click on a row (the tables below it - Eğri's DİBS, PCA's - would update it off screen),
+   * opened if folded; left where it is when its top is already in the upper part of the screen. */
+  revealCard() {
+    const card = this.chart && this.chart.host.closest ? this.chart.host.closest('.panel') : null;
+    if (!card) return;
+    if (card.__open) card.__open();
+    const r = card.getBoundingClientRect();
+    const vh = window.innerHeight || document.documentElement.clientHeight || 800;
+    if (r.top >= 0 && r.top < vh * 0.6) return;
+    card.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
   fillStatus() {
@@ -814,32 +1008,41 @@ export class QuantPage {
           + 'Bloomberg\'in günlük veri limiti için). Analizler eldekiyle çalışır.' : ''].concat(errs.map(([k, v]) => k + ': ' + v)).filter(Boolean).join(' · ');
     }
     if (this.boxes.status) this.boxes.status.set(['Hesap', 'Değer'], statusRows(st), null, 'Durum yok');
+    const cov = d.coverage || [];
+    if (this.covLine) {
+      const line = coverageLine(cov, (d.settings || {}).min_obs || 120);
+      this.covLine.textContent = line.text;
+      this.covLine.title = line.tip;
+      this.covLine.classList.toggle('hidden', !cov.length);
+    }
     if (this.boxes.coverage) {
-      const cov = d.coverage || [];
       this.boxes.coverage.set(['Seri', 'Grup', 'Ticker', 'Gün', 'İlk', 'Son', 'Durum', 'Canlı'], cov.map((c) => [T(c.label, { b: 1 }), T(c.group), T(c.ticker),
         N(c.n, 0, { cls: c.n < ((d.settings || {}).min_obs || 120) ? 'soft' : '' }), T(isoToTr(c.first)), T(isoToTr(c.last)),
         T(c.state || '', { cls: c.state === 'var' ? '' : 'soft' }), T(c.live ? '●' : '')]), null, 'Kapsam bilgisi henüz yok');
     }
   }
 
-  /** The status and the data coverage at the bottom of a page. */
+  /** The status and the data coverage, once, at the foot of Sinyaller and folded (Düzen, 27.11.2026: on the other pages
+   * the coverage line and the status line above them say it in a line, the line a link to these). */
   addStatus(parent) {
-    const cov = panel(this.what + '-coverage', 'Veri kapsamı (günlük kapanışlar)', { cls: 'aux' });
+    const cov = panel(this.what + '-coverage', 'Veri kapsamı (günlük kapanışlar)', { cls: 'aux', folded: true });
     cov.note.textContent = 'Gün: analizlerin okuduğu kapanış sayısı (bugün hariç; bugün canlı değerdir). En az gözlemin altındakiler soluk. Yeni ticker\'lar canlı '
-      + 'dashboard\'un tarihçe güncellemesiyle iki yıl geriye doldurulur (Ayarlar → tarihçe kapsamı).';
-    this.boxes.coverage = new GridBox(cov, 'quant/' + this.what + '/coverage');
-    const st = panel(this.what + '-status', 'Hesap durumu', { cls: 'aux' });
+      + 'dashboard\'un tarihçe güncellemesiyle iki yıl geriye doldurulur (Ayarlar → tarihçe kapsamı). Bütün sayfaların serileri burada; her sayfa '
+      + 'kendi serilerini üstteki "Veri kapsamı" satırında özetler.';
+    this.boxes.coverage = new GridBox(cov, 'quant/' + this.what + '/coverage', null, { freeze: 1 });
+    const st = panel(this.what + '-status', 'Hesap durumu', { cls: 'aux', folded: true });
     st.note.textContent = 'Analizler motor iş parçacığında değil, kendi iş parçacığında çalışır: yeni kapanışta tam hesap, dakikada en çok bir kez son noktanın canlı değerle yenilenmesi.';
     this.boxes.status = new GridBox(st, 'quant/' + this.what + '/status');
     parent.appendChild(cov.el);
     parent.appendChild(st.el);
   }
 
-  /** Draw one monitor (a click on a signal or on a row that has one). */
-  async pick(sid) {
+  /** Draw one monitor (a click on a signal or on a row that has one: ``click``, the card brought into view). */
+  async pick(sid, click) {
     if (!sid || !this.chart) return;
     this.picked = sid;
     this.chart.loading('');
+    if (click) this.revealCard();
     try {
       const d = await api.get('/api/quant/signal', { id: sid });
       if (this.dead || this.picked !== sid) return;

@@ -6,10 +6,17 @@ from starlette.testclient import TestClient
 
 from conftest import ANON, auth
 from tto.server import create_app
-from tto.service import ServiceError
+from tto.service import Service, ServiceError
 
-#: what a table hides until its user chooses: DİBS RV's own FX swap columns
-DEFAULTS = {"v/dibs/B3": ["BF", "BG", "BH", "BI", "BJ"]}
+#: what a table hides until its user chooses: DİBS RV's own FX swap columns, the quant signal lists' secondary statistics
+#: (Düzen, 27.11.2026) - read from the service: the layout builders each add their tables' entries
+DEFAULTS = {t: list(c) for t, c in Service.DEFAULT_HIDDEN_COLUMNS.items()}
+
+
+def _answer(tables, **more):
+    """What ``columns`` answers: the tables the user chose for, the defaults of the tables they did not."""
+    rest = {t: c for t, c in DEFAULTS.items() if t not in tables}
+    return dict({"tables": tables}, **({"defaults": rest} if rest else {}), **more)
 
 
 def test_each_user_keeps_their_own_hidden_columns(service):
@@ -52,14 +59,14 @@ def test_dibs_rvs_own_fx_swap_columns_are_hidden_until_a_user_shows_them(service
     view changes.  Nothing of the sheet changes: the cells are there, their values the workbook's."""
     a = service.login("FX Sütun Ayşe")["user"]
     b = service.login("FX Sütun Mehmet")["user"]
-    assert service.DEFAULT_HIDDEN_COLUMNS == {"v/dibs/B3": ("BF", "BG", "BH", "BI", "BJ")}
+    assert service.DEFAULT_HIDDEN_COLUMNS["v/dibs/B3"] == ("BF", "BG", "BH", "BI", "BJ")
     assert service.columns(a)["defaults"] == DEFAULTS
     note = next(p for p in service.view(a, "dibs")["panels"] if p["id"] == "B3").get("note") or ""
     assert note.startswith("BF–BJ") and "varsayılan olarak gizli" in note and "Genel" in note and "FX swap ASW" in note
     service.set_columns(a, "v/dibs/B3", DEFAULTS["v/dibs/B3"] + ["B"])                  # (the page sends what it hides now)
-    assert service.columns(a) == {"tables": {"v/dibs/B3": ["BF", "BG", "BH", "BI", "BJ", "B"]}}
+    assert service.columns(a) == _answer({"v/dibs/B3": ["BF", "BG", "BH", "BI", "BJ", "B"]})
     service.set_columns(a, "v/dibs/B3", [])
-    assert service.columns(a) == {"tables": {"v/dibs/B3": []}} and service.store.get("cols." + a) == {"v/dibs/B3": []}
+    assert service.columns(a) == _answer({"v/dibs/B3": []}) and service.store.get("cols." + a) == {"v/dibs/B3": []}
     assert service.columns(b) == {"tables": {}, "defaults": DEFAULTS}
     # (another table's empty choice is forgotten, as before)
     service.set_columns(a, "v/dibs/B5", ["C"])
@@ -124,13 +131,13 @@ def test_each_user_puts_the_columns_of_a_table_in_their_own_order(service):
     assert "order" not in service.columns(a)                                   # nobody moved a column: the sheet's order
     assert service.set_column_order(a, "v/dibs/B3", ["C", "A", "B", "C"]) == {"table": "v/dibs/B3", "order": ["C", "A", "B"]}
     service.set_columns(a, "v/dibs/B3", ["K"])                                 # hidden and moved: both kept, apart
-    assert service.columns(a) == {"tables": {"v/dibs/B3": ["K"]}, "order": {"v/dibs/B3": ["C", "A", "B"]}}
+    assert service.columns(a) == _answer({"v/dibs/B3": ["K"]}, order={"v/dibs/B3": ["C", "A", "B"]})
     assert "order" not in service.columns(b)
     service.set_column_order(b, "v/dibs/B3", ["B"])
     assert service.columns(a)["order"] == {"v/dibs/B3": ["C", "A", "B"]}
     # back to the sheet's order: the table is forgotten, what is hidden stays
     service.set_column_order(a, "v/dibs/B3", [])
-    assert service.columns(a) == {"tables": {"v/dibs/B3": ["K"]}}
+    assert service.columns(a) == _answer({"v/dibs/B3": ["K"]})
     assert service.store.get("colorder." + a) == {} and service.store.get("colorder." + b) == {"v/dibs/B3": ["B"]}
 
 

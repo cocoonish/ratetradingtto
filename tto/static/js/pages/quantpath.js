@@ -10,7 +10,7 @@ import { api } from '../api.js';
 import { h, clear, errorToast, toast } from '../ui.js';
 import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum,
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum,
   BLUE, ORANGE, GREEN, PURPLE, GREY } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
@@ -35,21 +35,21 @@ class PathBase extends QuantPage {
     this.tools([h('span', { class: 'muted' }, 'Merkez bankası'), this.bankSeg]);
     this.modeNote = h('div', { class: 'banner hidden', id: 'quant-' + this.what + '-mode' });
     this.host.appendChild(this.modeNote);
-    const page = h('div', { class: 'volpage quantpage' });
+    const page = this.pageEl();
     if (withSignals) {
-      const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller');
+      const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller', { wide: true });
       sp.note.textContent = 'Kinkler (İma patikası ayrıklığı) ve büyük adımın sistematik yanlış fiyatlanması (İma kalibrasyonu); elenenler gri. '
         + 'Satıra tıklayın: işlemin düz anlatımı, seri ve giriş / hedef / stop aşağıda; senaryo K/Z ve tez sinyalin notunda.';
-      this.boxes.sig = new GridBox(sp, 'quant/' + this.what + '/signals', (sid) => this.pick(sid));
-      const cp = panel('quant-' + this.what + '-chart', 'Seçili seri');
+      this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+      const cp = panel('quant-' + this.what + '-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
       this.chart = new SignalChart(cp.body);
       page.append(sp.el, cp.el);
     }
     for (const p of panels) page.appendChild(p.el);
-    this.setPanel = panel('quant-' + this.what + '-settings', 'Izgara ve politika faizi · masa ayarı (herkes için)', { cls: 'aux' });
+    this.setPanel = panel('quant-' + this.what + '-settings', 'Izgara ve politika faizi · masa ayarı (herkes için)', { cls: 'aux', folded: true });
     page.appendChild(this.setPanel.el);
-    this.addStatus(page);
     this.host.appendChild(page);
+    this.addJumps(page);
     this.loadSettings().catch(() => {});
   }
 
@@ -76,13 +76,7 @@ class PathBase extends QuantPage {
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Bu analizden şu an eşiği geçen sinyal yok (kinkin kendi geçmişi en az 40 gün, kalibrasyon en az 8 toplantı ister).',
-    this.picked);
+    this.showSignals('Bu analizden şu an eşiği geçen sinyal yok (kinkin kendi geçmişi en az 40 gün, kalibrasyon en az 8 toplantı ister).');
   }
 
   async loadSettings() {
@@ -124,21 +118,22 @@ class PathPage extends PathBase {
     this.meet = panel('quant-path-meetings', 'Toplantı başına ima · ızgaraya ayrışım');
     this.meet.note.textContent = 'Adım: toplantı sonrası ima seviyesi − bir öncekinin (ilk toplantıda patikanın başladığı seviye: TLREF / stub O/N). Her adım iki yanındaki '
       + 'ızgara katının karışımıdır: −40 = %80 −50 + %20 0. Kümülatif bugünkü seviyeye göre; fiyatlanan adım = kümülatif ÷ ızgara.';
-    this.boxes.meet = new GridBox(this.meet, 'quant/path/meetings');
+    this.boxes.meet = new GridBox(this.meet, 'quant/path/meetings', null, { freeze: 1 });
     this.pairs = panel('quant-path-pairs', 'Ardışık toplantılar · tutarlı kesikli patikalar ve toplantı tarihli OIS K/Z');
     this.pairs.note.textContent = 'Patikalar: ızgarada, ardışık iki toplantıda yön değiştirmeyen, toplamı ima toplamın iki yanındaki ızgara katı olan karar çiftleri '
       + '(böyle bir karışım iki adımı veremiyorsa her toplantının kendi iki sonucu: "en yakın"). Olasılık aralığı: iki ima adımı veren bütün karışımlar içinde en az / en çok. '
       + 'K/Z: toplantı tarihli OIS receive, bp / DV01 - 1. dönem iki toplantı arası (ilk çiftten sonra bir önceki döneme karşı), 2. dönem ikinci toplantıdan sonrası.';
-    this.boxes.pairs = new GridBox(this.pairs, 'quant/path/pairs');
+    // (the meetings stay in view while it scrolls sideways at 1366; "Okuma" wraps instead of being cut)
+    this.boxes.pairs = new GridBox(this.pairs, 'quant/path/pairs', null, { freeze: 1 });
     this.kinks = panel('quant-path-kinks', 'Kinkler · dönemin komşularının ortalamasına göre');
     this.kinks.note.textContent = 'Kink = C_k − (C_k−1 + C_k+1) ÷ 2 = −(ikinci fark) ÷ 2: + ise dönem eşit adımlı patikaya göre ucuz (receive), − pahalı (pay). Zikzak: ikinci fark '
       + 'ardışık toplantılarda yön değiştiriyor (en az ızgaranın beşte biri). z: aynı toplantının önceki günlerdeki kinkine göre; en az 40 günle sinyal (fly: +1 dönem, −½ komşular).';
-    this.boxes.kinks = new GridBox(this.kinks, 'quant/path/kinks', (sid) => this.pick(sid));
+    this.boxes.kinks = new GridBox(this.kinks, 'quant/path/kinks', (sid, click) => this.pick(sid, click));
     this.cal = panel('quant-path-calib', 'Kalibrasyon · büyük adım şu olasılıkla fiyatlandığında ne oldu?');
     this.boxes.cal = new GridBox(this.cal, 'quant/path/calib');
-    this.calm = panel('quant-path-calib-meetings', 'Kalibrasyon · toplantı toplantı', { cls: 'aux' });
+    this.calm = panel('quant-path-calib-meetings', 'Kalibrasyon · toplantı toplantı', { cls: 'aux', folded: true });
     this.boxes.calm = new GridBox(this.calm, 'quant/path/calib-meetings');
-    this.frame('İma Patikası', [this.meet, this.pairs, this.kinks, this.cal, this.calm], true);
+    this.frame('İma Patikası', [this.kinks, this.meet, this.pairs, this.cal, this.calm], true);
   }
 
   fillPage() {
@@ -164,7 +159,7 @@ class PathPage extends PathBase {
         prow.push([i ? T('') : T(isoToTr(p.first) + ' → ' + isoToTr(p.second), { b: 1 }),
           i ? T('') : T(bp(p.d1) + ' / ' + bp(p.d2) + ' (toplam ' + bp(p.total) + ')'), i ? T('') : T(p.support + (p.against_previous ? ' · önceki döneme karşı' : '')),
           T(bp(q.a1) + ' / ' + bp(q.a2), { b: 1 }), T(q.name), T(pct(q.p_min)), T(pct(q.p_max)), N(q.pnl1, 1, { sign: true, b: 1 }), N(q.pnl2, 1, { sign: true }),
-          T(q.reading, { tip: q.reading })]);
+          T(q.reading, { tip: q.reading, cls: 'qwrap' })]);
       });
     }
     this.boxes.pairs.set(['Toplantılar', 'İma adımlar (bp)', 'Destek', 'Patika', 'Ad', 'Olasılık en az', 'En çok', '1. dönem K/Z', '2. dönem K/Z', 'Okuma'],
@@ -203,21 +198,21 @@ class WirpPage extends PathBase {
     this.table.note.textContent = 'İma faiz: politika faizi + toplantıya kadar kümülatif ima hareket (politika faizi ile patikanın O/N faizi - TLREF, SOFR - arasındaki '
       + 'fark sabit). İndirim / sabit / artırım: toplantı sonrası faizin bugünküne göre (FedWatch gibi). Bu toplantıda: adımın iki ızgara sonucu. Satıra tıklayın: '
       + 'o toplantının faiz olasılıkları aşağıda.';
-    this.boxes.table = new GridBox(this.table, 'quant/wirp/table', (m) => { this.meeting = m; this.fillPage(); });
+    this.boxes.table = new GridBox(this.table, 'quant/wirp/table', (m) => { this.meeting = m; this.fillPage(); }, { freeze: 1 });
     this.table.tools.append(...boxTools(() => ({ type: 'wirp', bank: this.bank, w: 12 }), this.ctx));
     this.barHost = h('div', { class: 'volchart' });
-    this.bars = panel('quant-wirp-bars', 'Toplantı sonrası faiz olasılıkları');
+    this.bars = panel('quant-wirp-bars', 'Toplantı sonrası faiz olasılıkları', { wide: true });
     this.bars.body.appendChild(this.barHost);
     this.matrix = panel('quant-wirp-matrix', 'Koşullu toplantı olasılıkları (%)');
     this.matrix.note.textContent = 'Her toplantının adımı iki ızgara sonucuna bölünür ve adımlar beklenen patika verildiğinde bağımsız sayılır: bir toplantı sonrasının '
       + 'dağılımı öncekinin bu toplantının iki noktalı adımıyla evrişimi (FedWatch\'ın ağacı). Son sütun kontrol: matrisin beklenen değeri − ima (bp; 0 olmalı).';
-    this.boxes.matrix = new GridBox(this.matrix, 'quant/wirp/matrix', (m) => { this.meeting = m; this.fillPage(); });
+    this.boxes.matrix = new GridBox(this.matrix, 'quant/wirp/matrix', (m) => { this.meeting = m; this.fillPage(); }, { freeze: 1 });
     this.histHost = h('div', { class: 'volchart' });
-    this.hist = panel('quant-wirp-history', 'Sıradaki toplantıların olasılıkları · son haftalar', { top: this.histHost });
+    this.hist = panel('quant-wirp-history', 'Sıradaki toplantıların olasılıkları · son haftalar', { top: this.histHost, wide: true });
     this.hist.note.textContent = 'Aynı toplantı için geçmiş günlerin fiyatlaması, bugünkü faiz kovalarında (aradaki kararlar TLREF / üst bandın ızgaraya yuvarlanmış '
       + 'değişiminden). Grafik: bu toplantıların ima adımı (bp) gün gün.';
-    this.boxes.hist = new GridBox(this.hist, 'quant/wirp/history');
-    this.frame('TCMB WIRP', [this.head, this.table, this.bars, this.matrix, this.hist], false);
+    this.boxes.hist = new GridBox(this.hist, 'quant/wirp/history', null, { freeze: 1 });
+    this.frame('TCMB WIRP', [this.table, this.head, this.bars, this.matrix, this.hist], false);
   }
 
   fillPage() {

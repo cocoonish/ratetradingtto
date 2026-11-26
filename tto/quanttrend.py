@@ -864,7 +864,8 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
             tm = (sg.get("trend") or {}).get("money") or {}
             r.update({"line": sg.get("line"), "exp": tm.get("total"), "ccy": tm.get("ccy"), "hold": sg.get("hold"),
                       "entry": sg.get("entry"), "target": sg.get("target"), "stop": sg.get("stop"), "px": sg.get("px"),
-                      "unit_level": sg.get("unit"), "digits": sg.get("digits"), "bucket": (sg.get("trend") or {}).get("bucket")})
+                      "unit_level": sg.get("unit"), "digits": sg.get("digits"), "bucket": (sg.get("trend") or {}).get("bucket"),
+                      "rr": sg.get("rr")})            # (the table starts with the trade: Düzen, 27.11.2026 - its reward / risk too)
     base["trend"] = tab
     base["signals"] = [s for s in v["signals"] + v["gated"] if s.get("page") == VIEWS[what]]
     base["settings"] = fit["cfg"]

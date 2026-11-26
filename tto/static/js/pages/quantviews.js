@@ -6,36 +6,33 @@
 import { h, clear } from '../ui.js';
 import { Chart } from '../chart.js';
 import { isoToTr } from '../format.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum, REGIME,
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, T, N, Z, heatHex, seg, pref, keep, fmt, sgn, pct, isNum, REGIME,
   BLUE, ORANGE, GREEN, PURPLE, RED, GREY } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
 const ARROW = (s) => (s > 0 ? '↑' : s < 0 ? '↓' : '');
 
-/** The frame of an analysis page: its signals, the chart of a picked row, its panels, the status. */
+/** The frame of an analysis page (Düzen, 27.11.2026: the same order on every page): its signals, the card of a picked
+ * row, its trade tables, its analysis, its secondary tables (folded on a long page: ``opts.jumps`` lists the panels
+ * above them); the coverage and the status in a line above (their tables on Sinyaller). */
 class AnalysisPage extends QuantPage {
-  frame(title, panels, tools = []) {
+  frame(title, panels, tools = [], opts = {}) {
     this.tools(tools);
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller');
+    const page = this.pageEl();
+    const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller', { wide: true });
     sp.note.textContent = 'Bu analizden çıkan sinyaller (elenenler gri, nedeniyle). Beklenen K/Z: FX\'te 1 mn baz döviz başına para, faizde bp (TL ipucunda). '
       + 'Satıra tıklayın: işlemin düz anlatımı (ne alınır / satılır, hangi fiyattan, hedefte ve stopta ne olur), seri ve giriş / hedef / stop aşağıda.';
-    this.boxes.sig = new GridBox(sp, 'quant/' + this.what + '/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-' + this.what + '-chart', 'Seçili seri');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-' + this.what + '-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     page.append(sp.el, cp.el);
     for (const p of panels) page.appendChild(p.el);
-    this.addStatus(page);
     this.host.appendChild(page);
+    if (opts.jumps) this.addJumps(page);
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Bu analizden şu an eşiği geçen sinyal yok.', this.picked);
+    this.showSignals('Bu analizden şu an eşiği geçen sinyal yok.');
   }
 
   fill() {
@@ -68,8 +65,8 @@ class CorrPage extends AnalysisPage {
     this.boxes.heat = new GridBox(this.heat, 'quant/corr/heat');
     this.pairs = panel('quant-corr-pairs', 'Çiftler · kırılma z sırasıyla');
     this.pairs.note.textContent = 'Sinyal: uzun dönem |ρ| eşiğin üstündeki çiftlerde |z| ≥ giriş. İşlem: son kısa pencerede ayrışan çiftin β ile yakınsaması.';
-    this.boxes.pairs = new GridBox(this.pairs, 'quant/corr/pairs', (sid) => this.pick(sid));
-    this.frame('Korelasyon', [this.heat, this.pairs], [h('span', { class: 'muted' }, 'Pencere'), this.winSeg, h('span', { class: 'muted' }, 'Göster'), viewSeg]);
+    this.boxes.pairs = new GridBox(this.pairs, 'quant/corr/pairs', (sid, click) => this.pick(sid, click));
+    this.frame('Korelasyon', [this.pairs, this.heat], [h('span', { class: 'muted' }, 'Pencere'), this.winSeg, h('span', { class: 'muted' }, 'Göster'), viewSeg]);
   }
 
   fillPage() {
@@ -107,40 +104,40 @@ class PcaPage extends AnalysisPage {
       + 'izdüşümü, z = skor ÷ √λ; seviye z: bileşenin seviyesinin penceredeki yeri.';
     this.boxes.factors = new GridBox(this.factors, 'quant/pca/factors');
     this.loadChartHost = h('div', { class: 'volchart' });
-    this.loadings = panel('quant-pca-loadings', 'Yükler (vade başına)', { top: this.loadChartHost });
+    this.loadings = panel('quant-pca-loadings', 'Yükler (vade başına)', { top: this.loadChartHost, wide: true });
     this.boxes.loadings = new GridBox(this.loadings, 'quant/pca/loadings');
     this.dyn = panel('quant-pca-windows', 'Dinamik PCA · 60 / 120 / 250 günlük pencereler');
     this.dyn.note.textContent = 'Her pencerede günlük değişimlerin PCA\'sı (risk bileşenleri) ve seviyelerin PCA\'sı (eğrinin pencerede kaydığı yönler). Kararlılık: '
       + 'iki pencerenin aynı bileşen yüklerinin |kosinüsü| (1: aynı şekil) ve bir vadenin yükünün en büyük değişimi. Sinyaller, en az gözlem kadar kapanışı olan en uzun pencereyi kullanır (yazar).';
     this.boxes.dyn = new GridBox(this.dyn, 'quant/pca/windows');
-    this.stab = panel('quant-pca-stability', 'Yüklerin kararlılığı (PC1–PC3, pencere çiftleri)', { cls: 'aux' });
+    this.stab = panel('quant-pca-stability', 'Yüklerin kararlılığı (PC1–PC3, pencere çiftleri)', { cls: 'aux', folded: true });
     this.boxes.stab = new GridBox(this.stab, 'quant/pca/stability');
-    this.loadw = panel('quant-pca-loadw', 'Yükler pencere pencere', { cls: 'aux' });
+    this.loadw = panel('quant-pca-loadw', 'Yükler pencere pencere', { cls: 'aux', folded: true });
     this.boxes.loadw = new GridBox(this.loadw, 'quant/pca/loadw');
     this.resid = panel('quant-pca-resid', 'Zengin / ucuz · seviye-PCA\'sının PC1–PC2\'sine nötr paket');
     this.resid.note.textContent = 'Kalıntı: tenor ve iki komşusundan, seviyelerin PCA\'sının ilk iki bileşenine nötr paket (DV01 ağırlıklı), pencerenin ortalamasına göre (bp); '
       + '+ ise tenor ucuz (receive), − ise pahalı (pay). Seviye-PCA\'sı neden: bir döngü (indirim / artırım) eğriyi seviyelerin kaydığı yönlerde taşır; o yönler '
       + 'çıkarılınca kalan kalıntı döngüyle trend yapmaz. Değişimlerin PCA\'sına göre kalıntı (eski hali) döngünün yönüyle günlük risk bileşenleri aynı olmadığı '
       + 'için trendin bir kısmını taşır; kayan ortalamaya göre kalıntı ise trende gecikir. Diğer pencerelerin z\'si yanında.';
-    this.boxes.resid = new GridBox(this.resid, 'quant/pca/resid', (sid) => this.pick(sid));
+    this.boxes.resid = new GridBox(this.resid, 'quant/pca/resid', (sid, click) => this.pick(sid, click));
     this.rv = panel('quant-pca-rv', 'Fly ve spread\'ler · klasik (DV01 1:1 / 50/50) ve PCA ağırlıklı yan yana');
     this.rv.note.textContent = 'Klasik: masanın usulü, spread 1:1 (uzun bacak +1, kısa −1), fly 50/50 (gövde 1, kanatlar −0,5) - DV01 cinsinden, paralel kaymaya nötr. '
       + 'PCA ağırlıklı: spread PC1\'e nötr (uzun bacak 1), fly PC1 ve PC2\'ye nötr (gövde 1). Net DV01: Σ ağırlık × paket DV01\'i (TL/bp). PC1 / PC2 / PC3: '
       + 'bileşenin 1σ\'luk (günlük) hareketinde paketin hareketi (bp) = Σ ağırlık × yük × √λ - klasik fly\'ın gizli seviye / eğim maruziyetini, PCA fly\'ın sıfır olmayan '
       + 'net DV01\'ini gösterir. Nominal, masa ayarındaki paket DV01\'i için. Carry + roll: Carry & Roll sayfasının vade motorundan, ufuk A, haftalık. İkisi ayrı sinyal verebilir.';
-    this.boxes.rv = new GridBox(this.rv, 'quant/pca/rv', (sid) => this.pick(sid));
+    this.boxes.rv = new GridBox(this.rv, 'quant/pca/rv', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.fra = panel('quant-pca-fra', 'FRA / OIS forward\'ları · toplantı tarihli PPK patikasına göre');
     this.fra.note.textContent = 'Eğri forward\'ı: OIS kotalarından masanın konvansiyonuyla (≤ 3A tek ödeme, uzunlar üç ayda bir kupon) çözülen iskonto, '
       + 'log-doğrusal. Patika: tarihçenin PPK hesabı, aynı günün kotalarından (çözücünün taban seviyesinden başlar, her toplantının ertesi iş günü yeni '
       + 'seviye, iş günü bileşik). Patika kotaları yeniden ürettiği için fark normalde çözücünün toleransı içindedir; aşınca sinyal: + ise uzak bacak ucuz (FRA receive).';
-    this.boxes.fra = new GridBox(this.fra, 'quant/pca/fra', (sid) => this.pick(sid));
+    this.boxes.fra = new GridBox(this.fra, 'quant/pca/fra', (sid, click) => this.pick(sid, click));
     this.tenors = panel('quant-pca-tenors', 'Patikanın kotaları yeniden üretmesi · kota − patikanın par faizi (aynı gün, aynı konvansiyon)');
     this.boxes.tenors = new GridBox(this.tenors, 'quant/pca/tenors');
-    this.periods = panel('quant-pca-periods', 'Toplantı dönemleri · patikanın seviyesi ve fiyatlanan adım', { cls: 'aux' });
+    this.periods = panel('quant-pca-periods', 'Toplantı dönemleri · patikanın seviyesi ve fiyatlanan adım', { cls: 'aux', folded: true });
     this.periods.note.textContent = 'Her dönem bir kararın ertesi gününden sonrakinin ertesi gününe (toplantı tarihli OIS gibi): patikanın o dönemki gecelik seviyesi '
       + 've bir önceki seviyeye göre fiyatlanan adım (bp).';
     this.boxes.periods = new GridBox(this.periods, 'quant/pca/periods');
-    this.frame('PCA / RV', [this.factors, this.loadings, this.dyn, this.resid, this.rv, this.fra, this.tenors, this.periods, this.stab, this.loadw]);
+    this.frame('PCA / RV', [this.resid, this.rv, this.fra, this.factors, this.dyn, this.tenors, this.loadings, this.periods, this.stab, this.loadw], [], { jumps: true });
   }
 
   destroy() {
@@ -233,11 +230,11 @@ class PairsPage extends AnalysisPage {
     this.pairs = panel('quant-pairs-table', 'Eşbütünleşme taraması · Engle-Granger ve Kalman');
     this.pairs.note.textContent = 'y = α + β·x (son pencere), kalıntıya ADF (gecikme AIC ile, MacKinnon 2010 kritik değerleri, iki değişken). Geçer: ADF %5 ve |t(β)| ≥ 2. '
       + 'Spread (bp) = y − α − β·x; z pencereye göre. Kalman: β_t rastgele yürüyüş, kalıntı bir gün önceki β ile; ADF (tek seri) geçerse sinyal.';
-    this.boxes.pairs = new GridBox(this.pairs, 'quant/pairs/table', (sid) => this.pick(sid));
+    this.boxes.pairs = new GridBox(this.pairs, 'quant/pairs/table', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.cal = panel('quant-pairs-viop', 'VİOP takvim spread\'leri · faiz paritesine göre adil değer');
     this.cal.note.textContent = 'İki vade arasındaki ima TRY forward faizi (VİOP fiyatlarından) − aynı tarihler için OIS forward\'ı (bp). VİOP geçmişi sayfasındaki '
       + 'kontratlar ve "Geçmiş" gün sayısı kadar (en çok 240 iş günü); kayıtlı veri modunda VİOP geçmişi yoktur.';
-    this.boxes.cal = new GridBox(this.cal, 'quant/pairs/viop', (sid) => this.pick(sid));
+    this.boxes.cal = new GridBox(this.cal, 'quant/pairs/viop', (sid, click) => this.pick(sid, click));
     this.frame('Çiftler', [this.pairs, this.cal]);
   }
 
@@ -265,7 +262,7 @@ class RegimePage extends AnalysisPage {
       + 'forward primi: + ise kur forward\'ların fiyatladığından hızlı gidiyor) - forward primi aleyhine bir işlem, beklenen kazancı onu tamponla karşılamıyorsa '
       + 'elenir; sinyal kartında işlem forward\'ın kuruyla ve 1 mn baz döviz başına K/Z ile. Sıra: eğri, FX ve küresel gruplar içinde. '
       + 'Ortalamalar: hızlı / yavaş hareketli ortalama (↑ hızlı üstte) ve kaç gündür. Sinyal: |skor| ≥ momentum eşiği, ortalamalar aynı yönde, rejim trend (nötrde yarım ağırlık).';
-    this.boxes.mom = new GridBox(this.mom, 'quant/regime/momentum', (sid) => this.pick(sid));
+    this.boxes.mom = new GridBox(this.mom, 'quant/regime/momentum', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.cycle = panel('quant-regime-cycle', 'PPK döngüsü · eğim davranışı');
     this.cycle.note.textContent = 'Faz: TLREF\'in son 63 iş günündeki değişimi ≤ −eşik indirim, ≥ +eşik artırım, arası sabit. Her fazda eğimin sonraki ufuk boyunca değişimi; '
       + 't Newey-West ile (çakışan gözlemler). Küçük örneklem: n çakışan gözlem ≈ n ÷ ufuk bağımsız dönem; az dönemle Newey-West t\'si şişer, eşik o örneklemin '
@@ -274,7 +271,7 @@ class RegimePage extends AnalysisPage {
     this.reg = panel('quant-regime-table', 'İzlenen serilerin rejimi', { cls: 'aux' });
     this.reg.note.textContent = 'Varyans oranı VR(q) (Lo-MacKinlay, değişen varyansa dayanıklı z): z ≤ −1,645 ortalamaya dönüş, ≥ +1,645 trend, arası nötr. H: varyans-zaman '
       + 'Hurst üsteli (0,5 rastgele yürüyüş). Vol yüzdelik: bugünkü 20 günlük vol\'ün penceredeki yeri.';
-    this.boxes.reg = new GridBox(this.reg, 'quant/regime/table', (sid) => this.pick(sid));
+    this.boxes.reg = new GridBox(this.reg, 'quant/regime/table', (sid, click) => this.pick(sid, click));
     this.frame('Rejim & Momentum', [this.mom, this.cycle, this.reg]);
   }
 
@@ -320,21 +317,21 @@ class FxPage extends AnalysisPage {
       + 'Beklenen kayma: günlük log getirilerin EWMA\'sı (λ 0,97) yıllık, kendi kesinliğiyle sıfıra doğru küçültülmüş (gürültü olan kayma tahmin sayılmaz; ağırlık '
       + 'sütunda). Beklenen getiri (long): kayma + carry. Tampon: carry\'yi alan tarafın beklenen getirisi (− ise kayma carry\'yi yiyor). Karar: beklenen getiri ÷ vol '
       + 'masa eşiğini geçerse ilgili para birimi long / short, yoksa nötr. Forward\'ı olmayan pariteye carry uydurulmaz.';
-    this.boxes.sum = new GridBox(this.sum, 'quant/fx/summary');
+    this.boxes.sum = new GridBox(this.sum, 'quant/fx/summary', null, { freeze: 1 });
     this.sum.tools.append(...boxTools(() => ({ type: 'fx-summary', w: 12 }), this.ctx));
     this.vol = panel('quant-fx-vol', 'İma − gerçekleşen vol ve GARCH tahmini (3M ATM)');
     this.vol.note.textContent = 'Gerçekleşen: günlük log getirilerin σ\'sı × √252, 21 / 63 / 126 gün. Vol primi = ima − 63 günlük; GARCH(1,1) (ızgara üzerinde en çok olabilirlik, '
       + 'uzun dönem varyans hedefli) önümüzdeki 63 iş gününün ortalama vol\'ü; EWMA λ 0,94. + z: vol pahalı (sat), − z: ucuz (al). Skew β: 25D RR\'nin spotun %1\'lik '
       + 'hareketine tepkisi (vol puanı, 63 gün).';
-    this.boxes.vol = new GridBox(this.vol, 'quant/fx/vol', (sid) => this.pick(sid));
+    this.boxes.vol = new GridBox(this.vol, 'quant/fx/vol', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.carry = panel('quant-fx-carry', 'EM carry / risk sıralaması');
     this.carry.note.textContent = 'Carry: 3M forward\'ın ima ettiği yıllık getiri farkı (USD\'ye karşı, %); carry / vol = carry ÷ ATM 3M vol. TRY göreli: TRY\'nin carry / vol\'ü '
       + '− EM sepetinin ortalaması; z kendi geçmişine göre (+ ise TRY carry\'si göreli cazip).';
-    this.boxes.carry = new GridBox(this.carry, 'quant/fx/carry', (sid) => this.pick(sid));
+    this.boxes.carry = new GridBox(this.carry, 'quant/fx/carry', (sid, click) => this.pick(sid, click));
     this.fwd = panel('quant-fx-fwd', 'Forward primi · carry zamanlaması');
     this.fwd.note.textContent = 'İma değer kaybı: (F/S − 1) × 365 / gün; beklenen kayma: günlük getirilerin EWMA\'sı (λ 0,97) yıllık; gerçekleşen: vade kadar geriye. '
       + 'Tampon = ima − beklenen; + z: forward kaybı fazla fiyatlıyor → carry (TRY al), − z: tersi. USDTRY trendde ise sinyal bekletilir.';
-    this.boxes.fwd = new GridBox(this.fwd, 'quant/fx/fwd', (sid) => this.pick(sid));
+    this.boxes.fwd = new GridBox(this.fwd, 'quant/fx/fwd', (sid, click) => this.pick(sid, click));
     this.frame('FX Vol Primi & Carry', [this.sum, this.vol, this.carry, this.fwd]);
   }
 
@@ -379,10 +376,10 @@ class MacroPage extends AnalysisPage {
     this.betas = panel('quant-macro-betas', 'TRY eğrisi · küresel sürücülere betalar');
     this.betas.note.textContent = 'Günlük değişimlerin (bp) EKK regresyonu, ortak günlerde (kapanış saatleri farklı: betalar biraz küçük çıkar). Bugün: hareket = α + Σ β × '
       + 'sürücünün değişimi (küresel) + TRY\'ye özgü kalıntı; z = kalıntı ÷ σ. Canlı değer yoksa son kapanış günü.';
-    this.boxes.betas = new GridBox(this.betas, 'quant/macro/betas', (sid) => this.pick(sid));
+    this.boxes.betas = new GridBox(this.betas, 'quant/macro/betas', (sid, click) => this.pick(sid, click));
     this.attrHost = h('div', { class: 'volchart' });
-    this.attr = panel('quant-macro-attr', 'Bugünkü hareketin ayrıştırılması (bp)', { top: this.attrHost });
-    this.boxes.attr = new GridBox(this.attr, 'quant/macro/attr', (sid) => this.pick(sid));
+    this.attr = panel('quant-macro-attr', 'Bugünkü hareketin ayrıştırılması (bp)', { top: this.attrHost, wide: true });
+    this.boxes.attr = new GridBox(this.attr, 'quant/macro/attr', (sid, click) => this.pick(sid, click));
     this.frame('Makro Beta', [this.betas, this.attr]);
   }
 
@@ -420,7 +417,7 @@ class ModelPage extends AnalysisPage {
       + 'birinci derece otokorelasyonu), vol (20 / 120 günlük oranının logu); eğitim penceresinin kendi ortalamasıyla standartlaştırılır. Doğrulama: her hafta bir test '
       + 'noktası, model yalnızca etiketi o güne kadar bilinen örneklerle (dört haftada bir yeniden) kurulur - ileriye bakış yok. Sinyal: doğrulanmış isabet ≥ eşik, '
       + 'yeterli test noktası ve z = (p − 0,5) ÷ 0,05 girişin üstünde.';
-    this.boxes.table = new GridBox(this.table, 'quant/model/table', (sid) => this.pick(sid));
+    this.boxes.table = new GridBox(this.table, 'quant/model/table', (sid, click) => this.pick(sid, click));
     this.frame('Tahmin Modeli', [this.table]);
   }
 
@@ -429,7 +426,8 @@ class ModelPage extends AnalysisPage {
     const st = this.data.settings || {};
     const feats = md.features || [];
     const rows = md.rows || [];
-    this.boxes.table.set(['Enstrüman', 'Test', 'İsabet', 'Taban oran', 'Log-loss', 'p (yukarı)', 'Geçerli'].concat(feats.map((f) => 'β ' + f)),
+    // (the same columns as Makine öğrenmesi's under the same names: "Basılıyor" ✓ or why not, "Olasılık (yukarı)")
+    this.boxes.table.set(['Enstrüman', 'Test', 'İsabet', 'Taban oran', 'Log-loss', 'Olasılık (yukarı)', 'Basılıyor'].concat(feats.map((f) => 'β ' + f)),
       rows.map((r) => [T(r.label, { b: 1 }), N(r.n_test, 0), { t: pct(r.hit_rate, 1), v: r.hit_rate, k: 'n', cls: isNum(r.hit_rate) && r.hit_rate >= (st.model_hit || 0.55) ? 'thru' : '' },
         T(pct(r.base_rate, 1)), N(r.log_loss, 3), T(pct(r.p, 1)), T(r.error || (r.valid ? '✓' : (r.why || '—')), { cls: r.valid ? 'thru' : 'soft' })]
         .concat(feats.map((_, i) => N(r.coef ? r.coef[i + 1] : null, 2, { sign: true })))), rows.map((r) => (r.valid ? 'model:' + r.key : null)), 'Model için geçmiş yok', this.picked);
@@ -451,14 +449,14 @@ class IntradayPage extends AnalysisPage {
     this.z.note.textContent = 'Uzaklık: seviyenin günün son 60 dakikalık ortalamasına uzaklığı (faizde bp, kurda %), z son 20 günün 5 dakikalık dağılımına göre; '
       + 'yarı ömür bar (5 dk) cinsinden. Açılış aralığı: ilk 30 dakika; skor (seviye − orta) ÷ yarı genişlik, ±1,5 kırılım; kırılım sayısı ve kapanışa kadar ortalama devamı '
       + 'son günlerden.';
-    this.boxes.z = new GridBox(this.z, 'quant/intraday/z', (sid) => this.pick(sid));
+    this.boxes.z = new GridBox(this.z, 'quant/intraday/z', (sid, click) => this.pick(sid, click));
     this.rv = panel('quant-intraday-rv', 'Gün içi RV · spread\'ler 5 dakikalık barlarda');
-    this.boxes.rv = new GridBox(this.rv, 'quant/intraday/rv', (sid) => this.pick(sid));
+    this.boxes.rv = new GridBox(this.rv, 'quant/intraday/rv', (sid, click) => this.pick(sid, click));
     this.path = panel('quant-intraday-path', 'USDTRY · carry\'nin ima ettiği gün içi patika');
     this.path.note.textContent = 'Patika: günün açılışından forward priminin dakika dakika ima ettiği değer kaybıyla; fark (%, log) bar gürültüsü × √bar ile z. '
       + '+ ise spot patikanın önünde (sat), − ise gerisinde (al).';
-    this.boxes.path = new GridBox(this.path, 'quant/intraday/path', (sid) => this.pick(sid));
-    this.frame('Gün İçi', [this.st, this.z, this.rv, this.path]);
+    this.boxes.path = new GridBox(this.path, 'quant/intraday/path', (sid, click) => this.pick(sid, click));
+    this.frame('Gün İçi', [this.z, this.rv, this.path, this.st]);
   }
 
   fillPage() {

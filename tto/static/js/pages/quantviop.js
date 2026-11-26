@@ -5,7 +5,7 @@
 // (month and quarter ends, weekdays, the days to expiry), the intraday profile of the 5-minute bars, how the levels
 // held on the history.  Computed in the quant worker's thread; the levels with the values now when the page reads.
 import { h } from '../ui.js';
-import { QuantPage, GridBox, SignalChart, panel, signalRows, SIGNAL_HEAD, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum } from './quantbase.js';
+import { QuantPage, GridBox, SignalChart, panel, SIGNALS_TABLE, RATE_DIGITS, T, N, Z, seg, pref, keep, fmt, sgn, pct, isNum } from './quantbase.js';
 import { boxTools } from '../pagebox.js';
 
 const PICK_PREF = 'tto.quant.viop.contract';
@@ -20,25 +20,28 @@ class ViopPage extends QuantPage {
   }
 
   build() {
+    // (the contract selector in the panel of the levels it chooses, above them: Düzen, 27.11.2026 - it was ~850 px above)
     this.contractHost = h('span', { class: 'qtools' });
-    this.tools([h('span', { class: 'muted' }, 'Kontrat'), this.contractHost]);
+    this.tools([]);
     this.modeNote = h('div', { class: 'banner hidden', id: 'quant-viop-mode' });
     this.host.appendChild(this.modeNote);
-    const page = h('div', { class: 'volpage quantpage' });
-    const sp = panel('quant-viop-signals', 'VİOP · sinyaller');
+    const page = this.pageEl();
+    const sp = panel('quant-viop-signals', 'VİOP · sinyaller', { wide: true });
     sp.note.textContent = 'Kontratın ima TRY faizinin aynı vadenin OIS\'ine farkı, sabit vadeli geçmişteki normaline göre: farkı normalin altındaysa ima '
       + 'faiz ucuz - vadeli al, spot sat (Buy VİOP / Sell spot); üstündeyse tersi. Bacaklar ana bacağın DV01\'iyle (Ayarlar: 1.000 $), kontrat 1.000 $. '
       + 'Beklenen K/Z bp (TL karşılığı ipucunda); satıra tıklayınca kartta ne alınıp satıldığı, hedefte kazanç ve stopta kayıp bp ve TL olarak.';
-    this.boxes.sig = new GridBox(sp, 'quant/viop/signals', (sid) => this.pick(sid));
-    const cp = panel('quant-viop-chart', 'Seçili seri');
+    this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
+    const cp = panel('quant-viop-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
     this.chart = new SignalChart(cp.body);
     this.table = panel('quant-viop-contracts', 'Kontratlar · canlı');
     this.table.note.textContent = 'İma TRY % = ((fiyat / spot) · (1 + USD · g/360) − 1) · 360/g, g valörden vadeye gün (VİOP sayfasının formülü). Alış = ask '
       + 'fiyatının, satış = bid fiyatının ima faizi. OIS 360 günlük (VİOP sayfasının satır 77\'si gibi), offshore olduğu gibi (ICAP). Adil = OIS + farkın '
       + 'penceredeki ortalaması (sabit vadeli seriden, kontratın gününde). 1.000 $ DV01: ima faizin 1 bp\'si 1.000 $ olan pozisyon.';
-    this.boxes.table = new GridBox(this.table, 'quant/viop/contracts', (sid) => this.pick(sid));
+    // (16 columns: the contract stays in view while the table scrolls sideways at 1366)
+    this.boxes.table = new GridBox(this.table, 'quant/viop/contracts', (sid, click) => this.pick(sid, click), { freeze: 1 });
     this.table.tools.append(...boxTools(() => ({ type: 'viop-contracts', w: 12 }), this.ctx));
-    this.levels = panel('quant-viop-levels', 'Emir seviyeleri');
+    this.levels = panel('quant-viop-levels', 'Emir seviyeleri', { wide: true, top: h('div', { class: 'qform qcontract' }, h('span', { class: 'muted' }, 'Kontrat'),
+      this.contractHost) });
     this.levels.tools.append(...boxTools(() => ({ type: 'viop-levels', contract: this.levelsChoice() }), this.ctx));
     this.levels.note.textContent = 'Bugün (kalan seans) ve bu hafta (Cuma kapanışına kadar): alış emri ask ima faizinin en düşük noktasına, satış emri bid ima '
       + 'faizinin en yüksek noktasına göre - o seviyenin görülme olasılığı. Model: sürüklenmeli Brown hareketi (yansıma ilkesi); sürüklenme adil değere çekilme '
@@ -46,32 +49,32 @@ class ViopPage extends QuantPage {
       + 'geçmişte tutturma kalibrasyonuyla (c × σ). Fiyat: o ima faizin şimdiki spot ve USD faiziyle vadeli fiyatı.';
     this.levelsBody = h('div', { class: 'qcols' });
     this.levels.body.appendChild(this.levelsBody);
-    this.cal = panel('quant-viop-calendar', 'Takvim etkileri · VİOP − OIS farkının günlük değişimi (1 aylık sabit vade)', { cls: 'aux' });
+    this.cal = panel('quant-viop-calendar', 'Takvim etkileri · VİOP − OIS farkının günlük değişimi (1 aylık sabit vade)', { cls: 'aux', folded: true });
     this.cal.note.textContent = 'Ay sonuna kalan iş günü (0 = ayın son iş günü, + = yeni ayın ilk günleri) ve haftanın günü: ortalama değişim (bp), t, gün sayısı. '
       + '|t| ≥ 2 olan ay sonu etkileri seviye tahmininin sürüklenmesine girer.';
     this.boxes.cal = new GridBox(this.cal, 'quant/viop/calendar');
-    this.expiry = panel('quant-viop-expiry', 'Vadeye yakınlık · ima faizin günlük oynaklığı', { cls: 'aux' });
+    this.expiry = panel('quant-viop-expiry', 'Vadeye yakınlık · ima faizin günlük oynaklığı', { cls: 'aux', folded: true });
     this.boxes.expiry = new GridBox(this.expiry, 'quant/viop/expiry');
-    this.intra = panel('quant-viop-intraday', 'Gün içi · 5 dakikalık barlar (Bloomberg)', { cls: 'aux' });
+    this.intra = panel('quant-viop-intraday', 'Gün içi · 5 dakikalık barlar (Bloomberg)', { cls: 'aux', folded: true });
     this.intra.note.textContent = 'Ön kontratın işlemleri ve USDTRY orta kuru: yarım saatlik dilimde barın oynaklığı ve ima faizin günün ortalamasından '
       + 'ortalama uzaklığı (− = o saatlerde genellikle daha düşük: alış için iyi). Barlar canlı modda, geçmiş günler için bir kez istenir.';
     this.boxes.intra = new GridBox(this.intra, 'quant/viop/intraday');
     // (the last days' lows and highs in a panel of their own: two tables in one panel's body would clear each other)
-    this.days = panel('quant-viop-intraday-days', 'Gün içi · son günlerin en düşük ve en yüksek ima faizi', { cls: 'aux' });
+    this.days = panel('quant-viop-intraday-days', 'Gün içi · son günlerin en düşük ve en yüksek ima faizi', { cls: 'aux', folded: true });
     this.boxes.days = new GridBox(this.days, 'quant/viop/days');
-    this.calib = panel('quant-viop-calibration', 'Seviyeler geçmişte nasıl tuttu', { cls: 'aux' });
+    this.calib = panel('quant-viop-calibration', 'Seviyeler geçmişte nasıl tuttu', { cls: 'aux', folded: true });
     this.calib.note.textContent = 'Haftalık: geçmişin her kapanışında o haftanın kalanı için verilen seviyeler, gelen kapanışlara karşı (1 ve 3 aylık sabit '
       + 'vade). c: isabet oranlarını olasılıklara en çok yaklaştıran σ çarpanı (canlı seviyelerde kullanılır). Gün içi: barlı günlerde saat 11:00\'de verilen '
       + 'seviyeler, günün kalanına karşı.';
     this.boxes.calib = new GridBox(this.calib, 'quant/viop/calibration');
-    this.ranges = panel('quant-viop-ranges', 'Günlük aralık · fiyat (en yüksek − en düşük)', { cls: 'aux' });
+    this.ranges = panel('quant-viop-ranges', 'Günlük aralık · fiyat (en yüksek − en düşük)', { cls: 'aux', folded: true });
     this.boxes.ranges = new GridBox(this.ranges, 'quant/viop/ranges');
-    this.data_ = panel('quant-viop-data', 'Veri · kontratların Bloomberg geçmişi', { cls: 'aux' });
+    this.data_ = panel('quant-viop-data', 'Veri · kontratların Bloomberg geçmişi', { cls: 'aux', folded: true });
     this.boxes.data = new GridBox(this.data_, 'quant/viop/data');
     page.append(sp.el, cp.el, this.table.el, this.levels.el, this.cal.el, this.expiry.el, this.intra.el, this.days.el, this.calib.el, this.ranges.el,
       this.data_.el);
-    this.addStatus(page);
     this.host.appendChild(page);
+    this.addJumps(page);
   }
 
   fill() {
@@ -87,12 +90,7 @@ class ViopPage extends QuantPage {
   }
 
   fillSignals() {
-    const list = this.data.signals || [];
-    this.boxes.sig.set(SIGNAL_HEAD.concat(['Bileşik / neden', 'Saat']), list.map((s) => {
-      const row = signalRows([s], { gated: !!s.gated })[0];
-      if (s.gated) for (const c of row) if (c && typeof c === 'object') c.cls = ((c.cls || '') + ' soft').trim();
-      return row;
-    }), list.map((s) => s.id), 'Şu an VİOP sinyali yok (|z| ≥ giriş gerekli).', this.picked);
+    this.showSignals('Şu an VİOP sinyali yok (|z| ≥ giriş gerekli).');
   }
 
   fillPage() {
@@ -124,7 +122,7 @@ class ViopPage extends QuantPage {
       T(hm(r.from) + '–' + hm(r.from + 30)), N(isNum(r.var) ? Math.sqrt(r.var) * 100 : null, 2), N(r.level_bp, 1, { sign: true }), N(r.n, 0)]),
     null, intra.days ? 'Profil için bar az' : 'Gün içi bar yok (canlı modda Bloomberg\'den istenir)');
     this.boxes.days.set(['Gün', 'En düşük %', 'Saat', 'En yüksek %', 'Saat', 'Kapanış %'], (intra.ranges || []).slice(-10).reverse().map((r) => [
-      T(r.day), N(r.low, 2), T(r.low_at), N(r.high, 2), T(r.high_at), N(r.close, 2)]), null, 'Barlı gün yok');
+      T(r.day), N(r.low, RATE_DIGITS), T(r.low_at), N(r.high, RATE_DIGITS), T(r.high_at), N(r.close, RATE_DIGITS)]), null, 'Barlı gün yok');
     const calib = v.calibration || {};
     const crow = [];
     for (const G of ['30', '91']) {
@@ -163,18 +161,20 @@ class ViopPage extends QuantPage {
 export const CONTRACT_HEAD = ['Kontrat', 'Vade', 'Gün', 'Alış ima % (ask)', 'Satış ima % (bid)', 'Orta %', 'OIS % (360)', 'VİOP − OIS (bp)',
   'Normal fark (bp)', 'Adil ima %', 'z', 'Yarı ömür (g)', 'Offshore %', 'VİOP − offshore (bp)', '1.000 $ DV01: kontrat', 'Not'];
 
-/** The contracts' rows now (``bold``: the ticker of the contract whose levels are shown). */
+/** The contracts' rows now (``bold``: the ticker of the contract whose levels are shown); the rates in three decimals,
+ * as every quant level (the desk, 25.11.2026: the move between two reads as the bp beside them). */
 export function contractRows(rows, bold, entry) {
+  const R = RATE_DIGITS;
   return rows.map((r) => [
-    T(r.name, { b: r.ticker === bold ? 1 : 0 }), T(r.expiry || ''), N(r.g, 0), N(r.ask, 2), N(r.bid, 2), N(r.mid, 2), N(r.ois, 2),
-    N(r.basis, 1, { sign: true }), N(r.mean_basis, 1, { sign: true }), N(r.fair, 2), Z(r.z, entry), N(r.half_life, 1), N(r.off, 2),
+    T(r.name, { b: r.ticker === bold ? 1 : 0 }), T(r.expiry || ''), N(r.g, 0), N(r.ask, R), N(r.bid, R), N(r.mid, R), N(r.ois, R),
+    N(r.basis, 1, { sign: true }), N(r.mean_basis, 1, { sign: true }), N(r.fair, R), Z(r.z, entry), N(r.half_life, 1), N(r.off, R),
     N(r.vs_off, 1, { sign: true }), N((r.size || {}).contracts, 0), T(r.n_cm ? (r.source || '') : 'geçmiş yok', { cls: 'soft' })]);
 }
 
 /** The order levels' title of a contract: its quotes' implied rates, its fair rate, the calibration's c. */
 export function levelsTitle(r) {
-  return 'Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, 2) + ' / satış ' + fmt(r.bid, 2)
-    + (isNum(r.fair) ? ' · adil ' + fmt(r.fair, 2) : '') + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : '');
+  return 'Emir seviyeleri · ' + r.name + ' · alış ' + fmt(r.ask, RATE_DIGITS) + ' / satış ' + fmt(r.bid, RATE_DIGITS)
+    + (isNum(r.fair) ? ' · adil ' + fmt(r.fair, RATE_DIGITS) : '') + (isNum(r.calibration_c) ? ' · c ' + fmt(r.calibration_c, 2) : '');
 }
 
 /** A contract's order levels into ``host``: today's and the week's, each the buy and sell orders with the probability that
@@ -182,7 +182,7 @@ export function levelsTitle(r) {
 export function drawLevels(host, r) {
   // where the levels start and whose σ they use, when not the contract's own quotes and history
   const from = [];
-  if (r.levels_from && r.levels_from !== 'kota') from.push('Başlangıç: ' + r.levels_from + (isNum(r.ref) ? ' (' + fmt(r.ref, 2) + ')' : ''));
+  if (r.levels_from && r.levels_from !== 'kota') from.push('Başlangıç: ' + r.levels_from + (isNum(r.ref) ? ' (' + fmt(r.ref, RATE_DIGITS) + ')' : ''));
   if (r.sd_from) from.push('Oynaklık: ' + r.sd_from + ' kontratından (bu kontratın kendi geçmişi az)');
   for (const [which, title] of [['today', 'Bugün (kalan seans)'], ['week', 'Bu hafta (Cuma kapanışına)']]) {
     const part = r[which] || {};
@@ -201,8 +201,8 @@ export function drawLevels(host, r) {
       for (let i = 0; i < Math.max(buy.length, sell.length); i++) {
         const b = buy[i] || {};
         const s = sell[i] || {};
-        tbl.appendChild(h('tr', null, h('td', null, pct(b.p || s.p)), h('td', { class: 'n' }, fmt(b.level, 2)), h('td', { class: 'n' }, fmt(b.price, 4)),
-          h('td', { class: 'n' }, sgn(b.move_bp, 1)), h('td', { class: 'n' }, fmt(s.level, 2)), h('td', { class: 'n' }, fmt(s.price, 4)),
+        tbl.appendChild(h('tr', null, h('td', null, pct(b.p || s.p)), h('td', { class: 'n' }, fmt(b.level, RATE_DIGITS)), h('td', { class: 'n' }, fmt(b.price, 4)),
+          h('td', { class: 'n' }, sgn(b.move_bp, 1)), h('td', { class: 'n' }, fmt(s.level, RATE_DIGITS)), h('td', { class: 'n' }, fmt(s.price, 4)),
           h('td', { class: 'n' }, sgn(s.move_bp, 1))));
       }
       box.appendChild(tbl);

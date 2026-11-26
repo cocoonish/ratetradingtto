@@ -3514,6 +3514,12 @@ class Service(object):
 
     #: the columns of one table a user may name in an order of their own
     MAX_ORDER_COLUMNS = 400
+    #: the 19 quant signal lists share one column choice (``quant/signals``: quantbase.js SIGNALS_TABLE - Sinyaller's list, its
+    #: box, every analysis page's; Düzen, 27.11.2026, the desk: "Hepsini yap"): until a user chooses, the secondary statistics
+    #: are hidden - the asset class (the trade names it), the half-life (the holding beside it), the regime, the families
+    #: agreeing and the gates (the card shows all four; a held line's reason stays in "Bileşik / neden") -, never the trade,
+    #: its levels, P&L, record or carry
+    DEFAULT_HIDDEN_COLUMNS["quant/signals"] = ("Varlık", "Yarı ömür (g)", "Rejim", "Uyum", "Kapılar")
 
     def set_column_order(self, user: Optional[str], table: Any, order: Any) -> Dict[str, Any]:
         """The order this user puts the columns of one table in (by the same keys as hiding them; an empty list: the
