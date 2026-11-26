@@ -37,12 +37,21 @@ function N(v, digits, extra) {
   return Object.assign({ t: num(v, digits, false), v, k: 'n' }, extra || {});
 }
 
-/** Background of a change: warm for up, cool for down, stronger the larger it is against `scale`. */
-function heat(v, scale) {
+/** The heat map's colour of a rise / a fall (app.css ``--heat-up`` / ``--heat-down``: Eğri Hareketi's, FX Vol's). */
+export function heatBase(up) {
+  let text = '';
+  try { text = getComputedStyle(document.documentElement).getPropertyValue(up ? '--heat-up' : '--heat-down'); } catch (e) { text = ''; }
+  const rgb = String(text || '').split(',').map((x) => Number(x.trim()));
+  return rgb.length === 3 && rgb.every((x) => x >= 0 && x <= 255) ? rgb : (up ? [230, 103, 103] : [57, 135, 229]);
+}
+
+/** Background of a change: the heat map's colour of a rise (up) or a fall (down), stronger the larger it is against
+ *  `scale` - one scale on every page (the desk, 27.11.2026: the layout proposals). */
+export function heat(v, scale, base) {
   if (!isNum(v) || !(scale > 0) || Math.abs(v) < 1e-9) return null;
   const t = Math.min(1, Math.abs(v) / scale) * 0.62 + 0.1;
-  const base = v > 0 ? [224, 106, 58] : [59, 131, 247];
-  return base.map((c) => Math.round(128 + (c - 128) * t).toString(16).padStart(2, '0')).join('');
+  const c = base || heatBase(v > 0);
+  return c.map((x) => Math.round(128 + (x - 128) * t).toString(16).padStart(2, '0')).join('');
 }
 
 /** A change as a cell: signed, coloured by size, the earlier level in its tooltip. */
@@ -56,6 +65,22 @@ function D(v, scale, digits, from, fromDay, fromDigits) {
   return cell;
 }
 
+const TYPE_TIP = 'Tip: B bono, S sabit kuponlu, T TLREF\'e endeksli, F değişken faizli · Bloomberg\'in adı (NAME) ISIN ve Tip hücresinin üzerinde';
+
+/** Whether the bonds' names tell more than their kind ("Tip"): Bloomberg's NAME is "TURKIYE GOVERNMENT BOND" /
+ *  "TURKIYE T-BILL" for nearly every DİBS - repeated down the table it says nothing a kind does not. */
+export function namesTellMore(bonds) {
+  const byType = new Map();
+  for (const b of bonds || []) {
+    const n = String(b.name || '').trim();
+    if (!n) continue;
+    const k = String(b.type || '');
+    if (!byType.has(k)) byType.set(k, new Set());
+    byType.get(k).add(n);
+  }
+  return [...byType.values()].some((s) => s.size > 1);
+}
+
 /** Largest change of a block (never below `floor`), so that colours compare within the block. */
 function scaleOf(values, floor) {
   let m = floor;
@@ -63,16 +88,36 @@ function scaleOf(values, floor) {
   return m;
 }
 
+/** A panel; ``fit``: as wide as its table (side by side with another when they fit); ``fold``: a ▾ / ▸ in its header
+ *  folds it - ``folded`` by default, each user's own choice kept in this browser (``tto.hist.fold.<id>``). */
 function panel(title, opts = {}) {
   const body = h('div', { class: 'body' });
   const tools = h('div', { class: 'tools' });
-  const head = h('header', null, h('h2', { title }, title), opts.badge || null, tools);
-  const el = h('section', { class: 'panel' + (opts.wide ? ' wide' : '') + (opts.chart ? ' chart full' : '') }, head, body);
+  const h2 = h('h2', { title }, title);
+  const head = h('header', null, h2, opts.badge || null, tools);
+  const el = h('section', { class: 'panel' + (opts.wide ? ' wide' : '') + (opts.fit ? ' fit' : '') + (opts.chart ? ' chart full' : '') }, head, body);
   if (opts.id) el.dataset.panel = opts.id;
   const note = h('div', { class: 'note hidden' });
   el.appendChild(note);
-  return { el, body, tools, head, title: head.firstChild, note,
+  const p = { el, body, tools, head, title: h2, note,
     setNote(text) { note.textContent = text || ''; note.classList.toggle('hidden', !text); } };
+  if (opts.fold && opts.id) {
+    const key = 'tto.hist.fold.' + opts.id;
+    let kept = null;
+    try { kept = localStorage.getItem(key); } catch (e) { kept = null; }
+    const btn = h('button', { class: 'iconbtn fold', type: 'button', title: 'Daralt / aç' });
+    btn.dataset.fold = opts.id;
+    p.fold = (on, remember) => {
+      el.classList.toggle('collapsed', on);
+      btn.textContent = on ? '▸' : '▾';
+      if (remember) try { localStorage.setItem(key, on ? '1' : '0'); } catch (e) { /* not kept */ }
+    };
+    btn.addEventListener('click', () => p.fold(!el.classList.contains('collapsed'), true));
+    head.insertBefore(btn, h2);                      // (in sight: not among the tools that show on hover)
+    h2.addEventListener('click', () => { if (el.classList.contains('collapsed')) p.fold(false, true); });
+    p.fold(kept === null ? !!opts.folded : kept === '1', false);
+  }
+  return p;
 }
 
 function gridPanel(title, opts = {}) {
@@ -236,9 +281,10 @@ export class EodPage extends HistoryPage {
       h('span', { class: 'grow' }), this.stateEl, now));
     this.banner = h('div', { class: 'banner hidden' });
     this.host.appendChild(this.banner);
-    this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { wide: true, id: 'curve', onCell: (i, j) => this.pickCurve(i, j) });
-    this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { wide: true, id: 'mpc', onCell: (i, j) => this.pickMpc(i, j) });
-    this.bonds = gridPanel('DİBS — getiri ve değişim', { wide: true, id: 'dibs', onCell: (i) => this.pickBond(i) });
+    // the three tables at their own width: OIS · Offshore and PPK side by side when they fit (the desk, 27.11.2026)
+    this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { fit: true, id: 'curve', onCell: (i, j) => this.pickCurve(i, j) });
+    this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { fit: true, id: 'mpc', onCell: (i, j) => this.pickMpc(i, j) });
+    this.bonds = gridPanel('DİBS — getiri ve değişim', { fit: true, id: 'dibs', onCell: (i) => this.pickBond(i) });
     // the series of the row clicked (as on Realized Vol · Carry): level, the window's mean and ±2σ, z day by day
     this.seriesPanel = panel('Seçili seri', { wide: true, id: 'eod-series' });
     const close = h('button', { class: 'iconbtn', type: 'button', title: 'Grafiği kapat' }, '✕');
@@ -362,11 +408,12 @@ export class EodPage extends HistoryPage {
       return scaleOf(vals, 10);
     };
     const so = sides(d.curve.map((r) => r.ois).concat([d.tlref])), sf = sides(d.curve.map((r) => r.off));
-    const half = (e, scale) => (e
-      ? [N(e.last, 3, { tip: e.ticker + ' · ' + e.field + (e.day ? ' · ' + isoToTr(e.day) : '')
+    // (``dg``: the level's decimals - TLREF two, as on the header strip and every other page)
+    const half = (e, scale, dg = 3) => (e
+      ? [N(e.last, dg, { tip: e.ticker + ' · ' + e.field + (e.day ? ' · ' + isoToTr(e.day) : '')
           + (e.backup ? ' · bu günün kapanışı yedek kaynaktan (' + e.backup + '): onun hareketi ana kaynağın seviyesine eklendi' : ''),
         c: e.backup ? 'mute' : undefined }),
-        D(e.d1, scale, 1, e.d1_from, d.ref.d1), D(e.w1, scale, 1, e.w1_from, d.ref.w1), D(e.m1, scale, 1, e.m1_from, d.ref.m1)]
+        D(e.d1, scale, 1, e.d1_from, d.ref.d1, dg), D(e.w1, scale, 1, e.w1_from, d.ref.w1, dg), D(e.m1, scale, 1, e.m1_from, d.ref.m1, dg)]
       : [EMPTY(), EMPTY(), EMPTY(), EMPTY()]);
     // what a click on a row draws: the OIS side (columns 1-4, the tenor) or the offshore side (5-8)
     const keys = [null, null];
@@ -374,7 +421,7 @@ export class EodPage extends HistoryPage {
     const side = (e, title) => (e && e.sid ? { sid: e.sid, title } : null);
     const offName = (r) => (r.off && r.months >= 12 ? 'XCCY ' : 'Offshore ') + r.tenor;
     if (d.tlref) {
-      rows.push(marked([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so)), pickedSid && d.tlref.sid === pickedSid).concat(half(null)));
+      rows.push(marked([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so, 2)), pickedSid && d.tlref.sid === pickedSid).concat(half(null)));
       keys.push({ ois: side(d.tlref, 'TLREF'), off: null });
     }
     for (const r of d.curve) {
@@ -420,8 +467,13 @@ export class EodPage extends HistoryPage {
   renderBonds(d) {
     const rows = [];
     const latest = !d.days.length || d.asof === d.days[0];
-    rows.push([HD('ISIN'), HD('Ad'), HD('Vade'), HD('Tip'), HD('Son'), HD('Δ1G'), HD('Δ1H'), HD('Δ1A'), HD('Son · Δ birimi'), HD('Kapanış'),
-      HD('DİBS RV · BIST bileşik %', { tip: 'Excel\'in kendi hesabı (DİBS RV sayfası, şu anki değer) – Bloomberg getirisiyle karşılaştırmak için' })]);
+    // Bloomberg's name ("TURKIYE GOVERNMENT BOND" down the whole table) only when it tells more than "Tip"; else it is
+    // the ISIN's and the Tip's tooltip
+    const named = namesTellMore(d.bonds);
+    rows.push([HD('ISIN'), named ? HD('Ad') : null, HD('Vade'), HD('Tip', named ? null : { tip: TYPE_TIP }), HD('Son'), HD('Δ1G'), HD('Δ1H'), HD('Δ1A'),
+      HD('Son · Δ birimi'), HD('Kapanış'),
+      HD('DİBS RV · BIST bileşik %', { tip: 'Excel\'in kendi hesabı (DİBS RV sayfası, şu anki değer) – Bloomberg getirisiyle karşılaştırmak için' })]
+      .filter(Boolean));
     const sc = scaleOf(d.bonds.filter((b) => b.unit === 'pct').flatMap((b) => [b.d1, b.w1, b.m1]), 10);
     const sp = scaleOf(d.bonds.filter((b) => b.unit !== 'pct').flatMap((b) => [b.d1, b.w1, b.m1]), 0.25);
     let any = false;
@@ -430,10 +482,12 @@ export class EodPage extends HistoryPage {
       const pct = b.unit === 'pct', s = pct ? sc : sp, dg = pct ? 1 : 3;
       if (isNum(b.last)) any = true;
       keys.push(b.sid ? { sid: b.sid, title: (b.name || b.isin) + (b.name ? ' (' + b.isin + ')' : '') + (pct ? ' · getiri' : ' · fiyat') } : null);
-      rows.push(marked([TXT(b.isin, { cls: 'lab', tip: b.ticker + ' · ' + b.field }), TXT(b.name), TXT(isoToTr(b.maturity)), TXT(b.type),
+      const name = named || !b.name ? '' : ' · ' + b.name;
+      rows.push(marked([TXT(b.isin, { cls: 'lab', tip: b.ticker + ' · ' + b.field + name }), named ? TXT(b.name) : null, TXT(isoToTr(b.maturity)),
+        TXT(b.type, named || !b.name ? null : { tip: b.name }),
         N(b.last, 3), D(b.d1, s, dg, b.d1_from, d.ref.d1), D(b.w1, s, dg, b.w1_from, d.ref.w1), D(b.m1, s, dg, b.m1_from, d.ref.m1),
         TXT(pct ? 'getiri · bp' : 'fiyat · puan', { c: 'mute' }), TXT(isoToTr(b.day), { c: 'mute' }),
-        latest && isNum(b.bist) ? N(b.bist * 100, 3) : EMPTY()], !!(this.picked && b.sid && this.picked.sid === b.sid)));
+        latest && isNum(b.bist) ? N(b.bist * 100, 3) : EMPTY()].filter(Boolean), !!(this.picked && b.sid && this.picked.sid === b.sid)));
     }
     this.keys.bonds = keys;
     this.bonds.setData({ sheet: '', rows });
@@ -560,8 +614,9 @@ export class SpreadsPage extends HistoryPage {
     const offRows = [[HD('Vade'), HD('Tür'), HD('Offshore %'), HD('OIS %')].concat(tail)];
     for (const r of d.off) {
       offRows.push(this.cells(r, so, [TXT(r.tenor, { cls: 'lab chartlink', b: 1, tip: 'Grafikte göster' }), TXT(r.kind, { c: 'mute' }),
-        N(r.off_now, 3, { tip: 'Offshore ' + r.off_label + ': kullanılan kaynağın bid / ask ortası (Ayarlar → Veri kaynakları)' }),
-        N(r.ois_now, 3, { tip: 'TRY OIS ' + r.ois_label + ': kullanılan kaynak' })]));
+        // (TRY rates in two decimals, as the VİOP table under it)
+        N(r.off_now, 2, { tip: 'Offshore ' + r.off_label + ': kullanılan kaynağın bid / ask ortası (Ayarlar → Veri kaynakları)' }),
+        N(r.ois_now, 2, { tip: 'TRY OIS ' + r.ois_label + ': kullanılan kaynak' })]));
     }
     if (!d.off.length) offRows.push([TXT('Offshore ve OIS\'in ortak vadesi için ne kapanış ne canlı kota var', { cs: 16 })].concat(Array.from({ length: 15 }, SKIP)));
     this.offPanel.ids = [null].concat(d.off.map((r) => r.id));
@@ -820,7 +875,7 @@ export class MpcPage extends HistoryPage {
       const off = flagged[days[i]];                    // a day the solver does not stand behind: its values, greyed
       rows.push([TXT(isoToTr(days[i]) + (mark ? ' · PPK' : ''), { cls: 'lab', tip: mark
         ? 'PPK günü: TLREF fixingi kararı ertesi gün yansıtır; o gün adımlar çözücünün karar sonrası ima ettiği seviyeden ölçülür' : '' }),
-      N(d.tlref[k], 4), N(d.quotes[k], 0, quoteTip(k)), state(k)].concat(cols.map((m) => {
+      N(d.tlref[k], 2), N(d.quotes[k], 0, quoteTip(k)), state(k)].concat(cols.map((m) => {
         if (off) {
           const w = off[m.date] ? off[m.date][this.metric] : null;
           return N(isNum(w) ? w * M.scale : null, M.digits, { c: 'mute', tip: 'Çözücü bu gün kotaları tutturamadı: güvenilir değil' });
@@ -847,6 +902,10 @@ const HOL_ABOUT = {
   EUR: 'EUR tatilleri: TARGET2\'nin kapalı olduğu günler - EURTRY ve EURUSD valörleri',
 };
 const HOL_WORD = { TRY: 'TR', USD: 'USD', EUR: 'EUR' };
+/** The settings page's panels, as its jump bar names them (data-panel ids; ``#/settings?p=<id>`` opens one). */
+export const SETTINGS_JUMPS = [['interp', 'Eğri interpolasyonu'], ['curvepoints', 'Eğri noktaları'], ['carry', 'Carry'],
+  ['sources', 'Veri kaynakları'], ['sources-used', 'Kullanılan kaynak'], ['calendar', 'PPK takvimi'], ['holidays', 'Tatiller'],
+  ['history', 'Tarihçe'], ['series', 'Tarihçe serileri']];
 const HOL_WHERE = { TRY: 'Yazıldığı kitaplar: ', USD: 'Yazıldığı yer: ', EUR: 'Yazıldığı yer: ' };
 
 export class SettingsPage {
@@ -887,6 +946,7 @@ export class SettingsPage {
     this.renderCalendar();
     this.renderHolidays(true);
     this.renderHistory();
+    this.syncJumps();
     this.timer = setInterval(() => { this.pollState().catch(() => {}); }, 4000);
   }
 
@@ -1019,7 +1079,8 @@ export class SettingsPage {
     this.srcPanel.setNote('Her eğri için soldan sağa denenir: fiyatı olan ilk kaynak kullanılır, en sonda her zaman Excel\'deki ticker (BGN). '
       + 'Kaynak kodu Bloomberg\'in fiyat kaynağıdır (GFOF, ICPL, BGN, CMPN, TRPU …): ticker kök + kaynak + Curncy olarak sorulur. OIS\'te önce MID, yoksa PX_LAST; '
       + 'offshore ve XCCY\'de bid ve ask\'in ikisi de olan kaynak alınır. Değişiklik herkes için ve hem canlı sayfalarda hem tarihçede geçerlidir.');
-    this.usedPanel = gridPanel('Şu an kullanılan kaynak · her vade için', { wide: true, id: 'sources-used' });
+    // (a long reference list: folded until opened - each user's own choice kept)
+    this.usedPanel = gridPanel('Şu an kullanılan kaynak · her vade için', { wide: true, id: 'sources-used', fold: true, folded: true });
 
     // ---- calendar
     this.calPanel = panel('PPK toplantı takvimi', { wide: true, id: 'calendar' });
@@ -1087,8 +1148,11 @@ export class SettingsPage {
     const holCopy = h('button', { class: 'btn', type: 'button', title: 'Listeyi (gg.aa.yyyy ve adı, sekmeyle) Excel\'e yapıştırmak için kopyala' }, 'Kopyala');
     holCopy.addEventListener('click', () => copyText(this.holText.value, this.holCcy + ' tatilleri kopyalandı'));
     this.holOther = h('div', { class: 'hol-other', id: 'holidays-other' });
+    // (the USD workbook's SIFMA holidays and FOMC meetings, read only: folded until opened)
+    this.holOtherFold = h('details', { class: 'hol-fold', id: 'holidays-other-fold' },
+      h('summary', null, 'SIFMA tatilleri ve FOMC toplantıları', h('span', { class: 'muted' }, ' · USD · FOMC sayfasının, salt okunur')), this.holOther);
     this.holPanel.body.appendChild(h('div', { class: 'set-body' }, this.holInfo, this.holText,
-      h('div', { class: 'set-actions' }, holCopy, h('span', { class: 'grow' }), holUndo, this.holSave), this.holOther));
+      h('div', { class: 'set-actions' }, holCopy, h('span', { class: 'grow' }), holUndo, this.holSave), this.holOtherFold));
     this.holPanel.setNote('Her satıra bir gün: tarih (gg.aa.yyyy) ve isterseniz adı - Excel\'den iki sütun yapıştırılabilir. Listeler herkes için '
       + 'ortaktır; sekmeden seçilir, her biri ayrı kaydedilir. TRY: üç kitaba birden yazılır - TRY kitabının tatilleri (Motor!A361:B523; bütün '
       + 'WORKDAY hesapları: para piyasası, tahvil, VİOP, OIS, kontrat vadeleri), DİBS ASW kitabınınki (ASW!LR2:LR200) ve Borsa Swap\'ınki '
@@ -1124,9 +1188,41 @@ export class SettingsPage {
         h('div', { class: 'field' }, h('label', null, 'DİBS getiri alanı (Bloomberg)'), this.fieldInp),
         h('div', { class: 'field' }, h('label', null, 'Geriye bakış (gün)'), this.daysInp),
         saveSet, h('span', { class: 'grow' }), sync, redo)));
-    this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series' });
-    this.host.appendChild(h('div', { class: 'panels' }, this.interpPanel.el, this.cpPanel.el, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el,
+    this.seriesPanel = gridPanel('Tarihçe serileri · neyin geçmişi var', { wide: true, id: 'series', fold: true, folded: true });
+    // a chip per panel over the page: a click brings it into view (a folded one opened) - as "#/settings?p=calendar" does
+    this.folds = { 'sources-used': this.usedPanel, series: this.seriesPanel };
+    this.jumps = h('div', { class: 'chips set-jump', id: 'settings-jump', role: 'navigation', 'aria-label': 'Ayarlar bölümleri' });
+    for (const [id, label] of SETTINGS_JUMPS) {
+      const b = h('button', { class: 'chip', type: 'button', title: label + ' bölümüne git' }, label);
+      b.dataset.p = id;
+      b.addEventListener('click', () => this.focusPanel(id));
+      this.jumps.appendChild(b);
+    }
+    this.host.insertBefore(this.jumps, this.host.firstChild);
+    this.host.appendChild(h('div', { class: 'panels set-panels' }, this.interpPanel.el, this.cpPanel.el, this.carryPanel.el, this.srcPanel.el, this.usedPanel.el,
       this.calPanel.el, this.holPanel.el, this.histPanel.el, this.seriesPanel.el));
+  }
+
+  /** Bring a panel into view (``#/settings?p=calendar``, a chip of the bar): a folded one is opened, a moment marked. */
+  focusPanel(id) {
+    const p = this.folds && this.folds[id];
+    if (p && p.el.classList.contains('collapsed')) p.fold(false, true);
+    const el = this.host.querySelector('[data-panel="' + id + '"]');
+    if (!el || el.classList.contains('hidden')) return false;
+    el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    el.classList.remove('focus');
+    void el.offsetWidth;
+    el.classList.add('focus');
+    return true;
+  }
+
+  /** A chip goes with its panel (Eğri noktaları on a dashboard without the curve points). */
+  syncJumps() {
+    if (!this.jumps) return;
+    for (const b of this.jumps.children) {
+      const el = this.host.querySelector('[data-panel="' + b.dataset.p + '"]');
+      b.classList.toggle('hidden', !el || el.classList.contains('hidden'));
+    }
   }
 
   // ------------------------------------------------------------------ the desk's list of curve points
@@ -1138,7 +1234,7 @@ export class SettingsPage {
     }
     const edit = !!d.can_edit;
     const custom = d.curves.filter((c) => c.custom);
-    clear(this.cpInfo).append(
+    clear(this.cpInfo).append(...[                 // (DOM append writes a null as the text "null": the parts there are)
       custom.length
         ? h('span', { id: 'cp-status', class: 'cp-differs' }, 'Liste varsayılandan farklı: '
           + custom.map((c) => c.title + ' – ' + c.differs.join(', ')).join(' · '))
@@ -1146,7 +1242,7 @@ export class SettingsPage {
       h('span', { class: 'muted' }, 'Hesaplanan noktalar sizin ayarınızla: ', h('b', null, d.mode_text)),
       edit ? null : h('span', { class: 'muted' }, 'Listeyi yalnız yöneticiler değiştirir (herkesin eğrisi değişir).'),
       d.errors && d.errors.length ? h('span', { class: 'warn-text', id: 'cp-errors' }, 'Listenin eğrisi kurulamadı - çalışma kitabının kendi '
-        + 'eğrisi kullanılıyor: ' + d.errors.join('; ')) : null);
+        + 'eğrisi kullanılıyor: ' + d.errors.join('; ')) : null].filter(Boolean));
     this.cpReset.classList.toggle('hidden', !edit);
     this.cpReset.disabled = !custom.length;
     const showPpk = this.cpShowPpk.checked;
@@ -1339,10 +1435,10 @@ export class SettingsPage {
       this.interpSeg.appendChild(b);
     }
     const st = d.stats || {};
-    clear(this.interpInfo).append(h('span', null, 'Şu an: ', h('b', { id: 'interp-status' }, d.status || '')),
+    clear(this.interpInfo).append(...[h('span', null, 'Şu an: ', h('b', { id: 'interp-status' }, d.status || '')),
       d.mode === 'ppk' && st.last_ms !== null && st.last_ms !== undefined
         ? h('span', { class: 'muted' }, 'PPK eğrisi son ' + (st.at || '') + ' hesaplandı (' + st.last_ms + ' ms) · PPK\'daki kullanıcı: ' + (st.users || 0))
-        : null);
+        : null].filter(Boolean));
   }
 
   async saveInterp(mode) {

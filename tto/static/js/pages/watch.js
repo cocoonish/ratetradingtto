@@ -106,13 +106,18 @@ export class WatchPage {
     tools.appendChild(this.perm);
     tools.appendChild(h('span', { class: 'muted' }, 'Ya da herhangi bir tablodaki hücreye sağ tıklayın: "İzlemeye ekle" / "Alarm kur…"'));
     this.host.appendChild(tools);
-    const panel = (id, title) => {
+    // the tables at their own width, side by side when they fit (the desk, 27.11.2026: the layout proposals); what fired
+    // today first
+    this.wrap = h('div', { class: 'panels watch-panels' });
+    this.host.appendChild(this.wrap);
+    const panel = (id, title, wide) => {
       const body = h('div', { class: 'body' });
-      const el = h('section', { class: 'panel wide', id }, h('header', null, h('h2', null, title)), body);
-      this.host.appendChild(el);
+      const el = h('section', { class: 'panel ' + (wide ? 'wide' : 'fit'), id }, h('header', null, h('h2', null, title)), body);
+      this.wrap.appendChild(el);
       return body;
     };
     this.zdays = savedDays();
+    this.firedBox = panel('watch-fired', 'Bugün çalan alarmlar');
     this.list = panel('watch-list', 'İzleme listesi');
     const zseg = h('div', { class: 'seg small', id: 'watch-zdays', title: 'z-skoru ve tarihsel bant: son kaç günlük kapanışa göre' });
     for (const n of [20, 60, 250]) {
@@ -137,15 +142,14 @@ export class WatchPage {
       h('header', null, h('h2', null, 'Seçili kalemin geçmişi'), h('span', { class: 'grow' }), close), seriesBody,
       h('div', { class: 'note' }, 'Listede bir kaleme (ya da bir alarma) tıklayın. Kapanışlar listedeki z\'nin kullandıklarıdır: OIS, TLREF ve offshore tarihçe deposundan, '
         + 'diğerleri dashboard\'un her gün kaydettiği kapanıştan. Pencere üstteki "z / bant" seçimi; son nokta şimdiki değer.'));
-    this.host.appendChild(this.seriesSec);
+    this.wrap.appendChild(this.seriesSec);
     this.sv = new SeriesView(seriesBody, { rule: 'raw', windowSeg: false, window: this.zdays, height: 220 });
     this.alarmBox = panel('watch-alarms', 'Alarmlar');
     this.deskBox = panel('watch-desk', 'Masa alarmları · herkese');
     this.deskAdd = h('button', { class: 'btn sm hidden', type: 'button', id: 'desk-add', title: 'Herkese çalan bir alarm (yalnızca yöneticiler)' }, 'Masa alarmı kur…');
     this.deskAdd.addEventListener('click', () => openWatchDialog(this.ctx, { focus: 'alarm', desk: true }));
     this.deskBox.parentElement.querySelector('header').appendChild(this.deskAdd);
-    this.firedBox = panel('watch-fired', 'Bugün çalan alarmlar');
-    const notesBody = panel('watch-notes', 'Masa notları · bugün (herkes görür)');
+    const notesBody = panel('watch-notes', 'Masa notları · bugün (herkes görür)', true);
     this.notes = h('textarea', { class: 'inp chatbox', id: 'notes-text', rows: '6', spellcheck: 'false',
       placeholder: 'Bugün izlenecek seviyeler, sabah toplantısı, ihale, veri takvimi…' });
     this.notesInfo = h('span', { class: 'muted', id: 'notes-info' });
@@ -440,16 +444,21 @@ export class WatchPage {
         : s.state === 'ok' ? h('span', { class: 'pill ok' }, 'normal')
           : h('span', { class: 'pill neu' }, s.state === 'off' ? 'kapalı' : 'denetlenmiyor');
       const open = s.entry && !s.entry.ack_by && !s.entry.closed_at;
+      // ("Ne zaman" and "Ayrıntı" wrap: a long rule no longer widens the table past the screen)
       st.appendChild(h('tr', { 'data-kind': s.kind, class: open ? 'open' : '' }, h('td', { class: 'l' }, s.label),
-        h('td', { class: 'l' }, state, ...status(s.entry, s.mute)), h('td', { class: 'l muted' }, s.threshold || ''),
-        h('td', { class: 'l', style: { whiteSpace: 'normal' } }, s.text || ''), acts('sys:' + s.kind, s.entry, s.mute, s.label)));
+        h('td', { class: 'l' }, state, ...status(s.entry, s.mute)), h('td', { class: 'l muted wrapcell' }, h('div', { class: 'wrap-when' }, s.threshold || '')),
+        h('td', { class: 'l wrapcell' }, h('div', { class: 'wrap-text' }, s.text || '')), acts('sys:' + s.kind, s.entry, s.mute, s.label)));
     }
     box.appendChild(st);
-    // ---- the settings: the administrators change them, everyone reads them
+    // ---- the settings: the administrators change them (folded: one click opens them), everyone reads them
     const cfg = desk.settings || {};
     if (admin) {
-      if (keep) box.appendChild(keep);
-      else box.appendChild(this.deskSettings(cfg));
+      const fold = h('details', { class: 'desk-fold', id: 'desk-settings-fold' },
+        h('summary', null, 'Sistem alarmı ayarları', h('span', { class: 'muted' }, ' · piyasa saatleri, bayat veri, Bloomberg sorgu saatleri, veri akışı / TLREF / veritabanı alarmları')),
+        keep || this.deskSettings(cfg));
+      fold.open = !!keep || !!this.deskFoldOpen;
+      fold.addEventListener('toggle', () => { this.deskFoldOpen = fold.open; });
+      box.appendChild(fold);
     } else {
       box.appendChild(h('div', { class: 'note' }, 'Piyasa saatleri ' + (cfg.market_open || '') + '–' + (cfg.market_close || '') + ' (masanın iş günleri) · '
         + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı')

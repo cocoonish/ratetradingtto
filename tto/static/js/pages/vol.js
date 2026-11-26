@@ -181,7 +181,8 @@ export class VolPage {
     this.carryBody = h('div', { class: 'body' });
     const carry = h('section', { class: 'panel wide', id: 'carry-panel' },
       h('header', null, this.carryTitle, h('span', { class: 'grow' }), kind, h('span', { class: 'muted' }, 'Ufuk'), this.horizonSeg, h('div', { class: 'tools' }, copy2)),
-      this.carryNote, h('div', { class: 'carrygrid' }, this.scatterHost, this.carryBody));
+      // (the table first, the scatter beside it; one under the other on a narrower screen - the desk, 27.11.2026)
+      this.carryNote, h('div', { class: 'carrygrid tablefirst' }, this.carryBody, this.scatterHost));
     this.host.appendChild(h('div', { class: 'volpage' }, typed, carry));
   }
 

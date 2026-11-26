@@ -2585,3 +2585,59 @@ Code: `tto/views/30_forward.json`, `40_viop.json`, `46_borsa.json`, `50_carry.js
 `tests/test_views.py`, `tests/test_service.py`, `tests/test_server.py` (VİOP's and Forward's tabs), `tests/test_viopfra.py`
 (Target from L), `tests/test_extras.py` (the additions left out on another workbook); the browser test's Forward, Kotasyon,
 VİOP and Borsa checks.
+
+#### Düzen: masa araçları, FX, menü, Ayarlar
+
+The desk tools' part (builder L4) of the layout proposals of 27.11.2026 (the desk's words and the list: *Düzen: sayfalar
+tek tek*); the desk's answer to them: **"Hepsini yap"**. Only where and how things are shown: no value changes, every DOM id
+kept, each user's own choices win, nothing numeric hidden without a click back. No new Bloomberg request.
+
+- **17 · the menu** (`menu.js`): a group of one entry joins its neighbour - **DV01 Risk** closes TRY Faiz, **USD · FOMC**
+  closes FX, the group then "**FX · USD**" (`JOIN`; a group that gets a second page is its own again). A group's title folds
+  it: its pages leave the menu, their count beside the title; the page on screen and an entry with a count (Sosyal,
+  Ajanda, Broker Chat's badge) stay; kept per user in this browser (`tto.menu.fold.<user>.<group>`); the menu drawn narrow
+  shows every entry. Entries 4 px instead of 6 px top and bottom.
+- **17 · Bugün**: the blocks in columns, the things to do first - RET, Girilmemiş işlemler, Ajanda | Trades, Quant | DİBS
+  (three columns from 1 464 px of page, two from 972, else one; `columnPlan`) - a short block no longer leaves a hole beside
+  a tall one, and a block keeps its column while its content changes. A table's column empty (or "—") in every row goes
+  (`emptyColumns`: DİBS's "Sıfır kupon" while the zero coupon curve has no comparison, the "döndü" column with nothing turned).
+- **17 · İzleme · Alarmlar**: **Bugün çalan alarmlar** first; the tables at their own width; the system alarms' "Ne zaman" and
+  "Ayrıntı" wrap (no sideways scroll at 1366); the administrators' settings form folded ("Sistem alarmı ayarları", a click
+  opens it; open while being typed in).
+- **20 · Günlük İşlemler**: the sheet's own summary tables folded until opened (▸ or the title; per table, this browser);
+  **OIS — CPT x VADE** (P87:V349, 262 rows, ~81 % empty) shows the rows holding a DV01 - each such counterparty's tenors
+  with a DV01, its TOPLAM, GENEL TOPLAM (`cptRows`; a counterparty without one is left out whole) -, **Tümü (262)** every
+  row (kept per browser). Nothing is computed: rows are the sheet's, with their row numbers.
+- **22 · Spot / FX and FX Vol İzleme**: the pairs at a glance live on FX Vol İzleme (*Özet*); on Spot / FX the *Pariteler*
+  table (its spot, day change, ±1σ, breakeven columns included) is folded until opened, a **Parite** box picks the pair;
+  *Vade geçmişi* folded until opened (a click on a row of the surface opens it), the pair's histories on FX Vol İzleme's
+  *Parite ayrıntısı* (links both ways, each opening the same pair); **one Yöntem** for both pages on Spot / FX (FX Vol's
+  paragraphs moved there; FX Vol's chip "Yöntem ↗" opens it: `#/fx?p=fx-method`). FX Vol's pair box: no fixed 26 px height
+  (the name was cut in half).
+- **5 · Ayarlar**: a sticky bar of chips to its nine panels (`SETTINGS_JUMPS`, `focusPanel`: also `#/settings?p=<id>`),
+  a folded panel opened by its chip; the long reference lists folded until opened: *Şu an kullanılan kaynak*, *Tarihçe
+  serileri*, the holidays' SIFMA / FOMC lists. (Two info lines no longer print "null".)
+- **8 · tables at their own width** (`.panel.fit`, the core's CSS; out of `.wide` in a `.panels` row they are already):
+  Trades' four tables, Gün Sonu Matrisi's three (OIS · Offshore and PPK share a row), İzleme, Eğri Hareketi's maps, the broker
+  log (`fit-content` in its grid cell), Ajanda's form (the text box no longer page-wide, "Tekrar" on its line); Realized Vol's
+  carry / vol table first, the scatter beside it, under it below 1500 px.
+- **9 · decimals and colours**: TLREF in 2 decimals on Gün Sonu Matrisi (35,82 as on the strip, not 35,816) and on PPK
+  Fiyatlama Geçmişi's daily table (not 35,8159); Spread Geçmişi's Offshore % / OIS % in 2 (as its VİOP table); the
+  matrices' rise / fall in the heat map's colours (`heat()` reads `--heat-up` / `--heat-down`: red up, blue down - before:
+  orange up); one tile for `table.heat` and `table.fxheat`; Gün Sonu's DİBS "Ad" (Bloomberg's NAME, "TURKIYE GOVERNMENT
+  BOND" on every row) shown only when a name tells more than "Tip" (`namesTellMore`), else in the ISIN's and Tip's tooltip.
+- **The review's small fixes**: one day / range bar on Günlük İşlemler and Broker Chat (**Gün** · Bugün · Aralık … Göster ·
+  Bu hafta · **Bu ay** · Son 30 gün · "Gün sonu arşivi (.xlsx)" / "**Chat arşivi (.xlsx)**", before "Excel (.xlsx)"); Trades'
+  empty texts as `.empty` (not on the panel's border); the status bar's "Ctrl+C kopyala · …" only while a table
+  (`table.grid` / `table.calc-grid`) is on screen (CSS `:has`; a browser without it shows it as before).
+
+**Choices made while building it** (ask the desk before changing):
+- DV01 Risk joins **TRY Faiz** (not Masa); USD · FOMC joins **FX**.
+- Folds are kept in the browser (`localStorage`), as the pages' other folds - the menu's per user -, not with the account.
+- Bugün's columns follow a fixed plan (not balanced heights), so a block does not jump between columns as it grows.
+- CPT × VADE also leaves out a kept counterparty's tenors without a DV01 (the TOPLAM stays).
+- Gün Sonu's "Ad": a rule on the page, not a default-hidden column (`Service.DEFAULT_HIDDEN_COLUMNS` untouched).
+
+Code: `tto/static/js/menu.js`; `tto/static/js/pages/` `bugun.js`, `watch.js`, `heat.js`, `blotter.js`, `broker.js`, `trades.js`,
+`history.js`, `vol.js`, `fx.js`, `fxvol.js`, `agenda.js`; `tto/static/css/app.css` (the block "Masa araçları düzen" at its
+end). Tests: `tests/test_duzen_masa.py`; the browser test's duzen-masa checks (and Bugün's block order there).

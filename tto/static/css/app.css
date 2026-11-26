@@ -1759,3 +1759,79 @@ table.plain.kf td.kf-m-proj .kf-2l-y { font-weight: 650; }
 .qpage .qform.qcontract { padding-bottom: 0; }
 .qpage .qform.qcontract .seg { flex-wrap: wrap; }
 .qpage details.qlegsfold > summary { cursor: pointer; color: var(--ink-2); font-size: 12px; padding: 2px 0 4px; }
+/* ================================================================ Masa araçları düzen (L4 duzen-masa, 27.11.2026)
+   The desk's "Hepsini yap" to the layout proposals: the desk tools, FX, the menu, Ayarlar.  Page blocks only; the
+   global rules (.panel.fit among them) are the core's. */
+/* the menu: tighter entries; a group's title folds it (menu.js), a folded group keeps the page on screen and an entry
+   with a count; the menu drawn narrow shows every entry */
+#nav .nav-group { margin-top: 8px; }
+#nav .nav-group.nav-own { margin-top: 4px; }
+#nav .nav-item { padding: 4px 8px; }
+#nav .nav-group > .gt { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; cursor: pointer; user-select: none; }
+#nav .nav-group > .gt:hover, #nav .nav-group > .gt:focus-visible { color: var(--ink); background: var(--surface-2); outline: none; }
+#nav .nav-group > .gt::before { content: "▾"; font-size: 9px; width: 9px; flex: none; color: var(--ink-3); }
+#nav .nav-group.folded > .gt::before { content: "▸"; }
+#nav .nav-group.folded > .gt::after { content: attr(data-n); margin-left: auto; font-size: 10px; letter-spacing: 0; padding: 0 6px; border-radius: 999px;
+  background: var(--surface-3); color: var(--ink-2); }
+#nav .nav-group.folded > .nav-item:not(.active) { display: none; }
+#nav .nav-group.folded > .nav-item:has(.nav-count) { display: flex; }
+#app.nav-collapsed #nav .nav-group.folded > .nav-item { display: flex; }
+@media (max-width: 900px) { #nav .nav-group.folded > .nav-item { display: flex; } #nav .nav-group > .gt { display: none; } }
+/* Bugün: the blocks in columns (bugun.js columnPlan), none leaves a hole beside a taller one */
+.bugun-grid.bugun-cols { display: flex; gap: 12px; align-items: flex-start; }
+.bugun-cols > .bugun-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+/* İzleme · Alarmlar: the tables at their own width; the system alarms' rule and text wrap; the settings folded */
+.watch-panels > .panel.fit { min-width: min(100%, 360px); }
+table.plain.watch td.wrapcell { white-space: normal; }
+table.plain.watch td .wrap-when { min-width: 12em; max-width: 24em; white-space: normal; }
+table.plain.watch td .wrap-text { min-width: 14em; max-width: 30em; white-space: normal; }
+.desk-fold { border-top: 1px solid var(--line); }
+.desk-fold > summary { cursor: pointer; padding: 8px 12px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.desk-fold > summary:hover { color: var(--ink); }
+.desk-fold > summary .muted { font-weight: 400; }
+.desk-fold > .desk-settings { border-top: 1px dashed var(--line); }
+/* Trades: the tables at their own width, side by side when they fit */
+.trades-panels { margin-bottom: 12px; }
+.trades-panels > .panel.trades { margin-bottom: 0; }
+/* Günlük İşlemler: the sheet's own tables folded until opened (▸ / ▾, the title opens one) */
+.panel > header .iconbtn.fold { flex: none; padding: 2px 5px; font-size: 11px; }
+.panel.collapsed > header h2 { cursor: pointer; }
+.blotter-sheets .panel.collapsed > .note, .set-panels .panel.collapsed > .note { display: none; }
+/* Broker Chat: the log as wide as its table */
+.broker > .logcol > .panel.fit { width: fit-content; max-width: 100%; min-width: min(100%, 720px); }
+/* Realized Vol · Carry: the carry / vol table first, the scatter beside it; one under the other below 1500 px */
+.carrygrid.tablefirst { grid-template-columns: minmax(0, auto) minmax(360px, 1fr); }
+.carrygrid.tablefirst > .body { border-left: 0; border-right: 1px solid var(--line); border-radius: 0 0 0 var(--radius); }
+@media (max-width: 1500px) {
+  .carrygrid.tablefirst { grid-template-columns: minmax(0, 1fr); }
+  .carrygrid.tablefirst > .body { border-right: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+}
+/* Ajanda: the form at its own width, "Tekrar" in its line */
+.agenda-page > .panel.agenda-new { flex: 0 1 auto; max-width: 100%; }
+.agenda-new .agenda-form #agenda-text { flex: 1 1 300px; max-width: 460px; }
+.agenda-new .agenda-form .agenda-repeat { padding: 0; }
+/* one tile for the heat maps: Eğri Hareketi (table.heat) and FX Vol İzleme (table.fxheat) */
+table.heat, table.fxheat { border-collapse: separate; border-spacing: 2px; font-variant-numeric: tabular-nums; }
+table.heat th, table.fxheat th { font-size: 11px; color: var(--ink-3); font-weight: 600; padding: 2px 4px; white-space: nowrap; text-align: center; }
+table.heat th.row, table.fxheat th.row { text-align: left; color: var(--ink-2); padding-right: 10px; vertical-align: middle; }
+table.heat td, table.fxheat td { min-width: 50px; height: 36px; padding: 2px 5px; border-radius: 5px; text-align: center; vertical-align: middle; }
+table.heat td .c, table.fxheat td .c { font-size: 12.5px; font-weight: 650; color: var(--ink); line-height: 1.2; }
+table.heat td .l, table.fxheat td .l { font-size: 10px; color: var(--ink-2); line-height: 1.2; }
+table.heat td.none, table.fxheat td.none { background: transparent; }
+@media (max-width: 1500px) { table.heat td, table.fxheat td { min-width: 40px; } }
+/* Spot / FX and FX Vol İzleme: the pair box, the links between the two pages, the one method of both */
+.fxpanel > header select.fxpairsel { width: auto; min-width: 96px; height: auto; padding: 3px 8px; font-size: 12px; }
+a.golink { text-decoration: none; white-space: nowrap; }
+.fxchips a.golink { border: 1px dashed var(--line-2); border-radius: 999px; padding: 3px 10px; font-size: 11.5px; color: var(--accent-ink); }
+.fxchips a.golink:hover { border-color: var(--accent); }
+.fxmethod h3.fxmethod-h { margin: 12px 0 2px; font-size: 12px; font-weight: 650; color: var(--ink); }
+.fxmethod h3.fxmethod-h:first-child { margin-top: 2px; }
+/* Ayarlar: a chip per panel over the page (in sight while it scrolls); the long reference lists folded */
+.set-jump { position: sticky; top: -14px; z-index: 6; background: var(--plane); margin: -4px -14px 10px; padding: 6px 14px 7px;
+  border-bottom: 1px solid var(--line); }
+.set-jump .chip { cursor: pointer; }
+.set-panels > .panel { scroll-margin-top: 52px; }
+.hol-fold > summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 2px 0 4px; }
+.hol-fold > summary .muted { font-weight: 400; }
+/* the status bar's "Ctrl+C kopyala · …" only where a table takes it (a grid on the page or in the side drawer) */
+#app:not(:has(table.grid, table.calc-grid)) #sb-hint { display: none; }

@@ -4,7 +4,8 @@
 // of the whole set, the day's movers, one pair in depth (term structure, skew and smile now against a week and a month
 // ago, time series, implied against realized).  The skew of a tenor is its risk reversal over its ATM vol (RR / ATM),
 // followed like a vol.  A click on a cell or a row draws that series' past and its z-score day by day ("Seçili seri").
-// Each section can be shown or hidden.
+// Each section can be shown or hidden.  The method of this page is on Spot / FX's "Yöntem" with that page's (the desk,
+// 27.11.2026: the layout proposals - shown once, linked from here); the pairs' table is this page's "Özet".
 import { api } from '../api.js';
 import { h, clear, errorToast, toast, confirmDialog, promptDialog } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
@@ -15,7 +16,7 @@ import { num, isoToTr } from '../format.js';
 import { SeriesView } from '../serieschart.js';
 
 const SECTIONS = [['summary', 'Özet'], ['heat', 'Isı haritası'], ['series', 'Seçili seri'], ['movers', 'Hareketler'], ['pair', 'Parite ayrıntısı'],
-  ['own', 'Kendi ticker\'larım'], ['method', 'Yöntem']];
+  ['own', 'Kendi ticker\'larım']];
 const WINDOWS = [[63, '3A', 'Son 63 kapanış (~3 ay)'], [126, '6A', 'Son 126 kapanış (~6 ay)'], [250, '1Y', 'Son 250 kapanış (~1 yıl)']];
 const METRICS = [['last', 'Seviye'], ['d1', 'Δ1G'], ['w1', 'Δ1H'], ['m1', 'Δ1A'], ['z', 'z'], ['pct', 'Yüzdelik']];
 const KIND = { ATM: 'ATM', RR25: '25D RR', BF25: '25D BF', RR10: '10D RR', BF10: '10D BF', SKEW25: '25D RR/ATM', SKEW10: '10D RR/ATM' };
@@ -228,6 +229,9 @@ export class FxVolPage {
       });
       chips.appendChild(b);
     }
+    // the method: Spot / FX's "Yöntem" holds both pages' (opened there)
+    const method = h('a', { class: 'golink', id: 'fxvol-method-link', href: '#/fx?p=fx-method', title: 'Bu sayfanın ve Spot / FX\'in yöntemi: Spot / FX › Yöntem' }, 'Yöntem ↗');
+    chips.appendChild(method);
     const sync = h('button', { class: 'btn', type: 'button', id: 'fxvol-sync', title: 'Vol\'lerin günlük kapanışlarını Bloomberg\'den şimdi iste (ilk kez bir yıl geriye, sonra son günler)' }, 'Tarihçeyi güncelle');
     sync.addEventListener('click', () => this.sync());
     this.histNote = h('span', { class: 'muted', id: 'fxvol-history' });
@@ -271,7 +275,11 @@ export class FxVolPage {
     this.tenorSeg = h('span');
     this.pairCharts = h('div', { class: 'volcharts' });
     this.pairNote = h('div', { class: 'note' });
-    this.sections.pair = this.panel('fxvol-pair', 'Parite ayrıntısı', [this.pairSeg, h('span', { class: 'muted' }, 'Smile vadesi'), this.tenorSeg],
+    // (the pair's surface, the probability cloud and matrix: Spot / FX, opened on this pair)
+    const toFx = h('a', { class: 'btn sm ghost golink', id: 'fxvol-to-fx', href: '#/fx', title: 'Paritenin vol yüzeyi, olasılık bulutu ve matrisi, smile ve yoğunluk: Spot / FX' },
+      'Spot / FX →');
+    toFx.addEventListener('click', () => { if (this.pair) keep('tto.fx.pair', this.pair); });
+    this.sections.pair = this.panel('fxvol-pair', 'Parite ayrıntısı', [this.pairSeg, h('span', { class: 'muted' }, 'Smile vadesi'), this.tenorSeg, toFx],
       this.pairCharts, this.pairNote);
 
     // ---- the desk's own
@@ -291,17 +299,6 @@ export class FxVolPage {
       h('div', { class: 'note' }, 'Parite yazılırsa (USDZAR) o paritenin vol seti bütün tablolara girer; başka bir ticker yazılırsa (sonunda sarı tuşuyla) aşağıdaki tabloda seviyesi, '
         + 'değişimleri ve tarihsel yeri izlenir. Liste herkes içindir.'));
 
-    // ---- method
-    this.sections.method = this.panel('fxvol-method', 'Yöntem ve kaynaklar', null, h('div', { class: 'fxmethod' },
-      h('p', null, 'Ticker\'lar: ', h('code', null, '<PARİTE>V<vade> BGN Curncy'), ' (ATM), ', h('code', null, '25R'), ' / ', h('code', null, '10R'), ' (risk reversal), ',
-        h('code', null, '25B'), ' / ', h('code', null, '10B'), ' (butterfly), spot ', h('code', null, '<PARİTE> Curncy'), '. Fiyat kaynağı (BGN) masanın ortak ayarıdır. '
-        + 'Her paritenin izlenen seti: ATM 1W 1M 3M 6M 1Y, 25D RR ve BF 1M 3M 1Y, 10D RR ve BF 1M; ayrıntıda bütün vadeler.'),
-      h('p', null, 'Skew = risk reversal ÷ aynı vadenin ATM vol\'ü (25D RR / ATM 1M 3M 1Y, 10D RR / ATM 1M): call\'ların put\'lara göre primi, vol seviyesinden arındırılmış. '
-        + 'Kapanışları iki serinin aynı günkü kapanışlarının oranı (yeni Bloomberg isteği yok); değişim, z ve yüzdelik vol\'lerle aynı tanımla.'),
-      h('p', null, 'Değişim ve istatistikler Masa sayfasının Makro bloğundaki gibidir: hafta içi günler (boş gün önceki kapanışla), Δ1G / Δ1H / Δ1A canlı değerin 1 / 5 / 21 iş günü önceki '
-        + 'kapanışa farkı; z 3A son 63 kapanışa, z ve yüzdelik seçili pencereye göre; |z| ≥ 1,5 vurgulu.'),
-      h('p', null, 'Tarihçe: her vol\'ün günlük kapanışı (PX_LAST) bir kez bir yıl geriye, sonra günde bir son on gün istenir ve dashboard\'un tarihçe tablosunda saklanır. '
-        + 'Gerçekleşen vol: spotun günlük log getirilerinin son 21 günlük standart sapması × √252.')));
     this.showSections();
   }
 
@@ -658,7 +655,8 @@ export class FxVolPage {
     if (!d || !this.mon) return;
     clear(this.pairSeg);
     const pairs = this.mon.pairs.map((p) => [p.code, p.code]);
-    const sel = h('select', { class: 'inp', id: 'fxvol-pair-select', style: { width: '110px', height: '26px' } });
+    // (a fixed 26 px height with .inp's padding cut the pair's name in half: the header's own small box instead)
+    const sel = h('select', { class: 'inp fxpairsel', id: 'fxvol-pair-select' });
     for (const [v] of pairs) {
       const o = h('option', { value: v }, v);
       if (v === this.pair) o.selected = true;

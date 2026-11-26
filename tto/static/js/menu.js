@@ -3,11 +3,18 @@
 // ``menu_title``, ``tab``) - and each user's own menu: the entries they took out of it ("Menüyü düzenle…", kept with the
 // account: layout.hidden_pages).  A page keeps its own address (#/quant-pca opens Faiz on "PCA / RV"), an entry with tabs
 // leads to its tab opened last; a page out of the menu still opens from Ctrl+K and from a link.
+// A group of a single entry joins its neighbour (``JOIN``: DV01 Risk into TRY Faiz, USD · FOMC into FX as "FX · USD"),
+// and a group's title folds it (remembered per user in this browser): a folded group still shows the page on screen
+// and an entry with a count (Sosyal's messages, Ajanda's late items, Broker Chat's trades not entered).
 import { h, clear, modal, toast } from './ui.js';
+import { session } from './api.js';
 import { hiddenPages, setHiddenPages } from './layout.js';
 
 const ADMIN_PAGES = [{ id: 'explorer', title: 'Sayfa gezgini' }, { id: 'users', title: 'Kullanıcılar' }, { id: 'backup', title: 'Yedekleme' }];
 const TAB_KEY = 'tto.menu.tab.';
+const FOLD_KEY = 'tto.menu.fold.';
+/** A group of one entry and the group it joins (its title then, when it changes). */
+export const JOIN = { 'Risk': { into: 'TRY Faiz' }, 'USD Faiz': { into: 'FX', title: 'FX · USD' } };
 let painted = null;                       // the hidden entries the menu on screen was drawn with
 
 /** The entries of a group's pages: a page, or one entry for the pages that name the same ``menu`` (its tabs). */
@@ -41,9 +48,45 @@ export function menuModel(pages, admin) {
   if (!groups.get('Araçlar').length) groups.delete('Araçlar');
   const masa = groups.get('Masa');
   if (masa) masa.sort((a, b) => (a.id === 'masa' ? -1 : b.id === 'masa' ? 1 : 0));
+  const titles = new Map();               // a group's title when another joined it
+  for (const [group, list] of [...groups]) {
+    const j = JOIN[group];
+    if (!j || entries(list).length !== 1 || !groups.has(j.into) || group === j.into) continue;
+    groups.get(j.into).push(...list);
+    groups.delete(group);
+    if (j.title) titles.set(j.into, j.title);
+  }
   const out = [{ group: null, entries: [{ id: 'launchpad', title: 'Launchpad', hint: 'Launchpad: kendi tablo sayfalarınız' }] }];
-  for (const [group, list] of groups) out.push({ group, entries: entries(list) });
+  for (const [group, list] of groups) out.push({ group: titles.get(group) || group, entries: entries(list) });
   return out;
+}
+
+/** Whether this user folded a group of the menu (in this browser). */
+export function groupFolded(group) {
+  try { return localStorage.getItem(FOLD_KEY + (session.user || '') + '.' + group) === '1'; } catch (e) { return false; }
+}
+
+function setGroupFolded(group, on) {
+  try {
+    const key = FOLD_KEY + (session.user || '') + '.' + group;
+    if (on) localStorage.setItem(key, '1'); else localStorage.removeItem(key);
+  } catch (e) { /* not kept */ }
+}
+
+/** A group's title folds it and opens it again (a click, Enter or Space); its entries' count is said while it is folded. */
+function foldable(box, title, group, n) {
+  title.setAttribute('role', 'button');
+  title.tabIndex = 0;
+  title.dataset.n = String(n);
+  const set = (on) => {
+    box.classList.toggle('folded', on);
+    title.setAttribute('aria-expanded', String(!on));
+    title.title = group + (on ? ': ' + n + ' sayfa - açmak için tıklayın' : ': daraltmak için tıklayın');
+  };
+  set(groupFolded(group));
+  const flip = () => { const on = !box.classList.contains('folded'); setGroupFolded(group, on); set(on); };
+  title.addEventListener('click', flip);
+  title.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
 }
 
 /** The menu entry with tabs a page is one of (null: a page of its own). */
@@ -68,7 +111,9 @@ export function paintMenu(nav, pages, admin, current) {
   for (const { group, entries: list } of menuModel(pages, admin)) {
     const shown = list.filter((e) => !out.has(e.id));
     if (!shown.length) continue;
-    const box = h('div', { class: 'nav-group' + (group ? '' : ' nav-own') }, group ? h('div', { class: 'gt' }, group) : null);
+    const title = group ? h('div', { class: 'gt' }, group) : null;
+    const box = h('div', { class: 'nav-group' + (group ? '' : ' nav-own') }, title);
+    if (title) foldable(box, title, group, shown.length);
     for (const e of shown) {
       const a = h('a', { class: 'nav-item', href: '#/' + (e.tabs ? lastTab(e) : e.id), title: e.hint || e.title },
         h('span', { class: 'dot' }), h('span', { class: 'lbl' }, e.title));
