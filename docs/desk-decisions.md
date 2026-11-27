@@ -2357,9 +2357,9 @@ still prices the market ("tlref'e geri gelecek gibi hesap yapacagiz").
   Delete gives the formula back (as the forward matrix's spreads and EK_PPK's rates).
 - **"Açık" counts only with a date after the OIS spot, a normal TLREF and today's TLREF** (`OIS_MAIN!M2`); otherwise
   everything stays as off and Durum says why ("Açık değil: tarih yok", "… normal TLREF yok", "… tarih geçti").
-- **Measured from the normal TLREF:** the first upcoming meeting's Implied bps, Cum. Implied, the Spot row (it reads "Spot
-  · normal", with the normal TLREF in its TLREF columns), the 1Y figures (İma 12A, İma / toplantı), SENARYOLAR' 12A,
-  the stub's "− TLREF" columns, Masa's "İma PF" (PF + ima TLREF − the normal TLREF). The scenarios S1–S3 start from it.
+- **Measured from the normal TLREF:** the first upcoming meeting's Implied bps, Cum. Implied, the 1Y figures (İma 12A,
+  İma / toplantı), SENARYOLAR' 12A, the stub's "− TLREF" columns, Masa's "İma PF" (PF + ima TLREF − the normal TLREF).
+  The scenarios S1–S3 start from it in the model. (The page's levels: TLREF as it runs, 27.11.2026 - below.)
 - **Every curve on a PPK path keeps pricing the market:** the implied path ("MPC ima") and the scenarios are the normal
   path; wherever their discount factors are read (Masa's date-to-date rates, FORWARD KOTASYON's curves, RET's
   scenarios, OIS · Nakit Akışı, carry, the scenario pars and MPC OIS's scenario rates) the stretch before the date is
@@ -2468,6 +2468,27 @@ Code: `tto/ppkcurve.py` (`norm`, `Norm`, `NORM_*`, `StepCurve.with_stretch`, `wi
 (`OisMarket.mpc_norm`, `pcum_at`, `mpc_stretch`), `tto/service.py` (`_mpc_implied`), `tto/interp.py` (`badge`),
 `tto/static/js/pages/broker.js` (the step's tooltip). Tests: `tests/test_normallesme_adim.py`, `tests/test_ppkcurve.py`
 (the module's pieces), `tests/test_ppkters.py` (left out together).
+
+#### TLREF normalleşmesi: seviyeler TLREF'in işlediği gibi (27.11.2026)
+
+Trying v2 at the office (TLREF bugün typed 39 %, Normal TLREF 35,85 %, the date 01.03.2027, S1's steps 0, 0, −100, …), the
+desk: "Normal tlref ve kullanilan tarihi degistirdim ama hala tlref baz vs kisminda normal tlref kullaniliyor" - TLREF
+Baz / Hawkish / Dovish read 35,85 % at Spot, MPC1 and MPC2, as if TLREF were already normal.
+
+**Decision:** the page's TLREF *levels* are TLREF as it runs - today's TLREF until the date in use, the normal path after
+it - and the *steps* stay the PPK's, measured on the normal path ([curves.md](curves.md#tlref-normalleşmesi)):
+- **Levels:** the Spot row is TLREF bugün (the "Spot · normal" label is gone); after a meeting that takes effect before
+  the date, Implied MPC and TLREF S1–S3 are the normal level + the gap (TLREF bugün − Normal TLREF); STUB İMA's levels and
+  the 1Y levels follow the same rule; Masa's copies and the "TLREF patikası" chart with them. The Implied MPC column moves
+  with the scenario columns on purpose: otherwise their difference on the page (545 bp at MPC1 on the desk's screen)
+  would not be the scenario − implied the DV01 page uses (230 bp).
+- **Steps and bp, unchanged:** Implied bps, Cum. Implied, the chart's step bars (0, 0, −100: the drop at the date is not
+  a PPK step), İma 12A, SENARYOLAR' 12A, the stub's TLREF farkı, DV01 Risk's scenario − implied.
+- **The model, unchanged to the bit:** the solver, Motor's paths (the scenarios' chains now sit in Motor's meeting table),
+  every curve and price; off, every cell as before (the whole workbook compared, off and on).
+
+Code: `tto/extras.py` (`norm_level`, `_norm_levels`, `_norm_levels_check`, `_norm_dv01`, `NORM_LEVEL_ROWS` …). Tests:
+`tests/test_normallesme_ppk.py` (`test_the_page_shows_tlref_as_it_runs`); the browser test's "TLREF normalleşmesi" check.
 
 ### Düzen: sayfalar tek tek (27.11.2026)
 

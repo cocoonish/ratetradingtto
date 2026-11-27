@@ -6,8 +6,10 @@ yapabilmeliyiz" - (the normal TLREF) "bunu da yazabileyim".
 
 A switch in the page's pinned parameters (OIS_MAIN!K2:L6, each user's own): on with a date N and a normal TLREF L0, TLREF
 is today's (J2) until N and normal after it.  The PPK model (Motor's "GLOBAL İMA PPK v3") solves for the normal path: every
-evaluation of a path's ln G at a day t gets + E(min(t, n)), r0's prior mean is REF = L0, and the page measures the path
-from REF.  Off - the file's "Kapalı", and every calculation without a user - every value is the one before, bit for bit.
+evaluation of a path's ln G at a day t gets + E(min(t, n)), r0's prior mean is REF = L0, and the page measures the steps
+from REF; its TLREF levels are TLREF as it runs - today's until N (the desk, 27.11.2026: "hala tlref baz vs kisminda
+normal tlref kullaniliyor").  Off - the file's "Kapalı", and every calculation without a user - every value is the one
+before, bit for bit.
 
 The checks: off, every cell of the workbook against the workbook without the addition; on with no gap, every number as
 off; a market made from a known path (an elevated TLREF until N, then L0 and known steps) gives its first step back from
@@ -182,12 +184,12 @@ def test_every_read_of_a_path_gets_its_own_day_e():
 # ============================================================================== on, no gap: as off
 def test_on_without_a_gap_every_number_is_the_one_before(books):
     """On with a date and the normal TLREF typed at today's TLREF (gap 0): E is 0, REF is today's TLREF - every number of
-    every sheet as off; only the switch's own cells (M2, M3, L5, the status) and the Spot row's label say it is on."""
+    every sheet as off; only the switch's own cells (M2, M3, L5, the status) say it is on."""
     new, _ = books
     spot, j2 = at(new, "OIS_MAIN!B2"), at(new, "OIS_MAIN!J2")
     on = switch_on(new, spot + 20, j2)
     assert (at(new, "OIS_MAIN!M2", on), at(new, "OIS_MAIN!M3", on), at(new, "OIS_MAIN!M5", on)) == (1.0, 20.0, 0.0)
-    assert at(new, "OIS_MAIN!L6", on) == "Açık · 20 gün · fark 0 bp" and at(new, "OIS_MAIN!O9", on) == "Spot · normal"
+    assert at(new, "OIS_MAIN!L6", on) == "Açık · 20 gün · fark 0 bp" and at(new, "OIS_MAIN!O9", on) == "Spot"
     diff = moved(new, new.engine.shared, on)
     # (merged in v2: with the switch on the OIS-implied date's walk works - its helper sheet EK_NORM and its block beside
     # STUB İMA, OIS_MAIN!AO8:AS15 -, and the PPK step tables measure their first window from REF instead of the stub's
@@ -196,8 +198,7 @@ def test_on_without_a_gap_every_number_is_the_one_before(books):
                                                             and 8 <= int("".join(ch for ch in d.split("!")[1] if ch.isdigit())) <= 15)}
     steps = {d for d in diff if d.startswith("EK_PPK!")}
     diff = [d for d in diff if d not in walk and d not in steps]
-    assert sorted(diff) == sorted(["OIS_MAIN!" + a for a in ("L2", "L4", "L5", "L6", "M2", "M3", "O9")] + ["MASA!B94"]), diff
-    assert at(new, "MASA!B94", on) == "Spot · normal"                     # (Masa's copy of the Spot row's label)
+    assert sorted(diff) == sorted(["OIS_MAIN!" + a for a in ("L2", "L4", "L5", "L6", "M2", "M3")]), diff
 
 
 # ============================================================================== a market from a known path
@@ -263,7 +264,8 @@ def test_a_market_made_from_a_known_path_gives_its_first_step_back(books):
     assert max(abs(x) for x in residuals) <= tol, residuals
     stub = [got[k] for k in ("AN9", "AN10", "AN11", "AN12") if got[k] != "–"]            # (the stub's knots in use)
     assert len(stub) >= 2 and all(abs(x) < 0.5 for x in stub), got                    # the stub's levels: the normal TLREF
-    assert abs(at(new, "OIS_MAIN!S9", on) - L0) == 0.0 and at(new, "OIS_MAIN!T10", on) == round(got["R10"], 2)
+    # the Spot row is TLREF as it runs - today's -, the cumulative step is measured from REF
+    assert at(new, "OIS_MAIN!S9", on) == H and at(new, "OIS_MAIN!T10", on) == round(got["R10"], 2)
     # off: today's 40 % is the base - the normalization is part of the next meeting's cut
     first_off = at(new, "OIS_MAIN!R10", off)
     assert first_off < (L0 - H + STEPS[0]) * 10000 + 50 and first_off < -350, first_off
@@ -273,8 +275,80 @@ def test_a_market_made_from_a_known_path_gives_its_first_step_back(books):
     si = new.model.sheet_index["OIS_MAIN"]
     steps = {(si, parse_a1("U%d" % (10 + k))): s * 10000 for k, s in enumerate(STEPS[:2])}
     s1 = switch_on(new, spot + N_DAYS, L0, {**market, **steps})
-    assert at(new, "OIS_MAIN!X9", s1) == L0 and abs(at(new, "OIS_MAIN!X11", s1) - (L0 + STEPS[0] + STEPS[1])) < 1e-15
+    assert at(new, "OIS_MAIN!X9", s1) == H and at(new, "Motor!H4", s1) == L0          # (the chain starts from REF)
+    assert abs(at(new, "OIS_MAIN!X11", s1) - (L0 + STEPS[0] + STEPS[1])) < 1e-15        # (both meetings after N: normal)
     assert abs(at(new, "Motor!G327", s1) - market[(si, parse_a1("B11"))]) < 1e-12
+
+
+# ============================================================================== the page's levels: TLREF as it runs
+def _one_year(book: Book, calc, path: str) -> float:
+    """A path of Motor's meeting table at the 1Y day (OIS_MAIN!E447) as the page reads it: the last meeting up to it."""
+    day = at(book, "OIS_MAIN!E447", calc)
+    k = max(k for k in range(4, 85) if isinstance(at(book, "Motor!C%d" % k, calc), float) and at(book, "Motor!C%d" % k, calc) <= day)
+    return at(book, "Motor!%s%d" % (path, k), calc)
+
+
+def test_the_page_shows_tlref_as_it_runs(books):
+    """The desk, 27.11.2026, on the page with the switch on: "Normal tlref ve kullanilan tarihi degistirdim ama hala tlref
+    baz vs kisminda normal tlref kullaniliyor".  TLREF typed at 39 %, the normal TLREF 35,85 %, the date 91 days after the
+    spot - MPC1 (day 37) and MPC2 (day 79) inside the stretch - and S1's steps typed 0, 0, −100: IMPLIED RATES' levels are
+    TLREF as it runs - today's on the Spot row, the normal path + the gap after a meeting inside the stretch, the normal
+    path after the date - in the Implied MPC and the three TLREF scenario columns alike; every step stays the PPK step on
+    the normal path (Implied bps, Cum. Implied, the chart's scenario steps, DV01 Risk's scenario − implied) and the model
+    reads the normal path (Motor's meeting table).  STUB İMA's levels and, with a date past a year, the 1Y figures follow
+    the same rule; off, the same typed TLREF and steps give TLREF + the steps everywhere."""
+    new, _ = books
+    si = new.model.sheet_index["OIS_MAIN"]
+    spot = at(new, "OIS_MAIN!B2")
+    typed = {(si, parse_a1("J2")): 0.39, (si, parse_a1("U10")): 0.0, (si, parse_a1("U11")): 0.0, (si, parse_a1("U12")): -100.0}
+    on = switch_on(new, spot + 91, 0.3585, typed)
+    gap = at(new, "OIS_MAIN!M5", on)
+    assert (at(new, "OIS_MAIN!M2", on), at(new, "OIS_MAIN!M3", on), gap) == (1.0, 91.0, 0.39 - 0.3585)
+    assert at(new, "OIS_MAIN!L6", on) == "Açık · 91 gün · fark 315 bp"
+    days = [at(new, "Motor!C%d" % k, on) for k in (5, 6, 7)]
+    assert days[0] < 91 and days[1] < 91 <= days[2], days                    # (replay: MPC1, MPC2 inside; MPC3 after)
+    # the Spot row: today's TLREF in every level column, its label as off
+    assert [at(new, "OIS_MAIN!%s9" % c, on) for c in "SXYZ"] == [0.39] * 4 and at(new, "OIS_MAIN!O9", on) == "Spot"
+    # TLREF Baz (S1): 39 % through MPC1 and MPC2 (steps 0), then the normal TLREF − 100 bp after the date; Motor's S1 is the
+    # normal path the scenario is priced on
+    assert [at(new, "Motor!H%d" % k, on) for k in (4, 5, 6)] == [0.3585] * 3
+    assert [round(at(new, "OIS_MAIN!X%d" % r, on), 12) for r in (10, 11, 12)] == [0.39, 0.39, 0.3485]
+    assert [at(new, "OIS_MAIN!BM%d" % r, on) for r in (10, 11, 12)] == [0.0, 0.0, -100.0]   # the steps, not the drop at N
+    checked = 0
+    for r in range(10, 90):
+        k, b = r - 5, r + 5724
+        d = at(new, "Motor!C%d" % k, on)
+        if at(new, "OIS_MAIN!P%d" % r, on) == "" or d == 0:
+            continue
+        add = gap if d < 91 else 0.0
+        assert at(new, "OIS_MAIN!S%d" % r, on) == at(new, "Motor!B%d" % b, on) + add, r
+        for col, path in (("X", "H"), ("Y", "N"), ("Z", "P")):
+            assert at(new, "OIS_MAIN!%s%d" % (col, r), on) == at(new, "Motor!%s%d" % (path, k), on) + add, (col, r)
+        # Cum. Implied from the normal TLREF on the normal path (Motor's İma TLREF = the solver's level)
+        implied = at(new, "Motor!K%d" % k, on)
+        assert implied == at(new, "Motor!B%d" % b, on)
+        assert abs(at(new, "OIS_MAIN!T%d" % r, on) - (implied - 0.3585) * 10000) <= 0.005 + 1e-9, r
+        checked += 1
+    assert checked >= 8
+    for col, r in (("AK", 10), ("AL", 11), ("AM", 12)):
+        assert at(new, "DV01_RISK!%s66" % col, on) == (at(new, "Motor!H%d" % (r - 5), on) - at(new, "Motor!K%d" % (r - 5), on)) * 10000
+    # STUB İMA: its levels start before the date - the gap in them; TLREF farkı from the normal TLREF, as before
+    assert at(new, "OIS_MAIN!AM9", on) == at(new, "Motor!B5728", on) + gap
+    assert at(new, "OIS_MAIN!AN9", on) == (at(new, "Motor!B5728", on) - 0.3585) * 10000
+    # the 1Y figures: the date before the year - no gap; a date past it - the gap in the levels, not in the bp
+    assert at(new, "OIS_MAIN!B5", on) == _one_year(new, on, "K") and at(new, "OIS_MAIN!H5", on) == _one_year(new, on, "H")
+    late = switch_on(new, spot + 400, 0.3585, typed)
+    gap = at(new, "OIS_MAIN!M5", late)
+    assert at(new, "OIS_MAIN!E447", late) < 400 and gap == 0.39 - 0.3585
+    for addr, path in (("B5", "K"), ("H5", "H"), ("R3", "H"), ("R4", "N"), ("R5", "P")):
+        assert at(new, "OIS_MAIN!" + addr, late) == _one_year(new, late, path) + gap, addr
+    assert at(new, "OIS_MAIN!D5", late) == (_one_year(new, late, "K") - 0.3585) * 10000
+    assert abs(at(new, "OIS_MAIN!S3", late) - (_one_year(new, late, "H") - 0.3585) * 10000) <= 0.05 + 1e-9
+    # off: the typed TLREF is the Spot row and the base of every scenario, as before
+    off = new.engine.layer(("normppk", "levels off"), new.engine.shared, typed)
+    assert at(new, "OIS_MAIN!M2", off) == 0.0 and at(new, "OIS_MAIN!X9", off) == 0.39 == at(new, "Motor!H4", off)
+    assert at(new, "OIS_MAIN!X10", off) == at(new, "Motor!H5", off) == 0.39 and round(at(new, "OIS_MAIN!X12", off), 12) == 0.38
+    assert at(new, "OIS_MAIN!S10", off) == at(new, "Motor!B5734", off)
 
 
 # ============================================================================== per user; the history
@@ -293,7 +367,9 @@ def test_each_users_switch_is_their_own_and_the_history_is_as_before(books, tmp_
                                            {"ref": "OIS_MAIN!L4", "value": "33"}])
         assert res["errors"] == []
         assert cell(svc, "OIS_MAIN!M2", ayse) == 1.0 and cell(svc, "OIS_MAIN!L4", ayse) == 0.33
-        assert cell(svc, "OIS_MAIN!S9", ayse) == 0.33 and cell(svc, "OIS_MAIN!R10", ayse) != before["OIS_MAIN!R10"]
+        # the Spot row stays today's TLREF; the scenarios start from the normal TLREF, the first step is measured from it
+        assert cell(svc, "OIS_MAIN!S9", ayse) == cell(svc, "OIS_MAIN!J2") and cell(svc, "Motor!H4", ayse) == 0.33
+        assert cell(svc, "OIS_MAIN!R10", ayse) != before["OIS_MAIN!R10"]
         # Bootstrap (Murex's MTM) never moves: the switched-on user's bootstrap is everybody's
         boot = ["Motor!%s%d" % (col, r) for r in range(88, 131) for col in "FGI"]
         assert [cell(svc, ref, ayse) for ref in boot] == [cell(svc, ref) for ref in boot]
@@ -346,9 +422,12 @@ def test_a_calendar_change_with_the_switch_on(tmp_path):
         mine = {k[1]: v for k, v in svc.store.user_inputs(user, "tto").items()}
         assert (mine["OIS_MAIN!L2"], mine["OIS_MAIN!L3"], mine["OIS_MAIN!L4"]) == ("Açık", float(spot + 30), 0.34)
         assert cell(svc, "OIS_MAIN!M2", user) == 1.0 and cell(svc, "OIS_MAIN!M3", user) == 30.0
-        ref, level = cell(svc, "OIS_MAIN!M4", user), cell(svc, "OIS_MAIN!S10", user)
+        # the new meeting takes effect inside the stretch (day 22, N day 30): its step is measured on the normal path
+        # (Motor's İma TLREF), its level on the page is the normal one + the gap
+        ref, level, gap = cell(svc, "OIS_MAIN!M4", user), cell(svc, "Motor!K5", user), cell(svc, "OIS_MAIN!M5", user)
         assert ref == 0.34 and abs(cell(svc, "OIS_MAIN!R10", user) - (level - ref) * 10000) < 1e-9
         assert abs(cell(svc, "OIS_MAIN!T10", user) - round((level - ref) * 10000, 2)) < 1e-9
+        assert cell(svc, "Motor!C5", user) < 30 and cell(svc, "OIS_MAIN!S10", user) == level + gap
         assert cell(svc, "OIS_MAIN!AU12", user) in ("OK", "Kota/takvim tutarsız – kontrolü incele")
         assert cell(svc, "OIS_MAIN!AU11", user) < 10
         shared = cell(svc, "OIS_MAIN!J2")

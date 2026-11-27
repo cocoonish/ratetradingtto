@@ -7523,8 +7523,9 @@ def _masa_off(model: Model) -> None:
 #: comes back when they restart - "Ois ppk sayfasi ustunde yapmaliyiz yeni panel olmadan, normalizasyon ac kapat
 #: yapabilmeliyiz"; docs/desk-decisions.md, "TLREF normalleşmesi").  A switch on the OIS · PPK page's pinned parameters,
 #: each user's own: with it on, TLREF is today's (H, OIS_MAIN!J2) until the normalization date N and normal afterwards,
-#: and the PPK model is solved for the *normal* path - its levels and steps measured from the normal TLREF L0 (REF) - with
-#: the stretch before N added where its ln G is read:
+#: and the PPK model is solved for the *normal* path - its steps measured from the normal TLREF L0 (REF) - with the
+#: stretch before N added where its ln G is read; the page shows TLREF's levels as TLREF runs, the stretch in them
+#: (``norm_level``: the desk, 27.11.2026):
 #:
 #:   actual ln G(t) = normal ln G(t) + E(min(t, n)),  n = N − the OIS spot (days),
 #:   E(m) = m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²]
@@ -7579,8 +7580,35 @@ NORM_SPOT_LEVELS = (("Motor", "H4"), ("Motor", "N4"), ("Motor", "P4"), ("EK_RET"
 #: the scenarios' MPC OIS window rates (OIS_MAIN, rows 84 … 99: S1 BD, S2 BE, S3 BF), worked out from the window's level
 NORM_WINDOWS = (("BD", "BE", "BF"), (84, 99))
 #: OIS_MAIN's cells that measure the PPK path from today's TLREF ($J$2): measured from REF (``NORM_REF_TEXT``) instead
-NORM_MEASURES = (["S9", "X9", "Y9", "Z9", "D5", "S3", "S4", "S5", "AU4"] + ["AN%d" % r for r in range(9, 15)]
-                 + ["R%d" % r for r in range(10, 90)] + ["T%d" % r for r in range(10, 90)])
+#: (the Spot row's levels S9, X9:Z9 stay today's TLREF; Cum. Implied, the 1Y bp and SENARYOLAR' 12A are written with the
+#: levels below, from the normal path)
+NORM_MEASURES = ["AU4"] + ["AN%d" % r for r in range(9, 15)] + ["R%d" % r for r in range(10, 90)]
+#: TLREF's levels on the page as TLREF runs (the desk, 27.11.2026, on a page with the switch on: "Normal tlref ve
+#: kullanilan tarihi degistirdim ama hala tlref baz vs kisminda normal tlref kullaniliyor"): a level that starts on a day d
+#: (from the OIS spot) before N is the normal path's + the gap (``norm_level``) - IMPLIED RATES' Implied MPC (S) and TLREF
+#: S1–S3 (X:Z), the 1Y figures, STUB İMA's levels; the Spot row is today's TLREF (S9, X9:Z9 as the workbook has them).
+#: Steps and bp - Implied bps, Cum. Implied, the scenarios' steps (the chart's BM:BO), İma 12A, SENARYOLAR' 12A, the
+#: stub's TLREF farkı, DV01 Risk's scenario − implied - stay on the normal path, and so do Motor's meeting table (İma K,
+#: S1 H, S2 N, S3 P: the scenarios' chains move there from X:Z), the solver and every curve (+ E where its ln G is read).
+#: IMPLIED RATES: OIS_MAIN rows 10 … 89, one PPK meeting each = Motor's meeting table rows 5 … 84 (its effective day C) =
+#: the solver's result rows 5734 … 5813 (the level B)
+NORM_LEVEL_ROWS = (10, 89)
+NORM_MOTOR_ROW, NORM_RESULT_ROW = -5, 5724
+#: the scenarios: (OIS_MAIN's level column, its typed step column, the chart's step column, Motor's path column)
+NORM_SCENARIOS = (("X", "U", "BM", "H"), ("Y", "V", "BN", "N"), ("Z", "W", "BO", "P"))
+#: DV01 Risk's "Sapma" rows (scenario − implied per meeting): row, the scenario's OIS_MAIN column, its Motor column;
+#: columns AK … DL, each reading one meeting row of OIS_MAIN (AK … BP: MPC1 … MPC32; the workbook's BQ … DL repeat MPC32)
+NORM_DV01 = ((66, "X", "H"), (67, "Y", "N"), (68, "Z", "P"))
+NORM_DV01_FIRST, NORM_DV01_COUNT = 37, 80               # AK, … DL
+_NORM_DV01 = (r"IF\(AND\(ISNUMBER\(OIS_MAIN!\$%(c)s\$(\d+)\),ISNUMBER\(OIS_MAIN!\$S\$\1\)\),"
+              r"\(OIS_MAIN!\$%(c)s\$\1-OIS_MAIN!\$S\$\1\)\*10000,0\)")
+#: the 1Y figures (the 1Y day OIS_MAIN!E447): the levels (İma 1Y sonu TLREF, S1 1Y TLREF, SENARYOLAR' 1Y sonu TLREF) and
+#: their Motor path; the bp measured from REF (İma 12A, SENARYOLAR' 12A toplam) with the level they read
+NORM_1Y_LEVELS = (("B5", "K"), ("H5", "H"), ("R3", "H"), ("R4", "N"), ("R5", "P"))
+NORM_1Y_MEASURES = (("D5", "B5", "(%s-$J$2)*10000"), ("S3", "R3", "ROUND((%s-$J$2)*10000,1)"),
+                    ("S4", "R4", "ROUND((%s-$J$2)*10000,1)"), ("S5", "R5", "ROUND((%s-$J$2)*10000,1)"))
+#: STUB İMA (spot → MPC1): rows 9 … 14, each a knot of the solver (its flag Motor!C4305…, start day B4305…, level B5728…)
+NORM_STUB_ROWS = (9, 14)
 #: Masa's "PPK · piyasa ima vs anket": İma PF = PF + (ima TLREF − REF)
 NORM_MASA = ["S%d" % r for r in range(157, 164)]
 _NORM_J2 = re.compile(r"(?<![A-Za-z0-9_!$.'])\$J\$2(?![0-9])")
@@ -7590,6 +7618,18 @@ def norm_e(day: str) -> str:
     """E(min(``day``, n)) - what the stretch before the normalization date adds to a PPK path's ln G at a day counted
     from the OIS spot - as an Excel expression, an exact 0 while the switch is off (OIS_MAIN!M2)."""
     return "IF(OIS_MAIN!$M$2=1,INDEX(%s,MIN(%s,%d)+1),0)" % (NORM_E_RANGE, day, NORM_LIMIT)
+
+
+def norm_level(level: str, day: str) -> str:
+    """A TLREF level on the page as TLREF runs, in OIS_MAIN's own cells: ``level`` (a normal path's) + the gap while
+    ``day`` - the day it starts, from the OIS spot - is before the normalization date (n, M3); ``level`` itself while off
+    (picked with IF: the same bits)."""
+    return "IF($M$2=1,%s+IF(%s<$M$3,$M$5,0),%s)" % (level, day, level)
+
+
+def _norm_1y(path: str) -> str:
+    """A path of Motor's meeting table (İma K, S1 H, S2 N, S3 P) at the 1Y day (OIS_MAIN!E447), as the page reads it."""
+    return "INDEX(Motor!$%s$4:$%s$84,MATCH($E$447,Motor!$C$4:$C$84,1))" % (path, path)
 
 
 def _norm_e_node(day: tuple) -> tuple:
@@ -7776,13 +7816,110 @@ def _norm_ppk_check(model: Model) -> None:
     # the paths read as the meeting table's readers read them (the scenario pars, the date-to-date block)
     _need_formula(model, "Motor", "E325", "EXP(INDEX($I$4:$I$84,MATCH(B325,$C$4:$C$84,1))+(B325-INDEX($C$4:$C$84,")
     _need_formula(model, "MASA", "I62", "INDEX(Motor!$L$4:$L$84,MATCH($M$60,Motor!$C$4:$C$84,1))+($M$60-INDEX(")
+    _norm_levels_check(model)
+
+
+def _norm_exact(model: Model, sheet: str, addr: str, want: str) -> None:
+    """A cell written over holds the formula it is written against."""
+    got = _need_formula(model, sheet, addr)
+    if got != want:
+        raise ValueError("%s!%s beklenen formül değil: %s" % (sheet, addr, got[:80]))
+
+
+def _norm_dv01(model: Model) -> List[Tuple[str, int, str, str]]:
+    """DV01 Risk's scenario − implied cells (``NORM_DV01``): (address, the OIS_MAIN meeting row it reads, the scenario's
+    OIS_MAIN column, its Motor path) - each read off its own formula (an error when one is not that formula)."""
+    out = []
+    for j in range(NORM_DV01_COUNT):
+        col = index_to_col(NORM_DV01_FIRST + j)
+        for row, level, path in NORM_DV01:
+            addr = "%s%d" % (col, row)
+            text = _need_formula(model, "DV01_RISK", addr)
+            hit = re.fullmatch(_NORM_DV01 % {"c": level}, text)
+            if hit is None or not NORM_LEVEL_ROWS[0] <= int(hit.group(1)) <= NORM_LEVEL_ROWS[1]:
+                raise ValueError("DV01_RISK!%s beklenen formül değil: %s" % (addr, text[:80]))
+            out.append((addr, int(hit.group(1)), level, path))
+    return out
+
+
+def _norm_levels_check(model: Model) -> None:
+    """IMPLIED RATES as the workbook builds it - the Spot row today's TLREF; each scenario's level the row above + the
+    row's step, Motor's meeting table reading the levels, the chart's steps their differences; the implied level the
+    solver's, Cum. Implied from it; DV01 Risk's scenario − implied -, the 1Y figures and STUB İMA's levels: what
+    ``_norm_levels`` writes over."""
+    _need_captions(model, (("OIS_MAIN", "S8", "Implied MPC"), ("OIS_MAIN", "T8", "Cum. Implied"),
+                           ("Motor", "K3", "İma TLREF"), ("Motor", "C3", "Etkin gün (ertesi iş günü)"),
+                           ("OIS_MAIN", "A5", "İma 1Y sonu TLREF"), ("OIS_MAIN", "G5", "S1 1Y TLREF"),
+                           ("OIS_MAIN", "R2", "1Y sonu TLREF"), ("OIS_MAIN", "AK8", "Başlangıç gün"),
+                           ("OIS_MAIN", "AM8", "Seviye %"), ("DV01_RISK", "AI66", "Sapma Baz (bp)"),
+                           ("DV01_RISK", "AI67", "Sapma Hawkish"), ("DV01_RISK", "AI68", "Sapma Dovish")))
+    for addr in ("S9", "X9", "Y9", "Z9"):
+        _norm_exact(model, "OIS_MAIN", addr, "$J$2")
+    r1, r2 = NORM_LEVEL_ROWS
+    for r in range(r1, r2 + 1):
+        k, b = r + NORM_MOTOR_ROW, r + NORM_RESULT_ROW
+        _need_formula(model, "Motor", "C%d" % k, "INDEX($G$528:$G$4228,MIN(OIS_MAIN!P%d-OIS_MAIN!$B$2+1" % r)
+        for level, step, chart, path in NORM_SCENARIOS:
+            _norm_exact(model, "OIS_MAIN", "%s%d" % (level, r),
+                        '%s%d+IF(AND($P%d<>"",$P%d<$B$2),0,IF(%s%d<>"",%s%d,IF($B$3=1,N(R%d),0)+$D$3))/10000'
+                        % (level, r - 1, r, r, step, r, step, r, r))
+            _norm_exact(model, "OIS_MAIN", "%s%d" % (chart, r), "ROUND((%s%d-%s%d)*10000,2)" % (level, r, level, r - 1))
+            _norm_exact(model, "Motor", "%s%d" % (path, k), "OIS_MAIN!%s%d" % (level, r))
+        _norm_exact(model, "OIS_MAIN", "S%d" % r, 'IF(AND($P%d<>"",$P%d<$B$2),"",Motor!$B$%d)' % (r, r, b))
+        _norm_exact(model, "OIS_MAIN", "T%d" % r, 'IF(ISNUMBER(S%d),ROUND((S%d-$J$2)*10000,2),"")' % (r, r))
+        _norm_exact(model, "Motor", "K%d" % k, "IF(C%d=0,K%d,OIS_MAIN!S%d)" % (k, k - 1, r))
+    _norm_dv01(model)
+    for addr, path in NORM_1Y_LEVELS:
+        _norm_exact(model, "OIS_MAIN", addr, _norm_1y(path))
+    for addr, level, text in NORM_1Y_MEASURES:
+        _norm_exact(model, "OIS_MAIN", addr, text % level)
+    for j in range(NORM_STUB_ROWS[1] - NORM_STUB_ROWS[0] + 1):
+        r = NORM_STUB_ROWS[0] + j
+        _norm_exact(model, "OIS_MAIN", "AK%d" % r, 'IF(Motor!$C$%d=1,Motor!$B$%d,"–")' % (4305 + j, 4305 + j))
+        _norm_exact(model, "OIS_MAIN", "AM%d" % r, 'IF(Motor!$C$%d=1,Motor!$B$%d,"–")' % (4305 + j, 5728 + j))
+
+
+def _norm_levels(model: Model) -> None:
+    """TLREF's levels on the page as TLREF runs (``NORM_LEVEL_ROWS``): each scenario's chain - the row above + the row's
+    step, from REF - moves to Motor's meeting table (S1 H, S2 N, S3 P: the paths the model prices, normal), and the page's
+    levels are Motor's + the stretch (``norm_level``, on the level's start day: a meeting's effective day Motor!C, a stub
+    knot's start, the 1Y day); the Spot row stays today's TLREF.  Every step and bp reads the normal path: the chart's
+    scenario steps, Cum. Implied, Motor's İma TLREF (the solver's level, no longer the page's), DV01 Risk's scenario −
+    implied, İma 12A and SENARYOLAR' 12A (from REF, as before)."""
+    o, m, dv = SheetBuilder(model, "OIS_MAIN"), SheetBuilder(model, "Motor"), SheetBuilder(model, "DV01_RISK")
+    r1, r2 = NORM_LEVEL_ROWS
+    for r in range(r1, r2 + 1):
+        k, b = r + NORM_MOTOR_ROW, r + NORM_RESULT_ROW
+        day = "Motor!$C$%d" % k
+        for level, step, chart, path in NORM_SCENARIOS:
+            m.patch("%s%d" % (path, k), '=%s%d+IF(AND(OIS_MAIN!$P%d<>"",OIS_MAIN!$P%d<OIS_MAIN!$B$2),0,IF(OIS_MAIN!%s%d<>"",'
+                                        'OIS_MAIN!%s%d,IF(OIS_MAIN!$B$3=1,N(OIS_MAIN!R%d),0)+OIS_MAIN!$D$3))/10000'
+                    % (path, k - 1, r, r, step, r, step, r, r))
+            o.patch("%s%d" % (level, r), "=" + norm_level("Motor!$%s$%d" % (path, k), day))
+            o.patch("%s%d" % (chart, r), "=ROUND((Motor!$%s$%d-Motor!$%s$%d)*10000,2)" % (path, k, path, k - 1))
+        o.patch("S%d" % r, '=IF(AND($P%d<>"",$P%d<$B$2),"",%s)' % (r, r, norm_level("Motor!$B$%d" % b, day)))
+        o.patch("T%d" % r, '=IF(ISNUMBER(S%d),ROUND((Motor!$B$%d-%s)*10000,2),"")' % (r, b, NORM_REF_TEXT))
+        m.patch("K%d" % k, "=IF(C%d=0,K%d,$B$%d)" % (k, k - 1, b))
+    for addr, r, level, path in _norm_dv01(model):
+        k = r + NORM_MOTOR_ROW
+        dv.patch(addr, "=IF(AND(ISNUMBER(OIS_MAIN!$%s$%d),ISNUMBER(OIS_MAIN!$S$%d)),(Motor!$%s$%d-Motor!$K$%d)*10000,0)"
+                 % (level, r, r, path, k, k))
+    paths = dict(NORM_1Y_LEVELS)
+    for addr, path in NORM_1Y_LEVELS:
+        o.patch(addr, "=" + norm_level(_norm_1y(path), "$E$447"))
+    for addr, level, text in NORM_1Y_MEASURES:
+        o.patch(addr, "=" + (text % _norm_1y(paths[level])).replace("$J$2", NORM_REF_TEXT))
+    for j in range(NORM_STUB_ROWS[1] - NORM_STUB_ROWS[0] + 1):
+        o.patch("AM%d" % (NORM_STUB_ROWS[0] + j), '=IF(Motor!$C$%d=1,%s,"–")'
+                % (4305 + j, norm_level("Motor!$B$%d" % (5728 + j), "Motor!$B$%d" % (4305 + j))))
 
 
 def _tto_norm_ppk(model: Model) -> None:
     """The PPK model with the stretch: + E at every payment day of each Gauss-Newton iteration and of the result (their
     derivatives as they are: E does not depend on the levels), r0's prior mean REF; the paths' spot levels REF; + E
     wherever a path's ln G is read at a day (the scenarios', the implied path's, the fair RET's reference); the scenarios'
-    window rates with the stretch's part of the window; the page's cells measured from REF; the Spot row says so."""
+    window rates with the stretch's part of the window; the page's steps measured from REF and its TLREF levels as TLREF
+    runs (``_norm_levels``)."""
     m = SheetBuilder(model, "Motor")
     for start in NORM_ITERATIONS + (NORM_RESULT - 88,):
         for p in range(NORM_PAYDAYS[1] - NORM_PAYDAYS[0] + 1):
@@ -7808,11 +7945,10 @@ def _tto_norm_ppk(model: Model) -> None:
             o.patch(addr, "=" + _norm_window(formula_of(model, "OIS_MAIN", addr)))
     for addr in NORM_MEASURES:
         o.patch(addr, "=" + _NORM_J2.sub(NORM_REF_TEXT, formula_of(model, "OIS_MAIN", addr)))
-    # (the Spot row says it is the normal TLREF while on: its label, read by Masa's copy of the path too)
-    o.set("O9", '=IF($M$2=1,"Spot · normal","Spot")', like="O9")
     masa = SheetBuilder(model, "MASA")
     for addr in NORM_MASA:
         masa.patch(addr, "=" + _NORM_J2.sub("IF(OIS_MAIN!$M$2=1,OIS_MAIN!$M$4,$J$2)", formula_of(model, "MASA", addr)))
+    _norm_levels(model)
 # ---------------------------------------------------------------------------------------------- OIS · PPK: the date OIS implies for TLREF's normalization
 #: TLREF's normalization, v2 (the desk, 26.11.2026; docs/desk-decisions.md, docs/curves.md): TCMB paused its one-week repo
 #: auctions, so TLREF (OIS_MAIN!J2, H) sits above its normal level (OIS_MAIN!L4, L0 - the switch's builder's: the policy

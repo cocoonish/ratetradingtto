@@ -230,9 +230,10 @@ to a path's ln G - exact while the normal path is L0 over the stretch; a meeting
   (`Motor!B` at block start + 88 … + 132 of İterasyon 1 … 7) and the result's (`Motor!B5815:B5859`) + E(min(t, n)); their
   derivatives (`C`) as they are (E does not depend on the levels); r0's prior mean (`Motor!D4305`) = REF. So the solved
   levels are the normal path, and the quotes are fitted with the stretch.
-- **The paths start at REF:** the scenarios S1–S3 in the meeting table (`Motor!H4`, `N4`, `P4`), the page's Spot row
-  (`OIS_MAIN!X9:Z9`, `S9`; its label `O9` reads "Spot · normal" while on) and the fair RET's reference path
-  (`EK_RET!D30`). The implied path ("MPC ima", `Motor!K`/`L`) is the solver's normal levels by itself.
+- **The paths start at REF:** the scenarios S1–S3 in Motor's meeting table (`Motor!H4`, `N4`, `P4`; each meeting's level
+  is the one before + its step, `Motor!H5:H84`, `N`, `P` - the scenarios' chains, moved there from the page's `X:Z`) and
+  the fair RET's reference path (`EK_RET!D30`). The implied path ("MPC ima", `Motor!K`/`L`) is the solver's normal levels
+  by itself (`Motor!K` reads the solver's result `Motor!B5734…` directly).
 - **Every read of a PPK path's ln G at a day t + E(t):** `INDEX(<path>, MATCH(t, Motor!$C$4:$C$84, ·))` - İma `L`, S1 `I`,
   S2 `O`, S3 `Q` and RET's reference `EK_RET!E30:E110` - in Motor, OIS_MAIN, MASA, C & R, TM_OIS, EK_FWD, EK_TARIH,
   EK_RET, EK_VFRA and EK_CARRY (about 1 700 reads, `extras.norm_path_readers`): the scenario pars and the implied curve's
@@ -240,9 +241,23 @@ to a path's ln G - exact while the normal path is L0 over the stretch; a meeting
   RET's scenarios, OIS · Nakit Akışı, carry, the calculators, MPC OIS's scenario columns. Every curve on a PPK path is the
   normal path + the stretch, so it still prices the market. The scenarios' window rates worked out from a level (MPC OIS
   `BD:BF`) get E(end) − E(start).
-- **The page measures from REF** (every "− $J$2" that measured the PPK path from today's TLREF): `OIS_MAIN!R10:R89` (the
-  first upcoming meeting's Implied bps), `T10:T89`, `D5` (→ `F5`), SENARYOLAR `S3:S5`, `AU4`, STUB İMA `AN9:AN14`; Masa's
-  "PPK · piyasa ima vs anket" `MASA!S157:S163` (İma PF = PF + (ima TLREF − REF)).
+- **The page measures the steps from REF** (every "− $J$2" that measured the PPK path from today's TLREF):
+  `OIS_MAIN!R10:R89` (the first upcoming meeting's Implied bps), `T10:T89` (Cum. Implied, the solver's level − REF), `D5`
+  (→ `F5`), SENARYOLAR `S3:S5`, `AU4`, STUB İMA `AN9:AN14`; Masa's "PPK · piyasa ima vs anket" `MASA!S157:S163` (İma PF =
+  PF + (ima TLREF − REF)).
+- **The page's TLREF levels are TLREF as it runs** (the desk, 27.11.2026: "Normal tlref ve kullanilan tarihi degistirdim
+  ama hala tlref baz vs kisminda normal tlref kullaniliyor"; `extras.norm_level`): a level that starts on a day d from the
+  OIS spot shows the normal path's + the gap while d < n, the normal path's after. The Spot row is today's TLREF (`S9`,
+  `X9:Z9` = `J2`, on or off); after a meeting (from its effective day `Motor!C`) IMPLIED RATES' Implied MPC (`S10:S89`) and
+  TLREF S1–S3 (`X:Z`); STUB İMA's levels (`AM9:AM14`, from a knot's start day); the 1Y levels (`B5`, `H5`, SENARYOLAR
+  `R3:R5`, on the 1Y day `E447`); Masa's copies (`MASA!F94:F106`, `L2`, `M94:M96`) and the chart "TLREF patikası" with
+  them. Steps and bp stay on the normal path: Implied bps, Cum. Implied, the chart's scenario steps (`BM:BO`, from
+  Motor's paths), İma 12A, SENARYOLAR' 12A, the stub's TLREF farkı, DV01 Risk's scenario − implied
+  (`DV01_RISK!AK66:DL68`, from Motor's paths). With TLREF at 39 %, the normal TLREF 35,85 %, the date between MPC2 and MPC3
+  and S1's steps 0, 0, −100, TLREF S1 reads 39 % at Spot, MPC1 and MPC2, then 34,85 %; the chart's step bars read 0, 0,
+  −100 (the drop at the date is no PPK step; the chart draws it between MPC2 and MPC3, its points being the meetings).
+  Everything else - the solver, the pars, every curve, every step - is the same bits as before this (every cell of the
+  workbook compared, off and on).
 - **Not here:** EK_PPK, Broker Chat's step, `OIS_MAIN!BJ` and PPK basamak (the step part), the OIS-implied date (`L5`'s
   fallback) - their parts of the feature.
 

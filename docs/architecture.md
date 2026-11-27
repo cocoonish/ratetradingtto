@@ -354,8 +354,9 @@ the contract, `VIOP!M17:X17` / `M29:X29`; display only, nothing kept), DİBS RV'
 `DİBS RV!BO:BQ` on its free columns, the typed O/N's store and the helpers `YQ:YW`; Tüm Kâğıtlar' `EK_EVREN!S`), the
 TLREF normalization (26.11.2026, [curves.md](curves.md#tlref-normalleşmesi): the switch `OIS_MAIN!K2:L6` and its
 interface `M2:M5`, Motor's E column `H527:H4228`, and + E written into every formula that reads a PPK path's ln G at a
-day - `extras.norm_path_readers`, the last of the tto additions so that it finds every reader the others wrote) and
-others.
+day - `extras.norm_path_readers`, the last of the tto additions so that it finds every reader the others wrote; the page's
+TLREF levels as TLREF runs, 27.11.2026 - the scenarios' chains moved from `OIS_MAIN!X:Z` into Motor's meeting table, the
+page's levels Motor's + the gap before the date, `extras._norm_levels`) and others.
 The module docstring's list of sheets is incomplete; `_BUILDERS` is the full list.
 
 One addition changes only how cells read, never a value: the layout review's looks (27.11.2026, `LOOK_NAME`,
