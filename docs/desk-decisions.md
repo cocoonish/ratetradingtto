@@ -2481,7 +2481,9 @@ it - and the *steps* stay the PPK's, measured on the normal path ([curves.md](cu
   the date, Implied MPC and TLREF S1–S3 are the normal level + the gap (TLREF bugün − Normal TLREF); STUB İMA's levels and
   the 1Y levels follow the same rule; Masa's copies and the "TLREF patikası" chart with them. The Implied MPC column moves
   with the scenario columns on purpose: otherwise their difference on the page (545 bp at MPC1 on the desk's screen)
-  would not be the scenario − implied the DV01 page uses (230 bp).
+  would not be the scenario − implied the DV01 page uses (230 bp). Asked whether Implied MPC should show the normal
+  level instead, the desk ("bunu anlamadim. Dogrusu ne sence"; shown both on its own screen's numbers, the actual level
+  recommended): "Onerdigin gibi olsun" (27.11.2026). The normal level is still Normal TLREF + Cum. Implied.
 - **Steps and bp, unchanged:** Implied bps, Cum. Implied, the chart's step bars (0, 0, −100: the drop at the date is not
   a PPK step), İma 12A, SENARYOLAR' 12A, the stub's TLREF farkı, DV01 Risk's scenario − implied.
 - **The model, unchanged to the bit:** the solver, Motor's paths (the scenarios' chains now sit in Motor's meeting table),
