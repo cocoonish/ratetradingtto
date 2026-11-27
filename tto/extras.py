@@ -8322,6 +8322,62 @@ def _borsa_formats(model: Model) -> None:
     SheetBuilder(model, "Sheet1").number_format(BORSA_ON_POINTS, lambda fmt: "#,##0.00")
 
 
+# ---------------------------------------------------------------------------------------------- OIS · PPK: O/N and zero
+#: OIS · PPK's O/N EŞLENİKLERİ (360) (OIS_MAIN!AD7:AH26, the Kotalar tab) with each curve's zero beside its O/N (the desk,
+#: 27.11.2026: "Bunlarin on esleniklerini verirken zerosunu da vermemiz gerekli"): per tenor the MPC-implied curve's
+#: ("piyasa", Motor!J: its DF) and the scenarios' (Motor!E / L / P: their growth G = 1/DF, the normalization's stretch in
+#: them while it is on) zero rate, 360 simple - as Masa's ORANLAR / O/N EŞLENİKLERİ show OIS and offshore: the same DF and
+#: the same days g as the row's O/N, 1 + zero·g/360 = (1 + O/N/360)^g.  The zeros go into the panel's free columns AA:AC
+#: and AI; the page lists them after the O/N columns (``"cols"``, tto/views/20_ois.json) - the O/N cells stay where they
+#: are (nothing reads them; a user's decimals on them stay).  Display only: no other cell reads the zeros.
+ONZ_NAME = "OIS O/N eşlenikleri ve zero"
+ONZ_ROWS = (9, 26)
+ONZ_TITLE_CELL, ONZ_TITLE = "AD7", "O/N EŞLENİKLERİ VE ZERO (360 · zero basit)"
+#: (the O/N column, its zero's column, the zero's caption - text or a formula, as the O/N's)
+ONZ_COLS = (("AE", "AA", "Zero piyasa"), ("AF", "AB", '="Zero "&$P$3'), ("AG", "AC", '="Zero "&$P$4'),
+            ("AH", "AI", '="Zero "&$P$5'))
+#: a row's O/N: 360·(G^(1/g) − 1), G = 1/DF (piyasa: (1/Motor!$J$m)), g the tenor's days
+_ONZ_ON = re.compile(r'IFERROR\(360\*\((\(1/Motor!\$J\$\d+\)|Motor!\$[ELP]\$\d+)\^\(1/(.+)\)-1\),""\)')
+
+
+def _onz_parts(model: Model, on: str, r: int) -> Tuple[str, str]:
+    """(G, g) of a row's O/N formula: its growth factor and its days, as Excel text (an error when it is not one)."""
+    text = _need_formula(model, "OIS_MAIN", "%s%d" % (on, r))
+    hit = _ONZ_ON.fullmatch(text)
+    if hit is None:
+        raise ValueError("OIS_MAIN!%s%d O/N formülü değil: %s" % (on, r, text[:60]))
+    return hit.group(1), hit.group(2)
+
+
+def _onz_check(model: Model) -> None:
+    """The O/N table as the workbook has it - its title, its captions, an O/N formula in every row of every curve, the
+    four curves' (piyasa J, S1 E, S2 L, S3 P) - and the zeros' columns empty."""
+    _need_sheets(model, "OIS_MAIN", "Motor")
+    _need_captions(model, (("OIS_MAIN", ONZ_TITLE_CELL, "O/N EŞLENİKLERİ (360)"), ("OIS_MAIN", "AD8", "Vade"),
+                           ("OIS_MAIN", "AE8", "O/N piyasa"), ("Motor", "J324", "DF ima(T)"), ("Motor", "E324", "G S1(T)"),
+                           ("Motor", "L324", "G S2(T)"), ("Motor", "P324", "G S3(T)")))
+    sh = model.sheet("OIS_MAIN")
+    for on, zero, _ in ONZ_COLS:
+        for r in range(ONZ_ROWS[0] - 2, ONZ_ROWS[1] + 1):
+            if parse_a1("%s%d" % (zero, r)) in sh.fml or parse_a1("%s%d" % (zero, r)) in sh.consts:
+                raise ValueError("OIS_MAIN!%s%d boş değil" % (zero, r))
+        for r in range(ONZ_ROWS[0], ONZ_ROWS[1] + 1):
+            g, _ = _onz_parts(model, on, r)
+            if ("$%d" % (r + 316)) not in g:
+                raise ValueError("OIS_MAIN!%s%d başka bir vadeyi okuyor" % (on, r))
+
+
+def _tto_on_zero(model: Model) -> None:
+    """Each curve's zero (360 simple) beside its O/N: the same growth factor and days as the row's O/N formula."""
+    b = SheetBuilder(model, "OIS_MAIN")
+    b.set(ONZ_TITLE_CELL, ONZ_TITLE, like=ONZ_TITLE_CELL)
+    for on, zero, caption in ONZ_COLS:
+        b.set("%s8" % zero, caption, like="%s8" % on)
+        for r in range(ONZ_ROWS[0], ONZ_ROWS[1] + 1):
+            g, days = _onz_parts(model, on, r)
+            b.set("%s%d" % (zero, r), '=IFERROR((%s-1)*360/%s,"")' % (g, days), like="%s%d" % (on, r))
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
               ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1), (FMT_NAME, _borsa_formats_check, _borsa_formats)),
@@ -8383,7 +8439,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (NORM_NAME, _norm_switch_check, _tto_norm_switch), (NORM_USED_NAME, _norm_used_check, _tto_norm_used),
             (NORM_PPK_NAME, _norm_ppk_check, _tto_norm_ppk),
             # (TLREF's normalization: the date OIS implies - after the switch's builder, whose date in use it extends)
-            (NW_NAME, _nw_check, _tto_norm_walk),
+            (NW_NAME, _nw_check, _tto_norm_walk), (ONZ_NAME, _onz_check, _tto_on_zero),
             # (how numbers read - after everything that writes the cells, whose look it changes only)
             (FMT_NAME, _layout_formats_check, _tto_layout_formats)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),

@@ -130,6 +130,8 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Normalleşme anahtarı", "Normalleşme kullanılan tarih",
                                                    "Normalleşme PPK modeli",
                                                    "Normalleşme OIS ima tarihi",
+                                                   # (OIS · PPK's O/N EŞLENİKLERİ with each curve's zero - 27.11.2026)
+                                                   extras.ONZ_NAME,
                                                    # (how numbers read on the Forward and DV01 Risk pages - düzen, 27.11.2026)
                                                    extras.FMT_NAME]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",

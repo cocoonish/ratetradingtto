@@ -479,8 +479,9 @@
   {
    "id": "B5",
    "type": "table",
-   "title": "O/N EŞLENİKLERİ (360)",
-   "range": "AD7:AH26",
+   "title": "O/N EŞLENİKLERİ VE ZERO (360 · zero basit)",
+   "range": "AA7:AI26",
+   "cols": ["AD", "AE", "AF", "AG", "AH", "AA", "AB", "AC", "AI"],
    "hidden": false
   },
   {

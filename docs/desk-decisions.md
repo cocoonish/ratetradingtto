@@ -2490,6 +2490,22 @@ it - and the *steps* stay the PPK's, measured on the normal path ([curves.md](cu
 Code: `tto/extras.py` (`norm_level`, `_norm_levels`, `_norm_levels_check`, `_norm_dv01`, `NORM_LEVEL_ROWS` …). Tests:
 `tests/test_normallesme_ppk.py` (`test_the_page_shows_tlref_as_it_runs`); the browser test's "TLREF normalleşmesi" check.
 
+### OIS · PPK: O/N eşlenikleri ve zero (27.11.2026)
+
+On OIS · PPK → Kotalar's O/N EŞLENİKLERİ (360) (per tenor the O/N equivalent of the MPC-implied curve and of the three
+scenarios), the desk: "Bunlarin on esleniklerini verirken zerosunu da vermemiz gerekli".
+
+- **Each curve's zero beside its O/N:** Zero piyasa / Baz / Hawkish / Dovish after the four O/N columns; the table is
+  "O/N EŞLENİKLERİ VE ZERO (360 · zero basit)".
+- **The zero is 360 simple** - Masa's ORANLAR "OIS zero" (Motor's "Zero simple 360"), the desk's comparison basis:
+  (1/DF − 1) × 360 / days, on the row's own discount factor and days, so 1 + zero·g/360 = (1 + O/N/360)^g. A simple zero
+  grows at the long end (above 100 % at 10Y at today's rates); Motor also has "Zero (sürekli)" and "Zero simple 365" -
+  ask the desk before switching.
+- With the TLREF normalization on, the scenarios' zeros carry the stretch, as their O/N do. Display only.
+
+Code: `tto/extras.py` (`ONZ_NAME`, `_onz_check`, `_tto_on_zero`), `tto/views/20_ois.json` (B5: `AA7:AI26`, `"cols"`).
+Tests: `tests/test_ois_on_zero.py`.
+
 ### Düzen: sayfalar tek tek (27.11.2026)
 
 > "Panellerin boyutlarindan da bazi sorunlar yasiyorum, bunlari da kontrol edelim. Gorsel olarak da biraz daha

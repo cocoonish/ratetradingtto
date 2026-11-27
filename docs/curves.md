@@ -599,6 +599,10 @@ offshore side, ask the desk first.
   difference in bp. To 10Y since 26.11.2026 ([desk-decisions.md](desk-decisions.md#masa-offshore-2y-sonrası-zero-ve-on-26112026)):
   offshore the XCCY bootstrap (`Forward!H127 …`, `E112 …`; days from the USDTRY spot), OIS Motor's node (`Motor!M102 …`,
   `Forward!F112 …`; days from the OIS spot). A tenor without an XCCY node stays blank.
+- OIS · PPK's O/N EŞLENİKLERİ VE ZERO (`OIS_MAIN!AA7:AI26`, 27.11.2026, `extras.ONZ_NAME`): per tenor the MPC-implied
+  curve's (`Motor!J`, its DF) and the scenarios' (`Motor!E` / `L` / `P`, G = 1/DF) O/N (360, daily) and zero (360
+  simple) on the same DF and days - 1 + zero·g/360 = (1 + O/N/360)^g. TRY OIS only; the zeros in `AA:AC`, `AI`, listed
+  after the O/N columns by the page.
 
 ## Known differences - read before changing
 

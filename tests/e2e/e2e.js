@@ -4109,6 +4109,18 @@ async function clipAfter(page, action) {
     const ppkSigned = (t) => trNumber(String(t).replace('−', '-'));
     const ppkClear = async (ref) => { await (await cellHandle(page, ref)).click(); await page.keyboard.press('Delete'); };
     await open(page, 'ois');
+    // O/N EŞLENİKLERİ VE ZERO (the desk, 27.11.2026: "Bunlarin on esleniklerini verirken zerosunu da vermemiz gerekli"): the
+    // Kotalar tab's O/N table with each curve's zero (360 basit) after its four O/N columns
+    await tab(page, 'quotes');
+    await page.waitForFunction(() => { const it = window.tto.state.page.items.get('B5'); return !!(it && it.grid && it.grid.data); },
+      null, { timeout: 20000 }).catch(() => {});
+    const onzPanel = { cols: await page.evaluate(() => { const it = window.tto.state.page.items.get('B5'); return it && it.grid ? it.grid.data.c : null; }),
+      head: (await cellText(page, 'OIS_MAIN!AA8') || '').trim(), dovish: (await cellText(page, 'OIS_MAIN!AI8') || '').trim(),
+      zero1m: (await cellText(page, 'OIS_MAIN!AA9') || '').trim(), on1m: (await cellText(page, 'OIS_MAIN!AE9') || '').trim() };
+    check('OIS · PPK → Kotalar: O/N EŞLENİKLERİ VE ZERO - Zero piyasa … Zero Dovish (360 basit) after the four O/N columns, as %',
+      JSON.stringify(onzPanel.cols) === JSON.stringify(['AD', 'AE', 'AF', 'AG', 'AH', 'AA', 'AB', 'AC', 'AI'])
+      && onzPanel.head === 'Zero piyasa' && /^Zero /.test(onzPanel.dovish) && /%$/.test(onzPanel.zero1m) && /%$/.test(onzPanel.on1m)
+      && onzPanel.zero1m !== onzPanel.on1m, onzPanel);
     await tab(page, 'mpcis');                      // (MPC işlem: PPK ima's trades tab since 27.11.2026)
     const duzenTryAOisTabs = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button[data-tab]')]
       .map((b) => b.dataset.tab + ':' + b.firstChild.textContent));
