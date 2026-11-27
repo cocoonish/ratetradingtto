@@ -436,6 +436,11 @@ def test_the_addition_writes_its_own_cells_only(monkeypatch):
         """A sheet's conditional formats, each with its style's contents (the model's list of them is shared)."""
         return [dict(x, dxf=model.dxfs[x["dxf"]] if isinstance(x.get("dxf"), int) else x.get("dxf")) for x in sh.cf]
 
+    def looks(model, sh):
+        """A sheet's cell looks by their contents (number format, bold, colours …): the model's list of them is shared,
+        and an addition after this one that adds a look shifts the indices without changing a cell's look."""
+        return {rc: tuple(model.xfs[x]) for rc, x in sh.styles.items()}
+
     block = {r * COLS + c for r in range(8, 16) for c in range(41, 46)}            # AO8:AS15
     used = parse_a1(ex.NW_USED)
     new = block | {used}
@@ -443,11 +448,13 @@ def test_the_addition_writes_its_own_cells_only(monkeypatch):
     for a, b in zip(others, without.sheets):
         ca, cb = cells(full, a), cells(without, b)
         if a.name != "OIS_MAIN":
-            assert ca == cb and a.styles == b.styles and a.comments == b.comments and rules(full, a) == rules(without, b), a.name
+            assert (ca == cb and looks(full, a) == looks(without, b) and a.comments == b.comments
+                    and rules(full, a) == rules(without, b)), a.name
             continue
         assert set(ca) - set(cb) <= new and set(cb) <= set(ca) and ca[used] != cb.get(used)
         assert {rc: v for rc, v in ca.items() if rc not in new} == {rc: v for rc, v in cb.items() if rc not in new}
-        assert {rc: x for rc, x in a.styles.items() if rc not in new} == {rc: x for rc, x in b.styles.items() if rc not in new}
+        la, lb = looks(full, a), looks(without, b)
+        assert {rc: x for rc, x in la.items() if rc not in new} == {rc: x for rc, x in lb.items() if rc not in new}
         mine = [x for x in rules(full, a) if x["sqref"] == ex.NW_TICKS]
         assert [x for x in rules(full, a) if x["sqref"] != ex.NW_TICKS] == rules(without, b)
         assert len(mine) == 1 and mine[0]["dxf"] == {"fmt": ";;;"}

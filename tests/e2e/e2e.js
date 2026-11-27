@@ -4102,6 +4102,24 @@ async function clipAfter(page, action) {
     await typeInto(page, 'Forward!C169', '40,5');                      // (the Manuel row as it was)
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!X200'] });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!C197', 'Forward!F200:F214', 'Forward!R200'] });
+    // DV01 Risk → VaR (the desk, 27.11.2026: "Bir de dv01 risk'e var hesaplamasi koyalim ... Realized vol'den hesaplayacagiz"):
+    // its own tab - the parameters, the four books' summary, the paste area with an Offshore column beside Onshore / TLREF
+    // and each bucket's σ and VaR; the replay's history holds no curve closes, so the page says there is no history
+    await open(page, 'dv01');
+    await tab(page, 'var');
+    await page.waitForFunction(() => { const it = window.tto.state.page.items.get('V3'); return !!(it && it.grid && it.grid.data); },
+      null, { timeout: 20000 }).catch(() => {});
+    const varTab = { panels: await panelsOnPage(page),
+      cols: await page.evaluate(() => { const it = window.tto.state.page.items.get('V3'); return it && it.grid ? it.grid.data.c : null; }),
+      offHead: (await cellText(page, 'DV01_RISK!AA32') || '').trim(), sumHead: (await cellText(page, 'DV01_RISK!Z32') || '').trim(),
+      window: (await cellText(page, 'DV01_RISK!AB29') || '').trim(), conf: (await cellText(page, 'DV01_RISK!X29') || '').trim(),
+      book4: (await cellText(page, 'DV01_RISK!W59') || '').trim(), note: (await cellText(page, 'DV01_RISK!AI29') || '').trim() };
+    check('DV01 Risk → VaR: parameters (99 %, 1 yıl), summary of Offshore / Onshore / OIS (TLREF) / Onshore + OIS, the paste area with '
+      + 'Offshore first and σ / VaR columns; without curve history the page says so',
+      ['V1', 'V2', 'V3'].every((id) => varTab.panels.includes(id))
+      && JSON.stringify(varTab.cols) === JSON.stringify(['W', 'AA', 'X', 'Y', 'Z', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'])
+      && varTab.offHead === 'Offshore' && varTab.sumHead === 'Onshore + TLREF' && varTab.window === '1 yıl' && /99/.test(varTab.conf)
+      && varTab.book4 === 'Onshore + OIS' && /^Tarihçe yok/.test(varTab.note), varTab);
     // OIS · PPK and USD · FOMC, the ways back (the desk, 24.11.2026: items 2, 3 and 13): a meeting window's market rate
     // typed reads the market's own PPK step; an MPC spread typed reads the later window's rate (the earlier's market +
     // the spread); a target FRA reads the end leg it needs, which typed back makes the realized FRA the target; a FOMC

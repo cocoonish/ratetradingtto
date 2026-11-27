@@ -184,6 +184,11 @@ def test_the_addition_writes_its_own_cells_only(monkeypatch):
         out.update({rc: ("c", v) for rc, v in sh.consts.items()})
         return out
 
+    def looks(model, sh):
+        """A sheet's cell looks by their contents (the model's list of them is shared: an addition after this one that
+        adds a look shifts the indices, not a cell's look)."""
+        return {rc: tuple(model.xfs[x]) for rc, x in sh.styles.items()}
+
     new = {(r * COLS + col) for col in (1, 15) for r in range(ex.VIOP_ON_FIRST - 1, ex.VIOP_ON_LAST + 1)}      # A, O
     renamed = {parse_a1("L%(on)d" % s) for s in ex.VIOP_ON_SIDES}             # VIOP!L17 / L29: the rows' label
     for a, b in zip(full.sheets, without.sheets):
@@ -192,14 +197,14 @@ def test_the_addition_writes_its_own_cells_only(monkeypatch):
             assert {rc: v for rc, v in ca.items() if rc not in renamed} == {rc: v for rc, v in cb.items() if rc not in renamed}
             assert [ca[rc] for rc in sorted(renamed)] == [("c", "ON karşılık")] * 2
             assert [cb[rc] for rc in sorted(renamed)] == [("c", "TRY Repo")] * 2
-            assert a.styles == b.styles and a.comments == b.comments
+            assert looks(full, a) == looks(without, b) and a.comments == b.comments
             continue
         if a.name != "MASA":
-            assert ca == cb and a.styles == b.styles and a.comments == b.comments, a.name
+            assert ca == cb and looks(full, a) == looks(without, b) and a.comments == b.comments, a.name
             continue
         assert set(ca) - set(cb) == new and set(cb) <= set(ca)
         assert {rc: v for rc, v in ca.items() if rc not in new} == cb
-        assert {rc: x for rc, x in a.styles.items() if rc not in new} == b.styles
+        assert {rc: x for rc, x in looks(full, a).items() if rc not in new} == looks(without, b)
     masa = full.sheet("MASA")
     assert [full.xfs[masa.styles[parse_a1("%s%d" % (c, r))]][0] for c in "AO" for r in ROWS] == ["0.00%"] * 24      # two decimals
     assert masa.consts[parse_a1("A109")] == "ON bid (360)" and masa.consts[parse_a1("O109")] == "ON ask (360)"

@@ -261,6 +261,10 @@ left on, ~9 500 for 08:00 - 19:00; now ~2 400 (`tests/test_quant.py`'s live day)
 and a restart the same day does not ask again ("1 kalsın"). A manual update (`History.request_sync`) asks again, still
 only after 16:30. Its first two years come once, last in the 40-a-sync turn.
 
+**Who else reads the closes.** DV01 Risk → VaR (`tto/varrisk.py`, 27.11.2026) reads the groups `ref | ois | off | xccy`
+as the history keeps them (backups merged, the curve cleaned by `curve_quotes`) for its realized vol and correlations:
+**no series and no request of its own**, nothing asked of Bloomberg. Today's point is left out (closes before today).
+
 **`tto/fx.py` keeps its own older rule.**
 - It runs live only.
 - Each series is asked at most once in 20 h, recorded in kv `fx.hist.asked`.

@@ -603,6 +603,12 @@ offshore side, ask the desk first.
   curve's (`Motor!J`, its DF) and the scenarios' (`Motor!E` / `L` / `P`, G = 1/DF) O/N (360, daily) and zero (360
   simple) on the same DF and days - 1 + zero·g/360 = (1 + O/N/360)^g. TRY OIS only; the zeros in `AA:AC`, `AI`, listed
   after the O/N columns by the page.
+- DV01 Risk → VaR (27.11.2026, `extras.VAR_NAME`, `tto/varrisk.py`): **not a meeting point.** Each curve's DV01s are
+  weighed with that curve's own moves only - Offshore with the offshore curve's (O/N `TRYION`, S/N `TRYITN`: USDTRY's
+  spot is T+1, so its tom/next is spot/next; 1W–9M FX swap implied; 1Y–10Y XCCY), Onshore / TLREF / their total with the
+  OIS curve's (O/N and S/N TLREF; 1W–10Y OIS). No covariance between the two curves is made or used (the desk asked for
+  offshore and OIS separately: "offshore'u, ve ois'e ayri ayri bakacagiz"). 3W, which neither curve quotes, is halfway
+  between 2W and 1M (linear by months, as the buckets split).
 
 ## Known differences - read before changing
 

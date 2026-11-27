@@ -12,7 +12,7 @@ from .parser import parse_template
 from .tokenizer import index_to_col
 
 _XLFN = {"MINIFS", "MAXIFS", "TEXTJOIN", "LET", "SINGLE", "CONCAT", "IFS", "SWITCH", "XLOOKUP", "XMATCH",
-         "FILTER", "SORT", "UNIQUE", "SEQUENCE", "STDEV.S", "STDEV.P", "IFNA", "DAYS", "LAMBDA"}
+         "FILTER", "SORT", "UNIQUE", "SEQUENCE", "STDEV.S", "STDEV.P", "IFNA", "DAYS", "LAMBDA", "NORM.S.INV"}
 _PLAIN_SHEET = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 

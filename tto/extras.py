@@ -5182,6 +5182,187 @@ def _tto_dv01_zero(model: Model) -> None:
                     sh.consts[rc] = 0.0
 
 
+# ---------------------------------------------------------------------------------------------- DV01 risk: VaR
+#: DV01 Risk → VaR (the desk, 27.11.2026: "Bir de dv01 risk'e var hesaplamasi koyalim. Burada offshore'u, ve ois'e ayri
+#: ayri bakacagiz. Ois tarafini da onshore ve ois olarak ikiye ayiralim, bunlarin toplamina ve ayri ayri da bakacagiz.
+#: Realized vol'den hesaplayacagiz"): a parametric VaR of four DV01 vectors (TL/bp, the 20 buckets O/N … 10Y of the paste
+#: area W33:W52) - Offshore (AA, new), Onshore (X), TLREF (Y: the desk's "OIS") and Onshore + TLREF (Z) - on the realized
+#: covariance of each curve's day-to-day moves (bp): Offshore on the offshore curve's, the OIS side's three on the OIS
+#: curve's (never one curve's moves for the other's: docs/curves.md).  The service makes the covariances from the
+#: history's closes (tto/varrisk.py) and writes them into EK_VAR, one block per window; each user's own confidence,
+#: horizon and window pick theirs:  VaR = z·√h·√(dᵀ Σ d), z = NORM.S.INV(confidence); a bucket's own z·√h·|dᵢ|·σᵢ.
+VAR_NAME = "DV01 Risk VaR"
+VAR_SHEET = "EK_VAR"
+#: the windows of the realized vol (label as typed, business days of moves)
+VAR_WINDOWS = (("1 ay", 21), ("3 ay", 63), ("6 ay", 125), ("1 yıl", 250), ("2 yıl", 500))
+VAR_WINDOW_DEFAULT, VAR_CONFIDENCE, VAR_HORIZON = "1 yıl", 0.99, 1
+#: DV01_RISK's buckets (W33:W52, the paste area's) - the covariance blocks' order
+VAR_BUCKETS = ("O/N", "S/N", "1W", "2W", "3W", "1M", "2M", "3M", "6M", "9M", "1Y", "2Y", "3Y", "4Y", "5Y", "6Y", "7Y",
+               "8Y", "9Y", "10Y")
+VAR_FIRST, VAR_TOTAL, VAR_PARAM, VAR_SUMMARY = 33, 53, 29, 55
+#: EK_VAR: the windows on rows VAR_WIN_ROW … (label, days; then the service's: moves used and first day of the OIS
+#: curve's, of the offshore curve's, the last close); window k's covariances (bp² a day) on the 20 rows from
+#: VAR_COV_ROW + 20·(k − 1), the OIS curve's in C:V and the offshore curve's in Y:AR
+VAR_WIN_ROW, VAR_COV_ROW = 4, 12
+VAR_STAT_COLS = {"n_ois": "C", "first_ois": "D", "n_off": "E", "first_off": "F", "last": "G"}
+VAR_OIS_COL, VAR_OFF_COL = 3, 25                  # C, Y (1-based)
+#: the books of the summary: (name, its DV01 column, its VaR column, its Σd helper, the curve's σ column, moves used)
+VAR_BOOKS = (("Offshore", "AA", "AD", "AH", "AB", "$AK$29"), ("Onshore", "X", "AE", "AI", "AC", "$AL$29"),
+             ("OIS (TLREF)", "Y", "AF", "AJ", "AC", "$AL$29"), ("Onshore + OIS", "Z", "AG", "AK", "AC", "$AL$29"))
+
+
+def var_stat_cells() -> Dict[str, Any]:
+    """The EK_VAR cells the service writes (tto/varrisk.py): per window ``stats[k][name]`` (VAR_STAT_COLS) and
+    ``cov[k][curve][i][j]`` (curve "ois" / "off"), as A1 addresses."""
+    stats, cov = [], []
+    for k in range(len(VAR_WINDOWS)):
+        stats.append({name: "%s%d" % (col, VAR_WIN_ROW + k) for name, col in VAR_STAT_COLS.items()})
+        top = VAR_COV_ROW + 20 * k
+        cov.append({curve: [["%s%d" % (index_to_col(first + j), top + i) for j in range(20)] for i in range(20)]
+                    for curve, first in (("ois", VAR_OIS_COL), ("off", VAR_OFF_COL))})
+    return {"stats": stats, "cov": cov}
+
+
+def _var_check(model: Model) -> None:
+    """The paste area as the workbook has it (its buckets, Onshore / TLREF / Toplam = X + Y) and the cells the VaR takes
+    empty; no EK_VAR yet."""
+    _need_sheets(model, "DV01_RISK")
+    if VAR_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % VAR_SHEET)
+    _need_captions(model, [("DV01_RISK", "X32", "Onshore"), ("DV01_RISK", "Y32", "TLREF"), ("DV01_RISK", "Z32", "Toplam"),
+                           ("DV01_RISK", "B5", "Bucket"), ("DV01_RISK", "B26", "Toplam"), ("DV01_RISK", "B28", "Özet")]
+                   + [("DV01_RISK", "W%d" % (VAR_FIRST + i), label) for i, label in enumerate(VAR_BUCKETS)])
+    sh = model.sheet("DV01_RISK")
+    for i in range(20):
+        r = VAR_FIRST + i
+        _need_formula(model, "DV01_RISK", "Z%d" % r, "X%d+Y%d" % (r, r))
+        if any(parse_a1("%s%d" % (c, r)) in sh.fml for c in "XY"):
+            raise ValueError("DV01_RISK!X%d:Y%d yapıştırma alanı değil" % (r, r))
+    for rng in ("W%d:AM%d" % (VAR_PARAM, VAR_PARAM), "W32", "AA32:AK52", "W%d:AK%d" % (VAR_TOTAL, VAR_TOTAL),
+                "W%d:AA%d" % (VAR_SUMMARY, VAR_SUMMARY + 4)):
+        _need_empty(model, "DV01_RISK", rng)
+
+
+def _tto_dv01_var(model: Model) -> None:
+    """EK_VAR (the service's realized covariances) and DV01 Risk's VaR: the parameters (row 29), the paste area with an
+    Offshore column and each bucket's σ and own VaR beside it (W32:AG53, Toplam: VaR with the correlations), the summary
+    of the four books (W55:AA59)."""
+    from .xl.tokenizer import col_to_index
+    n_win = len(VAR_WINDOWS)
+    # ---- EK_VAR
+    e = SheetBuilder(model, VAR_SHEET)
+    e.title("A1", "VaR · GERÇEKLEŞEN VOL VE KORELASYON · yardımcı (DV01 Risk → VaR)")
+    e.note("A2", "Servisin tarihçenin kapanışlarından yazdığı: her pencerede eğrinin kovalarının günlük hareketlerinin (bp) "
+                 "kovaryansı (bp²/gün). OIS: O/N ve S/N TLREF, 1W–10Y OIS kotaları; offshore: O/N TRYION, S/N TRYITN, "
+                 "1W–9M FX swap ima, 1Y–10Y XCCY; 3W, 2W ile 1M'nin ortası. Bugünün canlı noktası girmez.")
+    e.head("A3", ["Pencere", "İş günü", "Hareket (OIS)", "İlk gün (OIS)", "Hareket (offshore)", "İlk gün (offshore)",
+                  "Son kapanış"])
+    for k, (label, days) in enumerate(VAR_WINDOWS):
+        r = VAR_WIN_ROW + k
+        e.set("A%d" % r, label, bold=True)
+        e.set("B%d" % r, days, fmt="0")
+        for name, col in VAR_STAT_COLS.items():
+            e.set("%s%d" % (col, r), None, fmt=DATE if name in ("first_ois", "first_off", "last") else "0")
+    e.set("B%d" % (VAR_COV_ROW - 1), "Kova", bold=True)
+    e.row("C%d" % (VAR_COV_ROW - 1), ["OIS " + x for x in VAR_BUCKETS], bold=True)
+    e.set("X%d" % (VAR_COV_ROW - 1), "Kova", bold=True)
+    e.row("Y%d" % (VAR_COV_ROW - 1), ["Offshore " + x for x in VAR_BUCKETS], bold=True)
+    for k, (label, _) in enumerate(VAR_WINDOWS):
+        for i, bucket in enumerate(VAR_BUCKETS):
+            r = VAR_COV_ROW + 20 * k + i
+            e.set("A%d" % r, label)
+            e.set("B%d" % r, bucket, bold=True)
+            e.set("X%d" % r, bucket, bold=True)
+            for first in (VAR_OIS_COL, VAR_OFF_COL):
+                for j in range(20):
+                    e.set("%s%d" % (index_to_col(first + j), r), None, fmt="0.00")
+    e.sheet.freeze = [0, 2]
+    last = VAR_COV_ROW + 20 * n_win - 1
+    cov = {"ois": "%s!$%s$%d:$%s$%d" % (VAR_SHEET, index_to_col(VAR_OIS_COL), VAR_COV_ROW, index_to_col(VAR_OIS_COL + 19), last),
+           "off": "%s!$%s$%d:$%s$%d" % (VAR_SHEET, index_to_col(VAR_OFF_COL), VAR_COV_ROW, index_to_col(VAR_OFF_COL + 19), last)}
+
+    def per_window(name: str) -> str:
+        col = VAR_STAT_COLS[name]
+        return "%s!$%s$%d:$%s$%d" % (VAR_SHEET, col, VAR_WIN_ROW, col, VAR_WIN_ROW + n_win - 1)
+
+    # ---- DV01_RISK: the parameters (each user's own: the page's inputs) and the helpers right of them
+    b = SheetBuilder(model, "DV01_RISK")
+    p = VAR_PARAM
+    b.set("W%d" % p, "Güven düzeyi", like="B3")
+    b.set("X%d" % p, VAR_CONFIDENCE, fmt="0.0%", fill=INPUT_FILL, align="center")
+    b.set("Y%d" % p, "Ufuk (iş günü)", like="B3")
+    b.set("Z%d" % p, VAR_HORIZON, like="R3")
+    b.set("AA%d" % p, "Pencere", like="B3")
+    b.set("AB%d" % p, VAR_WINDOW_DEFAULT, like="F3")
+    b.set("AC%d" % p, "z", like="B3")
+    b.set("AD%d" % p, '=IF(AND(ISNUMBER($X$%(p)d),$X$%(p)d>0.5,$X$%(p)d<1),NORM.S.INV($X$%(p)d),"")' % {"p": p}, fmt="0.000")
+    b.set("AE%d" % p, "Gözlem (offshore / OIS)", like="B3")
+    b.set("AF%d" % p, '=IF($AJ$%(p)d=0,"",TEXT($AK$%(p)d,"0")&" / "&TEXT($AL$%(p)d,"0"))' % {"p": p}, align="center")
+    b.set("AG%d" % p, "Son kapanış", like="B3")
+    b.set("AH%d" % p, '=IF($AJ$%d=0,"",IF(N(INDEX(%s,$AJ$%d))>0,INDEX(%s,$AJ$%d),""))'
+          % (p, per_window("last"), p, per_window("last"), p), fmt=DATE)
+    b.set("AI%d" % p, ('=IF($AJ$%(p)d=0,"Pencere: 1 ay, 3 ay, 6 ay, 1 yıl ya da 2 yıl",IF(NOT(ISNUMBER($AM$%(p)d)),'
+                       '"Güven düzeyi %%50 ile %%100 arasında, ufuk 0\'dan büyük olmalı",IF(MIN($AK$%(p)d,$AL$%(p)d)<2,'
+                       '"Tarihçe yok: gerçekleşen vol hesaplanamadı","")))') % {"p": p}, color=NOTE_COLOR)
+    b.set("AJ%d" % p, '=IFERROR(MATCH($AB$%d,%s!$A$%d:$A$%d,0),0)' % (p, VAR_SHEET, VAR_WIN_ROW, VAR_WIN_ROW + n_win - 1),
+          fmt="0")
+    b.set("AK%d" % p, "=IF($AJ$%d=0,0,N(INDEX(%s,$AJ$%d)))" % (p, per_window("n_off"), p), fmt="0")
+    b.set("AL%d" % p, "=IF($AJ$%d=0,0,N(INDEX(%s,$AJ$%d)))" % (p, per_window("n_ois"), p), fmt="0")
+    b.set("AM%d" % p, '=IF(AND(ISNUMBER($AD$%(p)d),N($Z$%(p)d)>0),$AD$%(p)d*SQRT($Z$%(p)d),"")' % {"p": p}, fmt="0.000")
+    # ---- the paste area with the Offshore column, each bucket's σ and own VaR, the Σd helpers (AH:AK, not shown)
+    sh = b.sheet
+    head = sh.styles.get(parse_a1("B5"), 0)
+    b.set("W32", "Kova", like="B5")
+    b.set("AA32", "Offshore", like="B5")
+    b.set("Z32", "Onshore + TLREF", like="B5")
+    for col in "XY":
+        sh.styles[parse_a1("%s32" % col)] = head
+    for col, caption in (("AB", "σ offshore (bp/gün)"), ("AC", "σ OIS (bp/gün)"), ("AD", "VaR offshore"),
+                         ("AE", "VaR onshore"), ("AF", "VaR TLREF"), ("AG", "VaR onshore + TLREF"),
+                         ("AH", "Σd offshore"), ("AI", "Σd onshore"), ("AJ", "Σd TLREF"), ("AK", "Σd onshore + TLREF")):
+        b.set("%s32" % col, caption, like="B5")
+    paste, num = sh.styles.get(parse_a1("C6"), 0), sh.styles.get(parse_a1("L6"), 0)
+    first, end = VAR_FIRST, VAR_FIRST + 19
+    for i in range(20):
+        r = VAR_FIRST + i
+        f = {"r": r, "i": i + 1, "p": p, "off": cov["off"], "ois": cov["ois"], "a": first, "z": end}
+        sh.styles[parse_a1("W%d" % r)] = sh.styles.get(parse_a1("B6"), 0)
+        for col in "XY":
+            sh.styles[parse_a1("%s%d" % (col, r))] = paste
+        sh.styles[parse_a1("Z%d" % r)] = num
+        b.set("AA%d" % r, 0.0, like="C6")
+        b.set("AB%d" % r, '=IF($AK$%(p)d<2,"",SQRT(MAX(0,INDEX(%(off)s,($AJ$%(p)d-1)*20+%(i)d,%(i)d))))' % f, fmt="0.0")
+        b.set("AC%d" % r, '=IF($AL$%(p)d<2,"",SQRT(MAX(0,INDEX(%(ois)s,($AJ$%(p)d-1)*20+%(i)d,%(i)d))))' % f, fmt="0.0")
+        for _, dv, var, sd, sigma, _ in VAR_BOOKS:
+            g = dict(f, dv=dv, sigma=sigma)
+            b.set("%s%d" % (var, r), '=IF(AND(ISNUMBER(%(sigma)s%(r)d),ISNUMBER($AM$%(p)d)),$AM$%(p)d*ABS(N(%(dv)s%(r)d))'
+                                     '*%(sigma)s%(r)d,"")' % g, like="L6")
+        for _, dv, _, sd, sigma, n in VAR_BOOKS:
+            g = dict(f, dv=dv, n=n, curve=cov["off"] if dv == "AA" else cov["ois"])
+            b.set("%s%d" % (sd, r), "=IF(%(n)s<2,0,SUMPRODUCT(INDEX(%(curve)s,($AJ$%(p)d-1)*20+%(i)d,0),"
+                                    "TRANSPOSE($%(dv)s$%(a)d:$%(dv)s$%(z)d)))" % g, fmt="0")
+    t = VAR_TOTAL
+    b.set("W%d" % t, "Toplam", like="B26")
+    for _, dv, var, sd, _, n in VAR_BOOKS:
+        g = {"dv": dv, "var": var, "sd": sd, "n": n, "p": p, "a": first, "z": end}
+        b.set("%s%d" % (dv, t), "=SUM(%(dv)s%(a)d:%(dv)s%(z)d)" % g, like="C26")
+        b.set("%s%d" % (var, t), '=IF(AND(%(n)s>=2,ISNUMBER($AM$%(p)d)),$AM$%(p)d*SQRT(MAX(0,SUMPRODUCT($%(dv)s$%(a)d:'
+                                 '$%(dv)s$%(z)d,$%(sd)s$%(a)d:$%(sd)s$%(z)d))),"")' % g, like="C26")
+    # ---- the summary: each book's DV01, VaR (correlated), its buckets' own VaRs added up, the difference
+    s = VAR_SUMMARY
+    for k, caption in enumerate(("VaR", "DV01 toplamı (TL/bp)", "VaR (TL)", "Kova VaR'ları toplamı (TL)",
+                                 "Çeşitlendirme (TL)")):
+        b.set("%s%d" % (index_to_col(col_to_index("W") + k), s), caption, like="B28")
+    for j, (name, dv, var, _, _, _) in enumerate(VAR_BOOKS):
+        r = s + 1 + j
+        g = {"dv": dv, "var": var, "t": t, "r": r, "a": first, "z": end}
+        b.set("W%d" % r, name, like="B29")
+        b.set("X%d" % r, "=$%(dv)s$%(t)d" % g, like="C29")
+        b.set("Y%d" % r, "=$%(var)s$%(t)d" % g, like="C29")
+        b.set("Z%d" % r, '=IF(ISNUMBER($%(var)s$%(t)d),SUM($%(var)s$%(a)d:$%(var)s$%(z)d),"")' % g, like="C29")
+        b.set("AA%d" % r, '=IF(ISNUMBER($%(var)s$%(t)d),Z%(r)d-Y%(r)d,"")' % g, like="C29")
+
+
 # ---------------------------------------------------------------------------------------------- VİOP matrix DV01s
 #: the matrix's driver rows (VIOP!K97:X108) end with two DV01s per contract, per 1 mn USD: "DV01 TRY" - the TRY
 #: rate's bp, in TL - and "DV01 USD" - the USD rate's bp, but also in TL.  The desk reads them in their own
@@ -8440,6 +8621,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (NORM_PPK_NAME, _norm_ppk_check, _tto_norm_ppk),
             # (TLREF's normalization: the date OIS implies - after the switch's builder, whose date in use it extends)
             (NW_NAME, _nw_check, _tto_norm_walk), (ONZ_NAME, _onz_check, _tto_on_zero),
+            (VAR_NAME, _var_check, _tto_dv01_var),
             # (how numbers read - after everything that writes the cells, whose look it changes only)
             (FMT_NAME, _layout_formats_check, _tto_layout_formats)),
     "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),

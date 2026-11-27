@@ -132,11 +132,12 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Normalleşme OIS ima tarihi",
                                                    # (OIS · PPK's O/N EŞLENİKLERİ with each curve's zero - 27.11.2026)
                                                    extras.ONZ_NAME,
+                                                   extras.VAR_NAME,
                                                    # (how numbers read on the Forward and DV01 Risk pages - düzen, 27.11.2026)
                                                    extras.FMT_NAME]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
                                               "EK_IHALE", "EK_TATIL", "EK_TARIH", "EK_VFRA", "EK_RET", "EK_PPK", "EK_ISGUNU",
-                                              "EK_NORM"} & set(sofr.sheet_index)
+                                              "EK_NORM", "EK_VAR"} & set(sofr.sheet_index)
     assert extras.apply("asw", Model.load(os.path.join(root, "models", "sofr.json.gz")))[0].startswith("EK_FX:")
     # the ASW sheet's curve laid out otherwise: EK_FX reads its node days and ln discount factors by their place
     asw = Model.load(os.path.join(root, "models", "asw.json.gz"))

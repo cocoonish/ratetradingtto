@@ -54,6 +54,7 @@ def approx(a, b):
     ("ABS(-3)", 3.0),
     ("SIGN(-2)", -1.0),
     ("SQRT(16)", 4.0),
+    ("NORM.S.INV(0.5)", 0.0),
     # ---- dates
     ("DATE(2026,11,3)", 46329.0),
     ("DATE(2026,13,1)", 46388.0),        # month overflow rolls into the next year
@@ -121,6 +122,8 @@ def test_scalar_formulas(tr_locale, formula, expected):
     ('""+1', "#VALUE!"),
     ('"abc"*2', "#VALUE!"),
     ("SQRT(-1)", "#NUM!"),
+    ("NORM.S.INV(1)", "#NUM!"),
+    ("NORMSINV(0)", "#NUM!"),
     ("LN(0)", "#NUM!"),
     ("NA()", "#N/A"),
     ('AVERAGE(1,2,"x")', "#VALUE!"),
@@ -394,3 +397,25 @@ def test_aggregate(formula, expected):
 ])
 def test_aggregate_errors(formula, code):
     assert ev(formula, FILTER_CELLS).code == code
+
+
+@pytest.mark.parametrize("p, z", [
+    # Excel's NORM.S.INV, as it shows them (15 digits)
+    (0.99, 2.32634787404084), (0.95, 1.64485362695147), (0.975, 1.95996398454005), (0.001, -3.09023230616781),
+    (0.01, -2.32634787404084), (1e-10, -6.36134090240406), (0.5, 0.0),
+])
+def test_norm_s_inv_matches_excel(p, z):
+    """NORM.S.INV / NORMSINV (DV01 Risk's VaR: the z of the confidence typed) to the 15 digits Excel shows, both tails."""
+    for name in ("NORM.S.INV", "NORMSINV"):
+        got = ev("%s(%r)" % (name, p))
+        assert abs(got - z) <= 5e-15 * max(1.0, abs(z)) + 1e-15, (name, p, got)
+
+
+def test_norm_s_inv_is_written_as_excel_reads_it():
+    """An Excel file keeps NORM.S.INV (Excel 2010's) as _xlfn.NORM.S.INV - the xlsx download writes it so (``xlfn``), the
+    old NORMSINV as it is; read back, both are the function."""
+    from tto.xl.tokenizer import to_template
+    from tto.xl.unparse import to_a1
+    assert to_a1(to_template("NORM.S.INV(A1)*2", 1, 1), 1, 1, xlfn=True) == "_xlfn.NORM.S.INV(A1)*2"
+    assert to_a1(to_template("NORMSINV(A1)", 1, 1), 1, 1, xlfn=True) == "NORMSINV(A1)"
+    assert ev("_xlfn.NORM.S.INV(0.99)") == ev("NORM.S.INV(0.99)")

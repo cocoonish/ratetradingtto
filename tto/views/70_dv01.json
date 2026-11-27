@@ -81,7 +81,7 @@
    "scope": "user",
    "group": "dv01-8",
    "kind": "auto",
-   "label": "scratch paste 'Onshore' / 'TLREF'"
+   "label": "PASTE: 'Onshore' / 'TLREF' bucket DV01 (TL/bp) – VaR'ın OIS tarafı (OIS eğrisinin hareketleriyle)"
   },
   {
    "range": "D69",
@@ -222,6 +222,36 @@
    "group": "dv01-26",
    "kind": "amount",
    "label": "'Yeni işlem / day-1 P&L' (TL, full amount: 150k)"
+  },
+  {
+   "range": "AA33:AA52",
+   "scope": "user",
+   "group": "dv01-27",
+   "kind": "auto",
+   "label": "PASTE: 'Offshore' bucket DV01 (TL/bp) – VaR (offshore eğrisinin hareketleriyle)"
+  },
+  {
+   "range": "X29",
+   "scope": "user",
+   "group": "dv01-28",
+   "kind": "pct",
+   "label": "'Güven düzeyi' – VaR (%99 → z = NORM.S.INV)"
+  },
+  {
+   "range": "Z29",
+   "scope": "user",
+   "group": "dv01-29",
+   "kind": "auto",
+   "label": "'Ufuk (iş günü)' – VaR (√ufuk)"
+  },
+  {
+   "range": "AB29",
+   "scope": "user",
+   "group": "dv01-30",
+   "kind": "list",
+   "options": ["1 ay", "3 ay", "6 ay", "1 yıl", "2 yıl"],
+   "aliases": {"1 yil": "1 yıl", "2 yil": "2 yıl", "1A": "1 ay", "3A": "3 ay", "6A": "6 ay", "1Y": "1 yıl", "2Y": "2 yıl"},
+   "label": "'Pencere' – VaR'ın gerçekleşen vol penceresi (1 ay 21, 3 ay 63, 6 ay 125, 1 yıl 250, 2 yıl 500 iş günü)"
   }
  ],
  "panels": [
@@ -288,6 +318,43 @@
    "title": "Eğri şokları (bp)",
    "range": "B73:W81",
    "hidden": false
+  },
+  {
+   "id": "V1",
+   "type": "table",
+   "title": "VaR parametreleri",
+   "range": "W29:AI29",
+   "hidden": false
+  },
+  {
+   "id": "V2",
+   "type": "table",
+   "title": "VaR özeti · gerçekleşen vol'den (parametrik, korelasyonlu)",
+   "range": "W55:AA59",
+   "hidden": false
+  },
+  {
+   "id": "V3",
+   "type": "table",
+   "title": "Kova DV01'leri (yapıştırma alanı) · gerçekleşen vol ve kovaların VaR'ı",
+   "range": "W32:AG53",
+   "cols": ["W", "AA", "X", "Y", "Z", "AB", "AC", "AD", "AE", "AF", "AG"],
+   "hidden": false
+  },
+  {
+   "id": "V4",
+   "type": "table",
+   "sheet": "EK_VAR",
+   "title": "Yardımcı · gerçekleşen kovaryans (bp²/gün), pencere pencere",
+   "range": "A1:AR111",
+   "hidden": true
+  },
+  {
+   "id": "V5",
+   "type": "table",
+   "title": "Yardımcı · VaR ara hücreleri (pencerenin satırı, gözlemler, z·√ufuk; kovaların Σd'si)",
+   "range": "AH29:AM53",
+   "hidden": true
   },
   {
    "id": "B14D",
@@ -402,6 +469,16 @@
     "B13"
    ],
    "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesinde yapıştırılır; hedge sonrası risk Hedge sekmesindeki enstrüman ayarlarıyla (aktif, başlangıç / bitiş ayı, öncelik, ridge) hesaplanır."
+  },
+  {
+   "id": "var",
+   "title": "VaR",
+   "panels": [
+    "V1",
+    "V2",
+    "V3"
+   ],
+   "note": "VaR = z · √ufuk · √(dᵀ Σ d): d kovaların DV01'i (TL/bp; Offshore, Onshore ve TLREF kolonları buraya yapıştırılır), Σ eğrinin günlük hareketlerinin (bp) seçilen penceredeki kovaryansı - gerçekleşen vol ve korelasyon, tarihçenin kapanışlarından (bugünün canlı noktası girmez; yeni Bloomberg isteği yok) -, z güven düzeyinin normal dağılımdaki karşılığı. Offshore offshore eğrisiyle (O/N TRYION, S/N TRYITN, 1W–9M FX swap ima, 1Y–10Y XCCY); Onshore, TLREF ve toplamları OIS eğrisiyle (O/N ve S/N TLREF, 1W–10Y OIS); 3W, 2W ile 1M'nin ortası. Kova satırlarında her kovanın kendi VaR'ı (|DV01| · σ · z · √ufuk); Toplam satırında korelasyonlu VaR - kovaların VaR'larının toplamı değil: o ve aradaki fark (çeşitlendirme) özet tablosunda. VaR bu sekmede yapıştırılan DV01'lerle hesaplanır; Pozisyon sekmesindeki kova DV01 tablosu (pivot, sabit faiz) VaR'a girmez."
   },
   {
    "id": "hedge",

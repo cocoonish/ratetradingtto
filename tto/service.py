@@ -483,6 +483,11 @@ class Service(object):
         self.interp = Interp(self)
         self.interp.declare()
         self.interp.apply_list()
+        # DV01 Risk → VaR (varrisk.py): the realized covariances of the OIS and offshore curves' DV01 buckets, made of the
+        # history's closes and written into EK_VAR for the page's VaR formulas
+        from .varrisk import VarRisk
+        self.varrisk = VarRisk(self)
+        self.varrisk.declare()
         if tto is not None:
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
                 tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
@@ -1566,6 +1571,9 @@ class Service(object):
         return out
 
     def _calc(self, user: Optional[str], book: Book) -> Calc:
+        vr = getattr(self, "varrisk", None)
+        if vr is not None and book is vr.tto:
+            vr.refresh()                         # (DV01 Risk's VaR: the realized covariances current with the history)
         if not user:
             interp = getattr(self, "interp", None)
             if interp is not None and book is interp.tto and interp.listed():

@@ -2508,6 +2508,34 @@ scenarios), the desk: "Bunlarin on esleniklerini verirken zerosunu da vermemiz g
 Code: `tto/extras.py` (`ONZ_NAME`, `_onz_check`, `_tto_on_zero`), `tto/views/20_ois.json` (B5: `AA7:AI26`, `"cols"`).
 Tests: `tests/test_ois_on_zero.py`.
 
+### DV01 Risk → VaR (27.11.2026)
+
+The desk: "Bir de dv01 risk'e var hesaplamasi koyalim. Burada offshore'u, ve ois'e ayri ayri bakacagiz. Ois tarafini da
+onshore ve ois olarak ikiye ayiralim, bunlarin toplamina ve ayri ayri da bakacagiz. Realized vol'den hesaplayacagiz".
+
+- **Four books, each by itself:** Offshore; and the OIS side as Onshore, OIS (TLREF) and Onshore + OIS. Offshore and the
+  OIS side are not added together (they asked for them apart).
+- **Where the DV01s come from:** the page's paste area beside the bucket table - the workbook's own Onshore / TLREF
+  columns (`DV01_RISK!X33:Y52`, Murex's two TRY columns; the file's Toplam = X + Y is the "Onshore + OIS" vector) and a new
+  Offshore column (`AA33:AA52`), the same 20 buckets O/N … 10Y, TL/bp, each user's own.
+- **Realized vol, parametric:** VaR = z · √horizon · √(dᵀ Σ d), Σ the sample covariance of the buckets' day-to-day moves
+  (bp) in the window - realized vol and correlation, from the history's closes (no new Bloomberg request). A bucket's
+  own VaR = |DV01| · σ · z · √horizon; the summary also shows the buckets' VaRs added up (no correlation) and the
+  difference.
+- **Which moves:** Offshore on the offshore curve (O/N TRYION, S/N TRYITN - USDTRY's spot is T+1 -, 1W–9M FX swap implied,
+  1Y–10Y XCCY); Onshore, TLREF and their total on the OIS curve (O/N and S/N TLREF, 1W–10Y OIS). 3W halfway between 2W
+  and 1M. Today's live point is left out.
+- **Defaults, each user's own:** 99 %, 1 business day, window 1 yıl (250 business days; also 1 ay 21, 3 ay 63, 6 ay 125,
+  2 yıl 500). Chosen here as the usual desk VaR (99 % one day, a year of observations); not yet confirmed by the desk.
+- **Onshore is OIS.** Onshore is weighed with the OIS curve's moves, as TLREF is. On the file's own 03.11 position the
+  two columns are almost the same vector (9M: −2.45 m and −2.41 m TL/bp), so Onshore + OIS is about twice either. Asked
+  whether Onshore should follow another curve (the OIS curve, or another named), the desk: "Onshore dedigimiz de tamamen
+  ois, sadece o sayfada kullanacagiz bunu" and "1" - the OIS curve, as built (27.11.2026). The Onshore / TLREF split and
+  the VaR are DV01 Risk's only: nothing else on the dashboard reads them.
+
+Code: `tto/extras.py` (`VAR_NAME`, `_var_check`, `_tto_dv01_var`, `var_stat_cells`), `tto/varrisk.py`, `tto/xl/functions.py`
+(`NORM.S.INV`), `tto/views/70_dv01.json` (tab `var`: V1–V3, hidden V4 on EK_VAR). Tests: `tests/test_dv01_var.py`.
+
 ### Düzen: sayfalar tek tek (27.11.2026)
 
 > "Panellerin boyutlarindan da bazi sorunlar yasiyorum, bunlari da kontrol edelim. Gorsel olarak da biraz daha

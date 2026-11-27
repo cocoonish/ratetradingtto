@@ -14,6 +14,7 @@ from collections import Counter as _Counter
 from functools import reduce as _reduce
 from itertools import chain as _chain_it
 from operator import add as _op_add, mul as _op_mul
+from statistics import NormalDist as _NormalDist
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import numfmt
@@ -1026,6 +1027,20 @@ def F_SQRT(x):
     if x < 0.0:
         return E_NUM
     return math.sqrt(x)
+
+
+#: the standard normal (NORM.S.INV): the standard library's inverse - Wichura's AS241, double precision, as Excel's
+_STD_NORMAL = _NormalDist()
+
+
+def F_NORMSINV(p):
+    """NORM.S.INV / NORMSINV: the z of a probability (0 < p < 1, else #NUM!)."""
+    p = to_num(p)
+    if type(p) is XlError:
+        return p
+    if not 0.0 < p < 1.0:
+        return E_NUM
+    return _STD_NORMAL.inv_cdf(p)
 
 
 def F_POWER(x, y):
@@ -2163,6 +2178,8 @@ _reg("LN", F_LN, "v")
 _reg("LOG10", F_LOG10, "v")
 _reg("LOG", F_LOG, "vv")
 _reg("SQRT", F_SQRT, "v")
+_reg("NORM.S.INV", F_NORMSINV, "v")
+_reg("NORMSINV", F_NORMSINV, "v")
 _reg("POWER", F_POWER, "vv")
 _reg("INT", F_INT, "v")
 _reg("MOD", F_MOD, "vv")
