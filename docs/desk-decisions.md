@@ -2499,8 +2499,8 @@ scenarios), the desk: "Bunlarin on esleniklerini verirken zerosunu da vermemiz g
   "O/N EŞLENİKLERİ VE ZERO (360 · zero basit)".
 - **The zero is 360 simple** - Masa's ORANLAR "OIS zero" (Motor's "Zero simple 360"), the desk's comparison basis:
   (1/DF − 1) × 360 / days, on the row's own discount factor and days, so 1 + zero·g/360 = (1 + O/N/360)^g. A simple zero
-  grows at the long end (above 100 % at 10Y at today's rates); Motor also has "Zero (sürekli)" and "Zero simple 365" -
-  ask the desk before switching.
+  grows at the long end (above 100 % at 10Y at today's rates); Motor also has "Zero (sürekli)" and "Zero simple 365".
+  Asked (360 basit, 365 basit or continuous), the desk confirmed it (27.11.2026): "1- 360".
 - With the TLREF normalization on, the scenarios' zeros carry the stretch, as their O/N do. Display only.
 
 Code: `tto/extras.py` (`ONZ_NAME`, `_onz_check`, `_tto_on_zero`), `tto/views/20_ois.json` (B5: `AA7:AI26`, `"cols"`).
