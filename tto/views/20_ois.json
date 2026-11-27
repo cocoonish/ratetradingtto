@@ -143,6 +143,13 @@
    "label": "scenario probabilities"
   },
   {
+   "range": "U3:U5",
+   "scope": "user",
+   "group": "ois-norm-sc-date",
+   "kind": "date",
+   "label": "'Normalleşme tarihi' per scenario (S1 Baz, S2 Hawkish, S3 Dovish) – formula default: Kullanılan tarih (L5); silince ona döner"
+  },
+  {
    "range": "U10:U89",
    "scope": "user",
    "group": "ois-15",
@@ -415,8 +422,9 @@
    "id": "B2",
    "type": "table",
    "title": "SENARYOLAR",
-   "range": "O1:T6",
-   "hidden": false
+   "range": "O1:U6",
+   "hidden": false,
+   "note": "Normalleşme tarihi: senaryonun TLREF'inin normale döndüğü ilk gün (normalleşme açıkken) - o senaryonun TLREF seviyeleri, 1Y'si, MPC OIS pencereleri, O/N eşlenikleri ve DV01 Risk'teki sapması bu tarihle. Varsayılanı Parametreler'deki Kullanılan tarih; silince ona döner. Spot'tan önceki bir tarih senaryoyu spot'tan itibaren normal yapar."
   },
   {
    "id": "B3",
@@ -704,8 +712,8 @@
   {
    "id": "NORMPPK",
    "type": "table",
-   "title": "Yardımcı · TLREF normalleşmesi: açık (M2), gün (M3), referans TLREF (M4), fark (M5)",
-   "range": "M2:M5",
+   "title": "Yardımcı · TLREF normalleşmesi: açık (M2), gün (M3), referans TLREF (M4), fark (M5); senaryoların günleri (N3:N5)",
+   "range": "M2:N5",
    "hidden": true,
    "keep_title": true
   }

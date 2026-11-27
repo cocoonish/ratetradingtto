@@ -540,6 +540,8 @@ REFERENCE = {
         # TLREF normalleşmesi (OIS · PPK's pinned Parametreler, each user's own: the switch, the date, the normal TLREF -
         # its default the desk's policy rate on Masa): every reader of a PPK path reads it, as it reads today's TLREF
         "OIS_MAIN!L2:L4", "MASA!Q155",
+        # ... and each scenario's own date (SENARYOLAR, each user's own, 27.11.2026): every reader of a scenario's path
+        "OIS_MAIN!U3:U5",
         # market data typed by hand: today's TLREF, the manual spot, gold's spot, value date, swap rates and source
         "OIS_MAIN!J2", "VIOP!AA9:AA10", "EK_XAU!B5:C5", "EK_XAU!B8", "EK_XAU!B11", "EK_XAU!F16:F22",
     ],

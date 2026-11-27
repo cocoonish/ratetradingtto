@@ -4211,17 +4211,21 @@ async function clipAfter(page, action) {
     const normPpkOn = { r10: (await cellText(page, 'OIS_MAIN!R10')).trim(), status: (await cellText(page, 'OIS_MAIN!L6')).trim(),
       spot: (await cellText(page, 'OIS_MAIN!O9')).trim(), used: (await cellText(page, 'OIS_MAIN!L5')).trim(), on: await cellV('OIS_MAIN!M2'),
       j2: (await cellText(page, 'OIS_MAIN!J2')).trim(), s9: (await cellText(page, 'OIS_MAIN!S9')).trim(),
-      x9: (await cellText(page, 'OIS_MAIN!X9')).trim() };
+      x9: (await cellText(page, 'OIS_MAIN!X9')).trim(),
+      // (SENARYOLAR' own dates per scenario, 27.11.2026: Hawkish's at its default, the date in use)
+      scHead: (await cellText(page, 'OIS_MAIN!U2')).trim(), sc: (await cellText(page, 'OIS_MAIN!U4')).trim() };
     await normPpkPick('Kapalı');
     await waitCell(page, 'OIS_MAIN!R10', 't.trim() === ' + JSON.stringify(normPpkR10), 30000).catch(() => {});
     const normPpkOff = { r10: (await cellText(page, 'OIS_MAIN!R10')).trim(), status: (await cellText(page, 'OIS_MAIN!L6')).trim() };
     check('OIS · PPK: TLREF normalleşmesi - Normalleşme Açık with a date (spot + 20) and a normal TLREF (33 %) in the pinned '
       + 'Parametreler: the first meeting\'s Implied bps is measured from the normal TLREF (another number), the Spot row keeps '
-      + 'TLREF bugün in Implied MPC and TLREF S1 (the levels as TLREF runs, 27.11.2026), Durum "Açık · 20 gün …"; Kapalı again: '
+      + 'TLREF bugün in Implied MPC and TLREF S1 (the levels as TLREF runs, 27.11.2026), Durum "Açık · 20 gün …", the '
+      + 'scenarios’ Normalleşme tarihi (SENARYOLAR) at the date in use; Kapalı again: '
       + 'the very text it had',
       normPpkOn.on === 1 && normPpkOn.r10 !== normPpkR10 && /^[+−-]?\d/.test(normPpkOn.r10) && normPpkOn.spot === 'Spot'
       && /%$/.test(normPpkOn.j2) && normPpkOn.s9 === normPpkOn.j2 && normPpkOn.x9 === normPpkOn.j2
       && /^Açık · 20 gün · fark/.test(normPpkOn.status) && normPpkOn.used === normPpkDay
+      && normPpkOn.scHead === 'Normalleşme tarihi' && normPpkOn.sc === normPpkDay
       && normPpkOff.r10 === normPpkR10 && normPpkOff.status === 'Kapalı', { normPpkR10, normPpkOn, normPpkOff });
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['OIS_MAIN!L2', 'OIS_MAIN!L3', 'OIS_MAIN!L4'] });
     await tab(page, 'all');

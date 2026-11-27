@@ -7719,6 +7719,12 @@ def _masa_off(model: Model) -> None:
 #: The interface for the other parts of the feature (OIS_MAIN!M2:M5, outside the panel; nobody else writes them):
 #: M2 ON (1 / 0), M3 n (0 off), M4 REF = IF(ON, L0, J2), M5 gap·ON = (J2 − L0)·ON.  L5 (the date in use) is its own
 #: addition (``NORM_USED_NAME``) so that the OIS-implied date's can replace it after it.
+#:
+#: Each scenario its own date (the desk, 27.11.2026: "Normallesme tarihini de senaryoya gore degistirebileyim"):
+#: SENARYOLAR' column U (S1 … S3), each user's own, its default the date in use (L5); its days from the OIS spot n_s in
+#: N3:N5 (0 off; a date on or before the spot: 0 - normal from the spot).  E(m) is kept for every m (Motor's column) and
+#: each reader caps it at its own path's n: the scenarios' paths (S1 / S2 / S3) at n_s, everything else - the solver,
+#: the implied path, the fair RET's reference - at n.  With the dates at their default n_s = n: every value as before.
 NORM_NAME = "Normalleşme anahtarı"
 NORM_USED_NAME = "Normalleşme kullanılan tarih"
 NORM_PPK_NAME = "Normalleşme PPK modeli"
@@ -7728,6 +7734,14 @@ NORM_ROWS = (("K2", "Normalleşme", "L2"), ("K3", "Normalleşme tarihi", "L3"), 
              ("K5", "Kullanılan tarih", "L5"), ("K6", "Durum", "L6"))
 NORM_SWITCH, NORM_DATE, NORM_LEVEL, NORM_USED, NORM_STATUS = "L2", "L3", "L4", "L5", "L6"
 NORM_ON, NORM_DAYS, NORM_REF, NORM_GAP = "M2", "M3", "M4", "M5"
+#: each scenario's own normalization date: SENARYOLAR' caption and dates (OIS_MAIN U2, U3:U5 = S1, S2, S3 - per user,
+#: default the date in use L5) and their days n_s (N3:N5, outside the panels)
+NORM_SC_HEAD, NORM_SC_CAPTION = "U2", "Normalleşme tarihi"
+NORM_SC_DATES = ("U3", "U4", "U5")
+NORM_SC_DAYS = ("N3", "N4", "N5")
+#: the stretch's n of each PPK path's reader: the scenarios' (Motor's meeting table, ln G: S1 I, S2 O, S3 Q) their own,
+#: any other (the implied path L, the fair RET's reference) the date in use's
+NORM_PATH_DAYS = {("Motor", "I", 4, 84): "N3", ("Motor", "O", 4, 84): "N4", ("Motor", "Q", 4, 84): "N5"}
 #: the normal TLREF until a user types one: Masa's typed policy rate (%, a desk input) − 15 bp (TLREF ran 15–20 bp under
 #: the 36 % policy rate in early November)
 NORM_POLICY = "MASA!$Q$155"
@@ -7795,17 +7809,22 @@ NORM_MASA = ["S%d" % r for r in range(157, 164)]
 _NORM_J2 = re.compile(r"(?<![A-Za-z0-9_!$.'])\$J\$2(?![0-9])")
 
 
-def norm_e(day: str) -> str:
+def norm_e(day: str, n: str = "OIS_MAIN!$M$3") -> str:
     """E(min(``day``, n)) - what the stretch before the normalization date adds to a PPK path's ln G at a day counted
-    from the OIS spot - as an Excel expression, an exact 0 while the switch is off (OIS_MAIN!M2)."""
-    return "IF(OIS_MAIN!$M$2=1,INDEX(%s,MIN(%s,%d)+1),0)" % (NORM_E_RANGE, day, NORM_LIMIT)
+    from the OIS spot - as an Excel expression, an exact 0 while the switch is off (OIS_MAIN!M2); ``n`` the path's days to
+    its date (a scenario's: OIS_MAIN!N3:N5)."""
+    return "IF(OIS_MAIN!$M$2=1,INDEX(%s,MIN(%s,%s,%d)+1),0)" % (NORM_E_RANGE, day, n, NORM_LIMIT)
 
 
-def norm_level(level: str, day: str) -> str:
+def norm_level(level: str, day: str, n: str = "$M$3") -> str:
     """A TLREF level on the page as TLREF runs, in OIS_MAIN's own cells: ``level`` (a normal path's) + the gap while
-    ``day`` - the day it starts, from the OIS spot - is before the normalization date (n, M3); ``level`` itself while off
-    (picked with IF: the same bits)."""
-    return "IF($M$2=1,%s+IF(%s<$M$3,$M$5,0),%s)" % (level, day, level)
+    ``day`` - the day it starts, from the OIS spot - is before the normalization date (n, M3; a scenario's own: N3:N5);
+    ``level`` itself while off (picked with IF: the same bits)."""
+    return "IF($M$2=1,%s+IF(%s<%s,$M$5,0),%s)" % (level, day, n, level)
+
+
+#: a scenario's days to its own date by its Motor level path (S1 H, S2 N, S3 P; the implied K: the date in use's)
+NORM_SC_N = {"H": "$N$3", "N": "$N$4", "P": "$N$5", "K": "$M$3"}
 
 
 def _norm_1y(path: str) -> str:
@@ -7813,11 +7832,14 @@ def _norm_1y(path: str) -> str:
     return "INDEX(Motor!$%s$4:$%s$84,MATCH($E$447,Motor!$C$4:$C$84,1))" % (path, path)
 
 
-def _norm_e_node(day: tuple) -> tuple:
-    """:func:`norm_e` as an AST node (``tto.xl.parser``), ``day`` a node of the formula it goes into."""
+def _norm_e_node(day: tuple, n: str = NORM_DAYS) -> tuple:
+    """:func:`norm_e` as an AST node (``tto.xl.parser``), ``day`` a node of the formula it goes into, ``n`` the OIS_MAIN
+    cell of the path's days to its date (M3, or a scenario's N3:N5)."""
+    rc = parse_a1(n)
     on = ("bin", "=", ("cell", "OIS_MAIN", True, 2, True, 13), ("num", 1.0))
     e = ("range", "Motor", True, NORM_E_ROWS[0], True, 8, True, NORM_E_ROWS[1], True, 8)
-    at = ("bin", "+", ("func", "MIN", [day, ("num", float(NORM_LIMIT))], False), ("num", 1.0))
+    days = ("cell", "OIS_MAIN", True, rc // COLS, True, rc % COLS)
+    at = ("bin", "+", ("func", "MIN", [day, days, ("num", float(NORM_LIMIT))], False), ("num", 1.0))
     return ("func", "IF", [on, ("func", "INDEX", [e, at], False), ("num", 0.0)], False)
 
 
@@ -7842,9 +7864,10 @@ def _norm_rewrite(nd: tuple, host: str, c: int) -> tuple:
         args = [_norm_rewrite(a, host, c) for a in nd[2]]
         out = nd if all(a is b for a, b in zip(args, nd[2])) else ("func", nd[1], args, nd[3])
         a = nd[2]
-        if nd[1] == "INDEX" and len(a) == 2 and _norm_ref(a[0], host, c) in NORM_PATHS and a[1][0] == "func" \
+        path = _norm_ref(a[0], host, c) if nd[1] == "INDEX" and len(a) == 2 else None
+        if path in NORM_PATHS and a[1][0] == "func" \
                 and a[1][1] == "MATCH" and len(a[1][2]) == 3 and _norm_ref(a[1][2][1], host, c) == ("Motor", "C", 4, 84):
-            return ("paren", ("bin", "+", out, _norm_e_node(a[1][2][0])))
+            return ("paren", ("bin", "+", out, _norm_e_node(a[1][2][0], NORM_PATH_DAYS.get(path, NORM_DAYS))))
         return out
     if k == "bin":
         x, y = _norm_rewrite(nd[2], host, c), _norm_rewrite(nd[3], host, c)
@@ -7884,15 +7907,15 @@ def norm_path_readers(model: Model) -> Dict[Tuple[str, int], str]:
     return out
 
 
-def _norm_window(text: str) -> str:
+def _norm_window(text: str, n: str = "OIS_MAIN!$M$3") -> str:
     """A scenario's MPC OIS window rate worked out from its level, (EXP(<ln G over the window>) − 1)·365 / days, with the
     stretch's part of the window, E(end) − E(start), added to its ln G (the window's days on Motor's meeting days, the
-    Pcum lookups' days: end first)."""
+    Pcum lookups' days: end first) - the stretch to the scenario's own date (``n``: OIS_MAIN!N3:N5)."""
     days = re.findall(r"INDEX\(Motor!\$F\$528:\$F\$4228,MIN\((Motor!\$C\$\d+),3700\)\+1\)", text)
     if not text.startswith("(EXP(") or len(days) != 2 or text.count("EXP(") != 1:
         raise ValueError("pencere formülü beklenen değil: %s" % text[:60])
     head, tail = text.split(")-1)*365/", 1)
-    return "%s+%s-%s)-1)*365/%s" % (head, norm_e(days[0]), norm_e(days[1]), tail)
+    return "%s+%s-%s)-1)*365/%s" % (head, norm_e(days[0], n), norm_e(days[1], n), tail)
 
 
 def _norm_switch_check(model: Model) -> None:
@@ -7904,8 +7927,11 @@ def _norm_switch_check(model: Model) -> None:
     _need_formula(model, "OIS_MAIN", "J2", "BISTTREF")
     _need_formula(model, "OIS_MAIN", "B2", "WORKDAY(")
     _need_formula(model, "Motor", "F529", "F528+E528")
+    _need_captions(model, (("OIS_MAIN", "O2", "Senaryo"), ("OIS_MAIN", "P2", "Ad"), ("OIS_MAIN", "T2", "vs ima @1Y (bp)"),
+                           ("OIS_MAIN", "O3", "S1"), ("OIS_MAIN", "O4", "S2"), ("OIS_MAIN", "O5", "S3")))
     oism, motor = model.sheet("OIS_MAIN"), model.sheet("Motor")
     taken = [a for _, _, a in NORM_ROWS] + [a for a, _, _ in NORM_ROWS] + [NORM_ON, NORM_DAYS, NORM_REF, NORM_GAP, "M6"]
+    taken += [NORM_SC_HEAD] + list(NORM_SC_DATES) + list(NORM_SC_DAYS)
     for addr in taken:
         if parse_a1(addr) in oism.fml or parse_a1(addr) in oism.consts:
             raise ValueError("OIS_MAIN!%s boş değil" % addr)
@@ -7938,12 +7964,18 @@ def _tto_norm_switch(model: Model) -> None:
                        'IF($L$4<=0,"{on} değil: normal TLREF yok",IF(NOT(ISNUMBER($J$2)),"{on} değil: TLREF yok",'
                        'IF($L$5<=$B$2,"{on} değil: tarih geçti","{on} değil: tarih takvimin dışında")))))))'
           .format(on=NORM_OPEN, off=NORM_OFF), color=NOTE_COLOR, align="center")
-    # Motor: E(day) beside the daily calendar's Pcum (day = column A), worked out only while on
+    # each scenario's own date (SENARYOLAR' column U, a per-user input whose default is the date in use) and its days
+    b.set(NORM_SC_HEAD, NORM_SC_CAPTION, like="T2")
+    for date, days in zip(NORM_SC_DATES, NORM_SC_DAYS):
+        b.input(date, "=$%s$%s" % (NORM_USED[0], NORM_USED[1:]), fmt=DATE, align="center")
+        b.set(days, "=IF($M$2=1,IF(ISNUMBER($%s),MAX($%s-$B$2,0),$M$3),0)" % (date, date), fmt="0")
+    # Motor: E(day) beside the daily calendar's Pcum (day = column A), worked out only while on - for every day: each
+    # reader caps it at its own path's n (norm_e)
     m = SheetBuilder(model, "Motor")
     m.set("%s%d" % (NORM_E_COL, NORM_E_ROWS[0] - 1), "E(gün)", like="F%d" % (NORM_E_ROWS[0] - 1))
     first = "%s%d" % (NORM_E_COL, NORM_E_ROWS[0])
-    m.set(first, "=IF(OIS_MAIN!$M$2=1,MIN($A%(r)d,OIS_MAIN!$M$3)*(LN(1+OIS_MAIN!$J$2/365)-LN(1+OIS_MAIN!$L$4/365))"
-                 "-INDEX($F$528:$F$4228,MIN($A%(r)d,OIS_MAIN!$M$3)+1)*((OIS_MAIN!$J$2/365)^2-(OIS_MAIN!$L$4/365)^2),0)"
+    m.set(first, "=IF(OIS_MAIN!$M$2=1,$A%(r)d*(LN(1+OIS_MAIN!$J$2/365)-LN(1+OIS_MAIN!$L$4/365))"
+                 "-INDEX($F$528:$F$4228,$A%(r)d+1)*((OIS_MAIN!$J$2/365)^2-(OIS_MAIN!$L$4/365)^2),0)"
                  % {"r": NORM_E_ROWS[0]}, fmt="0.000000000")
     m.fill_down(first, NORM_E_ROWS[1])
 
@@ -8076,18 +8108,22 @@ def _norm_levels(model: Model) -> None:
             m.patch("%s%d" % (path, k), '=%s%d+IF(AND(OIS_MAIN!$P%d<>"",OIS_MAIN!$P%d<OIS_MAIN!$B$2),0,IF(OIS_MAIN!%s%d<>"",'
                                         'OIS_MAIN!%s%d,IF(OIS_MAIN!$B$3=1,N(OIS_MAIN!R%d),0)+OIS_MAIN!$D$3))/10000'
                     % (path, k - 1, r, r, step, r, step, r, r))
-            o.patch("%s%d" % (level, r), "=" + norm_level("Motor!$%s$%d" % (path, k), day))
+            o.patch("%s%d" % (level, r), "=" + norm_level("Motor!$%s$%d" % (path, k), day, NORM_SC_N[path]))
             o.patch("%s%d" % (chart, r), "=ROUND((Motor!$%s$%d-Motor!$%s$%d)*10000,2)" % (path, k, path, k - 1))
         o.patch("S%d" % r, '=IF(AND($P%d<>"",$P%d<$B$2),"",%s)' % (r, r, norm_level("Motor!$B$%d" % b, day)))
         o.patch("T%d" % r, '=IF(ISNUMBER(S%d),ROUND((Motor!$B$%d-%s)*10000,2),"")' % (r, b, NORM_REF_TEXT))
         m.patch("K%d" % k, "=IF(C%d=0,K%d,$B$%d)" % (k, k - 1, b))
     for addr, r, level, path in _norm_dv01(model):
+        # (scenario − implied on the page's row: the normal paths' difference, and the gap between the two dates when the
+        # scenario's own differs from the date in use - an exact 0 while they are the same)
         k = r + NORM_MOTOR_ROW
-        dv.patch(addr, "=IF(AND(ISNUMBER(OIS_MAIN!$%s$%d),ISNUMBER(OIS_MAIN!$S$%d)),(Motor!$%s$%d-Motor!$K$%d)*10000,0)"
-                 % (level, r, r, path, k, k))
+        n = "OIS_MAIN!" + NORM_SC_N[path]
+        dv.patch(addr, "=IF(AND(ISNUMBER(OIS_MAIN!$%s$%d),ISNUMBER(OIS_MAIN!$S$%d)),(Motor!$%s$%d-Motor!$K$%d)*10000"
+                       "+IF(OIS_MAIN!$M$2=1,(IF(Motor!$C$%d<%s,OIS_MAIN!$M$5,0)-IF(Motor!$C$%d<OIS_MAIN!$M$3,OIS_MAIN!$M$5,0))"
+                       "*10000,0),0)" % (level, r, r, path, k, k, k, n, k))
     paths = dict(NORM_1Y_LEVELS)
     for addr, path in NORM_1Y_LEVELS:
-        o.patch(addr, "=" + norm_level(_norm_1y(path), "$E$447"))
+        o.patch(addr, "=" + norm_level(_norm_1y(path), "$E$447", NORM_SC_N[path]))
     for addr, level, text in NORM_1Y_MEASURES:
         o.patch(addr, "=" + (text % _norm_1y(paths[level])).replace("$J$2", NORM_REF_TEXT))
     for j in range(NORM_STUB_ROWS[1] - NORM_STUB_ROWS[0] + 1):
@@ -8120,10 +8156,10 @@ def _tto_norm_ppk(model: Model) -> None:
                 fml[rc] = got
     o = SheetBuilder(model, "OIS_MAIN")
     cols, (r1, r2) = NORM_WINDOWS
-    for col in cols:
+    for col, n in zip(cols, NORM_SC_DAYS):                # (each scenario's window rates: its own date's stretch)
         for r in range(r1, r2 + 1):
             addr = "%s%d" % (col, r)
-            o.patch(addr, "=" + _norm_window(formula_of(model, "OIS_MAIN", addr)))
+            o.patch(addr, "=" + _norm_window(formula_of(model, "OIS_MAIN", addr), "OIS_MAIN!$%s$%s" % (n[0], n[1:])))
     for addr in NORM_MEASURES:
         o.patch(addr, "=" + _NORM_J2.sub(NORM_REF_TEXT, formula_of(model, "OIS_MAIN", addr)))
     masa = SheetBuilder(model, "MASA")

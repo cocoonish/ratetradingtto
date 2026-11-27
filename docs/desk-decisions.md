@@ -2492,6 +2492,23 @@ it - and the *steps* stay the PPK's, measured on the normal path ([curves.md](cu
 Code: `tto/extras.py` (`norm_level`, `_norm_levels`, `_norm_levels_check`, `_norm_dv01`, `NORM_LEVEL_ROWS` …). Tests:
 `tests/test_normallesme_ppk.py` (`test_the_page_shows_tlref_as_it_runs`); the browser test's "TLREF normalleşmesi" check.
 
+#### TLREF normalleşmesi: her senaryonun kendi tarihi (27.11.2026)
+
+The desk: "Normallesme tarihini de senaryoya gore degistirebileyim".
+
+- **Where:** SENARYOLAR gets a *Normalleşme tarihi* column (`OIS_MAIN!U3:U5`: Baz, Hawkish, Dovish), each user's own,
+  in the table that already holds the scenarios' names and probabilities - no new panel.
+- **Default:** the date in use (Parametreler → Kullanılan tarih: the typed date, else the OIS-implied one); Delete goes back
+  to it. A date on or before the spot makes that scenario normal from the spot.
+- **What follows a scenario's date:** its TLREF levels (IMPLIED RATES, the chart), its 1Y sonu TLREF, its MPC OIS window
+  rates, its O/N and zero, every curve on its path (carry, RET scenarios …), and DV01 Risk's scenario − implied (the gap
+  between the two dates included: the page's row difference). The implied path (MPC ima), the model, the stub and PPK
+  basamak keep the date in use.
+- At the defaults nothing changes (every cell compared with the build before).
+
+Code: `tto/extras.py` (`NORM_SC_*`, `NORM_PATH_DAYS`, `norm_e(t, n)`, `norm_level(…, n)`, `_norm_e_node`, `_norm_window`),
+`tto/views/20_ois.json` (B2 `O1:U6`, input `U3:U5`). Tests: `tests/test_normallesme_senaryo.py`.
+
 ### OIS · PPK: O/N eşlenikleri ve zero (27.11.2026)
 
 On OIS · PPK → Kotalar's O/N EŞLENİKLERİ (360) (per tenor the O/N equivalent of the MPC-implied curve and of the three

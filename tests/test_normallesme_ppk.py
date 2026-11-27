@@ -36,7 +36,9 @@ MINE = (ex.NORM_NAME, ex.NORM_USED_NAME, ex.NORM_PPK_NAME)
 #: the cells the addition writes that the workbook leaves empty (OIS_MAIN, Motor) - the switch, its labels, the status,
 #: the interface and the E column; K2 / L2 held Bloomberg's settle date before (now A6:B6)
 NEW_OIS = ({a for a, _, _ in ex.NORM_ROWS} | {a for _, _, a in ex.NORM_ROWS}
-           | {ex.NORM_ON, ex.NORM_DAYS, ex.NORM_REF, ex.NORM_GAP} | set(ex.OIS_SPOT_CELLS))
+           | {ex.NORM_ON, ex.NORM_DAYS, ex.NORM_REF, ex.NORM_GAP} | set(ex.OIS_SPOT_CELLS)
+           # (each scenario's own date: SENARYOLAR' column U and its days N3:N5 - 27.11.2026)
+           | {ex.NORM_SC_HEAD} | set(ex.NORM_SC_DATES) | set(ex.NORM_SC_DAYS))
 NEW_MOTOR = {"%s%d" % (ex.NORM_E_COL, r) for r in range(ex.NORM_E_ROWS[0] - 1, ex.NORM_E_ROWS[1] + 1)}
 
 
@@ -147,8 +149,10 @@ def test_every_read_of_a_path_gets_its_own_day_e():
             match = nd[2][1]
             assert match[0] == "func" and match[1] == "MATCH" and ex._norm_ref(match[2][1], host, c) == ("Motor", "C", 4, 84)
             # its parent: (INDEX(...) + E(t)), t the MATCH's day ...
+            # (to its own path's date: a scenario's S1 / S2 / S3 own, any other path the date in use's)
+            n = ex.NORM_PATH_DAYS.get(ex._norm_ref(nd[2][0], host, c), ex.NORM_DAYS)
             ok = (parent is not None and parent[0] == "bin" and parent[1] == "+" and parent[2] is nd
-                  and parent[3] == ex._norm_e_node(match[2][0]))
+                  and parent[3] == ex._norm_e_node(match[2][0], n))
             # ... and the growth from the meeting to t follows - or t is a meeting's day itself (MATCH(t, ·, 0))
             u = Unparser(r, c)
             t, cref = u.text(match[2][0]), u.text(match[2][1])
@@ -198,7 +202,10 @@ def test_on_without_a_gap_every_number_is_the_one_before(books):
                                                             and 8 <= int("".join(ch for ch in d.split("!")[1] if ch.isdigit())) <= 15)}
     steps = {d for d in diff if d.startswith("EK_PPK!")}
     diff = [d for d in diff if d not in walk and d not in steps]
-    assert sorted(diff) == sorted(["OIS_MAIN!" + a for a in ("L2", "L4", "L5", "L6", "M2", "M3")]), diff
+    # (and each scenario's date, at its default the date in use, with its days)
+    assert sorted(diff) == sorted(["OIS_MAIN!" + a for a in ("L2", "L4", "L5", "L6", "M2", "M3")
+                                   + ex.NORM_SC_DATES + ex.NORM_SC_DAYS]), diff
+    assert [at(new, "OIS_MAIN!" + a, on) for a in ex.NORM_SC_DAYS] == [20.0] * 3
 
 
 # ============================================================================== a market from a known path

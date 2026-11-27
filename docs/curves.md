@@ -222,8 +222,18 @@ m = min(t, n):
   **E(m) = m·[ln(1 + H/365) − ln(1 + L0/365)] − Pcum(m)·[(H/365)² − (L0/365)²]**
 
 to a path's ln G - exact while the normal path is L0 over the stretch; a meeting inside it errs ~1e-9 a day. E by day is
-`Motor!H528:H4228` (day = column A, beside Pcum; 0 without evaluating anything while off); `extras.norm_e(t)` reads it:
-`IF(OIS_MAIN!$M$2=1,INDEX(Motor!$H$528:$H$4228,MIN(t,3700)+1),0)`.
+`Motor!H528:H4228` (day = column A, beside Pcum, for every day; 0 without evaluating anything while off);
+`extras.norm_e(t, n)` reads it capped at the reader's path's n: `IF(OIS_MAIN!$M$2=1,INDEX(Motor!$H$528:$H$4228,MIN(t,n,3700)+1),0)`.
+
+**Each scenario its own date** (the desk, 27.11.2026: "Normallesme tarihini de senaryoya gore degistirebileyim"):
+SENARYOLAR' column U (`U2` "Normalleşme tarihi", `U3:U5` = S1 / S2 / S3, scope "user", a formula default `=$L$5` - the date
+in use; Delete → it) and their days n_s in `N3:N5` (`IF(ON, IF(ISNUMBER(U), MAX(U − B2, 0), M3), 0)`: a date on or before
+the spot is 0, normal from the spot). A scenario's path is read with its n_s: the reads of S1 `I`, S2 `O`, S3 `Q`
+(`extras.NORM_PATH_DAYS`, the path rewrite), its window rates (`BD` / `BE` / `BF`), its levels (`X` / `Y` / `Z`, `H5`,
+`R3:R5`) and DV01 Risk's scenario − implied (+ the gap where only one of the two dates has not come yet, so it stays the
+page's row difference). The solver, the implied path, the stub, the fair RET's reference and PPK basamak (`ppkcurve`
+reads `M2:M5`) keep the date in use (n, `M3`). At the defaults n_s = n and every value is the one before, bit for bit
+(the whole workbook compared with the commit before, off and on: only `U2:U5`, `N3:N5` and E past n differ).
 
 **What follows the switch** (on = measured "as if TLREF were back to normal"; `extras.NORM_PPK_NAME`):
 - **The PPK solver** ("GLOBAL İMA PPK v3", `Motor!A4300`): every Gauss-Newton iteration's ln G at the payment days
