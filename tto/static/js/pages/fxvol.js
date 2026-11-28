@@ -27,7 +27,9 @@ const BLUE = '4F81BD', ORANGE = 'F79646', PURPLE = '8064A2', GREEN = '9BBB59';
 const REFRESH_MS = 15000;
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
-const sgn = (v, d = 2) => (isNum(v) ? (v > 0 ? '+' : '') + num(v, d, false) : '');
+/** A number with its sign: "+" only when its decimals show more than zero (never "+0,0"; num() writes no "-0,0"). */
+const signed = (v, d) => { const t = num(v, d, false); return (v > 0 && /[1-9]/.test(t) ? '+' : '') + t; };
+const sgn = (v, d = 2) => (isNum(v) ? signed(v, d) : '');
 
 function pref(key, fallback) {
   try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
@@ -265,6 +267,12 @@ export class FxVolPage {
         + '(hafta içi günler, boş gün önceki kapanışla; pencere üstteki seçimden).'));
     this.sv = new SeriesView(this.seriesHost, { rule: 'macro', windowSeg: false, window: this.window, height: 230,
       hint: 'Isı haritasında bir hücreye tıklayın: geçmişi burada çizilir.' });
+    // the picked series beside the heat map, in the room it leaves on a desk screen; under it on a narrower one (the desk,
+    // 28.11.2026, B20: it stood a whole row below, ~690 px free beside the heat map)
+    const heatRow = h('div', { class: 'fxrow', id: 'fxvol-heat-row' });
+    this.host.insertBefore(heatRow, this.sections.heat);
+    heatRow.appendChild(this.sections.heat);
+    heatRow.appendChild(this.sections.series);
 
     // ---- movers
     this.moversBody = h('div', { class: 'volcharts' });

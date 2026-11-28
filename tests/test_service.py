@@ -1,4 +1,6 @@
 """Application service: pages, personal vs shared inputs, scenarios, the RET curve."""
+import re
+
 import pytest
 
 from conftest import cell, make_service
@@ -148,7 +150,7 @@ def test_manual_spot_is_at_the_top_and_can_be_typed_from_the_header(service, tmp
 def test_number_format_follows_the_requested_locale(service):
     tr = service.cell_info(None, "tto", "Forward!D33", "tr")["cell"]["t"]
     en = service.cell_info(None, "tto", "Forward!D33", "en")["cell"]["t"]
-    assert tr == "59,2364" and en == "59.2364"
+    assert re.fullmatch(r"\d{2},\d{4}", tr) and en == tr.replace(",", ".")       # (the forward of the strip's spot)
 
 
 def test_personal_inputs_change_only_my_view(service):
@@ -352,7 +354,7 @@ def test_cell_info_and_grid(service):
                                                                  "EK_DIBS", "EK_EVREN", "EK_ISGUNU", "EK_CARRY", "EK_IHALE", "EK_TARIH",
                                                                  "EK_VFRA", "EK_RET", "EK_INTERP", "EK_NORM", "EK_VAR"]
     assert len(service.sheets("tto")) == 17 - 4 + 18
-    assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2", "EK_TATIL"]
+    assert [s["name"] for s in service.sheets("borsa")] == ["bu", "Sheet1", "Sheet2", "EK_TATIL", "EK_SPOT"]
     assert [s["name"] for s in service.sheets("asw")] == ["ASW", "EK_FX", "EK_INTERP"]
 
 

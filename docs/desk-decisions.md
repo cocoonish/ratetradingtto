@@ -3527,3 +3527,110 @@ Code: `tto/service.py` (`_trading_keys`, `_trading_columns`, `_trading_table`, `
 the end of `app.css`. Tests: `tests/test_toplu_tahvil.py`; `test_dibsgenel.py`, `test_duzen_tahvil.py`, `test_kagit_on.py`,
 `test_columns.py`, `test_tradehint.py`, `test_bonds.py`, `test_service.py` (the ISIN now the bond tables' second column); the
 browser test's "toplu tahvil" checks.
+
+### TRY · FX sayfaları: tek spot, tek ad, tek spread kuralı (28.11.2026)
+
+> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
+> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu genel
+> olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
+
+> "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"
+
+To the question which USDTRY spot the pages use (B4: the strip's `MASA!H2` and `OIS_MAIN!D2` / `Forward!F2`, Bloomberg's MID,
+differed - 49,9973 / 49,9977 on the replay day): **"Bbg veya manual spot"** - every page uses the top strip's spot (Spot
+kaynağı: BBG, or the manual spot); and **"Digerlerini de onayliyorum"**.
+
+This part (builder K8, branch `toplu-try-fx`) is B4, B5, B11, B12, B14, B20, C8's carry, ORANLAR's colour and B7 on the
+Forward and OIS · Nakit Akışı pages.
+
+- **B4 · one spot.** The strip's spot is `MASA!H2`, the mid of `VIOP!L99:L100` (the manual bid / ask typed in
+  `VIOP!AA9:AA10`, else Bloomberg's `USDTRY Curncy` BID / ASK). The other USDTRY spots read it now
+  (`extras.SPOT_NAME`, `SPOT_SOURCES`: `=IF(ISNUMBER(MASA!$H$2),MASA!$H$2,NA())`): `OIS_MAIN!D2` and `Forward!F2` (both
+  Bloomberg's `TRY Curncy` MID before) and VİOP's spot rows `M11:X11`, `M23:X23`, `M50:O50`, `S50:U50`, `M75:X75`,
+  `M88:X88` (`USDTRY Curncy` MID, else PX_LAST). So does what reads them: OIS · PPK's nominals and $DV01s, Carry & Roll's $,
+  DİBS RV's and Manuel Tahvil's OIS hedge nominals, OIS · Nakit Akışı's $DV01 scale, the Forward page's outrights,
+  calculators and TOPLU FORWARD, VİOP's implied rates and fair forwards, the gold calculator, Günlük İşlemler, Fiyatlama's
+  NPV $, Trades, the FX board's USDTRY. `Forward!F2` stays a personal input ("USDTRY / EURTRY spot"): a spot typed there is
+  that user's, Delete brings the strip's back; its EURTRY half (`G2`) stays Bloomberg's EURTRY mid (no strip has an
+  EURTRY). Borsa Swap's workbook cannot read the TRY workbook: the service writes the strip's spot into `EK_SPOT!B2`
+  (`tto/spotlink.py`, before any calculation of that book), which its spot `Sheet1!AD18` reads ("Spot kur (üst şerit)";
+  blank - the service not there yet - Bloomberg's PX_LAST as before).
+  - **The proof** (`tests/test_tek_spot.py`): every cell of the TRY workbook with and without the addition - the cells that
+    move are the spot cells and what reads them (the reverse reference index's downstream of them); Motor (Bootstrap), the
+    OIS quotes, the offshore curve, the USD OIS and the strip are the same bits. On the replay day 918 cells of OIS_MAIN,
+    Forward, VİOP, MASA, C & R, EK_FWD, EK_XAU and Calculators moved (and 150 of Borsa Swap's), by
+    49,99725 / 49,9977 − 1 ≈ −9·10⁻⁶ relative where they are proportional to the spot; the other readers kept their values
+    (DİBS RV's and Manuel Tahvil's hedge nominals round to "Yuvarlama TL"; TOPLU FORWARD and OIS · Nakit Akışı have no row
+    filled in the recording). A manual spot typed reaches every page and Borsa's book (live, the fake terminal).
+  - **Bloomberg**: nothing new; fewer fields - the TRY workbook no longer asks `TRY Curncy` MID nor `USDTRY Curncy` MID /
+    PX_LAST (Borsa's spot keeps PX_LAST as its fallback).
+- **B4 · one number.** OIS · PPK's Parametreler reads as the strip: İma 12A and İma / toplantı with the strip's one
+  decimal (−285 / −284,9 before), Senaryo − ima too (`extras.NUMS_NAME`). Counts whole: OIS · PPK's EN İYİ FRA "Bitiş (ay)",
+  DİBS RV's "Ufuk (ay)" ("3,000 ay") and "TLREF gecikme (iş g.)", Manuel Tahvil's "Dönem gün" ("182,0000") and "TLREF
+  gecikme", the Forward sheet's chart days; DİBS RV's "Eşik (bp)" one decimal. **No "-0"**: a negative that its own number
+  section shows as zero reads as zero on every page (`numfmt.render`, `_rounds_to_zero`: "-0" of ORANLAR's Model fark,
+  OUTRIGHT's Fark, the spread / fly lists, Carry & Roll, USD) - the formulas' TEXT stays Excel's to the letter
+  (`excel=True`). OIS par with two decimals (the 25.11 rule) is the pricing tables' already; Ayarlar's curve points (4) and
+  Gün Sonu (3) are history.js's (integrator notes; Gün Sonu is K5's B19).
+- **B4 · one name.** The offshore TRY curve is "Offshore" where the curve is meant - ORANLAR's "ICAP" column and "ICAP − OIS",
+  RET BANDINA GÖRE's, the charts' series, Masa's "VİOP − FX sw", the Forward page's "ICAP Implied TL Curve" and the curve
+  row of its USDTRY / EURTRY forward tables, VİOP's "ICAP" table, "FX swap ima ff" matrices, "FX SWAP BAZI"
+  (`extras.NAMES_NAME`, texts only); "FX swap ima" (1W–9M) and "XCCY" (1Y–10Y) where its instruments are meant, "ICAP" where
+  its price source is. The page's "?" chip has a short glossary (`tto/static/js/glossary.js`; `pages/view.js` puts it in the
+  chip - integrator notes). The Borsa Swap spreads find the O/N cells under "Offshore" (or "ICAP", the addition left out:
+  `borsaspread.ON_CAPTIONS`). Fiyatlama's forward quote still names its row "ICAP" (`pages/blotter.js`, integrator notes).
+- **B5 · one spread rule: X − OIS (or X − Offshore), bp, whole, the side named** (`extras.SPREAD_NAME`): VİOP's "OIS - VIOP"
+  (2,09 %) is "VİOP mid − OIS (bp)" (−209); "OIS vs VIOP" / "ICAP vs VIOP" (the last price over the fair forward, % of the
+  price) are "VİOP son − OIS (bp)" / "VİOP son − Offshore (bp)": the rate the last price implies (the block's own formula,
+  360) less the block's TRY rate; the Forward page's O/N table "OIS - Off" (+4,58 %) and "VİOP - OIS" (%) are "Offshore − OIS
+  (bp)" (−458) and "VİOP − OIS (bp)"; its TRY OIS FRAs' "OIS - Off O/N (bp)" (−266,70) is "Offshore − OIS O/N (bp)" (+267);
+  Masa's O/N EŞLENİKLERİ "OIS − Off (bp)" (724) is "Offshore − OIS (bp)" (−724). The same rates, the other way round, in bp;
+  Masa's VİOP summary read VİOP's row × −10000 and reads it as it is now. Borsa's and the Forward page's TRY FAİZLERİ already
+  followed the rule. **İzleme · Alarmlar keep "OIS − VİOP"** (`watch.VIOP_METRICS["ois"]`: VİOP's row negated, the same
+  number as before): the users' watch rows and alarm expressions ("[VİOP 1. kontrat OIS − VİOP] − …") are written with that
+  name and sign - turning them to "VİOP − OIS" would flip every stored threshold. **Open for the desk.**
+- **B11 · USD · FOMC in two tables of the same range**: "FOMC ima patikası · piyasa, pencere OIS ve WIRP" (A73:AE83 - A–E,
+  H, K, AA–AE, L–Q; F, G, I, J hidden by default as before) and "Senaryo görüşü" (A72:Z83 - Toplantı, R–Z, the
+  probabilities above with their label in `SOFR_FOMC!B72`) beside the chart; Girdiler under them. It scrolled 911 px
+  sideways at 1920.
+- **B12 · OIS · PPK**: "Çözücü ayarları ve durum" left Kotalar (it ran ~350 px below OUTRIGHT) for MPC ima, under İMA PPK
+  beside KOTA ARALIKLARI (Kotalar 1,5 → 1,38 screens); the pinned Parametreler says in its title what it is set to -
+  "Parametreler · Normalleşme Kapalı · DV01/bacak 1.000 $ · Senaryo tabanı 1 · Ufuk 1/3 ay", folded or open (a caption row
+  of its own, `OIS_MAIN!A1`, lifted as the title; `extras.PARAM_TITLE_NAME`); the lists' "R/R Beklenen" is "R/R Bekl.": EN
+  İYİ 15 FLY beside EN İYİ 15 SPREAD at 1920 (the 27.11 layout left them ~16 px apart; En iyi işlemler 2,63 → 2,33
+  screens). **Masa · Faiz · PPK** in two rows: the offshore FRA chart beside MPC İMA PATİKASI, where 622 px were empty.
+- **B14 · the Forward page's helpers named or hidden, the curve and its day count in the titles**: Forward DV01's two
+  unlabelled "416" are "O/N · T/N puan" (AKGS); its "USD_Index" and the two USD OIS nodes around it ("8", "4,15 % 181",
+  "4,28 % 273", read by nothing: USD_SOFR interpolates by itself) are gone; RET SP's unit "Bid (P/gün)" / "Ask (P/gün)" and
+  the value date's RET "Valör"; RET + spread's result titled; the O/N table's four helper columns in a helper table of their
+  own ("Yardımcı tablolar"); the O/N chart fits its rates (it started at 0) and is titled "O/N karşılığı (360) · Offshore,
+  OIS ve VİOP". "Offshore · TRY faizi (ACT/360 basit): FX swap ima 1H–9A, XCCY zero 1Y+" (the Forward page; 2Y 51,09 is a
+  zero) beside VİOP's "Offshore · ICAP kotaları (… XCCY par 1Y+; ACT/360)" (2Y 41,65 is a par quote), "TRY OIS · basit zero
+  (ACT/360)" (Forward, 1M 35,87) beside VİOP's "TRY OIS · kotalar (ACT/365 basit)" (1M 36,37): the same name, a different
+  number, said why.
+- **B20 · FX Vol İzleme**: "Seçili seri" beside the heat map (the ~690 px it leaves at 1920; under it on a narrower
+  screen), the pair's charts on the page three a row (they were 755 px out of view in a box of their own). **Realized Vol**:
+  the typed instruments' table at its own width (it spread over 1 676 px, its captions ~150 px from their figures); the
+  carry table's "Gün" column, the same 20 on every line, is σ's window in its title ("Carry / vol · fly'lar · σ 20 gün").
+  No "+0,0" on these pages either.
+- **C8 · Carry & Roll's "Yıllık vol"** (Ufuk B, `C & R!N24:N39`, each user's input, empty in the file) defaults to the
+  tenor's realized vol: the daily σ of its TRY OIS quote's moves (bp) × √252, from EK_VAR (DV01 Risk → VaR's covariances, the
+  window the user chose there, "1 yıl" by default); 18M halfway between 1Y and 2Y (¼σ²(1Y) + ¼σ²(2Y) + ½cov). A value typed
+  wins, Delete brings the default back; without history it stays blank. So "C+R/vol" fills (`extras.CARRY_VOL_NAME`).
+- **ORANLAR's "Yön (model)"** reads RECEIVE green / PAY red, as every other YÖN of the OIS lists and Masa (B6's one colour
+  rule; `extras.ORANLAR_YON_NAME`).
+- **B7 · an empty calculator shows no error** (`extras.EMPTY_CALC_NAME`): the Forward page's XARTRY customer gold forward
+  (9× #VALUE!, "31.12.1899"), its bond carry (Bloomberg's yield, dirty price, coupon and B/E yield of no ISIN - the file's
+  cached values offline - and 2× #DIV/0!; the Bloomberg cells moved to helpers beside the block, `Forward!AA59:AA68`, asked
+  only with an ISIN) and OIS · Nakit Akışı's summary (14× #DIV/0!). Each cell keeps its formula behind a guard: filled in,
+  the very value it had (the bond carry's way back and TM_OIS's two-way PVs as before).
+
+Code: `tto/extras.py` (the additions named above), `tto/spotlink.py`, `tto/service.py` (`Service.__init__`, `_calc`: the
+spot link), `tto/xl/numfmt.py` (`render`'s "-0", `excel`), `tto/xl/functions.py` (`F_TEXT`), `tto/watch.py`
+(`VIOP_METRICS["ois"]`), `tto/borsaspread.py` (`ON_CAPTIONS`), `tto/views/10_masa.json`, `20_ois.json`, `30_forward.json`,
+`40_viop.json`, `46_borsa.json`, `50_carry.json`, `80_usd.json`, `tto/static/js/glossary.js`, `pages/fxvol.js`, `vol.js`,
+`fx.js`, `tto/static/css/app.css` (the K8 block at its end). Tests: `tests/test_tek_spot.py`, `test_duzen_try_fx.py`,
+`test_bos_hesap.py`, `test_carry_vol.py`; `test_duzen_try_a.py`, `test_duzen_try_b.py`, `test_ppkters.py`,
+`test_server.py`, `test_service.py`, `test_extras.py`, `test_views.py`, `test_watch.py`, `test_charts.py`,
+`test_borsa_spread.py`, `test_quantviop.py`, `test_viop_on.py`, `test_volcarry.py`, `test_prop.py` (their expectations as
+now: the strip's spot moves VİOP's implied rates ~1 bp on the replay day); the browser test's `k8…` checks.

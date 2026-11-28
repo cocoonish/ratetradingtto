@@ -15,7 +15,7 @@ maturity, and gets
   ARASI FAİZ' and of OIS_MAIN's 'İKİ TARİH ARASI SIMPLE RATE' (MASA!H67:I67, OIS_MAIN!D129:E129).  At a node its rate
   is ORANLAR's "OIS zero" (Motor!M89 …).  Its first node after the spot is 1M: here - for these spreads only, the
   curve itself and Masa's rows stay as they are - the 1W and 2W points ORANLAR reads its 1W / 2W "OIS zero" from come
-  before it (the 1W / 2W OIS quotes - MID, else PX_LAST - as the Forward sheet's "TRY OIS Simple Zero Rates" holds them:
+  before it (the 1W / 2W OIS quotes - MID, else PX_LAST - as the Forward sheet's "TRY OIS · basit zero" holds them:
   Forward!N6:P7, days and simple ACT/360 %), so a row of up to a month runs between spot, 1W, 2W and 1M;
 * **Offshore mid zero %** - the offshore TRY discount curve (``OFF_GUN`` / ``OFF_LNDF``: Forward!AK124:AK143 /
   AM124:AM143, Forward!AJ122): the mids (bid–ask average) of the FX swap implied TRY rates up to 9M - its short points
@@ -49,10 +49,11 @@ TABLES = {"D": (("D", "Valör"), ("E", "VKGS"), ("H", "BID %"), ("M", "ASK %")),
 #: (a name or a cell) and the O/N a day before the spot is carried with (simple ACT/360), with its name in a tip
 CURVES = (("ois", "BOOT_GUN", "BOOT_LNDF", "SPOTDATE", "Forward!AD123", "TLREF, 365 → 360"),
           ("off", "OFF_GUN", "OFF_LNDF", "Forward!I2", "Forward!AC123", "offshore O/N mid"))
-#: the captions the O/N cells stand under: the ON row of the comparison table, its OIS and ICAP columns
-ON_CAPTIONS = (("Forward!AA123", "ON"), ("Forward!AD122", "OIS"), ("Forward!AC122", "ICAP"))
+#: the captions the O/N cells stand under: the ON row of the comparison table, its OIS and offshore columns (the offshore
+#: one reads "Offshore" since 28.11.2026 - the curve's one name, extras.NAMES_NAME -, "ICAP" where that addition is left out)
+ON_CAPTIONS = (("Forward!AA123", ("ON",)), ("Forward!AD122", ("OIS",)), ("Forward!AC122", ("Offshore", "ICAP")))
 #: the OIS curve's short points before its first node (1M), for these spreads: ORANLAR's 1W and 2W "OIS zero" - the Forward
-#: sheet's "TRY OIS Simple Zero Rates" (days, simple ACT/360 %) - and the caption of the tenor each stands beside
+#: sheet's "TRY OIS · basit zero" (days, simple ACT/360 %) - and the caption of the tenor each stands beside
 OIS_SHORT = (("Forward!N6", "Forward!P6", "Forward!O6", "1W"), ("Forward!N7", "Forward!P7", "Forward!O7", "2W"))
 
 PCT = "0.00%"                            # BID % / ASK %'s own format
@@ -232,7 +233,7 @@ def read_curves(book, calc) -> Dict[str, Curve]:
         except (KeyError, ValueError):
             on_ok = False
             break
-        on_ok = on_ok and str(book.model.sheets[si].consts.get(rc) or "").strip() == caption
+        on_ok = on_ok and str(book.model.sheets[si].consts.get(rc) or "").strip() in caption
     out: Dict[str, Curve] = {}
     for key, days_name, lndf_name, spot_ref, on_ref, on_name in CURVES:
         days, lndf = _named(book, calc, days_name), _named(book, calc, lndf_name)

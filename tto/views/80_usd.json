@@ -204,13 +204,22 @@
   {
    "id": "fomc",
    "type": "table",
-   "title": "FOMC ima patikası · senaryo görüşü",
-   "range": "A71:AE83",
-   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "AA", "AB", "AC", "AD", "AE", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
-            "U", "V", "W", "X", "Y", "Z"],
+   "title": "FOMC ima patikası · piyasa, pencere OIS ve WIRP",
+   "range": "A73:AE83",
+   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "AA", "AB", "AC", "AD", "AE", "L", "M", "N", "O", "P", "Q"],
    "freeze": 2,
    "wide": true,
-   "note": "Pencere OIS → FOMC adımı: bir toplantının penceresinin (etkin gününden sonraki toplantınınkine; İşlem 1'deki pencere) OIS faizini \"Pencere OIS (elle) %\" sütununa yazın (%, ACT/360): O/N eşdeğeri - \"İma O/N %\"nin formülü, faizin kendi iskonto oranıyla: ((1 + r·gün/36000)^(1/gün) − 1)·36000 - ve fiyatladığı FOMC adımı, \"Önceki ima %\"ye göre (önceki toplantının piyasa O/N'si, ilk toplantıda stub O/N): bp olarak ve \"Toplantı adımı %\" gibi Adım (bp) cinsinden. Piyasa pencere faizini yazarsanız İma O/N ve Toplantı adımı aynen çıkar. USD OIS eğrisi (Girdiler'deki Eğri kaynağı). Yazdığınız faiz toplantısıyla gider: takvim değişince o toplantıda kalır."
+   "note": "İma = toplantılar arası bootstrap forward (O/N eşdeğeri) · #Adım tabanı = stub O/N. Senaryoların adımları, olasılıkları ve beklenen O/N yandaki \"Senaryo görüşü\" tablosunda (aynı satırlar). Pencere OIS → FOMC adımı: bir toplantının penceresinin (etkin gününden sonraki toplantınınkine; İşlem 1'deki pencere) OIS faizini \"Pencere OIS (elle) %\" sütununa yazın (%, ACT/360): O/N eşdeğeri - \"İma O/N %\"nin formülü, faizin kendi iskonto oranıyla: ((1 + r·gün/36000)^(1/gün) − 1)·36000 - ve fiyatladığı FOMC adımı, \"Önceki ima %\"ye göre (önceki toplantının piyasa O/N'si, ilk toplantıda stub O/N): bp olarak ve \"Toplantı adımı %\" gibi Adım (bp) cinsinden. Piyasa pencere faizini yazarsanız İma O/N ve Toplantı adımı aynen çıkar. USD OIS eğrisi (Girdiler'deki Eğri kaynağı). Yazdığınız faiz toplantısıyla gider: takvim değişince o toplantıda kalır."
+  },
+  {
+   "id": "fomc-sc",
+   "type": "table",
+   "title": "Senaryo görüşü · baz / şahin / güvercin adımları, olasılıklar ve beklenen O/N",
+   "range": "A72:Z83",
+   "cols": ["B", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"],
+   "freeze": 1,
+   "keep_title": true,
+   "note": "Her toplantıya senaryonun adımını (bp) yazın; boş adım faizi değiştirmez. Olasılıklar üstteki satırda (toplamı %100 olmalı). Beklenen O/N = olasılık ağırlıklı senaryo O/N'leri; piyasa − beklenen: FOMC tablosundaki İma O/N − beklenen (bp). Yazdığınız adım toplantısıyla gider: takvim değişince o toplantıda kalır."
   },
   {
    "id": "fomc-chart",
@@ -359,6 +368,14 @@
    "hidden": true,
    "keep_title": true,
    "title": "Yardımcı · FOMC ima patikası: iki yönlü hücrelerin yazılan değerleri"
+  },
+  {
+   "id": "fomc-top",
+   "type": "table",
+   "range": "A71:AE72",
+   "hidden": true,
+   "keep_title": true,
+   "title": "Yardımcı · FOMC tablosunun üst satırları (tek tablo iken başlığı ve açıklaması, olasılıklar, \"PENCERE OIS → FOMC ADIMI\" - iki tablonun başlık ve notlarında)"
   }
  ],
  "sections": [
@@ -378,8 +395,9 @@
    "title": "FOMC",
    "panels": [
     "fomc",
-    "inp",
-    "fomc-chart"
+    "fomc-sc",
+    "fomc-chart",
+    "inp"
    ]
   },
   {

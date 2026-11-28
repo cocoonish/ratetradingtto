@@ -98,7 +98,7 @@ def test_views_and_locale(client, user):
     assert client.get("/api/view/yok").status_code == 404
     tr = client.get("/api/cell?book=tto&ref=Forward!F2&lang=tr").json()["cell"]["t"]
     en = client.get("/api/cell?book=tto&ref=Forward!F2&lang=en").json()["cell"]["t"]
-    assert tr == "49,9977" and en == "49.9977"
+    assert tr == "49,9973" and en == "49.9973"                    # (the strip's spot since 28.11.2026: 49,99725)
     # the sheet explorer: administrators only (a page's cells come with the page, /api/cell answers everybody)
     adm = auth(_svc[0], "HTTP Yönetici", admin=True)
     grid = client.get("/api/grid", params={"book": "sofr", "sheet": "SOFR_FOMC", "range": "A47:C49"}, headers=adm).json()

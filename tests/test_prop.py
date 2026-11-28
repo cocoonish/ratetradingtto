@@ -523,7 +523,10 @@ def test_the_panel_over_http(client, module_service):
              "notional": "1m", "price": "%.4f" % usdtry, "stop": "%.4f" % (usdtry - 0.25)}
     assert client.post("/api/trades", json=trade, headers=ali).status_code == 200
     r = client.get("/api/prop/risk", headers=ali).json()
-    assert r["scope"] == "personal" and r["stops"]["count"] == 1 and abs(r["stops"]["try"] - 250000.0) < 1.0
+    # (the stop's loss from the mid: 0,25 less the stop's rounding to four decimals - the strip's mid, every page's USDTRY
+    # since 28.11.2026, has five: 49,99725)
+    stop_loss = (usdtry - float(trade["stop"])) * 1e6
+    assert r["scope"] == "personal" and r["stops"]["count"] == 1 and abs(r["stops"]["try"] - stop_loss) < 1.0
     assert r["pnl"]["try"] is None and r["room"]["try"] is None
     assert client.post("/api/trades/mtm", json={"scope": "personal"}, headers=ali).status_code == 200
     r = client.get("/api/prop/risk", params={"scope": "personal"}, headers=ali).json()

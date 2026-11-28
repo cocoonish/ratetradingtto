@@ -8,6 +8,11 @@ The dashboard has **two TRY discount curves** and they are not interchangeable:
 The desk: "OIS ile ayrı bunlar, OIS farklı". A third object, **the ASW sheet's own curve**, is an OIS curve that the
 ASW FX feature rebuilds from offshore rates. Always say which of the three you mean.
 
+**On the pages the offshore curve has one name, "Offshore"** (the desk's B4, 28.11.2026: it was ICAP, Offshore, FX swap
+ima and XCCY): "FX swap ima" (1W–9M) and "XCCY" (1Y–10Y) name its instruments, "ICAP" its price source (ICPL); the
+page's "?" chip has the short glossary (`tto/static/js/glossary.js`). A spread reads one way: **X − OIS** (or X − Offshore),
+in bp, whole, the side named in its caption (`extras.SPREAD_NAME`; [desk-decisions.md](desk-decisions.md)).
+
 Line numbers below are as of commit a5e7ea7. Search for the name if a line has moved. The desk's decisions behind
 this are in [desk-decisions.md](desk-decisions.md).
 
@@ -590,6 +595,15 @@ reads the date in use, `L5`, which falls back to this date: no cycle).
 | The ASW sheet's curve | `ASW!C4` → `T65`: Bloomberg's `SETTLE_DT` of `TRY Curncy`, else `WORKDAY(TODAY(),1,TATIL)` | the ASW book's `TATIL` |
 
 - The rules live in `extras.FX_SPOTS`, `pair_calendar` and `_tto_ois_spot`.
+- **The USDTRY spot itself (the price) is the top strip's on every page** (the desk, 28.11.2026: "Bbg veya manual spot";
+  `extras.SPOT_NAME`): `MASA!H2`, the mid of `VIOP!L99:L100` - the manual bid / ask typed in `VIOP!AA9:AA10`, else
+  Bloomberg's `USDTRY Curncy` BID / ASK. `OIS_MAIN!D2` (the $ of OIS · PPK's sizes, Fiyatlama's NPV $, the blotter's DV01 $),
+  `Forward!F2` (the Forward page's outrights and calculators, the FX board's USDTRY; a personal input over it stays the
+  user's) and VİOP's spot rows (`M11:X11`, `M23:X23`, `M50:O50`, `S50:U50`, `M75:X75`, `M88:X88`: its implied rates and fair
+  forwards, the gold calculator's `EK_XAU!B43:E43`) read it; Borsa Swap's book through `EK_SPOT!B2`, which the service
+  writes (`tto/spotlink.py`). They read Bloomberg's `TRY Curncy` / `USDTRY Curncy` MID before (49,9977 against the strip's
+  49,99725 on the replay day). No curve reads a spot: Bootstrap, the OIS quotes and the offshore curve keep their bits
+  (`tests/test_tek_spot.py`). EURTRY's spot (`Forward!G2`) stays Bloomberg's EURTRY mid.
 - Beside `Forward!I2`, `K2` and `OIS_MAIN!B2`, Bloomberg's `SETTLE_DT` is only shown, as "Bloomberg valörü"
   (`Forward!J2`, `L2`, `OIS_MAIN!B6` - `OIS_MAIN!L2` until 26.11.2026). Three dates still use it, and no addition patches them: `VIOP!K3` (VİOP's
   implied rates), `ASW!C4` → `T65` (the ASW sheet's curve and the shift of ASW FX's 18M) and the gold spot date

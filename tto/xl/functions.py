@@ -1737,7 +1737,7 @@ def F_TEXT(value, fmt):
     f = _txt(fmt)
     if type(f) is XlError:
         return f
-    return numfmt.format_value(value, f)
+    return numfmt.format_value(value, f, excel=True)
 
 
 def F_FIXED(number, decimals=2.0, no_commas=False):

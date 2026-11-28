@@ -415,8 +415,10 @@ def general(x: float, loc: Locale, digits: int = 15) -> str:
     return s
 
 
-def render(value: Any, fmt: str, loc: Optional[Locale] = None, general_digits: int = 15) -> Tuple[str, Optional[str]]:
-    """Format ``value`` with the Excel format ``fmt``; returns (text, colour name or None)."""
+def render(value: Any, fmt: str, loc: Optional[Locale] = None, general_digits: int = 15,
+           excel: bool = False) -> Tuple[str, Optional[str]]:
+    """Format ``value`` with the Excel format ``fmt``; returns (text, colour name or None).  ``excel``: Excel's text to the
+    letter, a negative shown as "-0" too (the formulas' TEXT); the pages' text never says "-0" (:func:`_rounds_to_zero`)."""
     if loc is None:
         loc = ENGINE_LOCALE
     if value is None:
@@ -437,6 +439,10 @@ def render(value: Any, fmt: str, loc: Optional[Locale] = None, general_digits: i
     if x != x or x in (float("inf"), float("-inf")):
         return "#NUM!", None
     nsec = len(secs)
+    if x < 0 and nsec >= 2 and not excel and _rounds_to_zero(x, secs[1]):
+        # a negative its own section shows as zero is a zero (the zero section, or the positive one): never "-0", "-0,0"
+        # or a red "(0)" - the desk, 28.11.2026 (a single section already writes no sign then: _fmt_number)
+        x = 0.0
     auto_sign = False
     if nsec == 1:
         sec = secs[0]
@@ -458,12 +464,21 @@ def render(value: Any, fmt: str, loc: Optional[Locale] = None, general_digits: i
     return _fmt_number(x, sec, loc, auto_sign), sec.color
 
 
+def _rounds_to_zero(x: float, sec: _Section) -> bool:
+    """Whether a number section shows ``x`` as zero: its digits after the percent / thousands scaling, rounded to the
+    section's decimals (not a date, a text, General or a scientific section)."""
+    if sec.kind != "num" or sec.exp is not None:
+        return False
+    v = abs(x) * (100.0 ** sec.pct) / (1000.0 ** sec.scale)
+    return _round_half_away(v, len(sec.frac_ph)) == 0.0
+
+
 def _has_paren(sec: _Section) -> bool:
     return any(k == "lit" and "(" in v for k, v in sec.tokens)
 
 
-def format_value(value: Any, fmt: str, loc: Optional[Locale] = None) -> str:
-    return render(value, fmt, loc)[0]
+def format_value(value: Any, fmt: str, loc: Optional[Locale] = None, excel: bool = False) -> str:
+    return render(value, fmt, loc, excel=excel)[0]
 
 
 def format_fixed(x: float, decimals: int, commas: bool, loc: Optional[Locale] = None) -> str:

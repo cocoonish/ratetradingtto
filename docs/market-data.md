@@ -236,6 +236,13 @@ curve in `B4:E6`, tried left to right. The workbook's own ticker (BGN) always co
   and ask.
 - **EK_KAYNAK does not reach book `asw`.** The ASW sheet's OIS quotes (`ASW!C65:R65`, roots `C63:R63`) keep the
   workbook's own chain: GFOF MID, else GFOF PX_LAST, else the plain ticker's PX_LAST.
+- **USDTRY spot: one source** (28.11.2026, the desk: "Bbg veya manual spot"): every page reads the top strip's, the manual
+  spot or Bloomberg's `USDTRY Curncy` BID / ASK mid (`VIOP!L99:L100`). The TRY workbook no longer asks `TRY Curncy` MID
+  (`OIS_MAIN!D2`, `Forward!F2`) nor `USDTRY Curncy` MID / PX_LAST (VİOP's spot rows): fewer fields, nothing new. Borsa
+  Swap's spot keeps `USDTRY Curncy` PX_LAST only as its fallback (`EK_SPOT`, [curves.md](curves.md#spot-and-value-dates)).
+  The Forward page's bond carry asks its yield, accrued, coupon and B/E yield only with an ISIN typed (it asked for " ISIN").
+  So the replay snapshot (`snapshot_from_model`: cells that are exactly one add-in call) holds no USDTRY / TRY MID any more,
+  and never held the strip's BID / ASK (inside `IF`s): a test that turns it into a fake live terminal gives those two itself.
 
 ## History (`tto/history.py`)
 

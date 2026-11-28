@@ -303,6 +303,9 @@ def test_the_carry_path_is_ones_own_choice(seeded):
     raw = Model.load(os.path.join(ROOT, "models", "tto.json.gz")).sheet("OIS_MAIN")
     steps = [{"ref": "OIS_MAIN!U%d" % r, "value": raw.consts.get(parse_a1("U%d" % r))} for r in range(10, 90)]
     assert svc.set_inputs(u, "tto", [s for s in steps if isinstance(s["value"], float)])["applied"] > 10
+    # ... and Excel's USDTRY spot (Bloomberg's MID, 49,9977): every page reads the strip's since 28.11.2026 (49,99725 in the
+    # recording) - the OIS nominals of the spreads and flies below, rounded to the TL, would move with it
+    assert svc.set_inputs(u, "tto", [{"ref": "OIS_MAIN!D2", "value": raw.cached[parse_a1("D2")]}], allow_adhoc=True)["errors"] == []
     st = svc.carry_settings(u)
     assert (st["path"], st["default"], st["a"], st["b"]) == ("Bootstrap", "Bootstrap", 1.0, 3.0)
     assert [o["id"] for o in st["options"]] == ["Bootstrap", "MPC ima", "S1", "S2", "S3", "Sabit TLREF"]

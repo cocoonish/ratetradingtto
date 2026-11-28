@@ -494,6 +494,10 @@ class Service(object):
         from .varrisk import VarRisk
         self.varrisk = VarRisk(self)
         self.varrisk.declare()
+        # the top strip's USDTRY spot in Borsa Swap's workbook, which cannot read the TRY workbook (spotlink.py, 28.11.2026)
+        from .spotlink import SpotLink
+        self.spotlink = SpotLink(self)
+        self.spotlink.declare()
         if tto is not None:
             if ex.SRC_SHEET in tto.model.sheet_index:          # the order of the pricing sources (settings page)
                 tto.declare("%s!B4:E6" % ex.SRC_SHEET, scope="shared", group="sources", kind="text",
@@ -1587,6 +1591,9 @@ class Service(object):
         vr = getattr(self, "varrisk", None)
         if vr is not None and book is vr.tto:
             vr.refresh()                         # (DV01 Risk's VaR: the realized covariances current with the history)
+        sl = getattr(self, "spotlink", None)
+        if sl is not None and book is sl.borsa:
+            sl.refresh()                         # (Borsa Swap: the top strip's USDTRY spot, BBG or the manual one)
         if not user:
             interp = getattr(self, "interp", None)
             if interp is not None and book is interp.tto and interp.listed():

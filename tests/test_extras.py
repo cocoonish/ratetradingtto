@@ -136,6 +136,11 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    # (OIS · PPK's O/N EŞLENİKLERİ with each curve's zero - 27.11.2026)
                                                    extras.ONZ_NAME,
                                                    extras.VAR_NAME,
+                                                   # (the TRY / FX pages, 28.11.2026: one spot, one look, one spread rule, one
+                                                   # name, empty calculators, Carry & Roll's vol, ORANLAR's colours, the title)
+                                                   extras.SPOT_NAME, extras.NUMS_NAME, extras.SPREAD_NAME, extras.NAMES_NAME,
+                                                   extras.EMPTY_CALC_NAME, extras.CARRY_VOL_NAME, extras.ORANLAR_YON_NAME,
+                                                   extras.PARAM_TITLE_NAME,
                                                    # (how numbers read on the Forward and DV01 Risk pages - düzen, 27.11.2026)
                                                    extras.FMT_NAME]
     assert sofr.formula_count() == n and not {"EK_FWD", "EK_XAU", "EK_VIOP", "EK_KAYNAK", "EK_BULK", "EK_DIBS", "EK_EVREN", "EK_CARRY",
@@ -155,8 +160,9 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
     assert extras.apply("tto", tto) == ["EK_XAU: VIOP!M58 bir formül değil"]
     # (rows 107-109: the matrix's DV01s, rewritten by their own addition whatever the gold tables are; rows 1 / 45 / 60:
     # the futures tickers, which roll by themselves - the gold ones too; rows 330-338: the target table, whose FRA takes
-    # the curve chosen per row)
-    dv01_rows = {r for r in (107, 108, 109, 1, 45, 60) + tuple(range(330, 339))}
+    # the curve chosen per row; rows 11 / 23 / 50 / 75 / 88: the spot rows, which read the strip's spot, and rows 18 / 82 / 95:
+    # the spreads as X − OIS in bp - 28.11.2026)
+    dv01_rows = {r for r in (107, 108, 109, 1, 45, 60) + tuple(range(330, 339)) + (11, 23, 50, 75, 88, 18, 82, 95)}
     keep = lambda fml: {rc: t for rc, t in fml.items() if rc // COLS not in dv01_rows}          # noqa: E731
     assert "EK_FWD" in tto.sheet_index and "EK_XAU" not in tto.sheet_index and keep(viop.fml) == keep(formulas)
     assert "EK_VIOP" in tto.sheet_index                                             # the history charts do not need the gold tables
@@ -690,10 +696,17 @@ def test_offline_the_gold_tables_show_what_excel_recorded(svc):
     for r in TARGET_ROWS:
         assert cell(svc, "EK_XAU!K%d" % r) == "BFXFORWARD"
         assert cell(svc, "EK_XAU!E%d" % r) == "" and cell(svc, "EK_XAU!D%d" % r) == ""
-    # what hangs on those cells is therefore unchanged too
+    # what hangs on those cells is therefore unchanged too - what also reads the USDTRY spot reads the strip's since 28.11.2026
+    # (49,99725, the bid / ask mid, where Excel's rows read USDTRY's MID 49,9977): tests/test_tek_spot.py shows that only
+    # what reads the spot moves
+    spot = book.engine.ref_index().downstream([book.cell(ref) for ref in extras.spot_cells()])
     for addr in ("VIOP!M55", "VIOP!M52", "VIOP!S52", "VIOP!M65", "Forward!I30", "Forward!J30"):
         sheet, a = addr.split("!")
-        assert cell(svc, addr) == pytest.approx(recorded(svc, sheet, a), rel=1e-12)
+        if book.cell(addr) in spot:
+            assert addr in ("VIOP!M52", "VIOP!S52", "Forward!I30", "Forward!J30")
+            assert cell(svc, addr) == pytest.approx(recorded(svc, sheet, a), rel=1e-3)
+        else:
+            assert cell(svc, addr) == pytest.approx(recorded(svc, sheet, a), rel=1e-12)
 
 
 def test_gold_forward_is_the_spot_carried_at_the_swap_rate_without_a_usd_rate(svc, gold):
@@ -995,6 +1008,8 @@ def test_live_without_bfxforward_the_gold_tables_run_on_the_swap_rate(svc, tmp_p
     today = svc.books["tto"].engine.clock.today()
     snapshot = {k: v for k, v in svc.provider.snapshot.items() if k[0] != "BFX"}
     snapshot.update({bdp_key("XAU Curncy", "BID"): 3960.0, bdp_key("XAU Curncy", "ASK"): 3961.0})
+    # (the strip's USDTRY bid / ask - every page's spot since 28.11.2026; the recording has no plain call of them to replay)
+    snapshot.update({bdp_key("USDTRY Curncy", "BID"): 49.997, bdp_key("USDTRY Curncy", "ASK"): 49.9975})
     clock = Clock(today + 0.5)
     clock.today = lambda: float(today)
     provider = _Direct(snapshot)

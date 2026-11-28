@@ -64,7 +64,8 @@
    "sheet": "Sheet1",
    "title": "Spot kur ve USD OIS eğrisi",
    "range": "AC3:AH19",
-   "keep_title": true
+   "keep_title": true,
+   "note": "Spot kur: üst şeridin USDTRY spotu (Spot kaynağı: BBG ya da manuel spot) - her sayfadaki gibi (28.11.2026). ON kur = spot − TRY O/N puanı."
   },
   {
    "id": "d0",
@@ -106,6 +107,15 @@
    "sheet": "EK_TATIL",
    "title": "Yardımcı · TRY tatilleri (TTO kitabının listesinin kopyası) ve T+1 valör",
    "range": "A1:C204",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
+   "id": "spot",
+   "type": "table",
+   "sheet": "EK_SPOT",
+   "title": "Yardımcı · üst şeridin USDTRY spotu (servisin yazdığı)",
+   "range": "A1:B3",
    "hidden": true,
    "keep_title": true
   }

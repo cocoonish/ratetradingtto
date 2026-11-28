@@ -8934,9 +8934,486 @@ def _tto_on_zero(model: Model) -> None:
             b.set("%s%d" % (zero, r), '=IFERROR((%s-1)*360/%s,"")' % (g, days), like="%s%d" % (on, r))
 
 
+# ---------------------------------------------------------------------------------------------- one USDTRY spot
+# The desk, 28.11.2026 (B4, "Bir büyüklük: tek ad, tek sayı"), asked which USDTRY spot the pages use: "Bbg veya manual
+# spot" - every page uses the top strip's spot (Spot kaynağı: BBG, or the manual spot typed in VIOP!AA9:AA10).  The strip
+# is MASA!H2, the mid of VIOP!L99:L100 (the manual bid / ask, else Bloomberg's USDTRY Curncy BID / ASK).  The workbook read
+# USDTRY in three more places: OIS_MAIN!D2 and Forward!F2 (Bloomberg's "TRY Curncy" MID) and the VİOP sheet's spot rows
+# (USDTRY Curncy MID, else PX_LAST).  They read the strip now, and so does everything that reads them: OIS · PPK's nominals
+# and $DV01s, Carry & Roll's $, DİBS RV's / Manuel Tahvil's OIS hedge nominals, OIS · Nakit Akışı's $DV01 scale, the
+# Forward page's outrights, calculators and TOPLU FORWARD, VİOP's implied rates and fair forwards, the gold calculator,
+# the blotter, Fiyatlama's NPV $, Trades, the FX board's USDTRY.  Forward!F2 stays a personal input: a spot typed there is
+# that user's, Delete brings the strip's back.  Borsa Swap's workbook cannot read the TRY workbook: the service writes the
+# strip's spot into it (tto/spotlink.py, EK_SPOT!B2).  No curve reads a spot: the OIS curve, Bootstrap (Motor) and the
+# offshore curve keep their bits (tests/test_tek_spot.py compares every cell of the workbook with and without this).
+SPOT_NAME = "Tek USDTRY spotu"
+STRIP_SPOT = "MASA!$H$2"
+SPOT_FORMULA = "=IF(ISNUMBER(%s),%s,NA())" % (STRIP_SPOT, STRIP_SPOT)
+_USDTRY_MID = '"USDTRY Curncy","MID"'
+#: (sheet, cells, what each read before - Bloomberg's field)
+SPOT_SOURCES = (("OIS_MAIN", "D2", '"TRY Curncy","MID"'), ("Forward", "F2", '"TRY Curncy","MID"'),
+                ("VIOP", "M11:X11", _USDTRY_MID), ("VIOP", "M23:X23", _USDTRY_MID), ("VIOP", "M50:O50", _USDTRY_MID),
+                ("VIOP", "S50:U50", _USDTRY_MID), ("VIOP", "M75:X75", _USDTRY_MID), ("VIOP", "M88:X88", _USDTRY_MID))
+
+
+def _cells_of(rng: str) -> List[str]:
+    """``"M11:O11"`` -> ``["M11", "N11", "O11"]`` (a range's addresses, row by row)."""
+    r1, c1, r2, c2 = parse_range(rng)
+    return ["%s%d" % (index_to_col(c), r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
+
+
+def spot_cells() -> List[str]:
+    """Every cell that reads the strip's spot since 28.11.2026, as ``"Sheet!A1"`` (the TRY workbook)."""
+    return ["%s!%s" % (sheet, a) for sheet, rng, _ in SPOT_SOURCES for a in _cells_of(rng)]
+
+
+def _spot_check(model: Model) -> None:
+    _need_sheets(model, "MASA", "VIOP", "OIS_MAIN", "Forward")
+    _need_formula(model, "MASA", "H2", "(VIOP!$L$99+VIOP!$L$100)/2")
+    for sheet, rng, field in SPOT_SOURCES:
+        for addr in _cells_of(rng):
+            _need_formula(model, sheet, addr, field)
+
+
+def _tto_spot(model: Model) -> None:
+    for sheet, rng, _ in SPOT_SOURCES:
+        b = SheetBuilder(model, sheet)
+        for addr in _cells_of(rng):
+            b.patch(addr, SPOT_FORMULA)
+
+
+#: Borsa Swap's workbook: the strip's spot as the service writes it (a blank cell until it does: Bloomberg's PX_LAST then)
+SPOT_SHEET = "EK_SPOT"
+SPOT_CELL = "B2"
+BORSA_SPOT = "AD18"
+BORSA_SPOT_CAPTION = "Spot kur (üst şerit)"
+
+
+def _borsa_spot_check(model: Model) -> None:
+    _need_sheets(model, "Sheet1")
+    if SPOT_SHEET in model.sheet_index:
+        raise ValueError("%s sayfası zaten var" % SPOT_SHEET)
+    _need_captions(model, (("Sheet1", "AC18", "Spot Kur"),))
+    _need_formula(model, "Sheet1", BORSA_SPOT, '"USDTRY Curncy","PX_LAST"')
+
+
+def _borsa_spot(model: Model) -> None:
+    e = SheetBuilder(model, SPOT_SHEET)
+    e.title("A1", "ÜST ŞERİDİN USDTRY SPOTU  ·  servisin yazdığı (tto/spotlink.py)")
+    e.set("A2", "USDTRY mid (BBG ya da manuel spot)", bold=True)
+    e.set(SPOT_CELL, None, fmt=NUM4)
+    e.note("A3", "TTO kitabının MASA!H2'si (VİOP!L99:L100'ün ortası: manuel bid / ask, boşsa Bloomberg'in USDTRY Curncy BID / "
+                 "ASK'i). Borsa Swap'ın spot kuru bunu okur; boşken (servis henüz yazmadıysa) Bloomberg'in PX_LAST'i.")
+    b = SheetBuilder(model, "Sheet1")
+    b.patch(BORSA_SPOT, '=IF(N(%s!$B$2)>0,%s!$B$2,_xll.BDP("USDTRY Curncy","PX_LAST"))' % (SPOT_SHEET, SPOT_SHEET))
+    b.set("AC18", BORSA_SPOT_CAPTION, like="AC18")
+    b.number_format(BORSA_SPOT, lambda fmt: NUM4)
+
+
+# ---------------------------------------------------------------------------------------------- one number, one look
+# B4 of 28.11.2026: the same figure reads the same everywhere - OIS · PPK's Parametreler as the top strip (İma 12A and İma /
+# toplantı with the strip's one decimal: "-285" / "-284,9" were the same number), counts as whole numbers ("3,000 ay" a horizon
+# of 3 months, "182,0000" days), a threshold in bp with one decimal.  How they read only: every value, formula and input
+# stays as it is, and a user's own decimals (right click) still sit on top.  ("-0" is numfmt's: a negative its section
+# rounds to zero reads as zero.)
+NUMS_NAME = "Tek sayı biçimi"
+#: OIS · PPK's Parametreler cells that show the strip's figures (or their kind), and the strip's cell whose format they take
+NUMS_LIKE_STRIP = (("D5", "M2"), ("F5", "N2"), ("J5", "M2"))
+#: counts read as whole numbers: (sheet, caption cell, its text, the cells)
+NUMS_WHOLE = (("OIS_MAIN", "J65", "Bitiş (ay)", "J66:J80"), ("DİBS RV", "I2", "Ufuk (ay)", "J2"),
+              ("DİBS RV", "U2", "TLREF gecikme (iş g.)", "V2"), ("Manuel Tahvil", "A9", "Dönem gün", "B9"),
+              ("Manuel Tahvil", "A13", "TLREF gecikme (iş günü)", "B13"), ("Forward", "AG122", "gün", "AG123:AG137"))
+#: bp figures with one decimal (LOOK_BP)
+NUMS_BP = (("DİBS RV", "O2", "Eşik (bp)", "P2"),)
+
+
+def _nums_check(model: Model) -> None:
+    _need_sheets(model, "OIS_MAIN", "MASA", "DİBS RV", "Manuel Tahvil", "Forward")
+    _need_captions(model, (("OIS_MAIN", "C5", "İma 12A (bp)"), ("OIS_MAIN", "E5", "İma / toplantı"), ("OIS_MAIN", "I5", "Senaryo − ima"),
+                           ("MASA", "M1", "İma 12A (bp)"), ("MASA", "N1", "İma / PPK (bp)"))
+                   + tuple((sheet, head, text) for sheet, head, text, _ in NUMS_WHOLE + NUMS_BP))
+
+
+def _tto_nums(model: Model) -> None:
+    from .xl import numfmt
+    strip = model.sheet("MASA")
+    o = SheetBuilder(model, "OIS_MAIN")
+    for addr, like in NUMS_LIKE_STRIP:
+        fmt = model.numfmts[strip.styles.get(parse_a1(like), 0)]
+        o.number_format(addr, lambda _old, fmt=fmt: fmt)
+    for sheet, _, _, rng in NUMS_WHOLE:
+        SheetBuilder(model, sheet).number_format(rng, lambda fmt: numfmt.with_decimals(fmt, 0))
+    for sheet, _, _, rng in NUMS_BP:
+        SheetBuilder(model, sheet).number_format(rng, lambda fmt: LOOK_BP)
+
+
+# ---------------------------------------------------------------------------------------------- one spread rule
+# B5 of 28.11.2026: a spread reads one way on every page - X − OIS (or X − Offshore), in bp, whole, the side named.  The
+# Forward page said it three ways (−461 bp "Offshore − OIS", +4,58 % "OIS − Off", −266,70 "OIS − Off O/N"), VİOP five for one
+# contract (−195 / −208 bp, "OIS - VIOP" 2,09 %, "OIS vs VIOP" −0,13 % of the price).  These cells read the rule now; only the
+# way they say it changed - the same rates, the other way round, in bp.  VİOP's two price comparisons ("OIS vs VIOP",
+# "ICAP vs VIOP": the last price over the fair forward, in % of the price) become the rate the last price implies (the VİOP
+# block's own formula, 360) less the block's TRY rate.  Masa's VİOP summary read "OIS - VIOP" × −10000: it reads the bp now.
+SPREAD_NAME = "Tek spread kuralı (X − OIS, bp)"
+BP0 = "#,##0;\\-#,##0;0"
+VIOP_COLS = [index_to_col(c) for c in range(13, 25)]          # M:X, the twelve contracts
+#: (sheet, caption cell, its text before, its text now, the cells, their formula before (a template on {c} the column /
+#: {r} the row), now)
+SPREAD_CELLS = (
+    ("VIOP", "L18", "OIS - VIOP", "VİOP mid − OIS (bp)", "M18:X18", "{c}77-({c}13+{c}25)/2", "=((({c}13+{c}25)/2)-{c}77)*10000"),
+    ("VIOP", "L82", "OIS vs VIOP", "VİOP son − OIS (bp)", "M82:X82", "({c}81-{c}79)/{c}79",
+     "=((({c}81/{c}75)*(1+{c}76*{c}74/360)-1)*360/{c}74-{c}77)*10000"),
+    ("VIOP", "L95", "ICAP vs VIOP", "VİOP son − Offshore (bp)", "M95:X95", "({c}94-{c}92)/{c}92",
+     "=((({c}94/{c}88)*(1+{c}89*{c}87/360)-1)*360/{c}87-{c}90)*10000"),
+    ("Forward", "G100", "OIS - Off", "Offshore − OIS (bp)", "G101:G119", "IF(AND(ISNUMBER(E{r}),ISNUMBER(F{r})),F{r}-E{r},NA())",
+     "=IF(AND(ISNUMBER(E{r}),ISNUMBER(F{r})),(E{r}-F{r})*10000,NA())"),
+    ("Forward", "I100", "VİOP - OIS", "VİOP − OIS (bp)", "I101:I119", "IF(AND(ISNUMBER(H{r}),ISNUMBER(F{r})),H{r}-F{r},NA())",
+     "=IF(AND(ISNUMBER(H{r}),ISNUMBER(F{r})),(H{r}-F{r})*10000,NA())"),
+    ("Forward", "X131", "OIS - Off O/N (bp)", "Offshore − OIS O/N (bp)", "X132:X140", 'IFERROR((W{r}-P{r})*100,"")',
+     '=IFERROR((P{r}-W{r})*100,"")'),
+    ("MASA", "V5", "OIS − Off (bp)", "Offshore − OIS (bp)", "V6:V20", 'IFERROR((Q{r}-R{r})*10000,"")', '=IFERROR((R{r}-Q{r})*10000,"")'))
+#: Masa's VİOP summary: "VİOP − OIS (bp)" of contract k, read from the VİOP sheet's row 18 (it multiplied by −10000)
+MASA_VIOP_SPREAD = ("I110:I121", 'IFERROR(INDEX(VIOP!$M$18:$X$18,{k})*-10000,"")', '=IFERROR(INDEX(VIOP!$M$18:$X$18,{k}),"")')
+
+
+def _spread_cells(rng: str) -> List[Tuple[str, str, int]]:
+    r1, c1, r2, c2 = parse_range(rng)
+    return [("%s%d" % (index_to_col(c), r), index_to_col(c), r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
+
+
+def _spread_check(model: Model) -> None:
+    _need_sheets(model, "VIOP", "Forward", "MASA")
+    _need_captions(model, tuple((sheet, cap, old) for sheet, cap, old, _, _, _, _ in SPREAD_CELLS))
+    for sheet, _, _, _, rng, before, _ in SPREAD_CELLS:
+        for addr, c, r in _spread_cells(rng):
+            _need_exact_formula(model, sheet, addr, before.format(c=c, r=r))
+    rng, before, _ = MASA_VIOP_SPREAD
+    for k, (addr, _, _) in enumerate(_spread_cells(rng)):
+        _need_exact_formula(model, "MASA", addr, before.format(k=k + 1))
+
+
+def _tto_spread(model: Model) -> None:
+    for sheet, cap, _, text, rng, _, now in SPREAD_CELLS:
+        b = SheetBuilder(model, sheet)
+        b.set(cap, text, like=cap)
+        for addr, c, r in _spread_cells(rng):
+            b.patch(addr, now.format(c=c, r=r))
+        b.number_format(rng, lambda fmt: BP0)
+    rng, _, now = MASA_VIOP_SPREAD
+    m = SheetBuilder(model, "MASA")
+    for k, (addr, _, _) in enumerate(_spread_cells(rng)):
+        m.patch(addr, now.format(k=k + 1))
+
+
+# ---------------------------------------------------------------------------------------------- one name: offshore
+# B4 of 28.11.2026: the offshore TRY curve had four names on the pages - ICAP (its price source, ICPL), Offshore, FX swap ima
+# (its 1W–9M part) and XCCY (its 1Y–10Y part).  It is "Offshore" wherever the curve is meant; FX swap ima and XCCY stay where
+# an instrument of it is meant (a TRYI or TRYSAQ quote), ICAP where the source is meant.  The page's "?" chip has the short
+# glossary (tto/static/js/glossary.js).  B14: the Forward page's helpers named, the curve and its day count in each title.
+# Texts only (no formula reads them; a text another addition changed meanwhile is left as it is: ``_replace_texts``).
+NAMES_NAME = "Tek ad (offshore)"
+#: (sheet, cell, text or part of it before, now)
+NAME_TEXTS = (
+    ("MASA", "F5", "ICAP", "Offshore"), ("MASA", "L5", "ICAP − OIS (bp)", "Offshore − OIS (bp)"),
+    ("MASA", "B21", "RET/ICAP/OIS zero/VİOP", "RET/Offshore/OIS zero/VİOP"),
+    ("MASA", "T42", "ICAP", "Offshore"), ("MASA", "X42", "ICAP bant dışı", "Offshore bant dışı"),
+    ("MASA", "AA42", "ICAP − RET mid", "Offshore − RET mid"),
+    ("MASA", "AI5", "ICAP", "Offshore"), ("MASA", "AP23", "ICAP", "Offshore"), ("MASA", "AJ23", "ICAP − RET mid", "Offshore − RET mid"),
+    ("MASA", "M109", "VİOP − FX sw (bp)", "VİOP − Offshore (bp)"), ("MASA", "N109", "VİOP−FX z", "VİOP − Offshore z"),
+    ("Forward", "G4", "ICAP Implied TL Curve", "Offshore · TRY faizi (ACT/360 basit): FX swap ima 1H–9A, XCCY zero 1Y+"),
+    ("Forward", "N4", "TRY OIS Simple Zero Rates", "TRY OIS · basit zero (ACT/360)"),
+    ("Forward", "AO4", "— ICAP, USD OIS", "— Offshore (ICAP kaynağı), USD OIS"), ("Forward", "AO5", "ICAP", "Offshore"),
+    ("Forward", "AC122", "ICAP", "Offshore"), ("Forward", "B174", "Offshore (ICAP) mid", "Offshore mid"),
+    # (the forward tables' curve rows - USDTRY / EURTRY outright and swap points; Fiyatlama's forward reads them by place)
+    ("Forward", "C30", "ICAP", "Offshore"), ("Forward", "C36", "ICAP", "Offshore"), ("Forward", "C42", "ICAP", "Offshore"),
+    ("Forward", "C48", "ICAP", "Offshore"),
+    ("EK_FWD", "A53", "offshore = ICAP ima eğrisi", "offshore = FX swap ima (1H–9A) + XCCY (1Y+) eğrisi"),
+    ("EK_FWD", "A96", "offshore = ICAP ima eğrisi", "offshore = FX swap ima (1H–9A) + XCCY (1Y+) eğrisi"),
+    ("VIOP", "B56", "ICAP Implied TL Curve", "Offshore · ICAP kotaları (FX swap ima 1H–9A basit, XCCY par 1Y+; ACT/360)"),
+    ("VIOP", "B41", "TRY OIS Simple Zero Rate Start", "TRY OIS · kotalar (ACT/365 basit)"),
+    ("VIOP", "K84", "ICAP", "Offshore"), ("VIOP", "K264", "FX swap ima TRY ff", "Offshore TRY ff"),
+    ("VIOP", "K278", "VİOP orta ima ff − FX swap ima ff (bp)", "VİOP orta ima ff − Offshore ff (bp)"),
+    ("VIOP", "K292", "FX swap ima ff − OIS FRA (bp)", "Offshore ff − OIS FRA (bp)"),
+    ("VIOP", "K353", "FX SWAP BAZI", "OFFSHORE − OIS BAZI"), ("VIOP", "K366", "VİOP − FX SWAP", "VİOP − OFFSHORE"),
+    ("VIOP", "L363", "ICAP canlı", "Offshore canlı"), ("VIOP", "Z109", "1W–9M ICAP implied", "1W–9M FX swap ima"),
+    # (B14) the Forward page's helpers named: RET SP's unit, the value date's RET, the result of RET + spread
+    ("Forward", "AB32", "Bid", "Bid (P/gün)"), ("Forward", "AC32", "Ask", "Ask (P/gün)")) + tuple(
+    # (B12) OIS · PPK's lists: "R/R Beklenen" was the widest caption of a column of "Risksiz" - shorter, EN İYİ 15 FLY sits
+    # beside EN İYİ 15 SPREAD on a desk screen (it was 9 px too wide); every list the same caption
+    ("OIS_MAIN", addr, "R/R Beklenen", "R/R Bekl.") for addr in ("K8", "K29", "K47", "K65", "K83", "J102", "J132", "J288"))
+#: empty cells given a caption (B14): (sheet, cell, text, bold)
+NAME_CAPTIONS = (("Forward", "P32", "O/N · T/N puan", True), ("Forward", "AA48", "Valör", True),
+                 ("Forward", "AA95", "RET + spread", True), ("Forward", "AB95", "Bid", True), ("Forward", "AC95", "Ask", True))
+#: Forward DV01's interpolation helpers nobody reads (USD_Index and the two USD OIS nodes around it: "8", "4,15 % 181",
+#: "4,28 % 273" in the table); USD_SOFR beside them interpolates by itself
+FWD_DV01_DEAD = "N38:O40"
+#: the Forward sheet's O/N chart: its title, and its axis fitted to the rates (it started at 0)
+ON_CHART = (0, "O/N Equivalent TRY Onshore - Offshore", "O/N karşılığı (360) · Offshore, OIS ve VİOP")
+
+
+def _replace_texts(model: Model, items: Sequence[Tuple[str, str, str, str]]) -> List[str]:
+    """Each cell's text with ``old`` replaced by ``new`` (where the cell still holds it); the cells changed."""
+    done = []
+    for sheet, addr, old, new in items:
+        if sheet not in model.sheet_index:
+            continue
+        sh = model.sheet(sheet)
+        rc = parse_a1(addr)
+        text = sh.consts.get(rc)
+        if rc in sh.fml or not isinstance(text, str) or old not in text:
+            continue
+        sh.consts[rc] = text if text == new else (new if text == old else text.replace(old, new))
+        done.append("%s!%s" % (sheet, addr))
+    return done
+
+
+def _names_check(model: Model) -> None:
+    _need_sheets(model, "MASA", "Forward", "VIOP")
+    sh = model.sheet("Forward")
+    for sheet, addr, _, _ in NAME_CAPTIONS:
+        _need_empty(model, sheet, addr)
+    _need_captions(model, (("Forward", "N38", "USD_Index"), ("Forward", "N41", "USD_SOFR")))
+    for addr in _cells_of(FWD_DV01_DEAD)[1:]:
+        if parse_a1(addr) not in sh.fml:
+            raise ValueError("Forward!%s bir formül değil" % addr)
+    k, title, _ = ON_CHART
+    if k >= len(sh.charts) or sh.charts[k].get("title") != title:
+        raise ValueError("Forward grafiği %d: %s yok" % (k, title))
+
+
+def _tto_names(model: Model) -> None:
+    _replace_texts(model, NAME_TEXTS)
+    for sheet, addr, text, bold in NAME_CAPTIONS:
+        SheetBuilder(model, sheet).set(addr, text, bold=bold)
+    sh = model.sheet("Forward")
+    for addr in _cells_of(FWD_DV01_DEAD):
+        rc = parse_a1(addr)
+        sh.fml.pop(rc, None)
+        sh.consts.pop(rc, None)
+    k, _, title = ON_CHART
+    sh.charts[k]["title"] = title
+    sh.charts[k]["auto"] = "fit"
+
+
+# ---------------------------------------------------------------------------------------------- empty calculators: no errors
+# B7 of 28.11.2026 ("Boş, sıfır ve yükleniyor ayrı okunsun"): a hand calculator nobody filled in shows blanks, not errors -
+# the Forward page's XARTRY customer gold forward (9× #VALUE!, "31.12.1899"), its bond carry (Bloomberg's yield and dirty
+# price of no ISIN - the file's cached values offline - and 2× #DIV/0!) and OIS · Nakit Akışı's summary (14× #DIV/0!).  Each
+# cell keeps its formula behind a guard: with what it needs given, the very value it had.  The bond carry's Bloomberg cells
+# move to helpers beside the block (AA59:AA68, their recorded values with them), the cells shown read them only with an ISIN.
+EMPTY_CALC_NAME = "Boş hesaplayıcılar hatasız"
+#: XARTRY: (cell, what it needs - Excel tests that must all hold for the cell's own formula)
+XAR_GUARDS = (("E60", "ISNUMBER(C61),ISNUMBER(E59)"), ("C62", "ISNUMBER(C61)"), ("C65", "ISNUMBER(E61)"),
+              ("E62", "ISNUMBER($E$63),ISNUMBER($E$64),N($C$65)>0"), ("E65", "ISNUMBER(C62),ISNUMBER(E62)"),
+              ("E66", "ISNUMBER(E65),ISNUMBER(E60)"), ("E68", "ISNUMBER(E61),ISNUMBER(E67)"),
+              ("E69", "ISNUMBER(E68),ISNUMBER(E66),N(C65)<>0"), ("B71", "ISNUMBER(E67)"), ("C71", "ISNUMBER(E61)"),
+              ("D71", "ISNUMBER(E60)"), ("E71", "ISNUMBER(E69)"), ("F71", "ISNUMBER(E71),ISNUMBER(D71)"),
+              ("B73", "ISNUMBER(B71),ISNUMBER(C71)"))
+XAR_CAPTIONS = (("Forward", "B57", "XAUUSD"), ("Forward", "D57", "XARTRY"), ("Forward", "D60", "XARTRY Spot"),
+                ("Forward", "D65", "XARTRY Forward"), ("Forward", "D69", "Swap Point"), ("Forward", "B65", "USDTRY N"))
+#: the bond carry's Bloomberg cells -> their helpers (the ISIN in V56)
+CARRY_BBG = (("V59", "AA59"), ("V60", "AA60"), ("V64", "AA64"), ("V68", "AA68"))
+CARRY_ISIN = "$V$56"
+CARRY_CAPTIONS = (("Forward", "U56", "ISIN"), ("Forward", "U59", "Yield"), ("Forward", "U60", "Dirty Price"),
+                  ("Forward", "U64", "Coupon"), ("Forward", "U68", "B/E Yield"), ("Forward", "U69", "Yield Drop"))
+#: the bond carry's cells that divide by N or read the cells above: (cell, guard) - and the two that multiply a blank
+CARRY_GUARDS = (("V69", "ISNUMBER(V68),ISNUMBER(V59)"), ("W69", "ISNUMBER(V69),N(V63)<>0"))
+CARRY_N = (("V65", "V60*", "N(V60)*"), ("V66", "V64*", "N(V64)*"))
+#: OIS · Nakit Akışı: (cell, guard) of the summary; the PVs (two-way members) guard their own PV inside (``_TMOIS_PV``)
+TMOIS_GUARDS = (("B4", "SUM($I$10:$I$34)<>0"), ("D4", "SUM($Q$10:$Q$34)<>0"), ("F4", "SUM($V$10:$V$34)<>0"),
+                ("H4", "SUM($AA$10:$AA$34)<>0"), ("J4", "ISNUMBER(D4),ISNUMBER(F4),ISNUMBER(H4)"),
+                ("D6", "SUM($I$10:$I$34)<>0"), ("F6", "N(D6)<>0"), ("H6", "ISNUMBER(B4),ISNUMBER(J4)"), ("J6", "ISNUMBER(H6)"))
+
+
+def _guarded(model: Model, sheet: str, addr: str, tests: str) -> str:
+    """A cell's own formula behind a guard: ``=IF(AND(tests), <its formula>, "")``."""
+    return '=IF(AND(%s),%s,"")' % (tests, formula_of(model, sheet, addr))
+
+
+def _empty_calc_check(model: Model) -> None:
+    _need_sheets(model, "Forward", "TM_OIS")
+    _need_captions(model, XAR_CAPTIONS + CARRY_CAPTIONS + (("TM_OIS", "A4", "Par – piyasa"), ("TM_OIS", "A6", "Kullanılan oran")))
+    for addr, _ in XAR_GUARDS + CARRY_GUARDS + (("W70", ""),):
+        _need_formula(model, "Forward", addr)
+    for addr, _ in CARRY_BBG:
+        _need_formula(model, "Forward", addr, "_xll.BDP(V56")
+    for _, helper in CARRY_BBG:
+        _need_empty(model, "Forward", helper)
+    for addr, _ in TMOIS_GUARDS:
+        _need_formula(model, "TM_OIS", addr)
+    for cell, x, fl, _ in TMOIS_PVS:
+        _need_formula(model, "TM_OIS", cell, _TMOIS_PV % {"x": x, "f": fl})
+    _need_formula(model, "TM_OIS", TMOIS_EXPECTED, _TMOIS_EXP)
+
+
+def _tto_empty_calc(model: Model) -> None:
+    fw = SheetBuilder(model, "Forward")
+    for addr, tests in XAR_GUARDS + CARRY_GUARDS:
+        fw.patch(addr, _guarded(model, "Forward", addr, tests))
+    # the bond carry's Bloomberg cells: the request (only with an ISIN) and the file's value in the helper beside the block
+    for addr, helper in CARRY_BBG:
+        text = formula_of(model, "Forward", addr)
+        fw.set(helper, '=IF(ISBLANK(%s),"",%s)' % (CARRY_ISIN, text), like=addr)
+        fw.recorded(helper, recorded_value(model, "Forward", addr))
+        fw.patch(addr, '=IF(ISBLANK(%s),"",$%s$%s)' % (CARRY_ISIN, helper[:2], helper[2:]))
+    for addr, old, new in CARRY_N:
+        text = formula_of(model, "Forward", addr)
+        if old in text and new not in text:
+            fw.patch(addr, "=" + text.replace(old, new, 1))
+    # the daily Px Drop (a two-way member when the bond carry's way back is there): nothing typed and no N, blank
+    fw.patch("W70", '=IF(AND(N($V$63)=0,ISBLANK($Z$70)),"",%s)' % formula_of(model, "Forward", "W70"))
+    tm = SheetBuilder(model, "TM_OIS")
+    for addr, tests in TMOIS_GUARDS:
+        tm.patch(addr, _guarded(model, "TM_OIS", addr, tests))
+    # the PVs (two-way: the store wraps them): their PV blank without a cash flow; the expected PV without the three
+    for cell, x, fl, a in TMOIS_PVS:
+        pv = _TMOIS_PV % {"x": x, "f": fl}
+        tm.patch(cell, "=" + formula_of(model, "TM_OIS", cell).replace(
+            pv, 'IF(SUM($%s$10:$%s$34)<>0,%s,"")' % (a, a, pv), 1))
+    tm.patch(TMOIS_EXPECTED, "=" + formula_of(model, "TM_OIS", TMOIS_EXPECTED).replace(
+        _TMOIS_EXP, 'IF(AND(ISNUMBER(D5),ISNUMBER(F5),ISNUMBER(H5)),%s,"")' % _TMOIS_EXP, 1))
+    # a period at the trade rate: with no rate (no cash flow, no par) its fixed leg is 0, not an error
+    for r in range(TMOIS_ROWS[0], TMOIS_ROWS[1] + 1):
+        if formula_of(model, "TM_OIS", "AC%d" % r) == 'IF(D%d<>"",D%d,$B$6)' % (r, r):
+            tm.patch("AC%d" % r, '=IF(D%d<>"",D%d,N($B$6))' % (r, r))
+
+
+# ---------------------------------------------------------------------------------------------- Carry & Roll: the vol
+# C8 of 28.11.2026: Carry & Roll's "Yıllık vol" (Ufuk B, C & R!N24:N39 - each user's input, empty in the file) defaults to
+# the tenor's realized vol: the daily σ of the TRY OIS quote's moves (bp) × √252, from EK_VAR (DV01 Risk → VaR's covariances
+# of the OIS curve's buckets; the window the user chose there, "1 yıl" by default).  18M lies halfway between 1Y and 2Y
+# (linear by months, as the buckets split): its variance is ¼·σ²(1Y) + ¼·σ²(2Y) + ½·cov.  A value typed is the user's, Delete
+# brings the default back; no history, no default (blank, as before).  So C+R/vol fills.
+CARRY_VOL_NAME = "Carry & Roll yıllık vol varsayılanı"
+CARRY_VOL = (24, 39)
+#: each row's tenor -> its buckets in VAR_BUCKETS and their weights
+CARRY_VOL_TENORS = (("1M", (("1M", 1.0),)), ("2M", (("2M", 1.0),)), ("3M", (("3M", 1.0),)), ("6M", (("6M", 1.0),)),
+                    ("9M", (("9M", 1.0),)), ("1Y", (("1Y", 1.0),)), ("18M (1,5Y)", (("1Y", 0.5), ("2Y", 0.5))),
+                    ("2Y", (("2Y", 1.0),)), ("3Y", (("3Y", 1.0),)), ("4Y", (("4Y", 1.0),)), ("5Y", (("5Y", 1.0),)),
+                    ("6Y", (("6Y", 1.0),)), ("7Y", (("7Y", 1.0),)), ("8Y", (("8Y", 1.0),)), ("9Y", (("9Y", 1.0),)),
+                    ("10Y", (("10Y", 1.0),)))
+CARRY_VOL_DAYS = 252
+
+
+def carry_vol_formula(weights: Sequence[Tuple[str, float]]) -> str:
+    """The default "Yıllık vol" of a tenor: √(wᵀΣw)·√252, Σ the OIS buckets' covariance (bp² a day) of the window the user
+    chose on DV01 Risk → VaR; blank without the window or with fewer than two moves."""
+    n_win = len(VAR_WINDOWS)
+    win = "MATCH(DV01_RISK!$AB$%d,%s!$A$%d:$A$%d,0)" % (VAR_PARAM, VAR_SHEET, VAR_WIN_ROW, VAR_WIN_ROW + n_win - 1)
+    moves = "INDEX(%s!$%s$%d:$%s$%d,%s)" % (VAR_SHEET, VAR_STAT_COLS["n_ois"], VAR_WIN_ROW, VAR_STAT_COLS["n_ois"],
+                                            VAR_WIN_ROW + n_win - 1, win)
+    cov = "%s!$%s$%d:$%s$%d" % (VAR_SHEET, index_to_col(VAR_OIS_COL), VAR_COV_ROW, index_to_col(VAR_OIS_COL + 19),
+                                 VAR_COV_ROW + 20 * n_win - 1)
+    terms = []
+    for b1, w1 in weights:
+        for b2, w2 in weights:
+            i, j = VAR_BUCKETS.index(b1) + 1, VAR_BUCKETS.index(b2) + 1
+            terms.append("%s*INDEX(%s,(%s-1)*20+%d,%d)" % (repr(w1 * w2), cov, win, i, j))
+    var = "+".join(terms)
+    return '=IFERROR(IF(N(%s)<2,"",SQRT(MAX(0,%s))*SQRT(%d)),"")' % (moves, var, CARRY_VOL_DAYS)
+
+
+def _carry_vol_check(model: Model) -> None:
+    _need_sheets(model, "C & R", VAR_SHEET, "DV01_RISK")
+    _need_captions(model, (("C & R", "N23", "Yıllık vol"), ("C & R", "O23", "C+R/vol"), ("DV01_RISK", "AA%d" % VAR_PARAM, "Pencere"))
+                   + tuple(("C & R", "A%d" % (CARRY_VOL[0] + k), label) for k, (label, _) in enumerate(CARRY_VOL_TENORS)))
+    sh = model.sheet("C & R")
+    for r in range(CARRY_VOL[0], CARRY_VOL[1] + 1):
+        if parse_a1("N%d" % r) in sh.fml:
+            raise ValueError("C & R!N%d bir formül" % r)
+        _need_formula(model, "C & R", "O%d" % r, "G%d/N%d" % (r, r))
+
+
+def _tto_carry_vol(model: Model) -> None:
+    b = SheetBuilder(model, "C & R")
+    for k, (_, weights) in enumerate(CARRY_VOL_TENORS):
+        r = CARRY_VOL[0] + k
+        b.patch("N%d" % r, carry_vol_formula(weights))
+    b.number_format("N%d:N%d" % CARRY_VOL, lambda fmt: "#,##0.0")
+    b.number_format("O%d:O%d" % CARRY_VOL, lambda fmt: "0.00")
+
+
+# ---------------------------------------------------------------------------------------------- ORANLAR's direction
+# B6 of 28.11.2026 (one colour rule): Masa's ORANLAR "Yön (model)" (MASA!J6:J20, the OIS page's model direction) reads in the
+# colours of every other YÖN of the OIS lists and Masa - RECEIVE green, PAY red (LOOK_YON_RULES, as Günlük İşlemler).
+ORANLAR_YON_NAME = "ORANLAR yön rengi"
+ORANLAR_YON = ("MASA", "J5", "Yön (model)", "J6:J20")
+
+
+def _oranlar_yon_check(model: Model) -> None:
+    sheet, head, text, _ = ORANLAR_YON
+    _need_captions(model, ((sheet, head, text),))
+
+
+def _tto_oranlar_yon(model: Model) -> None:
+    sheet, _, _, rng = ORANLAR_YON
+    b = SheetBuilder(model, sheet)
+    r1, c1, _, _ = parse_range(rng)
+    first = "%s%d" % (index_to_col(c1), r1)
+    for condition, look in LOOK_YON_RULES:
+        model.dxfs.append(dict(look))
+        b.sheet.cf.append({"sqref": rng, "type": "expression", "op": None, "text": None, "stop": False,
+                           "priority": max([x.get("priority", 0) for x in b.sheet.cf] + [0]) + 1,
+                           "dxf": len(model.dxfs) - 1, "anchor": r1 * COLS + c1,
+                           "formulas": [to_template(condition % first, r1, c1)]})
+
+
+# ---------------------------------------------------------------------------------------------- OIS · PPK: Parametreler in one line
+# B12 of 28.11.2026: folded, OIS · PPK's pinned Parametreler says in its header what it is set to ("Normalleşme Açık ·
+# DV01/bacak 3.000 $ · Senaryo tabanı 1 · Ufuk 1/3"): a caption row of its own above the table (OIS_MAIN!A1, empty in the
+# workbook), which the page lifts as the panel's title - the same line folded or open.
+PARAM_TITLE_NAME = "OIS · PPK Parametreler özeti"
+PARAM_TITLE = "A1"
+
+
+#: the TLREF normalization's switch (its own addition, NORM_NAME): caption and cell - the title says it only where it is
+PARAM_NORM = ("K2", "Normalleşme", "$L$2")
+
+
+def _param_title_check(model: Model) -> None:
+    _need_sheets(model, "OIS_MAIN")
+    _need_empty(model, "OIS_MAIN", "A1:N1")
+    _need_captions(model, (("OIS_MAIN", "E2", "DV01/bacak $"), ("OIS_MAIN", "A3", "Senaryo tabanı"),
+                           ("OIS_MAIN", "A4", "Ufuk A ay"), ("OIS_MAIN", "C4", "Ufuk B ay")))
+
+
+def _tto_param_title(model: Model) -> None:
+    head, text, switch = PARAM_NORM
+    try:
+        _need_captions(model, (("OIS_MAIN", head, text),))
+        norm = '  ·  Normalleşme "&%s&"' % switch
+    except ValueError:                                          # (the workbook without the normalization: no switch)
+        norm = ""
+    SheetBuilder(model, "OIS_MAIN").set(
+        PARAM_TITLE, '="Parametreler%s  ·  DV01/bacak "&TEXT($F$2,"#,##0")&" $  ·  Senaryo tabanı "&$B$3&"  ·  Ufuk "&$B$4'
+                     '&"/"&$D$4&" ay"' % norm, bold=True)
+
+
+# ---------------------------------------------------------------------------------------------- USD · FOMC: two tables
+# B11 of 28.11.2026: USD · FOMC's 31-column FOMC table (A71:AE83) is two panels of the same range - the market's path, the
+# window OIS and WIRP (A–E, H, K, AA–AE, L–Q) from its header row, and the scenario view (B, R–Z) beside the chart with the
+# scenarios' probabilities (R72:T72) above it.  The probabilities' label stood in Q72, a column of the first panel: the
+# second panel shows it in B72 (empty in the workbook; the first panel starts at row 73, the Q72 label in neither).
+FOMC_SC_NAME = "FOMC senaryo görüşü"
+FOMC_SC_LABEL = ("B72", "Olasılık →")
+
+
+def _fomc_sc_check(model: Model) -> None:
+    _need_sheets(model, "SOFR_FOMC")
+    _need_captions(model, (("SOFR_FOMC", "Q72", FOMC_SC_LABEL[1]), ("SOFR_FOMC", "R73", "Baz adım (bp)"),
+                           ("SOFR_FOMC", "B73", "Toplantı")))
+    _need_empty(model, "SOFR_FOMC", FOMC_SC_LABEL[0])
+
+
+def _usd_fomc_sc(model: Model) -> None:
+    addr, text = FOMC_SC_LABEL
+    SheetBuilder(model, "SOFR_FOMC").set(addr, text, like="Q72")
+
+
 _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model], None]], ...]] = {
     "borsa": (("Borsa O/N", _borsa_check, _borsa), ("Borsa süzgeç", _borsa_filter_check, _borsa_filter),
-              ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1), (FMT_NAME, _borsa_formats_check, _borsa_formats)),
+              ("Borsa T+1 valörü", _borsa_t1_check, _borsa_t1), (SPOT_SHEET, _borsa_spot_check, _borsa_spot),
+              (FMT_NAME, _borsa_formats_check, _borsa_formats)),
     "asw": ((FXC_SHEET, _asw_fx_check, _asw_fx), (ASW_HIST_NAME, _asw_hist_check, _asw_hist),
             (INTERP_ASW_NAME, _asw_interp_check, _asw_interp), (ASW_BACK_NAME, _asw_back_check, _asw_back),
             # (the bonds' table two-way: after its way back, whose cells it leaves as they are)
@@ -8999,9 +9476,18 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # (TLREF's normalization: the date OIS implies - after the switch's builder, whose date in use it extends)
             (NW_NAME, _nw_check, _tto_norm_walk), (ONZ_NAME, _onz_check, _tto_on_zero),
             (VAR_NAME, _var_check, _tto_dv01_var),
+            # (28.11.2026: one USDTRY spot - the strip's -, one look, one spread rule, one name for the offshore curve, the
+            # empty calculators without errors, Carry & Roll's vol from EK_VAR, ORANLAR's direction coloured, OIS · PPK's
+            # Parametreler in one line - after every addition whose cells they read or wrap: the market defaults, the
+            # calculators' ways back, OIS · Nakit Akışı two-way, EK_VAR)
+            (SPOT_NAME, _spot_check, _tto_spot), (NUMS_NAME, _nums_check, _tto_nums), (SPREAD_NAME, _spread_check, _tto_spread),
+            (NAMES_NAME, _names_check, _tto_names), (EMPTY_CALC_NAME, _empty_calc_check, _tto_empty_calc),
+            (CARRY_VOL_NAME, _carry_vol_check, _tto_carry_vol), (ORANLAR_YON_NAME, _oranlar_yon_check, _tto_oranlar_yon),
+            (PARAM_TITLE_NAME, _param_title_check, _tto_param_title),
             # (how numbers read - after everything that writes the cells, whose look it changes only)
             (FMT_NAME, _layout_formats_check, _tto_layout_formats)),
-    "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back)),
+    "sofr": ((EMPTY_NAME, _usd_empty_check, _usd_empty), (FOMC_BACK_NAME, _fomc_back_check, _usd_fomc_back),
+             (FOMC_SC_NAME, _fomc_sc_check, _usd_fomc_sc)),
 }
 
 

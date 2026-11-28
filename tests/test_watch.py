@@ -97,8 +97,9 @@ def test_what_can_be_watched_and_its_value_now(svc):
     assert preview(svc, u, {"kind": "masa", "key": "usdtry_mid"})["text"] == "49,9973"
     # a VİOP contract: OIS − VİOP in bp, the implied TRY rate in per cent; by its ticker or its place
     p = preview(svc, u, {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"})
-    assert (p["label"], p["show"], p["text"], p["detail"]) == ("VİOP A1Z6 OIS − VİOP", "bp", "203,2 bp", "vade 31.12.2026")
-    assert p["value"] == pytest.approx(cell(svc, "VIOP!N18", user=uk) * 10000)
+    # (202,6: VİOP's implied rates at the strip's USDTRY spot since 28.11.2026 - 203,2 at Bloomberg's USDTRY MID)
+    assert (p["label"], p["show"], p["text"], p["detail"]) == ("VİOP A1Z6 OIS − VİOP", "bp", "202,6 bp", "vade 31.12.2026")
+    assert p["value"] == pytest.approx(-cell(svc, "VIOP!N18", user=uk))     # (the row: "VİOP mid − OIS (bp)", 28.11.2026)
     mid = preview(svc, u, {"kind": "viop", "ticker": "a1z6", "metric": "try_mid"})
     assert mid["subject"]["ticker"] == "A1Z6 Curncy"
     assert mid["value"] == pytest.approx((cell(svc, "VIOP!N13", user=uk) + cell(svc, "VIOP!N25", user=uk)) * 50)
@@ -268,7 +269,7 @@ def test_alarms_on_a_viop_spread_a_bond_asw_and_an_expression(svc):
     u = svc.login("Spread İzleyen")["user"]
     viop = {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"}
     up = svc.alarm_add(u, subject=viop, op=">=", level="250", note="OIS − VİOP açılırsa öde")
-    assert (up["already"], up["text"], up["alarm"]["label"], up["alarm"]["show"]) == (False, "203,2 bp", "VİOP A1Z6 OIS − VİOP", "bp")
+    assert (up["already"], up["text"], up["alarm"]["label"], up["alarm"]["show"]) == (False, "202,6 bp", "VİOP A1Z6 OIS − VİOP", "bp")
     under = svc.alarm_add(u, subject={"kind": "viop", "position": 2, "metric": "ois"}, op="<=", level="150")["alarm"]
     asw = svc.alarm_add(u, subject={"kind": "bond", "isin": "TRT150328T24", "metric": "asw"}, op="<=", level="-70", label="15.03.28 ASW pahalandı")
     assert (asw["already"], asw["text"]) == (False, "-64,0 bp")
@@ -280,8 +281,9 @@ def test_alarms_on_a_viop_spread_a_bond_asw_and_an_expression(svc):
     svc.watch_add(u, subject=viop)
     tick(svc)
     assert svc.alarms_fired(u, 0)["fired"] == []
-    # the market moves: the A1Z6 spread to 262 bp, 15.03.28's ASW to -75, 2Y to 35,60% (1Y2Y: +5 bp)
-    svc.set_inputs(u, "tto", [{"ref": "VIOP!N18", "value": "0,0262"}, {"ref": "DİBS RV!Z8", "value": "-75"},
+    # the market moves: the A1Z6 spread to 262 bp, 15.03.28's ASW to -75, 2Y to 35,60% (1Y2Y: +5 bp) - VİOP's row reads
+    # "VİOP mid − OIS (bp)" since 28.11.2026: -262
+    svc.set_inputs(u, "tto", [{"ref": "VIOP!N18", "value": "-262"}, {"ref": "DİBS RV!Z8", "value": "-75"},
                               {"ref": "OIS_MAIN!B18", "value": "35,60%"}], allow_adhoc=True)
     tick(svc)
     fired = {e["label"]: e for e in svc.alarms_fired(u, 0)["fired"]}
@@ -293,7 +295,7 @@ def test_alarms_on_a_viop_spread_a_bond_asw_and_an_expression(svc):
     view = svc.watch_view(u)
     items = {i["label"]: i for i in view["items"]}
     assert items["1Y2Y"]["now"] == "5,0 bp" and items["1Y2Y"]["change"] == pytest.approx(-25.0)
-    assert items["VİOP A1Z6 OIS − VİOP"]["change"] == pytest.approx(58.8, abs=0.1)
+    assert items["VİOP A1Z6 OIS − VİOP"]["change"] == pytest.approx(59.4, abs=0.1)              # (262 − 202,6)
     waiting = {a["id"]: a for a in view["alarms"]}[under["id"]]
     assert waiting["active"] is True and waiting["label"] == "VİOP 2. kontrat OIS − VİOP" and "şu an A1Z6" in waiting["detail"]
 
@@ -311,7 +313,7 @@ def test_subjects_are_followed_when_the_tables_move(svc):
     svc.set_inputs(u, "tto", [{"ref": "VIOP!L1", "value": "A1Z6 Curncy"}, {"ref": "VIOP!M1", "value": "A1F7 Curncy"}], allow_adhoc=True)
     uk = user_key(u)
     z6 = preview(svc, u, {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"})
-    assert z6["value"] == pytest.approx(cell(svc, "VIOP!M18", user=uk) * 10000)
+    assert z6["value"] == pytest.approx(-cell(svc, "VIOP!M18", user=uk))
     assert preview(svc, u, {"kind": "viop", "position": 1, "metric": "ois"})["detail"].startswith("şu an A1Z6")
     gone = preview(svc, u, {"kind": "viop", "ticker": "A1X6 Curncy", "metric": "ois"})
     assert gone["value"] is None and "vadesi geçmiş" in gone["detail"]
@@ -440,7 +442,7 @@ def test_the_page_over_http_and_the_notes(svc):
         assert cat["viop"][0]["short"] == "A1X6" and any(b["isin"] == "TRT150328T24" for b in cat["bonds"])
         assert [g["group"] for g in cat["presets"]] == ["Masa", "TRY OIS eğrisi", "Offshore (FX swap ima)", "VİOP · OIS − VİOP (ilk 4 kontrat)"]
         p = client.post("/api/watch/preview", json={"subject": {"kind": "viop", "ticker": "A1Z6 Curncy", "metric": "ois"}}, headers=hdr).json()
-        assert (p["label"], p["text"], p["unit"]) == ("VİOP A1Z6 OIS − VİOP", "203,2 bp", "bp")
+        assert (p["label"], p["text"], p["unit"]) == ("VİOP A1Z6 OIS − VİOP", "202,6 bp", "bp")     # (the strip's spot)
         assert client.post("/api/watch/preview", json={"book": "tto", "ref": "DİBS RV!Z8"}, headers=hdr).json()["label"] == "15.03.28 ASW"
         bad = client.post("/api/watch/preview", json={"subject": {"kind": "expr", "text": "[OIS 2Y] -"}}, headers=hdr)
         assert bad.status_code == 400 and "yarım" in bad.json()["error"]

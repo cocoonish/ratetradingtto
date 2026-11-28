@@ -307,7 +307,7 @@ def test_the_copy_starts_as_the_try_workbooks_list(service):
     motor = [cell(service, "Motor!A%d" % r) for r in range(361, 524)]
     assert copy[:163] == motor and copy[163:] == [None] * 37 and sum(1 for x in motor if x) > 100
     assert cell(service, "EK_TATIL!B2", book="borsa") == cell(service, "OIS_MAIN!B2") == S
-    assert [s["name"] for s in service.sheets("borsa")][-1] == "EK_TATIL"
+    assert [s["name"] for s in service.sheets("borsa")][-2:] == ["EK_TATIL", "EK_SPOT"]     # (EK_SPOT: the strip's spot)
     hol = service.holidays()
     assert hol["books"] == ["tto", "asw", "borsa"] and hol["slots"] == 163
 

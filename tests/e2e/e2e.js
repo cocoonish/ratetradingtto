@@ -1666,21 +1666,23 @@ async function clipAfter(page, action) {
     await tab(page, '*');
     const mc = await chartInfo();
     check('desk page draws the six charts of the workbook', mc.length === 6, mc.map((c) => c.title));
-    check('"Oranlar": legend, Excel colours (RET red / purple dashes, ICAP orange, OIS blue, VİOP green), markers',
-      JSON.stringify(mc[0].keys) === JSON.stringify(['RET bid', 'RET ask', 'ICAP', 'OIS zero', 'VİOP'])
+    check('"Oranlar": legend, Excel colours (RET red / purple dashes, Offshore orange, OIS blue, VİOP green), markers',
+      JSON.stringify(mc[0].keys) === JSON.stringify(['RET bid', 'RET ask', 'Offshore', 'OIS zero', 'VİOP'])
       && JSON.stringify(mc[0].strokes) === JSON.stringify(['var(--c-red)', 'var(--c-purple)', 'var(--c-orange)', 'var(--c-blue)', 'var(--c-green)'])
       && mc[0].dashed === 2 && mc[0].markers > 35 && mc[0].curved === 0, mc[0]);
     check('value axis starts at the minimum fixed in Excel, with the format\'s decimals', mc[0].y[0] === '25,0%' && mc[0].y[1] === '30,0%', mc[0].y);
     // ORANLAR past 2Y (the desk, 26.11.2026): each curve's own zero rate at 3Y-10Y - the replay file prices TRYSAQ1-5 only
     const ratesRow = async (r) => { const out = []; for (const c of 'FGLR') out.push((await cellText(page, 'MASA!' + c + r)).trim()); return out; };
     const r3y = await ratesRow(17), r7y = await ratesRow(19);
-    check('ORANLAR past 2Y: 3Y has ICAP, OIS zero, ICAP − OIS and its offshore O/N; 7Y its OIS zero alone (TRYSAQ7 #N/A in replay)',
+    check('ORANLAR past 2Y: 3Y has Offshore, OIS zero, Offshore − OIS and its offshore O/N; 7Y its OIS zero alone (TRYSAQ7 #N/A in replay)',
       /^\d+,\d\d%$/.test(r3y[0]) && /^\d+,\d\d%$/.test(r3y[1]) && /^-?[\d.]+$/.test(r3y[2]) && /^\d+,\d\d%$/.test(r3y[3])
       && r7y[0] === '' && /^\d+,\d\d%$/.test(r7y[1]) && r7y[2] === '' && r7y[3] === '', [r3y, r7y]);
     check('"RET bid–ask": 30–42 % in steps of 1 % and the bid–ask boxes',
       mc[2].y.length === 13 && mc[2].y[0] === '30%' && mc[2].y[12] === '42%' && mc[2].boxes === 8, { y: mc[2].y, boxes: mc[2].boxes });
     check('"RET bandı": one legend key for the band, drawn as two washes', mc[3].keys.length === 4 && mc[3].keys[0] === 'RET bid–ask bandı' && mc[3].areas === 2, mc[3].keys);
-    check('"3M FRA eğrisi": every fourth label, as in Excel', JSON.stringify(mc[4].x) === JSON.stringify(['Spot', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y']), mc[4].x);
+    // (by its title: Faiz · PPK shows the offshore FRA chart before it since 28.11.2026)
+    const fra3m = mc.find((c) => /TRY OIS 3M/.test(c.title)) || {};
+    check('"3M FRA eğrisi": every fourth label, as in Excel', JSON.stringify(fra3m.x) === JSON.stringify(['Spot', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y']), fra3m.x);
     check('chart height follows the shape of the chart in Excel', mc[2].height > mc[0].height + 80 && mc[0].height >= 230 && mc[2].height <= 400, mc.map((c) => c.height));
     await shot(page, '07-charts-masa');
 
@@ -2294,7 +2296,8 @@ async function clipAfter(page, action) {
     await typeInto(page, 'EK_XAU!B46', '40');                  // "price it at this TRY rate"
     await waitCell(page, 'EK_XAU!B46', 't.trim() === "40,00"');
     const theo40 = trNumber(await cellText(page, 'EK_XAU!B53'));
-    const fwd40 = 49.9977 * (1 + 0.40 / 360 * 57) / (1 + 0.0396429 / 360 * 57);
+    // (the calculator's USDTRY spot: the strip's, as every page's since 28.11.2026)
+    const fwd40 = trNumber(await cellText(page, 'EK_XAU!B43')) * (1 + 0.40 / 360 * 57) / (1 + 0.0396429 / 360 * 57);
     check('gold calculator: theoretical XAUTRY at a typed TRY rate', theo40 > theo + 40
       && Math.abs(theo40 - trNumber(await cellText(page, 'EK_XAU!B48')) * fwd40 / 31.1035) < 0.02, [theo, theo40]);
     await shot(page, '11-gold-swap-rate');
@@ -2744,6 +2747,10 @@ async function clipAfter(page, action) {
     await open(page, 'forward');
     await tab(page, 'calc');
     const carryIsin = await page.evaluate(() => !!window.tto.findCell('Forward!V56'));
+    // (an ISIN first: Bloomberg's yield, dirty price, coupon and B/E yield are asked only with one since 28.11.2026 - the
+    // recording's values here -; blank without it, and the repo with them)
+    await typeInto(page, 'Forward!V56', 'TRT150328T24');
+    await waitCell(page, 'Forward!V60', 't.trim() !== ""');
     await typeInto(page, 'Forward!V57', '91,713');
     await typeInto(page, 'Forward!V58', '05.11.2026');
     await typeInto(page, 'Forward!V61', '36');
@@ -2757,8 +2764,8 @@ async function clipAfter(page, action) {
     check('Forward → Hesaplayıcılar: Tahvil carry\'s ISIN row is in its table; its own B/E typed as "Fwd temiz fiyat (elle)" reads the repo it '
       + 'was priced with ("İma repo")', carryIsin && Math.abs(trNumber(carryRepo) - 36) < 0.01 && /%$/.test(carryRepo),
       { carryIsin, carryBE, carryRepo });
-    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!V57', 'Forward!V58', 'Forward!V61', 'Forward!V62',
-      'Forward!V71'] });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!V56', 'Forward!V57', 'Forward!V58', 'Forward!V61',
+      'Forward!V62', 'Forward!V71'] });
     await waitCell(page, 'Forward!V71', 't.trim() === ""');
     // Hesaplayıcılar → Implied Move: the block's own move, upper bound and pips typed back read its vol (its tab: FX · vol)
     await open(page, 'calc');
@@ -4529,7 +4536,8 @@ async function clipAfter(page, action) {
     });
     const duzenTryAK = duzenTryAFomc.shown.indexOf('K');
     check('USD · FOMC → FOMC: the table first, Girdiler beside its chart; "Pencere OIS (elle)" right after İma O/N %, the day counts and ln DFs hidden',
-      duzenTryAFomc.panels.join(' ') === 'fomc inp fomc-chart' && duzenTryAFomc.shown.slice(duzenTryAK, duzenTryAK + 6).join(' ') === 'K AA AB AC AD AE'
+      // (B11, 28.11.2026: the scenario view a table of its own beside the chart, Girdiler under them)
+      duzenTryAFomc.panels.join(' ') === 'fomc fomc-sc fomc-chart inp' && duzenTryAFomc.shown.slice(duzenTryAK, duzenTryAK + 6).join(' ') === 'K AA AB AC AD AE'
       && !['F', 'G', 'I', 'J'].some((c) => duzenTryAFomc.shown.includes(c)) && duzenTryAFomc.shown.includes('H'), duzenTryAFomc);
     const fomcWinMkt = (await cellText(page, 'SOFR_FOMC!AA74')).trim();
     await typeInto(page, 'SOFR_FOMC!AB74', fomcWinMkt);
@@ -6737,7 +6745,8 @@ async function clipAfter(page, action) {
     check('VİOP: the VİOP sheet\'s twelve contracts with the implied rates of their live ask / bid; replay has no history - no fair value, no levels, and the page says so',
       viopApi.status === 200 && vrows.length === 12 && vShown === vrows.length && vrows[0].ticker === 'A1X6 Curncy' && vrows[11].ticker === 'A1V7 Curncy'
       && vrows.every((r) => typeof r.bid === 'number' && typeof r.ask === 'number' && r.bid < r.ask && r.fair == null && !r.today && !r.week)
-      && /Kas26/.test(vText) && /Eki27/.test(vText) && duzenQuant2(vrows[0].ask) === 33.83 && duzenQuant2(vrows[0].bid) === 33.58
+      // (33,84 / 33,59: at the strip's USDTRY spot, every page's since 28.11.2026 - 33,83 / 33,58 at Bloomberg's USDTRY MID)
+      && /Kas26/.test(vText) && /Eki27/.test(vText) && duzenQuant2(vrows[0].ask) === 33.84 && duzenQuant2(vrows[0].bid) === 33.59
       && vText.includes(duzenQuantTr3(vrows[0].ask)) && vText.includes(duzenQuantTr3(vrows[0].bid)) && /geçmiş yok/.test(vText)
       && /Seviye yok: oynaklık için geçmiş yok/.test(vLevels) && await page.locator('#quant-viop-mode:not(.hidden)').count() === 1,
     { rows: vrows.length, shown: vShown, why: vq.why || (vq.live || {}).why, first: vrows[0] });
@@ -6752,7 +6761,7 @@ async function clipAfter(page, action) {
     check('... the contract selector switches the levels panel to the contract chosen and is remembered',
       firstTitle.startsWith('Emir seviyeleri · Kas26 · alış ' + duzenQuantTr3(vrows[0].ask) + ' / satış ' + duzenQuantTr3(vrows[0].bid))
       && secondTitle.startsWith('Emir seviyeleri · Ara26 · alış ' + duzenQuantTr3(vrows[1].ask) + ' / satış ' + duzenQuantTr3(vrows[1].bid))
-      && duzenQuant2(vrows[1].ask) === 34.09 && duzenQuant2(vrows[1].bid) === 33.98
+      && duzenQuant2(vrows[1].ask) === 34.1 && duzenQuant2(vrows[1].bid) === 33.99          // (the strip's spot: 34,09 / 33,98 before)
       && keptContract === 'A1Z6 Curncy' && await page.locator('#quant-viop-contract button.on[data-v="A1Z6 Curncy"]').count() === 1,
     { firstTitle, secondTitle, keptContract });
     // Düzen: the seven secondary panels folded (a jump link each), the contract selector in the header of the levels it chooses
@@ -8883,6 +8892,101 @@ async function clipAfter(page, action) {
       await kabukCtx.close();
       await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { desk_favs: [] });
     }
+
+    // ------------------------------------------------------------------ K8 (28.11.2026): the TRY / FX pages
+    console.log('k8: one spot, one name, one spread rule; the TRY / FX pages\' layout at 1920');
+    const k8Keep = signedIn[keyOf('Ayşe Yılmaz')];
+    const k8Ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const k8 = await k8Ctx.newPage();
+    k8.on('pageerror', (e) => errors.push('pageerror (k8): ' + e.message));
+    await login(k8, 'Ayşe Yılmaz');
+    signedIn[keyOf('Ayşe Yılmaz')] = k8Keep;
+    const k8Rect = (pid) => k8.evaluate((p) => {
+      const el = document.querySelector('#content .panel[data-panel="' + p + '"], #content #' + p);
+      if (!el || el.offsetParent === null) return null;
+      const r = el.getBoundingClientRect();
+      return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+    }, pid);
+    const k8Strip = await k8.evaluate(() => {
+      const k = [...document.querySelectorAll('.kpi')].find((x) => (x.querySelector('.l') || {}).textContent === 'USDTRY mid');
+      return k ? k.querySelector('.v').textContent.trim() : null;
+    });
+    // one spot (the desk: "Bbg veya manual spot"): OIS · PPK's Parametreler, the Forward page's spot and Borsa Swap's read the strip's
+    await open(k8, 'ois');
+    const k8Ois = { spot: (await cellText(k8, 'OIS_MAIN!D2')).trim(), d5: (await cellText(k8, 'OIS_MAIN!D5')).trim(),
+      title: await k8.evaluate(() => document.querySelector('.panels.pinned .panel[data-panel="B1"] header').textContent) };
+    await open(k8, 'forward');
+    const k8Fwd = (await cellText(k8, 'Forward!F2')).trim();
+    await open(k8, 'borsa');
+    const k8Borsa = (await cellText(k8, 'Sheet1!AD18')).trim();
+    check('k8: every page\'s USDTRY spot is the strip\'s - OIS · PPK, Forward, Borsa Swap (B4: "Bbg veya manual spot")',
+      !!k8Strip && k8Ois.spot === k8Strip && k8Fwd === k8Strip && k8Borsa === k8Strip, { k8Strip, k8Ois, k8Fwd, k8Borsa });
+    check('k8: OIS · PPK\'s Parametreler says its settings in its title; İma 12A with the strip\'s one decimal',
+      /Normalleşme (Kapalı|Açık)/.test(k8Ois.title) && /DV01\/bacak [\d.]+ \$/.test(k8Ois.title) && /Ufuk \d+\/\d+ ay/.test(k8Ois.title)
+      && /^-?[\d.]+,\d$/.test(k8Ois.d5), k8Ois);
+    // B12: Kotalar without the solver's settings (under İMA PPK in MPC ima); En iyi işlemler: FLY beside SPREAD
+    await open(k8, 'ois');
+    await tab(k8, 'quotes');
+    const k8Quotes = await panelsOnPage(k8);
+    await tab(k8, 'mpc');
+    const k8Ima = [await k8Rect('B22'), await k8Rect('B8'), await k8Rect('B7')];
+    await tab(k8, 'best');
+    const k8Best = [await k8Rect('B9'), await k8Rect('B10')];
+    check('k8: OIS · PPK - the solver\'s settings under İMA PPK beside KOTA ARALIKLARI; EN İYİ FLY beside EN İYİ SPREAD at 1920',
+      !k8Quotes.includes('B8') && k8Ima.every(Boolean) && k8Ima[1].x === k8Ima[0].x && k8Ima[1].y > k8Ima[0].y && k8Ima[0].x > k8Ima[2].x
+      && k8Best.every(Boolean) && k8Best[0].y === k8Best[1].y && k8Best[1].x > k8Best[0].x, { k8Quotes, k8Ima, k8Best });
+    const k8Neg0 = await k8.evaluate(() => { tto.state.page.setTab('*'); return true; });
+    await k8.waitForTimeout(1500);
+    const k8Zero = await k8.evaluate(() => [...document.querySelectorAll('#content table.grid td')].map((td) => td.textContent.trim())
+      .filter((t) => /^[-−]0([.,]0+)?$/.test(t)));
+    check('k8: no "-0" on OIS · PPK (OUTRIGHT\'s Fark, the spread and fly lists)', k8Neg0 && k8Zero.length === 0, k8Zero.slice(0, 5));
+    // Masa · Faiz · PPK in two rows
+    await open(k8, 'masa');
+    await tab(k8, 'rates');
+    const k8Rates = [await k8Rect('B13'), await k8Rect('chart5'), await k8Rect('B21'), await k8Rect('chart4')];
+    check('k8: Masa · Faiz · PPK in two rows - the offshore FRA chart beside MPC İMA PATİKASI',
+      k8Rates.every(Boolean) && k8Rates[0].y === k8Rates[1].y && k8Rates[2].y === k8Rates[3].y && k8Rates[2].y > k8Rates[0].y, k8Rates);
+    // B11: USD · FOMC - the scenario view beside the chart, the FOMC table without sideways scrolling
+    await open(k8, 'usd');
+    await tab(k8, 'fomc');
+    const k8Usd = { sc: await k8Rect('fomc-sc'), chart: await k8Rect('fomc-chart'),
+      wide: await k8.evaluate(() => { const b = document.querySelector('#content .panel[data-panel="fomc"] .body'); return b ? b.scrollWidth - b.clientWidth : -1; }) };
+    check('k8: USD · FOMC in two tables - the scenarios beside the chart, the FOMC table on one screen\'s width',
+      !!k8Usd.sc && !!k8Usd.chart && k8Usd.sc.y === k8Usd.chart.y && k8Usd.chart.x > k8Usd.sc.x && k8Usd.wide >= 0 && k8Usd.wide <= 2, k8Usd);
+    // B20: FX Vol - the picked series beside the heat map, the pair's charts on the page; Realized Vol at its own width
+    await open(k8, 'fxvol');
+    const k8Fx = { heat: await k8Rect('fxvol-heat'), series: await k8Rect('fxvol-series'),
+      pair: await k8.evaluate(() => { const b = document.querySelector('#fxvol-pair > .body'); return b ? { over: b.scrollHeight - b.clientHeight,
+        cols: getComputedStyle(b.querySelector('.volcharts')).gridTemplateColumns.split(' ').length } : null; }) };
+    check('k8: FX Vol - "Seçili seri" beside the heat map; the pair\'s charts three a row, in no box of their own height',
+      !!k8Fx.heat && !!k8Fx.series && k8Fx.series.y === k8Fx.heat.y && k8Fx.series.x > k8Fx.heat.x && !!k8Fx.pair && k8Fx.pair.over <= 2
+      && k8Fx.pair.cols === 3, k8Fx);
+    await open(k8, 'vol');
+    const k8Vol = await k8.evaluate(() => ({ table: Math.round(document.querySelector('#vol-panel table.grid').getBoundingClientRect().width),
+      panel: Math.round(document.getElementById('vol-panel').getBoundingClientRect().width),
+      title: document.querySelector('#carry-panel h2').textContent,
+      heads: [...document.querySelectorAll('#carry-panel table.grid tr.hd td')].map((td) => td.textContent) }));
+    check('k8: Realized Vol - the typed instruments\' table at its own width; σ\'s window in the carry title, not a column',
+      k8Vol.table < k8Vol.panel - 300 && /σ \d+ gün/.test(k8Vol.title) && !k8Vol.heads.includes('Gün'), k8Vol);
+    // B5 / B4: one spread rule, one name on VİOP and the Forward page
+    await open(k8, 'viop');
+    await tab(k8, 'main');
+    const k8Viop = { cap: ((await cellText(k8, 'VIOP!L18')) || '').trim(), bp: ((await cellText(k8, 'VIOP!M18')) || '').trim(),
+      icap: await k8.evaluate(() => ((document.querySelector('#content .panel[data-panel="B13"] h2') || {}).textContent || '').trim()) };
+    check('k8: VİOP\'s spread reads "VİOP mid − OIS (bp)", whole bp; its offshore table is "Offshore"',
+      k8Viop.cap === 'VİOP mid − OIS (bp)' && /^-?\d[\d.]*$/.test(k8Viop.bp) && k8Viop.icap === 'Offshore', k8Viop);
+    // B7: the Forward page's empty calculators without errors
+    await open(k8, 'forward');
+    await tab(k8, 'calc');
+    const k8Calc = await k8.evaluate(() => ['B21', 'B24'].map((p) => [...document.querySelectorAll('#content .panel[data-panel="' + p + '"] table.grid td')]
+      .map((td) => td.textContent.trim()).filter((t) => t.startsWith('#') || t === '31.12.1899')));
+    check('k8: the XARTRY and bond carry calculators show no error while empty', k8Calc.every((x) => x.length === 0), k8Calc);
+    // the curves' glossary for the page's "?" chip (pages/view.js shows it there)
+    const k8Gloss = await k8.evaluate(async () => (await import('/static/js/glossary.js')).GLOSSARY.map((x) => x[0]));
+    check('k8: the curves\' glossary - Offshore, its parts, ICAP the source, OIS, the spot, the spread rule',
+      ['Offshore', 'FX swap ima', 'XCCY', 'ICAP', 'OIS', 'Spot', 'X − OIS (bp)'].every((t) => k8Gloss.includes(t)), k8Gloss);
+    await shot(k8, '99-k8');
+    await k8Ctx.close();
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');
