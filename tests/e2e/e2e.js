@@ -8025,6 +8025,7 @@ async function clipAfter(page, action) {
     console.log('işlem girişi');
     // Ctrl+K "işlem gir ois 2y rec 10k": the suggestion names the book; Günlük İşlemler's OIS form filled - nothing saved
     const islemBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    await page.waitForTimeout(300);           // (an Escape in the find box closes its list 120 ms after the box loses focus)
     await page.keyboard.press('Control+k');
     await page.keyboard.type('işlem gir ois 2y rec 10k');
     await page.waitForSelector('.findlist .hit.cmd');
