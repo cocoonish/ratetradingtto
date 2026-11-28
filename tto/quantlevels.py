@@ -124,6 +124,7 @@ OWN = {"trend", "sira", "ml"}
 KEEP: Dict[str, str] = {
     "viop": "seviyeler ailenin kendi tasarımı: VİOP sayfasındaki emir seviyeleri (doluş olasılıklarıyla)",
     "imacal": "seviyeler ailenin kendi tasarımı: toplantının iki sonucu (fiyatlanan ve diğer adım)",
+    "wirp": "seviyeler ailenin kendi tasarımı: hedef politika faizinin ankette (ya da beklentinde) olduğu seviye, stop ızgaranın payı",
     "izscore": "seviyeler ailenin kendi tasarımı: gün içi (5 dk bar, seans sonuna kadar) - günlük geri testi yok",
     "iorb": "seviyeler ailenin kendi tasarımı: gün içi açılış aralığı - günlük geri testi yok",
     "irv": "seviyeler ailenin kendi tasarımı: gün içi (5 dk bar, seans sonuna kadar) - günlük geri testi yok",

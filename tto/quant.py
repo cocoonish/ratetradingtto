@@ -895,7 +895,9 @@ class Quant(object):
                 m = {"label": "Offshore %s" % label, "kind": "rate", "months": d.months, "group": d.group, "ticker": d.ticker}
             else:
                 info = d.info or {}
-                m = {"label": info.get("name") or info.get("isin") or d.label, "kind": "rate" if d.unit == "pct" else "index",
+                # (a bond's label as the desk names it - "12.09.29" - not Bloomberg's NAME, the same on every bond: 28.11.2026)
+                blabel = qf.dibs_label(info, str(info.get("isin") or "")) if info.get("isin") else (info.get("name") or d.label)
+                m = {"label": blabel, "kind": "rate" if d.unit == "pct" else "index",
                      "group": "dibs", "unit": d.unit, "maturity": info.get("maturity"), "name": info.get("name") or info.get("isin"),
                      "type": info.get("type"), "ticker": d.ticker}
             m["fill"] = fill.get(d.id)
@@ -1507,7 +1509,7 @@ class Quant(object):
         return pv if pv and pv["busy"] else None
 
     def view(self, what: str, user: Optional[str], q: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        self.svc.require_user(user)
+        user = self.svc.require_user(user)
         q = q or {}
         for x in EXTRAS:
             if what in getattr(x, "QUERIES", ()):
@@ -1526,14 +1528,16 @@ class Quant(object):
             return self.backtest_view()
         if what == "box":
             return self.box_view(q)
+        if what == "book":
+            return self.book_view(user, q)
         v = self._view
         fit = self._fit
         base = {"ready": v is not None, "status": self.status(), "version": self.version}
         if v is None or fit is None:
             return base
         t = v["tables"]
-        if what in qp.VIEWS:                                # İma Patikası, TCMB WIRP (quantpath.py)
-            return qp.view(self, what, base, v, fit)
+        if what in qp.VIEWS:                                # İma Patikası, TCMB WIRP (quantpath.py: a user's own WIRP lines)
+            return qp.view(self, what, base, v, fit, user)
         if what in ql.VIEWS:                                # Öncü-Takipçi (quantlead.py)
             return ql.view(self, what, base, v, fit)
         if what in qv.VIEWS:                                # VİOP (quantviop.py)
@@ -1565,7 +1569,7 @@ class Quant(object):
                          "hits": self.log_view()["families"], "coverage": fit["coverage"]})
             return _clean(base)
         if what == "signal":
-            return self.signal_view(q.get("id"))
+            return self.signal_view(q.get("id"), user)
         if what == "universe":
             return self.universe_view()
         pages = {"corr": ("corr",), "pca": ("pca", "rv", "frapath"), "pairs": ("pairs", "viopcal"), "regime": ("momentum", "cycle", "regime"),
@@ -1670,18 +1674,23 @@ class Quant(object):
             return key in qi.KEYS
         return False
 
-    def signal_view(self, sid: Any) -> Dict[str, Any]:
-        """One monitor in depth: its series and z, the window's mean, entry / target / stop - what a click draws."""
+    def signal_view(self, sid: Any, user: Optional[str] = None) -> Dict[str, Any]:
+        """One monitor in depth: its series and z, the window's mean, entry / target / stop - what a click draws (a
+        user's own WIRP line - "Beklentim" - made for that user alone)."""
         fit = self._fit
         v = self._view
         if fit is None or v is None:
             return {"ready": False}
         # (a consensus line: its card is the line whose levels it tells - quantcons.py - with the consensus as its signal)
         cons = next((s for s in v.get("consensus") or () if s["id"] == str(sid or "")), None) if str(sid or "").startswith(qcons.PREFIX) else None
-        m = fit["mons"].get(cons["consensus"]["ref"] if cons is not None else str(sid or ""))
+        mine = qp.mine_monitor(self, user, str(sid or "")) if user and str(sid or "").endswith(":mine") else None
+        m = mine if mine is not None else fit["mons"].get(cons["consensus"]["ref"] if cons is not None else str(sid or ""))
         if m is None:
             raise QuantError("böyle bir sinyal yok: %s" % sid)
-        sg = cons if cons is not None else next((s for s in v["signals"] + v["gated"] if s["id"] == m.sid), None)
+        if mine is not None:
+            sg = qf.make_signal(m, fit["cfg"], _now().strftime("%H:%M"))
+        else:
+            sg = cons if cons is not None else next((s for s in v["signals"] + v["gated"] if s["id"] == m.sid), None)
         hist = m.history()
         try:
             why = qf.rationale(fit["ctx"], m, sg, fit["cfg"])
@@ -1695,6 +1704,15 @@ class Quant(object):
                                                                  "info": {k: x for k, x in m.info.items() if k not in ("inputs",)}},
                        "history": hist, "today": fit["today"], "settings": fit["cfg"]})
 
+    def book_view(self, user: str, q: Dict[str, Any]) -> Dict[str, Any]:
+        """``GET /api/quant/book?id=…``: "İşleme al" - Trades' form of a line: a user's own WIRP line (quantpath.py,
+        made again for them), any other the desk's list's (``tradequant.prefill``)."""
+        from . import tradequant as tq
+        line_id = str(q.get("id") or "")
+        if line_id.endswith(":mine"):
+            return _clean(qp.book_mine(self, user, line_id, str(q.get("scope") or "personal")))
+        return _clean(tq.prefill(self.svc, user, line_id, q.get("scope") or "personal"))
+
     def action(self, what: str, user: Optional[str], data: Dict[str, Any]) -> Dict[str, Any]:
         for x in EXTRAS:
             if what in getattr(x, "ACTIONS", ()):
@@ -1702,6 +1720,12 @@ class Quant(object):
                     return _clean(x.act(what, self.svc.require_user(user), data, self.store))
                 except ValueError as exc:
                     raise QuantError(str(exc))
+        if what == "wirp-mine":
+            # (a user's own expectation of a meeting's policy rate on the WIRP table: their own lines - C16, 28.11.2026)
+            try:
+                return qp.act_mine(self, self.svc.require_user(user), data if isinstance(data, dict) else {})
+            except ValueError as exc:
+                raise QuantError(str(exc))
         if what == "settings":
             out = self.set_settings(user, data.get("values") if isinstance(data.get("values"), dict) else data)
             return out

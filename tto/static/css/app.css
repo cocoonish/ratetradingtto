@@ -2133,3 +2133,33 @@ table.plain.bugun td.down { color: rgb(var(--heat-down)); font-weight: 650; }
 .bugun-body > .bugun-note .note-more:hover { text-decoration: underline; }
 .bugun-body > .bugun-note.clamp.long .note-more { display: inline; }
 .bugun-body > .bugun-note.clamp.open .note-more { display: inline; position: static; padding-left: 6px; background: none; }
+/* ---- Quant toplu (28.11.2026, K7 toplu-quant: B1, B18, C16) ---------------------------------------------------------
+   The card no taller than a screen (B1): two columns - the sentence, the trade, "İşleme al" and the levels on the left,
+   the series and its score charted one above the other on the right -, "Ayrıntı" and "Gerekçe" folded below (each
+   user's choice kept); the same card in its window (a box's, or a page's card off screen).  The lists' İşlem cell the
+   trade and its size, wrapping (B18); a chart beside the table it draws (.qside); WIRP's buckets beside its table. */
+.qcard2 .qcardcols { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-start; }
+.qcard2 .qcardleft { flex: 1 1 460px; min-width: 0; max-width: 780px; }
+.qcard2 .qcardright { flex: 1 1 400px; min-width: 0; }
+.qcard2 .qcardright .volcharts.svcharts { grid-template-columns: minmax(0, 1fr); gap: 4px; padding-top: 0; }
+.qcard2 .qcardleft .qplain { margin-top: 4px; }
+.qcard2 > .empty { padding: 8px 0 2px; }
+.qcard2 details.qfoldsec { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 2px; }
+.qcard2 details.qfoldsec > summary { cursor: pointer; font-size: 12px; color: var(--ink-2); padding: 4px 0; }
+.qcard2 details.qfoldsec > summary:hover { color: var(--ink); }
+.qcard2 details.qfoldsec > summary .muted { font-weight: 400; }
+.qcard2 details.qfoldsec > .qdetails { padding: 2px 0 6px; }
+.qcard2 .qrationale { margin-top: 0; border-top: 0; padding-top: 0; }
+.modal.qcard .qcard2 { padding: 8px 12px 10px; }
+/* the lists' İşlem cell: the trade and its size, a long one wraps (never cut) */
+table.grid td.qtrade { white-space: normal; min-width: 150px; max-width: 340px; }
+/* a chart beside the table it draws: the table at its width, the chart the rest (under it when narrow) */
+.qpage .panel .qside { display: flex; flex-wrap: wrap; gap: 0 12px; align-items: flex-start; }
+.qpage .panel .qside > .body { flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.qpage .panel .qside > .qsidechart { flex: 1 1 380px; min-width: 300px; padding: 6px 12px 8px 0; }
+.qpage > .panel.qempty .qside > .body > .empty { text-align: left; padding: 8px 12px; }
+/* WIRP: the chosen meeting's rate buckets beside the meeting table; its "Sinyal" and "Beklentim" cells */
+.qpage > .panel.qbeside, .qpage > .panel.fit.qbeside { flex: 1 1 360px; min-width: min(100%, 360px); max-width: 640px; }
+table.grid td.act.buy button { color: var(--pos); font-weight: 650; }
+table.grid td.act.sell button { color: var(--neg); font-weight: 650; }
+table.grid td input.qmine { width: 76px; height: 22px; padding: 1px 4px; font: inherit; }

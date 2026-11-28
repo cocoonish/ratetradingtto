@@ -16,11 +16,33 @@ import { boxTools } from '../pagebox.js';
 
 const BANK_PREF = 'tto.quant.path.bank';
 const BANKS = [['try', 'TCMB · PPK'], ['usd', 'Fed · FOMC']];
-const OWN_SETTINGS = ['path_grid_try', 'path_grid_usd', 'path_policy'];
+const OWN_SETTINGS = ['path_grid_try', 'path_grid_usd', 'path_policy', 'wirp_min', 'wirp_stop'];
+/** What a page's signal list says (a page of this module: its families). */
+const SIGNAL_NOTES = {
+  path: 'Kinkler (İma patikası ayrıklığı) ve büyük adımın sistematik yanlış fiyatlanması (İma kalibrasyonu); elenenler gri. '
+    + 'Satıra tıklayın: işlemin düz anlatımı, seri ve giriş / hedef / stop aşağıda; senaryo K/Z ve tez sinyalin notunda.',
+  wirp: 'Bir toplantının ima politika faizi (WIRP\'in "İma faiz %"i) PPK anketinden (Masa · PPK · piyasa ima vs anket, MASA!R157:R159) ya da tablodaki '
+    + '"Beklentim"inden ızgaranın en az dörtte biri (masa ayarı) uzaksa o toplantının dönemi bir satırdır: piyasa beklenenden yüksek fiyatlıyorsa receive, düşük '
+    + 'fiyatlıyorsa pay. Giriş dönemin MPC OIS piyasa faizi (Trades\'in değerlediği), hedef politika faizi ankete (beklentine) gelirse dönemin faizi, stop ızgaranın '
+    + 'yarısı ters, 1.000 $ DV01. Anketin satırları herkesin (Sinyaller, kayıt, alarm); beklentinin satırları yalnız sende, bu sayfada. "İşleme al" dönemi Trades\'e alır.',
+};
+const EMPTY_SIGNALS = {
+  path: 'Bu analizden şu an eşiği geçen sinyal yok (kinkin kendi geçmişi en az 40 gün, kalibrasyon en az 8 toplantı ister).',
+  wirp: 'Şu an ankete (ya da beklentine) göre eşiği geçen toplantı yok: fark ızgaranın dörtte birinin altında - ya da anket / politika faizi yok (Masa!Q155, R157:R159).',
+};
 const serialOf = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000) + 25569;
 const bp = (v) => (isNum(v) ? (Math.abs(v - Math.round(v)) < 0.05 ? sgn(Math.round(v), 0) : sgn(v, 1)) : '');
 const outcome = (v, p) => (isNum(v) ? (Math.abs(v) < 0.05 ? '0' : sgn(v, 0)) + ' · ' + pct(p) : '');
 const daysTo = (iso, from) => Math.round((serialOf(iso) - serialOf(from)));
+/** WIRP's check (the matrix's expected value − the implied path, bp: 0 by construction) as a cell: "✓" within 0,05 bp
+ * (``unit``: "0,0 bp ✓"), else the gap itself, marked - the full value in its tooltip (it read "0,000000" in 13 cells:
+ * 28.11.2026). */
+const checkCell = (v, unit) => {
+  if (!isNum(v)) return { t: '', k: '' };
+  const tip = 'Matrisin beklenen değeri − ima patika: ' + fmt(v, 6) + ' bp (0 olmalı)';
+  return Math.abs(v) < 0.05 ? { t: unit ? fmt(0, 1) + ' ' + unit + ' ✓' : '✓', v, k: 'n', cls: 'soft', tip }
+    : { t: sgn(v, 1) + (unit ? ' ' + unit : ''), v, k: 'n', cls: 'thru', tip };
+};
 
 /** What the two pages share: the bank toggle, the replay note, the desk's grid / policy-rate settings, the status. */
 class PathBase extends QuantPage {
@@ -38,8 +60,7 @@ class PathBase extends QuantPage {
     const page = this.pageEl();
     if (withSignals) {
       const sp = panel('quant-' + this.what + '-signals', title + ' · sinyaller', { wide: true });
-      sp.note.textContent = 'Kinkler (İma patikası ayrıklığı) ve büyük adımın sistematik yanlış fiyatlanması (İma kalibrasyonu); elenenler gri. '
-        + 'Satıra tıklayın: işlemin düz anlatımı, seri ve giriş / hedef / stop aşağıda; senaryo K/Z ve tez sinyalin notunda.';
+      sp.note.textContent = SIGNAL_NOTES[this.what] || '';
       this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
       const cp = panel('quant-' + this.what + '-chart', 'Seçili seri', { wide: true, cls: 'qcardp' });
       this.chart = new SignalChart(cp.body);
@@ -76,7 +97,7 @@ class PathBase extends QuantPage {
   }
 
   fillSignals() {
-    this.showSignals('Bu analizden şu an eşiği geçen sinyal yok (kinkin kendi geçmişi en az 40 gün, kalibrasyon en az 8 toplantı ister).');
+    this.showSignals(EMPTY_SIGNALS[this.what] || 'Şu an sinyal yok.');
   }
 
   async loadSettings() {
@@ -105,7 +126,8 @@ class PathBase extends QuantPage {
     });
     p.body.append(form, h('div', { class: 'qrow' }, save));
     p.note.textContent = 'Izgara: bankanın adım katı (TCMB 50, Fed 25 bp). Politika faizi (elle) 0 iken Masa sayfasındaki "Politika faizi %" (Q155) okunur; '
-      + 'WIRP faizleri buna, TLREF ile farkı sabit tutularak çevrilir. Sinyaller sayfasındaki masa ayarlarıyla aynı ayarlardır.'
+      + 'WIRP faizleri buna, TLREF ile farkı sabit tutularak çevrilir. WIRP sinyali: ima ile anket (ya da beklentin) arasındaki fark ızgaranın en az bu payı '
+      + '(0,25: 50 bp\'de 12,5 bp) olunca satır; stop ızgaranın bu payı ters (0,5: 25 bp). Sinyaller sayfasındaki masa ayarlarıyla aynı ayarlardır.'
       + (d.by ? ' Son değiştiren: ' + this.ctx.displayName(d.by) + ' (' + d.at + ').' : '');
   }
 }
@@ -196,23 +218,65 @@ class WirpPage extends PathBase {
     this.boxes.head = new GridBox(this.head, 'quant/wirp/head');
     this.table = panel('quant-wirp-table', 'WIRP · toplantı başına');
     this.table.note.textContent = 'İma faiz: politika faizi + toplantıya kadar kümülatif ima hareket (politika faizi ile patikanın O/N faizi - TLREF, SOFR - arasındaki '
-      + 'fark sabit). İndirim / sabit / artırım: toplantı sonrası faizin bugünküne göre (FedWatch gibi). Bu toplantıda: adımın iki ızgara sonucu. Satıra tıklayın: '
-      + 'o toplantının faiz olasılıkları aşağıda.';
+      + 'fark sabit). Anket: Masa\'daki PPK anketi (MASA!R157:R159, tarihi Q157:Q159); Beklentim: senin yazdığın toplantı sonrası politika faizi (✎, yalnız sende; '
+      + 'boş bırakıp Enter: silinir). İma − anket / beklentim ızgaranın dörtte birini geçince "Sinyal"de satırın yönü (tıklayın: kartı). İndirim / sabit / '
+      + 'artırım: toplantı sonrası faizin bugünküne göre (FedWatch gibi). Bu toplantıda: adımın iki ızgara sonucu. Satıra tıklayın: o toplantının faiz olasılıkları yanda.';
     this.boxes.table = new GridBox(this.table, 'quant/wirp/table', (m) => { this.meeting = m; this.fillPage(); }, { freeze: 1 });
     this.table.tools.append(...boxTools(() => ({ type: 'wirp', bank: this.bank, w: 12 }), this.ctx));
+    // (the chosen meeting's rate buckets beside the table they belong to - not a chart over the page's width: Düzen, 28.11.2026)
     this.barHost = h('div', { class: 'volchart' });
-    this.bars = panel('quant-wirp-bars', 'Toplantı sonrası faiz olasılıkları', { wide: true });
+    this.bars = panel('quant-wirp-bars', 'Toplantı sonrası faiz olasılıkları', { cls: 'qbeside' });
     this.bars.body.appendChild(this.barHost);
     this.matrix = panel('quant-wirp-matrix', 'Koşullu toplantı olasılıkları (%)');
     this.matrix.note.textContent = 'Her toplantının adımı iki ızgara sonucuna bölünür ve adımlar beklenen patika verildiğinde bağımsız sayılır: bir toplantı sonrasının '
-      + 'dağılımı öncekinin bu toplantının iki noktalı adımıyla evrişimi (FedWatch\'ın ağacı). Son sütun kontrol: matrisin beklenen değeri − ima (bp; 0 olmalı).';
+      + 'dağılımı öncekinin bu toplantının iki noktalı adımıyla evrişimi (FedWatch\'ın ağacı). Son sütun kontrol: matrisin beklenen değeri − ima (bp; 0 olmalı: ✓).';
     this.boxes.matrix = new GridBox(this.matrix, 'quant/wirp/matrix', (m) => { this.meeting = m; this.fillPage(); }, { freeze: 1 });
     this.histHost = h('div', { class: 'volchart' });
-    this.hist = panel('quant-wirp-history', 'Sıradaki toplantıların olasılıkları · son haftalar', { top: this.histHost, wide: true });
+    this.hist = panel('quant-wirp-history', 'Sıradaki toplantıların olasılıkları · son haftalar', { side: this.histHost, wide: true });
     this.hist.note.textContent = 'Aynı toplantı için geçmiş günlerin fiyatlaması, bugünkü faiz kovalarında (aradaki kararlar TLREF / üst bandın ızgaraya yuvarlanmış '
       + 'değişiminden). Grafik: bu toplantıların ima adımı (bp) gün gün.';
     this.boxes.hist = new GridBox(this.hist, 'quant/wirp/history', null, { freeze: 1 });
-    this.frame('TCMB WIRP', [this.table, this.head, this.bars, this.matrix, this.hist], false);
+    this.frame('TCMB WIRP', [this.table, this.bars, this.head, this.matrix, this.hist], true);
+  }
+
+  /** "Beklentim" typed in place: the cell's button becomes a box - Enter (or leaving it) saves, Escape takes it back; an
+   * empty box deletes the expectation (the user's own: their lines alone). */
+  editMine(meeting, now) {
+    const b = this.table.body.querySelector('button[data-act="mine-' + meeting + '"]');
+    if (!b) return;
+    const td = b.parentNode;
+    const inp = h('input', { class: 'inp num qmine', id: 'quant-wirp-mine-' + meeting, value: isNum(now) ? fmt(now, 2) : '', placeholder: '%',
+      title: isoToTr(meeting) + ' toplantısı sonrası politika faizi beklentin (%) - Enter kaydeder, Esc vazgeçer, boş Enter siler' });
+    let done = false;
+    // (while the box is open the table is not drawn again - a minute's refresh would take the box away)
+    this.editing = meeting;
+    const close = () => { done = true; this.editing = null; };
+    const save = async () => {
+      if (done) return;
+      close();
+      try {
+        const d = await api.post('/api/quant/wirp-mine', { bank: 'try', meeting, rate: inp.value.trim() });
+        if (this.dead) return;
+        this.data = d;
+        this.version = d.version;
+        this.fill();
+        toast(inp.value.trim() ? isoToTr(meeting) + ' beklentin kaydedildi (yalnız sende)' : isoToTr(meeting) + ' beklentin silindi', 'ok', 2500);
+      } catch (e) { errorToast(e); this.fillPage(); }
+    };
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') save();
+      else if (e.key === 'Escape') { close(); this.fillPage(); }
+    });
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    inp.addEventListener('blur', () => {
+      if (done) return;
+      if (inp.value.trim() !== (isNum(now) ? fmt(now, 2) : '')) save(); else { close(); this.fillPage(); }
+    });
+    clear(td);
+    td.appendChild(inp);
+    inp.focus();
+    inp.select();
   }
 
   fillPage() {
@@ -235,16 +299,21 @@ class WirpPage extends PathBase {
       [T('Fark: politika − ' + rateName, { b: 1 }), N(pol.spread, 1, { sign: true, unit: 'bp' }), T(this.bank === 'usd' ? 'bandın ortası − SOFR; ' + 'sabit tutulur'
         : 'sabit tutulur: ima politika faizi = bugünkü + kümülatif ima hareket')],
       [T('Izgara', { b: 1 }), N(b.grid, 0, { unit: 'bp' }), T('masa ayarı')],
-      [T('Kontrol', { b: 1 }), N(b.check, 6, { unit: 'bp' }), T('matrisin beklenen değeri − ima patika, en büyük mutlak fark')]], null, '—');
+      [T('Kontrol', { b: 1 }), checkCell(b.check, 'bp'), T('matrisin beklenen değeri − ima patika, en büyük mutlak fark')]], null, '—');
     const rows = b.rows || [];
     if (!this.meeting || !rows.some((r) => r.meeting === this.meeting)) this.meeting = rows.length ? rows[0].meeting : null;
     const sel = rows.find((r) => r.meeting === this.meeting);
-    this.boxes.table.set(wirpHead(this.bank), wirpRows(b), rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
+    // (the page's own table: "Beklentim" typed in place, a line's "Sinyal" opens its card - the box shows the same table read only)
+    const st = this.data.settings || {};
+    if (!this.editing) {
+      this.boxes.table.set(wirpHead(this.bank), wirpRows(b, { minShare: st.wirp_min, edit: (m, v) => this.editMine(m, v), open: (sid) => this.pick(sid, true) }),
+        rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
+    }
     const buckets = b.buckets || [];
     this.boxes.matrix.set([this.bank === 'usd' ? 'Toplantı · hedef aralık (bp)' : 'Toplantı · politika faizi %'].concat(buckets.map((x) => ({ t: x.label, k: 's', b: 1, f: 'hd' })),
       ['E[faiz] − ima (bp)']), rows.map((r) => [T(isoToTr(r.meeting), { b: 1 })].concat((r.matrix || []).map((p, i) => (p >= 0.0005
       ? { t: fmt(p * 100, 1), v: p * 100, k: 'n', heat: heatHex(-p) || undefined, b: buckets[i] && buckets[i].k === 0 ? 1 : 0 } : { t: '', k: '' })),
-    [N(r.check, 6)])), rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
+    [checkCell(r.check)])), rows.map((r) => r.meeting), 'Toplantı yok', this.meeting);
     this.drawBars(sel, b);
     this.fillHistory(b);
   }
@@ -304,17 +373,51 @@ class WirpPage extends PathBase {
   }
 }
 
-/** WIRP's meeting table: its caption row and its rows (the page's and its box's; ``b``: one bank's). */
+/** WIRP's meeting table: its caption row and its rows (the page's and its box's; ``b``: one bank's).  The TCMB's has the
+ * AL / SAT comparison right after the implied rate (C16, 28.11.2026): the survey (MASA!R157:R159) and the user's own
+ * "Beklentim", each with its gap (bp), and the line's side when a gap is past the threshold. */
+const COMPARE = ['Anket %', 'İma − anket (bp)', 'Beklentim %', 'İma − beklentim (bp)', 'Sinyal'];
+
 export function wirpHead(bank) {
-  return ['Toplantı', 'İma faiz %', 'İma ' + (bank === 'try' ? 'TLREF' : 'SOFR') + ' %', 'Bugüne göre (bp)', 'Önceki toplantıya göre (bp)', 'Fiyatlanan adım',
-    'Bu toplantıda', 'İndirim', 'Sabit', 'Artırım'];
+  // (the moves named as İma Patikası names them - "Kümülatif", "Adım": the table narrower, its buckets' chart beside it)
+  return ['Toplantı', 'İma faiz %'].concat(bank === 'try' ? COMPARE : [], ['İma ' + (bank === 'try' ? 'TLREF' : 'SOFR') + ' %',
+    { t: 'Kümülatif (bp)', k: 's', b: 1, f: 'hd', tip: 'Bugünkü faize göre' }, { t: 'Adım (bp)', k: 's', b: 1, f: 'hd', tip: 'Önceki toplantıya göre' },
+    'Fiyatlanan adım', 'Bu toplantıda', 'İndirim', 'Sabit', 'Artırım']);
 }
 
-export function wirpRows(b) {
+/** ``opts`` (the page's): ``minShare`` the threshold (a share of the grid), ``edit(meeting, now)`` "Beklentim" typed in
+ * place, ``open(sid)`` a line's card; without them (the box) the same cells read only. */
+export function wirpRows(b, opts = {}) {
   const hasRate = isNum((b.policy || {}).rate);
-  return (b.rows || []).map((r) => [T(isoToTr(r.meeting), { b: 1 }), hasRate ? N(r.rate, 3, { b: 1 }) : T('—'), N(r.level, 3),
-    N(r.cum, 1, { sign: true }), N(r.step, 1, { sign: true }), N(r.moves, 2, { sign: true }),
-    T(outcome(r.lo, r.p_lo) + '  ' + outcome(r.hi, r.p_hi)), T(pct(r.ease, 1)), T(pct(r.hold, 1)), T(pct(r.hike, 1))]);
+  const isTry = b.bank !== 'usd';
+  const thr = (isNum(opts.minShare) ? opts.minShare : 0.25) * (b.grid || 50);
+  return (b.rows || []).map((r) => {
+    const cmp = [];
+    if (isTry) {
+      // the line's side: the user's own expectation when typed, else the survey's - receive when the market prices more
+      const mine = isNum(r.mine_gap) && Math.abs(r.mine_gap) >= thr - 1e-9;
+      const anket = isNum(r.survey_gap) && Math.abs(r.survey_gap) >= thr - 1e-9;
+      const gap = mine ? r.mine_gap : (anket ? r.survey_gap : null);
+      const sid = mine ? r.mine_sid : (anket ? r.sid : null);
+      const word = isNum(gap) ? (gap > 0 ? 'Receive' : 'Pay') + ' · ' + (mine ? 'beklentim' : 'anket') : '';
+      const tip = isNum(gap) ? 'İma ' + (mine ? 'beklentinden' : 'anketten') + ' ' + sgn(gap, 1) + ' bp (eşik ' + fmt(thr, 1) + ' bp): '
+        + (gap > 0 ? 'piyasa daha yüksek faiz fiyatlıyor - dönemi receive' : 'piyasa daha düşük faiz fiyatlıyor - dönemi pay') + (sid && opts.open ? ' · tıklayın: kartı' : '')
+        : 'Fark eşiğin (' + fmt(thr, 1) + ' bp) altında ya da beklenti yok';
+      const signal = word && sid && opts.open
+        ? { t: '', k: '', cls: 'act ' + (gap > 0 ? 'buy' : 'sell'), tip, act: { id: 'sig-' + r.meeting, label: word + ' ▸', title: tip, fn: () => opts.open(sid) } }
+        : T(word, { b: 1, cls: word ? (gap > 0 ? 'buy' : 'sell') : 'soft', tip });
+      const mineCell = opts.edit
+        ? { t: '', k: '', cls: 'act', act: { id: 'mine-' + r.meeting, label: isNum(r.mine) ? fmt(r.mine, 2) + ' ✎' : '✎',
+          title: isoToTr(r.meeting) + ' toplantısı sonrası politika faizi beklentin (%) - yalnız sende; ima ile farkı ızgaranın dörtte birini geçerse sana özel AL / SAT satırı',
+          fn: () => opts.edit(r.meeting, r.mine) } }
+        : N(r.mine, 2);
+      cmp.push(N(r.survey, 2, { tip: r.survey_day ? 'Masa\'daki PPK anketi (MASA!R157:R159), ' + isoToTr(r.survey_day) + ' toplantısı' : undefined }),
+        N(r.survey_gap, 1, { sign: true }), mineCell, N(r.mine_gap, 1, { sign: true }), signal);
+    }
+    return [T(isoToTr(r.meeting), { b: 1 }), hasRate ? N(r.rate, 3, { b: 1 }) : T('—')].concat(cmp, [N(r.level, 3),
+      N(r.cum, 1, { sign: true }), N(r.step, 1, { sign: true }), N(r.moves, 2, { sign: true }),
+      T(outcome(r.lo, r.p_lo) + '  ' + outcome(r.hi, r.p_hi)), T(pct(r.ease, 1)), T(pct(r.hold, 1)), T(pct(r.hike, 1))]);
+  });
 }
 
 /** The pages of this module by id (quant.js asks here first). */

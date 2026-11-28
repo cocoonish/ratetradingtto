@@ -87,8 +87,10 @@ class CorrPage extends AnalysisPage {
     this.boxes.heat.set([''].concat(c.labels.map((l) => ({ t: l, k: 's', b: 1, f: 'hd' }))), rows, null, 'Veri yok');
     this.heat.setTitle(this.view === 'z' ? 'Korelasyon kırılması · z (' + c.short + ' gün, uzun dönem dağılımına göre)' : 'Günlük değişimlerin korelasyonu · ' + w + ' gün');
     const pairs = (c.pairs || []).slice(0, 80);
-    this.boxes.pairs.set(['A', 'B', 'Değişim', 'ρ ' + (c.windows || [])[0] + 'g', 'ρ ' + (c.windows || [])[1] + 'g', 'ρ ' + (c.windows || [])[2] + 'g', 'Uzun dönem ρ', 'Kırılma z', 'Yarı ömür', 'Sinyal'],
-      pairs.map((p) => [T(p.a_label, { b: 1 }), T(p.b_label, { b: 1 }), N(p.n, 0)].concat((c.windows || []).map((x) => N((p.c || {})[String(x)], 2, { heat: heatHex((p.c || {})[String(x)]) })),
+    // ("Gün": the days both series moved - the changes the correlation is measured on; it read "Değişim", as if a move: 28.11.2026)
+    this.boxes.pairs.set(['A', 'B', 'Gün', 'ρ ' + (c.windows || [])[0] + 'g', 'ρ ' + (c.windows || [])[1] + 'g', 'ρ ' + (c.windows || [])[2] + 'g', 'Uzun dönem ρ', 'Kırılma z', 'Yarı ömür', 'Sinyal'],
+      pairs.map((p) => [T(p.a_label, { b: 1 }), T(p.b_label, { b: 1 }), N(p.n, 0, { tip: 'İki serinin de kapanışı olan ardışık gün sayısı (korelasyonun ölçüldüğü günlük değişimler)' })]
+        .concat((c.windows || []).map((x) => N((p.c || {})[String(x)], 2, { heat: heatHex((p.c || {})[String(x)]) })),
         [N(p.long, 2), Z(p.z, (this.data.settings || {}).entry_z), N(p.half_life, 1), T(p.signal ? 'izleniyor' : (isNum(p.long) && Math.abs(p.long) < c.min ? 'ilişki zayıf' : ''))])),
       pairs.map((p) => (p.signal ? 'corr:' + p.a + '|' + p.b : null)), 'Çift yok', this.picked);
   }
@@ -104,7 +106,7 @@ class PcaPage extends AnalysisPage {
       + 'izdüşümü, z = skor ÷ √λ; seviye z: bileşenin seviyesinin penceredeki yeri.';
     this.boxes.factors = new GridBox(this.factors, 'quant/pca/factors');
     this.loadChartHost = h('div', { class: 'volchart' });
-    this.loadings = panel('quant-pca-loadings', 'Yükler (vade başına)', { top: this.loadChartHost, wide: true });
+    this.loadings = panel('quant-pca-loadings', 'Yükler (vade başına)', { side: this.loadChartHost, wide: true });    // (the chart beside its table: Düzen, 28.11.2026)
     this.boxes.loadings = new GridBox(this.loadings, 'quant/pca/loadings');
     this.dyn = panel('quant-pca-windows', 'Dinamik PCA · 60 / 120 / 250 günlük pencereler');
     this.dyn.note.textContent = 'Her pencerede günlük değişimlerin PCA\'sı (risk bileşenleri) ve seviyelerin PCA\'sı (eğrinin pencerede kaydığı yönler). Kararlılık: '

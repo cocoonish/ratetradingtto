@@ -327,7 +327,7 @@ class OptPage extends FitPage {
       + 'hareketinden gelen kısmını ayırır. Sinyaller: 25D RR (skew) ve 25D / 10D BF (kanatlar) - + z pahalı (sat), − z ucuz (al).';
     this.boxes.surface = new GridBox(this.surface, 'quant/opt/surface', (sid, click) => this.pick(sid, click), { freeze: 2 });
     this.tsChart = h('div', { class: 'volchart' });
-    this.ts = panel('quant-opt-ts', 'ATM vade yapısı', { top: this.tsChart, wide: true });
+    this.ts = panel('quant-opt-ts', 'ATM vade yapısı', { side: this.tsChart, wide: true });          // (the chart beside its table: Düzen, 28.11.2026)
     this.ts.note.textContent = 'Eğim = uzun vade ATM vol − kısa vade (vol puanı); 1Y − 1M\'nin z\'si sinyaldir: + ise eğim pahalı (1Y sat / 1M al).';
     this.boxes.ts = new GridBox(this.ts, 'quant/opt/ts', (sid, click) => this.pick(sid, click));
     this.probs = panel('quant-opt-probs', 'Smile\'ın ima ettiği dağılım · forward\'a göre ±X% olasılığı ve gerçekleşen sıklık');

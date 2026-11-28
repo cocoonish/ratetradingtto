@@ -3291,3 +3291,97 @@ Code: `tto/navmenu.py` (the menu), `tto/quant.py` (`MENU`: VİOP into Sinyaller,
 `index.html`, `app.css`. Tests: `tests/test_toplu_kabuk.py`; the menu's assertions of `test_bugun`, `test_desk`,
 `test_dibsgenel`, `test_fiyatyukleme`, `test_fx`, `test_kagitfiyat`, `test_pageboxes`, `test_pricing`, `test_quant`,
 `test_service`, `test_duzen_masa`; the browser test's "kabuk ·" checks.
+
+### Toplu iş · Quant: the card, the tables, WIRP's AL / SAT lines, the bugs (28.11.2026)
+
+The desk asked for the review:
+
+> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
+> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
+> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
+
+and answered the three lists (A işleyiş, B düzen, C yeni özellik; their evidence in the session notes,
+`oneriler-28-11.md`):
+
+> "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"
+
+> "Digerlerini de onayliyorum"
+
+This part (builder K7): **B1** and **B18** of the layout list, **C16** of the new features, and the bugs the review found
+on the way (listed as needing no decision). No Bloomberg request is new; Bootstrap and every curve are untouched.
+
+- **B1 - the card no taller than one screen** (it was 1 254 - 2 232 px, the trade tables 1,8 - 2,7 thousand px below
+  it). Two columns: the sentence, the trade, "İşleme al", entry / target / stop, at the target / at the stop and the levels
+  on the left; the series and its score charted one above the other on the right (200 px each). **Ayrıntı** (thesis,
+  score, regime, record, packages, gates) and **Gerekçe** (the days most like today, what would undo it) folded below,
+  each person's choice remembered. A row clicked while the card's top is not on the upper part of the screen opens the
+  card in the **card window** (the boxes' one, `pageboxes.js openCard` → `quantbase.js cardWindow`) instead of scrolling
+  the page to it; the page's card follows too ("Sayfadaki karta git" in the window).
+- **B18 - the quant tables.** The İşlem cell is the trade and its size - "SAT USDTRY 1A forward · 1 mn USD", "Receive 2Y
+  OIS · 1.000 $ DV01" - the levels being in Giriş / Hedef / Stop already (at 1366 the column was half the screen); a
+  systematic family's whole one-line format (Trend, DİBS switch, Opsiyon → spot, ML, Konsensüs) is the cell's tooltip
+  (`trade_line`). Long text wraps (the trade, the gated reason, the log's trade, the backtest's levels). **Carry +
+  momentum's six baskets are one table** (a row each: formation → next rebalance, the week's expected P&L, target, stop,
+  reward / risk, hit rate, so far, net, legs; a set without a basket its reason on its row), one ranking under it at a
+  time (a row's click or the switch in its header; kept in the browser) - two tables for six panels. **Charts beside
+  their tables**: Opsiyon's ATM term structure, PCA's loadings, WIRP's history (`panel`'s `side`: the table at its width,
+  the chart the rest, under it when narrow); WIRP's bucket chart beside the meeting table.
+- **C16 - WIRP AL / SAT lines.** The proposal (`oneriler-28-11.md`, C16): lines from WIRP against the PPK survey (or
+  the user's own view), Masa's survey cells (R157:R159) and a personal "Beklentim" column on the WIRP table, a line when
+  the gap is at least a quarter of the grid, "İşleme al" working since PPK periods can be booked. Built so
+  (`tto/quantpath.py`, family **TCMB WIRP**):
+  - The TCMB table has **Anket %** (MASA!R157:R159, its meeting the date in Q157:Q159 - a desk input; a meeting held is
+    skipped, a date a day off is its meeting's), **İma − anket (bp)**, the user's own **Beklentim %** (typed in place,
+    theirs alone), **İma − beklentim (bp)** and **Sinyal**.
+  - A meeting whose implied policy rate (WIRP's "İma faiz %") is at least a quarter of the grid (12,5 bp on 50) from the
+    survey - or from the user's expectation - is a line: the meeting's **period** (the meeting-dated OIS from its
+    effective day to the next meeting's) **received** when the market prices more than expected, **paid** when less.
+  - **Entry** the period's **MPC OIS market rate** ("Piyasa (bootstrap)", OIS_MAIN!D84:D99) - the rate Trades values a PPK
+    period at, so a booked line starts at zero (checked on the replay copy: the same rate both ways); **target** the
+    period's rate if the policy rate after the meeting is the survey's (its O/N moves by the gap, its rate by the
+    window's sensitivity, ~1,04 at 35 % over six weeks); **stop** half the grid against. The gap (ima − anket) beside
+    every level (the 24.11 rule: the traded instrument's level first).
+  - **Money** at the desk's DV01 (1.000 $): the expected P&L is the gap × the sensitivity - the survey taken as the
+    expectation, under it the period earns the gap; at the stop −25 bp × the sensitivity. Held to the meeting.
+  - **İşleme al** books the PPK period (meeting, side, 1.000 $ DV01, price the entry, target, stop).
+  - The survey's lines are everybody's (Sinyaller, TRY OIS ≤ 2Y; the log; the alarms); a new survey typed on Masa
+    reaches them at the minute's refresh. A user's own lines are theirs alone, on the WIRP page (their card and "İşleme
+    al" made for them; never the desk's list, the log or an alarm).
+- **The bugs.** *Trend's target equal to the entry* (`quantfam.py:1280`): a family giving no move to aim at had its
+  target at the entry (the list showed the entry while the line said "hedef —"; a backtest closed such a trade at once,
+  "at its target"); now no target - the list "—", a calibrated trailing stop "iz süren stop" - and no stop at the entry
+  either, in every family (it reaches the lines of any family without a reward or a risk scale). *DİBS switch* in one
+  sign convention - AL − SAT in the list, the card, the switches' table, the log and the chart (they read the gap with
+  different signs) - and the bonds by the desk's names ("15.03.28"; the ISIN in the tooltips and the ranking). *Çiftler*
+  and the quant's series labels name a bond by its maturity ("12.09.29"), not Bloomberg's long name. *Korelasyon*'s
+  "Değişim" (the count of daily changes) is "Gün". *WIRP*'s check reads "✓" (it read "0,000000"; the value in the
+  tooltip, a real gap red).
+
+**Choices made while building it** (ask the desk before changing):
+- **The entry is the period's swap rate, not the policy rate.** The proposal's example gave WIRP's "İma faiz %", a policy
+  rate after the meeting, as the entry; what is traded is the period's OIS, whose rate is its compounded O/N (~0,8 points
+  above the path's O/N at 35 %) - so the line's levels are the MPC OIS rate's, the policy-rate gap beside them.
+- **The expected P&L is the gap** (the survey taken as the expectation), not a probability-weighted one.
+- **A quarter of the grid** the threshold, **half** the stop: two desk settings ("WIRP sinyali: …", Masa ayarları).
+- **TCMB only**: the survey is the TCMB's and Trades books PPK periods, not FOMC ones; the Fed's table is as it was.
+- **A user's "Beklentim" by the meeting's date**, kept a month after the meeting; a corrected date follows its meeting
+  (`history.align_meetings`), a meeting held never passes to the next one.
+- **The card's folds per user in this browser**, as the menu's; "off screen" = the card's top not in the upper 60 % of
+  the screen (the old scroll rule's line).
+- **DİBS switch's line id names the AL bond first** (`dibssw:<AL>/<SAT>`, as the backtest's trades): a pair whose side
+  turns is a new line; a log entry open in the old orientation closes "veri yok" at its time, never on a wrong level.
+- **Not changed, for the desk:** İma kalibrasyonu's "İşleme al" books its period at the path's O/N level (its quote's
+  base), not the period's MPC OIS rate - Trades will show the difference (~0,8 points at 35 %) as P&L at once; WIRP's lines
+  use the MPC OIS rate. Masa's own "İma − anket" column reads Motor's live path, WIRP the history's (a few bp apart on
+  the replay copy).
+
+Code: `tto/quantpath.py` (`period_of`, `window_term`, `survey_of`, `attach_wirp`, `wirp_monitor`, `wirp_monitors`,
+`mine_of` / `set_mine` / `align_mine`, `mine_lines`, `mine_monitor`, `act_mine`, `book_mine`; `read_engine`: MASA!Q157:R159,
+S155, OIS_MAIN!B84:D99 and BJ), `tto/quant.py` (`view`'s user, `book_view`, the action `wirp-mine`, a bond's label),
+`tto/quantfam.py` (`make_signal`'s target / stop, `dibs_label`, the family `wirp`), `tto/quantlevels.py` (`KEEP`),
+`tto/quanttrend.py`, `tto/quantdibssw.py`, `tto/quantoptspot.py`, `tto/quantml.py`, `tto/quantcons.py` (`trade_line`);
+`tto/static/js/pages/quantbase.js` (`SignalChart`, `cardFold`, `cardWindow`, `cardAway`, `tradeCellText`, `bookAny`,
+`panel`'s `side`), `quantpath.js` (`wirpHead` / `wirpRows`, `editMine`, `checkCell`), `quantsira.js`, `quantfit.js`,
+`quantviews.js`, `quanttrend.js`, `quantread.js`, `tto/static/js/pageboxes.js` (`openCard`), `app.css` (the block "Quant
+toplu" at its end). Tests: `tests/test_toplu_quant.py`, `tests/test_quantdibssw.py`; the browser test's "toplu 28.11 ·
+quant" checks and the adapted Carry + momentum, Eğri and list checks.

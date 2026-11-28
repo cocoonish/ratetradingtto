@@ -68,15 +68,22 @@ from . import quantfam as qf
 from . import quantmath as qm
 
 # ---------------------------------------------------------------------------------------------- settings
-#: the desk's settings of this module (quant.py adds them to its own: "Masa ayarları", for everyone)
-DEFAULTS: Dict[str, Any] = {"path_grid_try": 50.0, "path_grid_usd": 25.0, "path_policy": 0.0}
+#: the desk's settings of this module (quant.py adds them to its own: "Masa ayarları", for everyone) - the WIRP lines'
+#: two (28.11.2026, "every assumption typeable"): a line prints when |ima − anket| is at least ``wirp_min`` of the grid
+#: (a quarter: 12,5 bp on the PPK's 50), its stop ``wirp_stop`` of the grid against (a half: 25 bp)
+DEFAULTS: Dict[str, Any] = {"path_grid_try": 50.0, "path_grid_usd": 25.0, "path_policy": 0.0, "wirp_min": 0.25, "wirp_stop": 0.5}
 LIMITS: Dict[str, Tuple[float, float, type]] = {"path_grid_try": (5.0, 500.0, float), "path_grid_usd": (5.0, 100.0, float),
-                                                "path_policy": (0.0, 200.0, float)}
+                                                "path_policy": (0.0, 200.0, float), "wirp_min": (0.05, 2.0, float),
+                                                "wirp_stop": (0.1, 3.0, float)}
 LABELS = {"path_grid_try": "PPK adım ızgarası (bp)", "path_grid_usd": "FOMC adım ızgarası (bp)",
-          "path_policy": "Politika faizi, elle (%; 0: Masa!Q155)"}
+          "path_policy": "Politika faizi, elle (%; 0: Masa!Q155)",
+          "wirp_min": "WIRP sinyali: ima − anket en az (ızgaranın payı)", "wirp_stop": "WIRP sinyali: stop (ızgaranın payı, ters)"}
 
 #: the families of this module (quantfam.FAMILIES) and the pages that show them (what -> page id)
 FAMILY_KINK, FAMILY_CAL = "imapath", "imacal"
+#: the WIRP's AL / SAT lines (28.11.2026, the desk's "C 16"): a meeting's implied policy rate against the PPK survey
+#: (Masa's "PPK · piyasa ima vs anket", MASA!R157:R159 dated Q157:Q159) - or a user's own "Beklentim" on the WIRP table
+FAMILY_WIRP = "wirp"
 VIEWS = {"path": "quant-path", "wirp": "quant-wirp"}
 
 #: bank -> what it is called, the grid's setting, the key of its meeting-dated periods (a trade's leg), its asset
@@ -85,6 +92,12 @@ BANKS: Dict[str, Dict[str, str]] = {
     "usd": {"label": "Fed · FOMC", "short": "FOMC", "grid": "path_grid_usd", "leg": "FOMC:", "asset": "Global", "rate": "SOFR"},
 }
 POLICY_CELL = ("MASA", "Q155")                 # "Politika faizi %": the desk types it (the workbook's PPK vs survey table)
+SURVEY_ROWS = (157, 159)                       # MASA!Q157:R159: the survey's next three meetings - "Tarih" (Q), "Anket %" (R)
+SURVEY_MONTH = "S155"                          # MASA!S155: "Anket ayı" (the month of the survey typed)
+#: OIS_MAIN's "MPC OIS" (A82:M99): each meeting period's start (B: the meeting's effective day), end (C: the next one's)
+#: and its market rate (D, "Piyasa (bootstrap)": Bootstrap's forward of the period, simple ACT/365 - what Trades values a
+#: PPK period at) beside the PPK model's own (BJ)
+MPC_OIS_ROWS = (84, 99)
 FOMC_SHEET = "SOFR_FOMC"
 FOMC_ROWS = (74, 83)                           # SOFR_FOMC!B74:B83 - the FOMC meetings of the USD workbook
 FED_RANGE = 25.0                               # bp: the width of the Fed's target range (its buckets' labels)
@@ -495,20 +508,39 @@ def try_paths(mpc: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def read_engine(svc) -> Dict[str, Any]:
-    """Engine thread, short: the FOMC table of the USD workbook (``SOFR_FOMC``) and the policy rate the desk types on
-    Masa (``MASA!Q155``) - nothing the solver of the TRY workbook computes."""
+    """Engine thread, short: the FOMC table of the USD workbook (``SOFR_FOMC``), the policy rate and the PPK survey the
+    desk types on Masa (``MASA!Q155``, ``Q157:R159``, the survey's month ``S155``) and the meeting periods' rates of
+    "MPC OIS" (``OIS_MAIN!B84:D99`` and ``BJ``: values the workbook has already) - nothing the solver computes here."""
     from .xl.model import COLS, parse_a1
     from .xl.values import serial_to_date
-    out: Dict[str, Any] = {"usd": None, "policy": None}
+    out: Dict[str, Any] = {"usd": None, "policy": None, "survey": [], "survey_month": None, "mpc_ois": []}
 
     def iso(v: Any) -> Optional[str]:
         return serial_to_date(v).isoformat() if type(v) is float and 20000 < v < 80000 else None
 
     book = svc.books.get("tto")
     if book is not None and POLICY_CELL[0] in book.model.sheet_index:
+        tcalc = svc._calc(None, book)
         si = book.model.sheet_index[POLICY_CELL[0]]
-        v = _num(svc._calc(None, book).get(si, *divmod(parse_a1(POLICY_CELL[1]), COLS)))
+
+        def tget(sheet: int, ref: str) -> Any:
+            return tcalc.get(sheet, *divmod(parse_a1(ref), COLS))
+
+        v = _num(tget(si, POLICY_CELL[1]))
         out["policy"] = v if v is not None and 0.0 < v < 200.0 else None
+        for r in range(SURVEY_ROWS[0], SURVEY_ROWS[1] + 1):
+            day, rate = iso(tget(si, "Q%d" % r)), _num(tget(si, "R%d" % r))
+            if day and rate is not None and 0.0 < rate < 200.0:
+                out["survey"].append({"row": r, "meeting": day, "rate": rate})
+        out["survey_month"] = iso(tget(si, SURVEY_MONTH))
+        if "OIS_MAIN" in book.model.sheet_index:
+            so = book.model.sheet_index["OIS_MAIN"]
+            for r in range(MPC_OIS_ROWS[0], MPC_OIS_ROWS[1] + 1):
+                start, end, mkt = iso(tget(so, "B%d" % r)), iso(tget(so, "C%d" % r)), _num(tget(so, "D%d" % r))
+                if start and end and mkt is not None:
+                    model = _num(tget(so, "BJ%d" % r))
+                    out["mpc_ois"].append({"row": r, "start": start, "end": end, "rate": mkt * 100.0,
+                                           "model": model * 100.0 if model is not None else None})
     book = svc.books.get("sofr")
     if book is None or FOMC_SHEET not in book.model.sheet_index:
         return out
@@ -588,6 +620,11 @@ class State(object):
         self.fixed: Dict[str, Dict[str, Any]] = {}   # bank -> what its history gave (kink series, calibration, paths)
         self.now: Dict[str, Dict[str, Any]] = {}     # bank -> today's tables
         self.mons: Dict[str, qf.Monitor] = {}        # sid -> this module's monitors
+        self.survey: List[Dict[str, Any]] = []       # MASA!Q157:R159 as last read: [{row, meeting, rate}]
+        self.survey_month: Optional[str] = None      # MASA!S155
+        self.mpc_ois: List[Dict[str, Any]] = []      # OIS_MAIN's MPC OIS periods as last read: [{start, end, rate, model}]
+        self.ctx: Optional[qf.Ctx] = None            # the last fit's context (a WIRP line's size, a user's own lines)
+        self.wirp_sig: Optional[str] = None          # what the WIRP lines were made of (the survey, the policy rate, the meetings)
 
 
 _STATES: "weakref.WeakKeyDictionary[Any, State]" = weakref.WeakKeyDictionary()
@@ -610,6 +647,9 @@ def _read(quant: Any, st: State) -> None:
         got = {"usd": None, "policy": None}
     st.engine_ms = round((time.perf_counter() - t0) * 1000.0, 1)
     st.policy = got.get("policy")
+    st.survey = list(got.get("survey") or [])
+    st.survey_month = got.get("survey_month")
+    st.mpc_ois = list(got.get("mpc_ois") or [])
     if got.get("usd") is not None:
         st.usd = got["usd"]
         st.usd_at = _dt.datetime.now().strftime("%H:%M:%S")
@@ -861,6 +901,406 @@ def cal_monitor(ctx: qf.Ctx, bank: str, now: Dict[str, Any], st: State) -> Optio
     return mon
 
 
+# ---------------------------------------------------------------------------------------------- 6. the WIRP's AL / SAT lines
+# The desk (28.11.2026, "C - 2-3-4-5-8-10-12-13-16"): "Quant: PPK anketine (ya da kendi görüşüme) karşı WIRP'ten AL/SAT
+# satırları" - a meeting whose implied policy rate (WIRP's "İma faiz %") is at least a quarter of the grid away from the
+# survey (MASA!R157:R159, its meeting by MASA!Q157:Q159) - or from what a user typed in the WIRP table's "Beklentim" - is
+# a line: the meeting's period (the meeting-dated OIS from its effective day to the next meeting's) received when the
+# market prices a higher rate than the survey, paid when a lower; entry its market rate now (MPC OIS's "Piyasa
+# (bootstrap)", what Trades values a PPK period at), target its rate if the policy rate after the meeting is the survey's
+# (the period's O/N moves by the gap, its rate by the window's sensitivity), stop half the grid against, the expected
+# P&L the gap (the survey is an expectation: under it the period earns the gap) at the desk's DV01 (1.000 $).  A PPK
+# period is what Trades books: "İşleme al" works.  The survey's lines are everybody's (Sinyaller, the log, the alarms);
+# a user's own lines are theirs alone, on the WIRP page.
+#: each user's own "Beklentim": {user: {bank: {meeting ISO: policy rate %}}} - by the meeting's date (a roll moves nothing; a
+#: corrected date is followed, :func:`align_mine`), kept until ``MINE_KEEP_DAYS`` after the meeting
+MINE_KEY = "quant.wirp.mine"
+MINE_KEEP_DAYS = 30
+#: where a line's expectation comes from: (the word, "…'nin", "…'de", the gap's name, the model's name)
+SOURCES = {"anket": ("anket", "anketin", "ankette", "anket farkı", "TCMB WIRP · anket"),
+           "mine": ("beklentim", "beklentimin", "beklentimde", "beklenti farkı", "TCMB WIRP · beklentim")}
+MATCH_DAYS = 3                                 # a survey date this near a meeting is that meeting (the day typed a day off)
+WIRP_BANK = "try"                              # the survey is the TCMB's (and Trades books PPK periods, not FOMC ones)
+
+
+#: the possessive after a number as it is read (its last word): by its last digit, else by its tens, else "yüz"
+_POSS_UNITS = {"1": "i", "2": "si", "3": "ü", "4": "ü", "5": "i", "6": "sı", "7": "si", "8": "i", "9": "u"}
+_POSS_TENS = {"1": "u", "2": "si", "3": "u", "4": "ı", "5": "si", "6": "ı", "7": "i", "8": "i", "9": "ı"}
+
+
+def _share(x: float) -> str:
+    """A share of the grid as the desk says it: "dörtte biri", "yarısı", else "%30'u", "%20'si", "%12,5'i"."""
+    words = {0.25: "dörtte biri", 0.5: "yarısı", 0.75: "dörtte üçü", 1.0: "tamamı"}
+    for k, w in words.items():
+        if abs(x - k) < 1e-9:
+            return w
+    text = _n(x * 100.0, 1)
+    whole, _, frac = text.partition(",")
+    last = (frac or whole).lstrip("−-")
+    if last[-1] != "0":
+        suffix = _POSS_UNITS[last[-1]]
+    elif len(last) > 1 and last[-2] != "0":
+        suffix = _POSS_TENS[last[-2]]
+    else:
+        suffix = "ü"                                           # (yüz, iki yüz)
+    return "%%%s'%s" % (text, suffix)
+
+
+def _effective(day: str, holidays: set) -> _dt.date:
+    """A meeting's effective day: the business day after it (TRY's list) - its period's start, as MPC OIS and Trades."""
+    return qf.business_on_or_after(_dt.date.fromisoformat(day) + _dt.timedelta(days=1), holidays)
+
+
+def window_term(start: _dt.date, end: _dt.date, holidays: set) -> Tuple[int, float]:
+    """A window's calendar days and its weekend / holiday term W = Σ g(g − 1)/2 over the gaps g between its business
+    days (``ppkcurve.growth``'s: TLREF compounds on business days - a weekend's three days in one step)."""
+    w, prev, d = 0.0, start, start + _dt.timedelta(days=1)
+    while d <= end:
+        if d == end or (d.weekday() < 5 and d not in holidays):
+            g = (d - prev).days
+            w += g * (g - 1) / 2.0
+            prev = d
+        d += _dt.timedelta(days=1)
+    return (end - start).days, w
+
+
+def period_of(rows: List[Dict[str, Any]], k: int, mpc_ois: Sequence[Dict[str, Any]], holidays: set) -> Optional[Dict[str, Any]]:
+    """The period after the k-th meeting of a WIRP table (its rows: ``meeting``, ``level`` - the path's O/N after it):
+    from its effective day to the next meeting's; its rate now - MPC OIS's market rate of the period
+    (``mpc_ois``: the row starting on its effective day), else the PPK model's window rate of the path's O/N -, and the
+    sensitivity of the window's rate to its O/N (bp a bp: the O/N compounds over the window).  ``None`` for the last
+    meeting (no next one: no period)."""
+    from . import ppkcurve as pc
+    if k + 1 >= len(rows):
+        return None
+    meeting, nxt = rows[k]["meeting"], rows[k + 1]["meeting"]
+    start, end = _effective(meeting, holidays), _effective(nxt, holidays)
+    on = _num(rows[k].get("level"))
+    days, term = window_term(start, end, holidays)
+    if days <= 0:
+        return None
+    mkt = next((p for p in mpc_ois if p.get("start") and 0 <= (_dt.date.fromisoformat(p["start"]) - start).days <= 4
+                and p.get("end") and abs((_dt.date.fromisoformat(p["end"]) - end).days) <= 4), None)
+    model = pc.window_rate(on / 100.0, days, term) * 100.0 if on is not None else None
+    sens = 1.0
+    if on is not None:
+        # (bp of the window's rate a bp of its O/N: the O/N compounds over the window - about 1,04 at 35 % over six weeks)
+        sens = (pc.window_rate(on / 100.0, days, term) - pc.window_rate((on - 0.01) / 100.0, days, term)) * 1e4
+    rate = mkt["rate"] if mkt is not None else model
+    if rate is None:
+        return None
+    return {"meeting": meeting, "next": nxt, "start": start.isoformat(), "end": end.isoformat(), "days": days, "term": term,
+            "rate": rate, "source": "MPC OIS piyasa (bootstrap)" if mkt is not None else "PPK modeli (patikanın O/N'ı)",
+            "market": mkt["rate"] if mkt is not None else None,
+            "model": mkt["model"] if mkt is not None and mkt.get("model") is not None else model, "row": (mkt or {}).get("row"), "on": on,
+            "sens": sens}
+
+
+def survey_of(meetings: Sequence[str], survey: Sequence[Dict[str, Any]], spot: str) -> Dict[str, Dict[str, Any]]:
+    """The survey's rows by the WIRP's meetings: a survey date on a meeting (or ``MATCH_DAYS`` from it: the day typed
+    a day off) - a meeting already held (before the path's spot) has none."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for s in survey:
+        day = s.get("meeting")
+        if not day or day < spot:
+            continue
+        best = min(meetings, key=lambda m: abs((_dt.date.fromisoformat(m) - _dt.date.fromisoformat(day)).days), default=None)
+        if best is not None and abs((_dt.date.fromisoformat(best) - _dt.date.fromisoformat(day)).days) <= MATCH_DAYS and best not in out:
+            out[best] = dict(s)
+    return out
+
+
+def attach_wirp(now: Dict[str, Any], st: State, holidays: set) -> None:
+    """Today's TCMB WIRP table with the survey beside each meeting (its rate, its date, ima − anket bp) and each
+    meeting's period (:func:`period_of`) - what the lines and the page read."""
+    w = now.get("wirp") or {}
+    rows = w.get("rows") or []
+    if not now.get("ok") or not rows:
+        return
+    spot = now.get("spot") or now.get("day") or ""
+    by = survey_of([r["meeting"] for r in rows], st.survey, spot)
+    for k, r in enumerate(rows):
+        r["period"] = period_of(rows, k, st.mpc_ois, holidays)
+        s = by.get(r["meeting"])
+        if s is not None:
+            r["survey"] = s["rate"]
+            r["survey_day"] = s["meeting"]
+            r["survey_gap"] = (r["rate"] - s["rate"]) * 100.0 if _num(r.get("rate")) is not None else None
+    w["survey"] = {"rows": [dict(s) for s in st.survey], "month": st.survey_month, "cells": "MASA!Q%d:R%d" % SURVEY_ROWS,
+                   "matched": len(by)}
+
+
+def _row(now: Optional[Dict[str, Any]], meeting: str) -> Optional[Dict[str, Any]]:
+    return next((r for r in ((now or {}).get("wirp") or {}).get("rows") or () if r["meeting"] == meeting), None)
+
+
+def _gap_history(st: State, meeting: str, expect: float, grid: float, policy: float, base: float, window: int) -> Tuple[List[str], List[float]]:
+    """The gap of a meeting day by day (its implied policy rate in today's terms - today's policy rate, the decisions
+    since that day on the grid and that day's cumulative move to the meeting, as WIRP's history reads it - less the
+    expectation, bp): the series the card draws."""
+    paths = (st.fixed.get(WIRP_BANK) or {}).get("paths") or {}
+    today = (st.now.get(WIRP_BANK) or {}).get("day") or ""
+    days, vals = [], []
+    for d in sorted(paths):
+        if d >= today:
+            continue
+        p = paths[d]
+        lv = next((v for m, v in p["meetings"] if m == meeting), None)
+        if lv is None:
+            continue
+        shift = int(round((p["base"] - base) * 100.0 / grid))
+        implied = policy + (shift * grid + (lv - p["base"]) * 100.0) / 100.0
+        days.append(d)
+        vals.append((implied - expect) * 100.0)
+    return days[-window:], vals[-window:]
+
+
+def wirp_monitor(ctx: qf.Ctx, st: State, meeting: str, source: str, expect: float, sid: Optional[str] = None) -> Optional[qf.Monitor]:
+    """A meeting's line against an expectation of its policy rate (``source`` "anket" - the survey - or "mine", a
+    user's own): its level the gap ima − expectation (bp, live: WIRP's table now), its score the gap in grids (a line
+    from ``wirp_min``), the meeting's period received (the market prices more than expected) or paid, told in the
+    period's own rate (``quote``); ``None`` without the meeting's period or the policy rate."""
+    now = st.now.get(WIRP_BANK) or {}
+    row = _row(now, meeting)
+    if not now.get("ok") or row is None or not row.get("period") or _num(row.get("rate")) is None:
+        return None
+    cfg = ctx.cfg
+    grid = float(now["grid"])
+    per = row["period"]
+    word, of, at, gname, model = SOURCES[source]
+    name = _period(WIRP_BANK, meeting, per["next"])
+    pol = now.get("policy") or {}
+    # (the closes before today; the card adds today's level - the monitor's - itself)
+    days, vals = _gap_history(st, meeting, expect, grid, float(pol.get("rate") or 0.0), float(now["base"]), int(cfg.get("lookback") or 250))
+    gap_now = (row["rate"] - expect) * 100.0
+    usd, tl = ctx.dv01_size()
+    t = per["days"] / 365.0
+    leg = {"key": BANKS[WIRP_BANK]["leg"] + meeting, "name": name, "weight": 1.0, "dv01_usd": usd or None, "dv01": tl,
+           "notional": tl / (t / (1.0 + per["rate"] / 100.0 * t) * 1e-4) / 1e6 if tl and t > 0 else None}
+    stop_share = float(cfg.get("wirp_stop") or DEFAULTS["wirp_stop"])
+
+    def calc(live: Dict[str, float], meeting=meeting, expect=expect) -> Optional[float]:
+        r = _row(st.now.get(WIRP_BANK), meeting)
+        return (r["rate"] - expect) * 100.0 if r is not None and _num(r.get("rate")) is not None else None
+
+    def quote(live: Dict[str, float], meeting=meeting, expect=expect) -> Optional[Dict[str, Any]]:
+        # the period as the desk trades it: its rate now; at a zero gap the rate it has when the policy rate after the meeting
+        # is the expectation (the O/N of the period moves by the gap, its rate by the window's sensitivity) - the map is
+        # exact to first order, the market rate held
+        r = _row(st.now.get(WIRP_BANK), meeting)
+        if r is None or not r.get("period") or _num(r.get("rate")) is None:
+            return None
+        p = r["period"]
+        gap = (r["rate"] - expect) * 100.0
+        k = p["sens"] / 100.0
+        return {"inst": name, "unit": "%", "digits": qf.RATE_DIGITS, "base": p["rate"] - k * gap, "scale": k,
+                "gap": {"name": gname, "of": of, "at": at},
+                "model": "dönemin %s faizi (%s)" % (p["source"], qf.rate_text(p["rate"])),
+                "note": "hedef: politika faizi %s olursa (%s)" % ("ankete gelirse" if source == "anket" else "beklentine gelirse", qf.rate_text(expect)),
+                "held": "Giriş dönemin %s faizi; hedef politika faizi %s (%s) olursa dönemin faizi - O/N'ı fark kadar iner, faizi ×%s "
+                        "(O/N dönem boyunca bileşik); stop ızgaranın %s ters. Piyasa faizi değişirse hepsi onunla kayar." % (
+                            p["source"], word, qf.rate_text(expect), qf._g(p["sens"], 3), _share(stop_share))}
+
+    def zfn(level: Optional[float], live: Dict[str, float]) -> Optional[float]:
+        # (its levels move with the gap: the target the gap closed, the stop the grid's share against, the expectation's
+        # mean - under it the period earns the gap)
+        if level is None:
+            return None
+        m.reward, m.risk, m.fcast = abs(level), stop_share * grid, -level
+        return level / grid
+
+    if source == "anket":
+        cell = next((s["row"] for s in st.survey if s.get("meeting") == row.get("survey_day")), SURVEY_ROWS[0])
+        whose = "Anket (Masa'daki PPK · piyasa ima vs anket, MASA!R%d%s):" % (cell, ", %s.%s anketi" % (st.survey_month[5:7], st.survey_month[:4])
+                                                                            if st.survey_month else "")
+    else:
+        whose = "Beklentin (WIRP tablosunda yazdığın, yalnız sende):"
+    note = ("%s %s toplantısı sonrası politika faizi %s; WIRP %s fiyatlıyor (ima − %s %s bp). Fark ızgaranın (%s bp) en az %s "
+            "olunca satır: piyasa beklenenden yüksek fiyatlıyorsa dönem receive, düşük fiyatlıyorsa pay. Taşıma 0: dönem ileri "
+            "başlangıçlı, tarihleri sabit." % (whose, _tr(meeting), qf.rate_text(expect), qf.rate_text(row["rate"]), word, _s(gap_now, 1),
+                                                _n(grid), _share(float(cfg.get("wirp_min") or DEFAULTS["wirp_min"]))))
+    m = qf.Monitor(sid or "%s:%s:%s" % (FAMILY_WIRP, WIRP_BANK.upper(), meeting) + (":mine" if source == "mine" else ""), FAMILY_WIRP,
+                   BANKS[WIRP_BANK]["asset"], name, "bp", 1, days, vals, [leg], calc, zfn=zfn, zvalues=[v / grid for v in vals],
+                   entry=float(cfg.get("wirp_min") or DEFAULTS["wirp_min"]), follows=False, mode="drift", pnl=("bp", per["sens"]),
+                   hold=float(max(1, _bdays(now["day"], meeting))), regime={"tag": None}, carry_up=0.0, pkg="rate", note=note, quote=quote,
+                   score_name="ızgara payı", series_label="%s: ima politika faizi − %s (bp)" % (_tr(meeting), word),
+                   info={"inputs": ["PATH:" + WIRP_BANK.upper()], "bank": WIRP_BANK, "meeting": meeting, "source": source, "expect": expect,
+                         "model": model, "period": dict(per), "survey_day": row.get("survey_day"), "survey_month": st.survey_month,
+                         "size": "%s $ DV01" % qf._th(usd, 0) if usd else None})
+    m.finish = lambda sg: _wirp_finish(m, sg, source, expect, grid)
+    return m
+
+
+def _wirp_finish(m: qf.Monitor, sg: Dict[str, Any], source: str, expect: float, grid: float) -> None:
+    """make_signal's line in the desk's words (the plan's format): "Receive PPK 10.12–21.01 dönemi · 1.000 $ DV01 · giriş
+    %35,761 · hedef %35,610 (anket %35,000) · stop %36,021 · beklenen +745 bin TL · ankete göre" - and its sentence."""
+    word = SOURCES[source][0]
+    q = sg.get("quote") or {}
+    mo = sg.get("money") or {}
+    info = sg.get("info") or {}
+    per = info.get("period") or {}
+    size = info.get("size") or ""
+    f = lambda v: qf.rate_text(v) if v is not None else "—"                       # noqa: E731
+    head = "%s · %s" % (sg["expression"], size) if size else sg["expression"]
+    rr = sg.get("rr")
+    parts = [head, "giriş " + f(q.get("entry")), "hedef %s (%s %s)" % (f(q.get("target")), word, qf.rate_text(expect)),
+             "stop " + f(q.get("stop")), "beklenen " + qf._money(mo.get("total"), "TL"), "%s göre" % ("ankete" if source == "anket" else "beklentime")]
+    sg["line"] = " · ".join(parts)
+    sg["trade_line"] = head
+    gap = float(sg.get("level") or 0.0)
+    side = "receive" if sg["direction"] < 0 else "pay"
+    comes = "ankete gelirse" if source == "anket" else "beklentine gelirse"
+    implied = qf.rate_text(expect + gap / 100.0)
+    why = "%s toplantısı sonrası piyasa politika faizini %s fiyatlıyor, %s %s: fark %s bp (eşik ızgaranın %s, %s bp)." % (
+        _tr(info.get("meeting") or ""), implied, word, qf.rate_text(expect), _s(gap, 1), _share(float(m.entry or 0.0)),
+        _n(float(m.entry or 0.0) * grid, 1))
+    what = "%s dönemini %s et: giriş %s (%s), hedef %s (politika faizi %s), stop %s (ızgaranın %s, %s bp ters)." % (
+        m.name.replace(" dönemi", ""), side, f(q.get("entry")), per.get("source") or "", f(q.get("target")), comes, f(q.get("stop")),
+        _share(float(m.risk or 0.0) / grid), _n(float(m.risk or 0.0), 1))
+    money = "%s ile %s %s, stopta %s%s; toplantıya %s iş günü. Taşıma 0: dönem ileri başlangıçlı." % (
+        size or "masanın DV01'i", comes, qf._money(mo.get("target"), "TL"), qf._money(mo.get("stop"), "TL"),
+        (" (ödül / risk %s)" % qf._g(rr, 2)) if rr is not None else "", qf._g(sg.get("hold"), 0))
+    sg["plain"] = " ".join([why, what, money])
+    sg["thesis"] = "TCMB WIRP · %s: %s" % ("ankete göre" if source == "anket" else "beklentime göre", sg["line"])
+    if source == "mine":
+        sg["personal"] = True                                  # (a user's own: their WIRP page alone - no log, no alarm)
+
+
+def wirp_monitors(ctx: qf.Ctx, st: State) -> List[qf.Monitor]:
+    """The survey's lines: a monitor for every meeting the survey names (a line when its gap is past the threshold)."""
+    out = []
+    for r in ((st.now.get(WIRP_BANK) or {}).get("wirp") or {}).get("rows") or ():
+        if _num(r.get("survey")) is None:
+            continue
+        m = wirp_monitor(ctx, st, r["meeting"], "anket", float(r["survey"]))
+        if m is not None:
+            out.append(m)
+    return out
+
+
+def _wirp_sig(st: State) -> str:
+    """What the survey's lines are made of: the meetings, the survey, the policy rate (the minute's refresh makes them
+    again when one moved - the survey typed on Masa during the day)."""
+    now = st.now.get(WIRP_BANK) or {}
+    return json.dumps([[r["meeting"] for r in (now.get("wirp") or {}).get("rows") or ()], st.survey, st.policy,
+                       sorted(p.get("start") or "" for p in st.mpc_ois)], sort_keys=True, default=str)
+
+
+# ---- each user's own expectation
+def _rate_in(v: Any) -> Optional[float]:
+    """A typed policy rate (%): "35", "35,25", "%35.25" - ``None`` for an empty box; ValueError for anything else."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        x = float(v)
+    else:
+        text = str(v).strip().replace("%", "").replace(" ", "").replace(",", ".")
+        if not text:
+            return None
+        try:
+            x = float(text)
+        except ValueError:
+            raise ValueError("politika faizi bir sayı olmalı (örn. 35,25): %s" % str(v)[:20])
+    if not (math.isfinite(x) and 0.0 < x < 200.0):
+        raise ValueError("politika faizi %0 – %200 arasında bir sayı olmalı")
+    return x
+
+
+def mine_of(store: Any, user: str) -> Dict[str, Dict[str, float]]:
+    """A user's typed expectations: {bank: {meeting ISO: rate %}}."""
+    saved = store.get(MINE_KEY)
+    mine = saved.get(user) if isinstance(saved, dict) else None
+    return {b: dict(v) for b, v in (mine or {}).items() if isinstance(v, dict)}
+
+
+def set_mine(store: Any, user: str, bank: str, meeting: str, rate: Any, today: str) -> Dict[str, Dict[str, float]]:
+    """A user's expectation of the policy rate after a meeting typed (``rate`` empty: taken back); the ones past their
+    meeting by more than ``MINE_KEEP_DAYS`` dropped."""
+    if bank not in BANKS:
+        raise ValueError("bilinmeyen banka: %s" % str(bank)[:20])
+    try:
+        _dt.date.fromisoformat(str(meeting))
+    except ValueError:
+        raise ValueError("toplantı tarihi anlaşılamadı: %s" % str(meeting)[:20])
+    x = _rate_in(rate)
+    saved = store.get(MINE_KEY)
+    saved = saved if isinstance(saved, dict) else {}
+    mine = saved.setdefault(user, {})
+    b = mine.setdefault(bank, {})
+    if x is None:
+        b.pop(str(meeting), None)
+    else:
+        b[str(meeting)] = round(x, 6)
+    floor = (_dt.date.fromisoformat(today) - _dt.timedelta(days=MINE_KEEP_DAYS)).isoformat()
+    for k in [k for k in b if k < floor]:
+        b.pop(k, None)
+    store.put(MINE_KEY, saved)
+    return mine_of(store, user)
+
+
+def align_mine(mine: Dict[str, float], meetings: Sequence[str]) -> Dict[str, Tuple[float, str]]:
+    """A user's expectations on today's meetings: {meeting: (rate, the date it was typed for)} - by date; a typed date
+    no meeting has any more follows the meeting whose date was corrected (``history.align_meetings``: the same meeting
+    within 45 days, between the dates both lists have) - a meeting already held is never paired with the next one."""
+    from .history import align_meetings
+    out = {m: (mine[m], m) for m in meetings if m in mine}
+    first = min(meetings) if meetings else None
+    gone = sorted(d for d in mine if d not in out and first is not None and d >= first)
+    if gone:
+        old = sorted(set(gone) | set(out))
+        al = align_meetings(old, list(meetings))
+        for i, d in enumerate(old):
+            j = al.get(i)
+            if d in gone and j is not None and meetings[j] not in out:
+                out[meetings[j]] = (mine[d], d)
+    return out
+
+
+def mine_lines(quant: Any, fit: Dict[str, Any], user: str, aligned: Dict[str, Tuple[float, str]]) -> List[Dict[str, Any]]:
+    """A user's own lines now: their typed expectation against WIRP, made and scored as the survey's (never in the
+    desk's list, the log or the alarms)."""
+    from . import quantlevels as qlv
+    from . import quantuniv as qu
+    st = state_of(quant)
+    ctx = fit.get("ctx") or st.ctx
+    if ctx is None:
+        return []
+    stamp = _dt.datetime.now().strftime("%H:%M")
+    out = []
+    for meeting, (rate, _) in sorted(aligned.items()):
+        m = wirp_monitor(ctx, st, meeting, "mine", rate)
+        if m is None:
+            continue
+        m.levels = {"ok": False, "own": True, "family": FAMILY_WIRP, "why": qlv.KEEP.get(FAMILY_WIRP, "")}
+        m.score(ctx.live or {}, {})
+        sg = qf.make_signal(m, fit["cfg"], stamp)
+        if sg is not None:
+            sg["day"] = fit.get("today")
+            qu.classify(sg)
+            out.append(sg)
+    return out
+
+
+def mine_monitor(quant: Any, user: str, sid: str) -> Optional[qf.Monitor]:
+    """A user's own line's monitor by its id ("wirp:TRY:<meeting>:mine"), scored now - its card."""
+    from . import quantlevels as qlv
+    parts = str(sid or "").split(":")
+    if len(parts) != 4 or parts[0] != FAMILY_WIRP or parts[3] != "mine":
+        return None
+    st = state_of(quant)
+    now = st.now.get(WIRP_BANK) or {}
+    aligned = align_mine(mine_of(quant.store, user).get(WIRP_BANK) or {}, [r["meeting"] for r in (now.get("wirp") or {}).get("rows") or ()])
+    hit = aligned.get(parts[2])
+    if hit is None or st.ctx is None:
+        return None
+    m = wirp_monitor(st.ctx, st, parts[2], "mine", hit[0])
+    if m is None:
+        return None
+    m.levels = {"ok": False, "own": True, "family": FAMILY_WIRP, "why": qlv.KEEP.get(FAMILY_WIRP, "")}
+    m.score(st.ctx.live or {}, {})
+    return m
+
+
 # ---------------------------------------------------------------------------------------------- the quant worker's part
 def _fixings_try(ctx: qf.Ctx) -> Dict[str, float]:
     return dict(ctx.series.get("TLREF") or {})
@@ -893,7 +1333,10 @@ def _build(quant: Any, ctx: qf.Ctx, st: State, refit: bool) -> None:
         live = bool(use_live and path is not None and (bank == "usd" and st.usd is not None or path["day"] >= today))
         now = bank_now(bank, path, fixed, cfg, st, live)
         now["_hist"] = {d: p for d, p in paths.items() if d < (path or {}).get("day", today)}
+        if bank == WIRP_BANK:
+            attach_wirp(now, st, ctx.holidays)                 # (the survey beside each meeting, each meeting's period)
         st.now[bank] = now
+    st.ctx = ctx
 
 
 def _publish_tables(quant: Any, ctx: qf.Ctx, st: State, tables: Dict[str, Any], raw_live: Dict[str, float]) -> None:
@@ -944,6 +1387,8 @@ def run(quant: Any, ctx: qf.Ctx, mons: List[qf.Monitor], tables: Dict[str, Any],
             m = cal_monitor(ctx, bank, st.now[bank], st)
             if m is not None:
                 own.append(m)
+        own.extend(wirp_monitors(ctx, st))                     # the WIRP's lines against the survey (C16, 28.11.2026)
+        st.wirp_sig = _wirp_sig(st)
         st.mons = {m.sid: m for m in own}
         mons.extend(own)
         _publish_tables(quant, ctx, st, tables, raw_live)
@@ -977,15 +1422,27 @@ def refresh(quant: Any, fit: Dict[str, Any], raw_live: Dict[str, float]) -> None
                 if k is not None:
                     m.note = _kink_note(bank, k, pair)
                     m.info["scenarios"] = (pair or {}).get("paths") or []
+        # the survey's lines made again when what they are made of moved (the survey typed on Masa, the policy rate, the
+        # meetings): the fit's monitors are this module's again (the next publish sets their levels, scores them)
+        sig = _wirp_sig(st)
+        if sig != st.wirp_sig:
+            for sid in [s for s, m in fit["mons"].items() if m.family == FAMILY_WIRP]:
+                del fit["mons"][sid]
+                st.mons.pop(sid, None)
+            fresh = wirp_monitors(ctx, st)
+            fit["mons"].update({m.sid: m for m in fresh})
+            st.mons.update({m.sid: m for m in fresh})
+            st.wirp_sig = sig
         _publish_tables(quant, ctx, st, tables, raw_live)
         (tables.get("errors") or {}).pop("imapath", None)
     except Exception as exc:  # noqa: BLE001 - the last fit's tables stand
         tables.setdefault("errors", {})["imapath"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
 
 
-def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Dict[str, Any]) -> Dict[str, Any]:
+def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Dict[str, Any], user: Optional[str] = None) -> Dict[str, Any]:
     """What the pages "İma Patikası" (``path``) and "TCMB WIRP" (``wirp``) read: the published tables, the kinks'
-    z of their monitors now, this page's signals, the settings, the coverage and the mode (a note in replay)."""
+    z of their monitors now, this page's signals, the settings, the coverage and the mode (a note in replay) - on WIRP
+    for ``user`` also their own "Beklentim" beside each meeting (its gap) and their own lines after the survey's."""
     from .quant import _clean
     name = "imapath" if what == "path" else "wirp"
     tab = copy.deepcopy((v.get("tables") or {}).get(name) or {})
@@ -1000,8 +1457,62 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
     page = VIEWS[what]
     base[what] = tab
     base["signals"] = [s for s in v["signals"] + v["gated"] if s["page"] == page]
+    if name == "wirp":
+        bk = (tab.get("banks") or {}).get(WIRP_BANK) or {}
+        for r in bk.get("rows") or ():
+            m = fit["mons"].get("%s:%s:%s" % (FAMILY_WIRP, WIRP_BANK.upper(), r["meeting"]))
+            if m is not None:
+                r["sid"] = m.sid                               # (a row with a survey line: its card)
+        if user and bk.get("ok"):
+            aligned = align_mine(mine_of(quant.store, user).get(WIRP_BANK) or {}, [r["meeting"] for r in bk.get("rows") or ()])
+            for r in bk.get("rows") or ():
+                hit = aligned.get(r["meeting"])
+                if hit is not None:
+                    r["mine"], r["mine_day"] = hit
+                    r["mine_gap"] = (r["rate"] - hit[0]) * 100.0 if _num(r.get("rate")) is not None else None
+                    r["mine_sid"] = "%s:%s:%s:mine" % (FAMILY_WIRP, WIRP_BANK.upper(), r["meeting"])
+            try:
+                base["signals"] = base["signals"] + mine_lines(quant, fit, user, aligned)
+            except Exception as exc:  # noqa: BLE001 - a user's own lines are not worth the page
+                base.setdefault("errors", {})["beklentim"] = "%s: %s" % (type(exc).__name__, str(exc)[:160])
     base["settings"] = fit["cfg"]
     base["coverage"] = tab.get("coverage") or []
-    base["errors"] = {k: e for k, e in ((v.get("tables") or {}).get("errors") or {}).items() if k == "imapath"}
+    base["errors"] = dict({k: e for k, e in ((v.get("tables") or {}).get("errors") or {}).items() if k == "imapath"}, **(base.get("errors") or {}))
     base["mode"] = getattr(quant.svc, "mode", "")
     return _clean(base)
+
+
+def act_mine(quant: Any, user: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """``POST /api/quant/wirp-mine`` {bank, meeting, rate}: a user's expectation typed (an empty rate takes it back) -
+    their WIRP page answered again with it."""
+    from . import tradequant as tq
+    today = (getattr(quant, "_fit", None) or {}).get("today") or _dt.date.today().isoformat()
+    set_mine(quant.store, user, str(data.get("bank") or WIRP_BANK), str(data.get("meeting") or ""), data.get("rate"), today)
+    return tq.mark(quant.view("wirp", user, {}))              # (every line says whether Trades can book it, as a GET's)
+
+
+def book_mine(quant: Any, user: str, line_id: str, scope: str = "personal", lang: str = "tr") -> Dict[str, Any]:
+    """"İşleme al" for a user's own line - Trades' form of it, as ``tradequant.prefill`` makes it for the desk's lines
+    (which it finds in the desk's list: a user's own line is in none) - the line made again here, now, from the user's
+    own expectation (never what a page sent)."""
+    from . import tradequant as tq
+    from .service import ServiceError
+    from .tradebook import describe
+    m = mine_monitor(quant, user, line_id)
+    fit = getattr(quant, "_fit", None)
+    sg = qf.make_signal(m, fit["cfg"], _dt.datetime.now().strftime("%H:%M")) if m is not None and fit else None
+    if sg is None:
+        raise ServiceError("sinyal yok (beklentin ile ima arasındaki fark eşiğin altında ya da beklenti silinmiş): %s" % str(line_id)[:80], 404)
+    ok, why, kind = tq.bookable(sg)
+    if not ok:
+        raise ServiceError("bu sinyal Trades'e alınamaz: %s" % why)
+    book = quant.svc.tradebook
+    user = book._user(user)
+    scope = book._scope(scope or "personal")
+    raw, source = tq.raw_form(book, user, sg, scope, kind)
+    t, f = book.normalize(raw, lang)
+    trade = t if not f.errors else dict(raw, **{k: v for k, v in t.items() if v is not None})
+    trade.pop("scope", None)
+    return {"ok": not f.errors, "trade": trade, "fields": f.errors, "text": describe(t, "PPK") if not f.errors else "", "source": source,
+            "scope": scope, "kind": kind, "line": {"id": sg.get("id"), "family": sg.get("family"), "family_label": sg.get("family_label"),
+                                                   "text": sg.get("line") or sg.get("expression") or "", "instrument": sg.get("instrument")}}

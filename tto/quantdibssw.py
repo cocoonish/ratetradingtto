@@ -3,7 +3,7 @@ fixed-coupon bonds and bills are ranked on their carry + roll over a month and t
 them is bought against the worst of a similar duration, DV01-balanced - each switch a line of the Sinyaller list (group
 DİBS) in the plan's format::
 
-    AL TRT150328T24 / SAT TRT130928T38 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A momentum lehte · hedef +12,0 bp ·
+    AL 15.03.28 / SAT 13.09.28 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A momentum lehte · hedef +12,0 bp ·
     stop -8,0 bp · beklenen +504 bin TL · isabet %56 (142)
 
 Page "DİBS switch", a tab of Faiz after Eğri Adil Değeri (``tto.quant.MENU``: where the DİBS lines of DİBS adil değeri
@@ -46,8 +46,10 @@ the same DV01 (DİBS RV!AI's DV01, of the simple yield) rounded the same way - t
 
 **Level** of a switch: its yield difference y_AL − y_SAT (bp, the SWITCH / PAIR table's "Getiri farkı"): the switch
 gains as it falls.  Target and stop are moves of it, told in the trade's P&L direction ("hedef +12,0 bp": 12 bp in
-favour).  A pair's monitor keeps one orientation - the shorter bond first, its level y_short − y_long - and the line's
-direction is the side of it the week's ranking took.
+favour).  One sign convention everywhere (28.11.2026): the list's entry / target / stop, the card, the switches' table
+and the log all read AL − SAT, the week's AL the higher composite; a pair's id names its AL bond first
+("dibssw:<AL>/<SAT>", as the backtest's trades), so a pair whose side turns is a new line.  The bonds are named as the
+desk names them ("15.03.28", "10.02.27 Bono"), the ISIN in the tooltips and the ranking's own column.
 
 **Backtest** (walk-forward, no look-ahead): every rebalance of the history makes its switches from the closes up to it,
 held to the next rebalance's close; a switch's P&L at each close is the fall of its yield difference plus its carry +
@@ -467,7 +469,7 @@ class Engine(object):
                 done.append(sw)
                 ser = self.pair(sw["al"], sw["sat"])
                 k = ser.at(end)
-                text = "AL %s / SAT %s" % (sw["al"].isin, sw["sat"].isin)
+                text = "AL %s / SAT %s" % (sw["al"].label, sw["sat"].label)          # (the desk's names: "15.03.28", not the ISIN)
                 trades.append({"sid": "%s:%s/%s" % (FAMILY, sw["al"].isin, sw["sat"].isin), "family": FAMILY, "type": TYPE, "group": GROUP,
                                "entry_day": day, "exit_day": end, "end_day": end, "dir": -1, "entry": sw["level"],
                                "exit": ser.vals[k] if k is not None else None, "outcome": "süre", "held": len(p), "pnl": pnl, "unit": "bp",
@@ -535,8 +537,8 @@ def sheet_cr(eng_rows: Dict[str, Dict[str, Any]], months: Optional[float], isin:
 
 
 class Line(object):
-    """A pair of the week's ranking: its two bonds in their orientation, the side the ranking took, its sizes, C+R and
-    momentum, its yield difference's history and its "sıra"."""
+    """A pair of the week's ranking: its two bonds, the side the ranking took (AL the higher composite), its sizes, C+R
+    and momentum, its yield difference AL − SAT with its history, and its "sıra"."""
 
     def __init__(self, eng: Engine, p: Dict[str, Any], cur: Dict[str, Any], sw: Optional[Dict[str, Any]], walk: Dict[str, Any],
                  cr_months: Optional[float], stats: Dict[str, Any], nxt: _dt.date):
@@ -544,10 +546,13 @@ class Line(object):
         self.ctx = eng.ctx
         self.first, self.second = eng.by[p["key"][0]], eng.by[p["key"][1]]
         self.key = p["key"]
-        self.sid = "%s:%s/%s" % (FAMILY, self.first.isin, self.second.isin)
         self.al, self.sat = eng.by[p["al"]["isin"]], eng.by[p["sat"]["isin"]]
+        # one sign convention everywhere (28.11.2026: the list said −6,2, the card +6,2, the table −10,0 → +6,2): the
+        # level is the yield difference AL − SAT, as the SWITCH / PAIR table and the backtest's trades read it - the
+        # switch gains as it falls; the line's id names the AL bond first (the backtest's trades' ids, too)
+        self.sid = "%s:%s/%s" % (FAMILY, self.al.isin, self.sat.isin)
         self.fa, self.fs = p["al"], p["sat"]
-        self.way = 1 if self.al is self.second else -1           # (the side of y_first − y_second the switch is)
+        self.way = 1 if self.al is self.second else -1           # (the side of y_first − y_second the switch is: the history's "sıra")
         self.z = p["z"]
         self.taken = bool(p["taken"])
         self.gap = p["gap"]
@@ -555,7 +560,7 @@ class Line(object):
         self.formed = cur["day"]
         self.next = nxt
         self.stats = stats
-        self.ser = eng.pair(self.first, self.second)
+        self.ser = eng.pair(self.al, self.sat)
         last = eng.calendar[-1] if eng.calendar else cur["day"]
         # carry + roll a month (bp, of the switch): DİBS RV's own now where it has both bonds', else the history's at the last
         # close (else at the ranking's)
@@ -573,15 +578,17 @@ class Line(object):
         self.level_formed = (self.ser.vals[self.ser.at(self.formed)] if self.ser.at(self.formed) is not None else None)
 
     def level(self, live: Dict[str, float]) -> Optional[float]:
-        a, b = self.first.now(self.ctx, live), self.second.now(self.ctx, live)
+        """The yield difference AL − SAT now (bp)."""
+        a, b = self.al.now(self.ctx, live), self.sat.now(self.ctx, live)
         return (a - b) * 100.0 if a is not None and b is not None else None
 
     def legs(self) -> List[Dict[str, Any]]:
-        """The AL leg first (its DV01 the package's), then the SAT leg - weights ±1 of y_first − y_second."""
+        """The AL leg first (its DV01 the package's), then the SAT leg - weights +1 / −1 of y_AL − y_SAT; each named as the
+        desk names the bond ("15.03.28"; the ISIN is its key)."""
         out = []
         for b, n, dv, usd in ((self.al, "al", "dv01_al", "usd_al"), (self.sat, "sat", "dv01_sat", "usd_sat")):
-            w = 1.0 if b is self.first else -1.0
-            leg = {"key": "DIBS:" + b.isin, "name": "%s (%s)" % (b.isin, b.label), "weight": w}
+            w = 1.0 if b is self.al else -1.0
+            leg = {"key": "DIBS:" + b.isin, "name": b.label, "weight": w}
             if self.size:
                 leg.update({"dv01": w * self.size[dv], "dv01_usd": w * self.size[usd] if self.size[usd] is not None else None,
                             "notional": self.size[n] / 1e6})
@@ -590,34 +597,38 @@ class Line(object):
 
 
 def _monitor(line: Line, cfg: Dict[str, Any], walk: Dict[str, Any]) -> qf.Monitor:
-    """The pair's monitor: its yield difference (bp, y_first − y_second), "sıra" now, the switch's legs and size; its own
-    levels until the calibrated ones come (1,5σ / 1σ of the week, the week's C+R expected), no gate."""
+    """The pair's monitor: its yield difference (bp, AL − SAT: the switch gains as it falls), "sıra" now (negative: the
+    side the week's ranking took is the fall), the switch's legs and size; its own levels until the calibrated ones come
+    (1,5σ / 1σ of the week, the week's C+R expected), no gate."""
     sig_h = line.dsd * math.sqrt(WEEK) if line.dsd else None
     days, vals = list(line.ser.days), list(line.ser.vals)
     info = {"version": TYPE, "model": MODEL, "group": GROUP, "tier": None, "priority": qu.priority(GROUP), "tag": "", "size": line.size_text,
-            "k": 1.0, "al": line.al.isin, "sat": line.sat.isin, "formed": line.formed, "next": line.next.isoformat(), "rank": (line.sw or {}).get("rank"),
-            "of": None, "gap": line.gap, "cr": line.cr, "mom": line.mom,
-            "inputs": ["DIBSS:" + line.first.isin, "DIBSC:" + line.first.isin, "DIBSS:" + line.second.isin, "DIBSC:" + line.second.isin]}
-    # (the level rising - the second bond bought, the first sold - is the up side: its C+R a week is the switch's when
-    # the ranking bought the second, its negative when it bought the first)
-    m = qf.Monitor(line.sid, FAMILY, "DİBS", "%s / %s switch" % (line.first.isin, line.second.isin), "bp", 1, days, vals, line.legs(),
-                   line.level, zfn=lambda lv, live, z=line.z: z, zvalues=_zhist(days, walk["z"], line.key), mode="drift", follows=True,
+            "k": 1.0, "al": line.al.isin, "sat": line.sat.isin, "al_label": line.al.label, "sat_label": line.sat.label, "formed": line.formed,
+            "next": line.next.isoformat(), "rank": (line.sw or {}).get("rank"), "of": None, "gap": line.gap, "cr": line.cr, "mom": line.mom,
+            "inputs": ["DIBSS:" + line.al.isin, "DIBSC:" + line.al.isin, "DIBSS:" + line.sat.isin, "DIBSC:" + line.sat.isin]}
+    # ("sıra" of the history in the pair's first / second orientation, as the walk keeps it: in AL − SAT's, × −way - a past
+    # week that took the same side is negative, one that took the other side positive)
+    zs = [-line.way * z if z is not None else None for z in _zhist(days, walk["z"], line.key)]
+    # (the level rising - the SAT bond bought, the AL bond sold: the switch the other way - is the up side: its C+R a week
+    # is the switch's negative)
+    m = qf.Monitor(line.sid, FAMILY, "DİBS", "%s / %s switch" % (line.al.label, line.sat.label), "bp", 1, days, vals, line.legs(),
+                   line.level, zfn=lambda lv, live, z=-line.way * line.z: z, zvalues=zs, mode="drift", follows=True,
                    entry=1.0, score_name="sıra", ungated=True, hold=WEEK, dsd=line.dsd, pnl=("bp", 1.0), pkg="bond", explicit=True,
-                   carry_up=line.way * line.cr * WEEK / MONTH_CLOSES, fcast=0.0,
+                   carry_up=-line.cr * WEEK / MONTH_CLOSES, fcast=0.0,
                    reward=T_MULT * sig_h if sig_h else None, risk=S_MULT * sig_h if sig_h else None, note=NOTE, info=info,
-                   regime={"tag": None}, series_label="getiri farkı %s − %s (basit getiri, bp)" % (line.first.label, line.second.label))
+                   regime={"tag": None}, series_label="getiri farkı AL − SAT: %s − %s (basit getiri, bp)" % (line.al.label, line.sat.label))
     m.finish = lambda sg: _finish(line, sg)
     m.dibssw = line
     return m
 
 
 def _finish(line: Line, sg: Dict[str, Any]) -> None:
-    """make_signal's line made the plan's: "AL … / SAT … · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A momentum lehte ·
-    hedef +12,0 bp · stop -8,0 bp · beklenen +504 bin TL · isabet %56 (142)" - target and stop moves of the yield
-    difference in the trade's favour; the card's sentence."""
+    """make_signal's line made the plan's: "AL 15.03.28 / SAT 13.09.28 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A
+    momentum lehte · hedef +12,0 bp · stop -8,0 bp · beklenen +504 bin TL · isabet %56 (142)" - the bonds by the desk's
+    names, target and stop moves of the yield difference in the trade's favour; the card's sentence."""
     s = int(sg.get("direction") or 0)
-    if s and s != line.way:
-        return                                              # (a side the week's ranking did not take: told as it is)
+    if s and s != -1:
+        return                                              # (a side the week's ranking did not take - AL − SAT up: told as it is)
     lv = sg.get("levels") or {}
     cal = bool(lv.get("ok"))
     entry = sg.get("entry")
@@ -626,14 +637,15 @@ def _finish(line: Line, sg: Dict[str, Any]) -> None:
     mo = sg.get("money") or {}
     hit, n = (lv.get("hit"), int(lv.get("n") or 0)) if cal else (line.stats.get("hit"), int(line.stats.get("trades") or 0))
     mom = "lehte" if line.mom > 0 else ("aleyhte" if line.mom < 0 else "nötr")
-    head = "AL %s / SAT %s · switch · %s" % (line.al.isin, line.sat.isin, line.size_text)
+    head = "AL %s / SAT %s · switch · %s" % (line.al.label, line.sat.label, line.size_text)
     parts = [head, "C+R %s bp/ay" % qf._sg(line.cr, 1), "1A momentum %s" % mom,
              "hedef +%s bp" % qf._g(t_bp, 1) if t_bp is not None else "hedef —", "stop -%s bp" % qf._g(s_bp, 1) if s_bp is not None else "stop —",
              "beklenen " + qf._money(mo.get("total"), "TL"), ("isabet %%%s (%d)" % (qf._g((hit or 0.0) * 100.0, 0), n)) if n else "isabet — (0)"]
     text = " · ".join(parts)
     sg["expression"] = sg["line"] = text
+    sg["trade_line"] = head                                 # (the list's İşlem cell: the trade and its sizes - Düzen, 28.11.2026)
     lvl = sg.get("level")
-    now = "%s / %s getiri farkı (AL − SAT, basit getiri) şimdi %s" % (line.al.label, line.sat.label, qf._sg(-line.way * lvl, 1) + " bp" if lvl is not None else "—")
+    now = "%s / %s getiri farkı (AL − SAT, basit getiri) şimdi %s" % (line.al.label, line.sat.label, qf._sg(lvl, 1) + " bp" if lvl is not None else "—")
     rr = ("hedefte %s, stopta %s" % (qf._money(mo.get("target"), "TL"), qf._money(mo.get("stop"), "TL"))) if mo.get("target") is not None else ""
     size = ""
     if line.size:
@@ -720,7 +732,7 @@ def run(ctx: qf.Ctx, reg: qu.Registry, cfg: Dict[str, Any]) -> Tuple[List[qf.Mon
                                       "dur_al": line.fa["dur"], "dur_sat": line.fs["dur"], "gap": sw["gap"], "cr": line.cr, "cr_sheet": line.cr_sheet,
                                       "cr_hist": line.cr_hist, "mom": line.mom, "level": sw["level"], "sigma_h": sig_h, "target_bp": m_ * sig_h,
                                       "stop_bp": k * sig_h, "size": line.size, "size_text": line.size_text, "way": line.way,
-                                      "level_formed": -line.way * line.level_formed if line.level_formed is not None else None})
+                                      "level_formed": line.level_formed})            # (AL − SAT at the rebalance, as the line)
     table["ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
     table["timing"] = {"walk_ms": round((t_walk - t0) * 1000.0, 1), "bonds": len(eng.bonds), "closes": len(eng.calendar),
                        "rebalances": len(walk["rebal"]), "trades": len(trades)}
@@ -748,8 +760,9 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
         sg = sigs.get(sw["sid"])
         now = m.level if m is not None else None
         if now is not None:
-            # (the yield difference AL − SAT now, and the P&L since the rebalance: its fall, bp of the AL leg's DV01)
-            sw["now"] = -sw["way"] * now
+            # (the yield difference AL − SAT now - the line's own level -, and the P&L since the rebalance: its fall, bp of
+            # the AL leg's DV01)
+            sw["now"] = now
             if sw.get("level_formed") is not None:
                 sw["so_far"] = -(sw["now"] - sw["level_formed"])
         if sg is not None:

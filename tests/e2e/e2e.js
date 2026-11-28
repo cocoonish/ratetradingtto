@@ -5946,7 +5946,8 @@ async function clipAfter(page, action) {
         return out;
       };
       return { at: col, head: q.SIGNAL_HEAD[col - 1], lead: q.SIGNAL_HEAD.slice(0, 7).join(' | '), yes: rows[0][col].act ? rows[0][col].act.label : null,
-        no: rows[1][col].t, noTip: rows[1][col].tip || '', side: [rows[0][0].cls, q.sideClass('SAT USDTRY 1A forward'), q.sideClass('AL A / SAT B')],
+        no: rows[1][col].t, noTip: rows[1][col].tip || '', side: [(rows[0][0].cls || '').split(' ').filter((c) => c !== 'qtrade').join(' '),
+          q.sideClass('SAT USDTRY 1A forward'), q.sideClass('AL A / SAT B')],
         cardYes: card(yes), cardNo: card(no) };
     });
     check('"İşleme al": a line Trades can book has the button in the list\'s "Trades" column (after the trade: İşlem · Giriş · Hedef · Stop · Beklenen K/Z · Ödül / risk · '
@@ -6133,29 +6134,39 @@ async function clipAfter(page, action) {
       && duzenQuantSig.card.empty === !duzenQuantSig.card.picked && duzenQuantHidden === 'Varlık,Yarı ömür (g),Rejim,Uyum,Kapılar', { duzenQuantSig, duzenQuantHidden });
     await shot(page, 'quant-signals');
     // ------------------------------------------------------------------ Carry + momentum (quantsira.py)
-    // a tab of Sinyaller: each set's basket card and ranking table under its read line, the backtest per set; the recorded
-    // month is too short for a basket - each set says why; a leg as the server sends it, in the list in the plan's format
+    // a tab of Sinyaller (toplu 28.11: the six baskets one table): a row each basket - or why there is none -, one ranking at
+    // a time under it with its switch, the backtest per set; the recorded month is too short for a basket - each row says why;
+    // a leg as the server sends it, in the list in the plan's format
     console.log('quant carry + momentum');
     await open(page, 'quant-sira');
-    await page.waitForSelector('#quant-sira-g10', { timeout: 30000 });
+    await page.waitForSelector('#quant-sira-baskets', { timeout: 30000 });
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.data && window.tto.state.page.data.ready, null, { timeout: 90000 });
     const siraApi = await api(page, 'ayşe yilmaz', 'GET', '/api/quant/sira');
-    const SIRA_SETS = ['quant-sira-g10', 'quant-sira-vol', 'quant-sira-ois', 'quant-sira-spread', 'quant-sira-fly', 'quant-sira-dibs'];
     const sira = await page.evaluate(() => ({
       tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
       panels: [...document.querySelectorAll('section.panel[id^="quant-sira-"]')].map((p) => {
         const r = p.querySelector(':scope > .qread');
-        return { id: p.id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER',
-          card: !!p.querySelector('.qbasket'), why: ((p.querySelector('.qbasket .empty') || {}).textContent || ''),
-          table: !!p.querySelector('table.grid, .body > .empty') };
-      }) }));
+        return { id: p.id, read: r ? r.textContent : '', under: !!r && (r.previousElementSibling || {}).tagName === 'HEADER' };
+      }),
+      baskets: [...document.querySelectorAll('#quant-sira-baskets table.grid tr:not(.hd)')].map((tr) => tr.innerText),
+      sets: [...document.querySelectorAll('#quant-sira-set button')].map((b) => b.dataset.v) }));
     const siraSets = ((siraApi.json || {}).sira || {}).sets || [];
-    check('Carry + momentum: the fourth tab of Sinyaller; each set\'s basket card and ranking table under its read line, the backtest per set',
+    check('Carry + momentum: the fourth tab of Sinyaller; the six baskets in one table under its read line - a row each, or why there is none -, one ranking at a '
+      + 'time with its switch, the backtest per set (toplu 28.11: no panel of a set\'s own)',
       sira.tabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi,VİOP' && sira.on.join() === 'quant-sira' && siraApi.status === 200 && siraSets.length === 6
-      && SIRA_SETS.every((id) => sira.panels.some((p) => p.id === id && p.read.length >= 40 && p.under && p.card && p.table))
-      && sira.panels.some((p) => p.id === 'quant-sira-backtest' && p.read.length >= 40 && p.under)
-      && siraSets.every((s) => s.ok || (s.why && sira.panels.some((p) => p.id === 'quant-sira-' + s.id && p.why === s.why))), { sira, sets: siraSets.map((s) => [s.id, s.ok, s.why]) });
+      && ['quant-sira-baskets', 'quant-sira-ranking', 'quant-sira-backtest'].every((id) => sira.panels.some((p) => p.id === id && p.read.length >= 40 && p.under))
+      && !sira.panels.some((p) => /^quant-sira-(g10|vol|ois|spread|fly|dibs)$/.test(p.id)) && sira.baskets.length === 6
+      && siraSets.every((s, i) => s.ok || (s.why && sira.baskets[i].includes(s.why))) && sira.sets.join() === 'g10,vol,ois,spread,fly,dibs',
+    { sira, sets: siraSets.map((s) => [s.id, s.ok, s.why]) });
+    // a basket's row: its ranking below (the switch follows, kept in the browser)
+    await page.locator('#quant-sira-baskets table.grid tr:not(.hd)').nth(2).locator('td').first().click();
+    await page.waitForFunction(() => /TRY OIS sepeti/.test((document.querySelector('#quant-sira-ranking h2') || {}).textContent || ''), null, { timeout: 10000 }).catch(() => null);
+    const siraPick = await page.evaluate(() => ({ on: [...document.querySelectorAll('#quant-sira-set button.on')].map((b) => b.dataset.v).join(),
+      title: (document.querySelector('#quant-sira-ranking h2') || {}).textContent || '', kept: (() => { try { return localStorage.getItem('tto.quant.sira.set'); } catch (e) { return null; } })() }));
+    await page.click('#quant-sira-set button[data-v="g10"]');
+    check('... a basket\'s row shows its ranking below: the set\'s switch follows, the choice kept', siraPick.on === 'ois' && /TRY OIS sepeti/.test(siraPick.title)
+      && siraPick.kept === 'ois', siraPick);
     const siraRow = await page.evaluate(async () => {
       const q = await import('/static/js/pages/quantbase.js');
       const leg = { id: 'sira:g10:FX:USDJPY', family: 'sira', family_label: 'Carry + momentum', asset: 'FX', group: 'G10 spot', tier: null, tag: '',
@@ -6175,12 +6186,10 @@ async function clipAfter(page, action) {
       siraRow.fam === 'Carry + momentum · G10 spot sepeti' && siraRow.trade === 'SAT USDJPY spot · 1,2 mn USD' && siraRow.entry === '150,250'
       && siraRow.target === '149,900' && siraRow.stop === '151,800' && siraRow.pnl === '+350 bin JPY / 1 mn USD' && siraRow.bt === '87 · 58% · +0,1σ'
       && siraRow.group === 'G10 spot' && siraRow.strength === 'Güçlü', siraRow);
-    // Düzen: a basket without a basket this week says why once - in its card - and its empty ranking no more; its legs' table folded
-    const duzenQuantSira = await page.evaluate((sets) => sets.filter((s) => !s.ok && s.why).map((s) => {
-      const p = document.getElementById('quant-sira-' + s.id);
-      return p ? p.innerText.split(s.why).length - 1 : -1;
-    }), siraSets.map((s) => ({ id: s.id, ok: s.ok, why: s.why })));
-    check('Düzen: each Carry + momentum basket without one says why once (its card; the empty ranking under it says no more)',
+    // Düzen: a basket without a basket this week says why once - on its row - and the ranking under it no more
+    const duzenQuantSira = await page.evaluate((sets) => sets.filter((s) => !s.ok && s.why).map((s) => document.querySelector('#content .qpage').innerText.split(s.why).length - 1),
+      siraSets.map((s) => ({ id: s.id, ok: s.ok, why: s.why })));
+    check('Düzen: each Carry + momentum basket without one says why once (its row in the baskets\' table; the ranking under it says no more)',
       duzenQuantSira.every((n) => n === 1), duzenQuantSira);
     await shot(page, 'quant-sira');
     await open(page, 'quant-pca');
@@ -6254,15 +6263,19 @@ async function clipAfter(page, action) {
     const mlLine = await page.evaluate(async () => {
       const q = await import('/static/js/pages/quantbase.js');
       const s = { id: 'ml:FX:AUDUSD', family: 'ml', family_label: 'Makine öğrenmesi', asset: 'FX', expression: 'AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)',
+        trade_line: 'AL AUDUSD spot · 1 mn AUD',
         z: 2.98, entry_z: 2, score_name: 'z(p)', strength: 'Orta', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2.98, regime: 1, hl: 1, carry: 1 }, composite: 2.98,
         hold: 5, horizon_unit: 'gün', bt: null, unit: '', digits: 5, entry: 0.63345, target: 0.63549, stop: 0.62282, direction: 1, pnl_unit: '%', exp_pnl: 0.32,
         group: 'G10 spot', tier: null, tag: '', gated: '' };
       const head = q.signalHead({ rank: true, group: true });
       const row = q.signalRows([s], { rank: true, group: true })[0];
-      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t, z: row[head.indexOf('z')].t };
+      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, tip: row[head.indexOf('İşlem')].tip || '', group: row[head.indexOf('Grup')].t,
+        z: row[head.indexOf('z')].t };
     });
-    check('... and an ML line in the list: family "Makine öğrenmesi", the trade "AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)", its group',
-      mlLine.family === 'Makine öğrenmesi' && mlLine.trade === 'AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)' && mlLine.group === 'G10 spot' && mlLine.z === '+2,98', mlLine);
+    check('... and an ML line in the list: family "Makine öğrenmesi", the İşlem cell the trade and its size "AL AUDUSD spot · 1 mn AUD" (toplu 28.11: its probability '
+      + 'and record have their columns; the whole line in its tooltip), its group',
+      mlLine.family === 'Makine öğrenmesi' && mlLine.trade === 'AL AUDUSD spot · 1 mn AUD' && mlLine.tip.startsWith('AL AUDUSD spot · 1 mn AUD · olasılık %65 · isabet %69 (64)')
+      && mlLine.group === 'G10 spot' && mlLine.z === '+2,98', mlLine);
     await shot(page, 'quant-ml');
     // curve fair value: the NSS fit of the OIS quotes and the NS fit of the DİBS RV list's fixed-coupon bonds, its bills
     // priced on it (today's quotes of the workbook; the recorded data has no DİBS history, so no z yet)
@@ -6297,18 +6310,17 @@ async function clipAfter(page, action) {
     });
     if (duzenQuantKey >= 0) {
       await page.locator('#quant-curve-ois table.grid tr:not(.hd)').nth(duzenQuantKey).locator('td').nth(1).click();
-      await page.waitForFunction(() => {
-        const r = document.getElementById('quant-curve-chart').getBoundingClientRect();
-        return r.top >= -2 && r.top < window.innerHeight * 0.6;
-      }, null, { timeout: 10000 }).catch(() => null);
+      await page.waitForSelector('.modal.qcard .qcardcols', { timeout: 15000 }).catch(() => null);
     }
-    const duzenQuantCard = await page.evaluate(() => {
-      const r = document.getElementById('quant-curve-chart').getBoundingClientRect();
-      return { top: Math.round(r.top), vh: window.innerHeight, picked: window.tto.state.page.picked || null };
-    });
-    check('Düzen: Eğri Adil Değeri opens with what to trade (best bond, quote, switch) before the two fits; a row clicked below brings the card into view',
+    const duzenQuantCard = await page.evaluate(() => ({ win: document.querySelectorAll('.modal.qcard').length, picked: window.tto.state.page.picked || null,
+      cols: document.querySelectorAll('.modal.qcard .qcardleft, .modal.qcard .qcardright').length, ids: document.querySelectorAll('.modal.qcard [id^="quant-sig-"]').length,
+      go: ((document.querySelector('.modal.qcard .mfoot button:not(.primary)') || {}).textContent || '') }));
+    if (duzenQuantCard.win) await page.click('.modal.qcard .mfoot button.primary');
+    check('Düzen: Eğri Adil Değeri opens with what to trade (best bond, quote, switch) before the two fits; a row clicked below with the card off screen opens the '
+      + 'card in its window (toplu 28.11: no scroll to it) - two columns, "Sayfadaki karta git"',
       duzenQuantCurve === 'quant-curve-best,quant-curve-quote,quant-curve-switch,quant-curve-ois,quant-curve-dibs'
-      && (duzenQuantKey < 0 || (duzenQuantCard.top >= -2 && duzenQuantCard.top < duzenQuantCard.vh * 0.6 && !!duzenQuantCard.picked)),
+      && (duzenQuantKey < 0 || (duzenQuantCard.win === 1 && !!duzenQuantCard.picked && duzenQuantCard.cols === 2 && duzenQuantCard.ids === 0
+        && duzenQuantCard.go === 'Sayfadaki karta git')),
     { duzenQuantCurve, duzenQuantKey, duzenQuantCard });
     await shot(page, 'quant-curve');
     // options: the vol surface of USDTRY and EURUSD by tenor and the smile's probabilities (the recorded data has no vol
@@ -6359,16 +6371,18 @@ async function clipAfter(page, action) {
       const text = '25D RR 1A 1 haftada +1,2 vol (z +2,1; USD call\'ları pahalandı), spot henüz gelmedi → AL USDJPY spot · 1,1 mn USD · giriş 150,250 '
         + '· hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)';
       const s = { id: 'optspot:FX:USDJPY', family: 'optspot', family_label: 'Opsiyon → spot', asset: 'FX', expression: text, line: text,
+        trade_line: 'AL USDJPY spot · 1,1 mn USD',
         z: 2.6, entry_z: 2, score_name: 'z(p)', strength: 'Orta', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2.6, regime: 1, hl: 1, carry: 1 },
         composite: 2.6, hold: 5, horizon_unit: 'gün', bt: null, unit: '', digits: 3, entry: 150.25, target: 152.1, stop: 148.77, direction: 1,
         pnl_unit: '%', exp_pnl: 0.31, group: 'G10 spot', tier: null, tag: '', gated: '' };
       const head = q.signalHead({ rank: true, group: true });
       const row = q.signalRows([s], { rank: true, group: true })[0];
-      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t };
+      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, tip: row[head.indexOf('İşlem')].tip || '', group: row[head.indexOf('Grup')].t };
     });
-    check('... and an Opsiyon → spot line in the list: its family, the option signal behind the trade first, then the plan\'s line, its group',
-      osLine.family === 'Opsiyon → spot' && osLine.trade.startsWith('25D RR 1A 1 haftada +1,2 vol')
-      && osLine.trade.endsWith('→ AL USDJPY spot · 1,1 mn USD · giriş 150,250 · hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)')
+    check('... and an Opsiyon → spot line in the list: its family, the İşlem cell the trade and its size (toplu 28.11); the option signal behind it and the '
+      + 'plan\'s line in its tooltip, its group',
+      osLine.family === 'Opsiyon → spot' && osLine.trade === 'AL USDJPY spot · 1,1 mn USD' && osLine.tip.startsWith('25D RR 1A 1 haftada +1,2 vol')
+      && osLine.tip.includes('→ AL USDJPY spot · 1,1 mn USD · giriş 150,250 · hedef 152,630 · stop 148,350 · beklenen +3,4 bin USD · isabet %57 (64)')
       && osLine.group === 'G10 spot', osLine);
     await shot(page, 'quant-optspot');
     // ------------------------------------------------------------------ DİBS switch (quantdibssw.py): a tab of Faiz
@@ -6398,19 +6412,22 @@ async function clipAfter(page, action) {
       { tabs: swPage.tabs, why: swTab.why, head: swPage.head, out: swTab.out, read: swPage.read });
     const swLine = await page.evaluate(async () => {
       const q = await import('/static/js/pages/quantbase.js');
-      const text = 'AL TRT150328T24 / SAT TRT130928T38 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A momentum lehte · hedef +12,0 bp · stop -8,0 bp '
+      const text = 'AL 15.03.28 / SAT 13.09.28 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay · 1A momentum lehte · hedef +12,0 bp · stop -8,0 bp '
         + '· beklenen +504 bin TL · isabet %56 (142)';
       const s = { id: 'dibssw:TRT150328T24/TRT130928T38', family: 'dibssw', family_label: 'DİBS switch', asset: 'DİBS', expression: text, line: text,
+        trade_line: 'AL 15.03.28 / SAT 13.09.28 · switch · 210 mn / 205 mn',
         z: -2, entry_z: 1, score_name: 'sıra', strength: 'Güçlü', gates: [], legs: [], agree: 0, conflict: 0, parts: { z: 2, regime: 1, hl: 1, carry: 1 },
         composite: 2, hold: 5, horizon_unit: 'gün', bt: null, unit: 'bp', digits: 1, entry: 35.2, target: 23.2, stop: 43.2, direction: -1,
         pnl_unit: 'bp', exp_pnl: 12, group: 'DİBS', tier: null, tag: '', gated: '', info: { model: 'DİBS switch' } };
       const head = q.signalHead({ rank: true, group: true });
       const row = q.signalRows([s], { rank: true, group: true })[0];
-      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, group: row[head.indexOf('Grup')].t };
+      return { family: row[head.indexOf('Aile')].t, trade: row[head.indexOf('İşlem')].t, tip: row[head.indexOf('İşlem')].tip || '', group: row[head.indexOf('Grup')].t };
     });
-    check('... and a DİBS switch line in the list: its family, the plan\'s line (both bonds, sizes, C+R, momentum, target / stop in bp, money, hit rate), group DİBS',
-      swLine.family === 'DİBS switch' && swLine.trade.startsWith('AL TRT150328T24 / SAT TRT130928T38 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay')
-      && swLine.trade.endsWith('isabet %56 (142)') && swLine.group === 'DİBS', swLine);
+    check('... and a DİBS switch line in the list: its family, the İşlem cell the bonds by their names and the sizes (toplu 28.11), the plan\'s line (C+R, '
+      + 'momentum, target / stop in bp, money, hit rate) in its tooltip, group DİBS',
+      swLine.family === 'DİBS switch' && swLine.trade === 'AL 15.03.28 / SAT 13.09.28 · switch · 210 mn / 205 mn'
+      && swLine.tip.startsWith('AL 15.03.28 / SAT 13.09.28 · switch · 210 mn / 205 mn · C+R +18,0 bp/ay') && swLine.tip.includes('isabet %56 (142)')
+      && swLine.group === 'DİBS', swLine);
     // Düzen: the reason there is no ranking once (in the switches' head line; it was printed five times); the bonds' yields in
     // three decimals (quant levels)
     const duzenQuantSw = await page.evaluate((why) => ({ n: why ? document.querySelector('#content .qpage').innerText.split(why).length - 1 : 1,
@@ -6462,6 +6479,92 @@ async function clipAfter(page, action) {
       && wb.usd.buckets.every((b) => /^\d+–\d+$/.test(b.label)) && await page.locator('#quant-wirp-matrix table.grid tr:not(.hd)').count() === wb.usd.rows.length);
     await shot(page, 'quant-wirp');
     await page.click('#quant-wirp-bank button[data-v="try"]');
+    // ------------------------------------------------------------------ toplu 28.11 (K7): WIRP AL / SAT lines, "Beklentim", the card
+    // C16: each TCMB meeting against the survey (Masa R157:R159) and the user's own "Beklentim"; a gap of a quarter of the grid a
+    // line - the meeting's period received or paid at its MPC OIS rate, bookable -; WIRP's check a tick, never "0,000000"
+    console.log('toplu 28.11 · quant');
+    await page.waitForFunction(() => /TCMB/.test((document.querySelector('#quant-wirp-table h2') || {}).textContent || ''), null, { timeout: 10000 }).catch(() => null);
+    const wirpLines = await page.evaluate(() => {
+      const d = window.tto.state.page.data;
+      const rows = d.wirp.banks.try.rows;
+      return { head: [...document.querySelectorAll('#quant-wirp-table table.grid tr.hd td')].map((td) => td.textContent.trim()).slice(0, 7).join(' | '),
+        survey: rows.filter((r) => typeof r.survey === 'number').map((r) => [r.meeting, r.survey, r.survey_gap]),
+        lines: (d.signals || []).filter((s) => s.family === 'wirp').map((s) => ({ id: s.id, line: s.line, book: !!(s.book && s.book.ok), dir: s.direction })),
+        zeros: /0,000000/.test(document.querySelector('#content .qpage').innerText),
+        ticks: [...document.querySelectorAll('#quant-wirp-matrix table.grid tr:not(.hd)')].filter((tr) => tr.lastElementChild.textContent === '✓').length,
+        rowsN: rows.length };
+    });
+    check('C16: WIRP\'s TCMB table compares each meeting with the survey and the user\'s "Beklentim"; a gap of a quarter of the grid is a line - the period '
+      + 'received / paid at its MPC OIS rate, "ankete göre", bookable -; the check a tick (no "0,000000")',
+      wirpLines.head === 'Toplantı | İma faiz % | Anket % | İma − anket (bp) | Beklentim % | İma − beklentim (bp) | Sinyal' && wirpLines.survey.length >= 1
+      && wirpLines.survey.every((x) => typeof x[2] === 'number') && !wirpLines.zeros && wirpLines.ticks === wirpLines.rowsN
+      && wirpLines.lines.length === wirpLines.survey.filter((x) => Math.abs(x[2]) >= 12.5).length
+      && wirpLines.lines.every((l) => /^(Receive|Pay) PPK .+ dönemi · 1\.000 \$ DV01 · giriş %[\d,]+ · hedef %[\d,]+ \(anket %[\d,]+\) · stop %[\d,]+ · beklenen .+ · ankete göre$/.test(l.line) && l.book),
+    wirpLines);
+    // "Beklentim" typed in place on a meeting the survey does not name: the user's own line, theirs alone
+    const mineDay = await page.evaluate(() => (window.tto.state.page.data.wirp.banks.try.rows.find((r) => typeof r.survey !== 'number' && r.period) || {}).meeting || '');
+    // (a step that cannot be done fails its check below, never the run)
+    await page.click('#quant-wirp-table button[data-act="mine-' + mineDay + '"]', { timeout: 10000 }).catch(() => null);
+    await page.fill('#quant-wirp-mine-' + mineDay, '30,00', { timeout: 10000 }).catch(() => null);
+    await page.press('#quant-wirp-mine-' + mineDay, 'Enter', { timeout: 10000 }).catch(() => null);
+    await page.waitForFunction(() => (window.tto.state.page.data.signals || []).some((s) => s.personal), null, { timeout: 30000 }).catch(() => null);
+    const wirpMine = await page.evaluate((m) => {
+      const d = window.tto.state.page.data;
+      const r = d.wirp.banks.try.rows.find((x) => x.meeting === m) || {};
+      const s = (d.signals || []).find((x) => x.personal) || {};
+      const tr = [...document.querySelectorAll('#quant-wirp-table table.grid tr:not(.hd)')].find((x) => x.children[0].textContent === m.split('-').reverse().join('.'));
+      return { mine: r.mine, gap: r.mine_gap, line: s.line || '', book: !!(s.book && s.book.ok), cell: tr ? tr.innerText : '',
+        idx: window.tto.state.page.boxes.sig.keys.indexOf(s.id) };
+    }, mineDay);
+    const wirpOther = (await api(page, 'mehmet', 'GET', '/api/quant/wirp')).json || {};
+    check('C16: "Beklentim" typed in the WIRP table in place - the user\'s own line (receive the period, "beklentime göre", bookable), the row its gap and side; '
+      + 'another user sees none of it',
+      wirpMine.mine === 30 && wirpMine.gap > 0 && /^Receive PPK .+ \(beklentim %30,000\) .+ · beklentime göre$/.test(wirpMine.line) && wirpMine.book
+      && /30,00 ✎/.test(wirpMine.cell) && /Receive · beklentim/.test(wirpMine.cell) && !(wirpOther.signals || []).some((s) => s.personal), { mineDay, wirpMine });
+    // its "İşleme al": Trades' form of the PPK period at the period's MPC OIS rate
+    if (wirpMine.idx >= 0) {
+      await page.evaluate(() => document.getElementById('quant-wirp-signals').scrollIntoView({ block: 'start' }));
+      await page.locator('#quant-wirp-signals table.grid tr:not(.hd)').nth(wirpMine.idx).locator('button[data-act="book"]').click();
+      await page.waitForSelector('#trade-form', { timeout: 20000 }).catch(() => null);
+    }
+    const wirpForm = await page.evaluate(() => ({ open: !!document.getElementById('trade-form'), price: (document.getElementById('tf-price') || {}).value || '',
+      meeting: (document.getElementById('tf-meeting') || {}).value || '', dv01: (document.getElementById('tf-dv01') || {}).value || '' }));
+    if (wirpForm.open) await page.keyboard.press('Escape');
+    const wirpLine = (await api(page, 'ayşe yilmaz', 'GET', '/api/quant/wirp')).json.signals.find((s) => s.personal) || {};
+    check('... its "İşleme al": Trades\' form of the PPK period at its MPC OIS rate, the meeting, 1.000 $ DV01 (nothing saved)',
+      wirpForm.open && wirpForm.meeting === mineDay && /^1k$|^1\.000$/.test(wirpForm.dv01)
+      && wirpForm.price === ((wirpLine.quote || {}).entry || 0).toFixed(4).replace('.', ','), { wirpForm, quote: wirpLine.quote });
+    // taken back: an empty box
+    await page.click('#quant-wirp-table button[data-act="mine-' + mineDay + '"]', { timeout: 10000 }).catch(() => null);
+    await page.fill('#quant-wirp-mine-' + mineDay, '', { timeout: 10000 }).catch(() => null);
+    await page.press('#quant-wirp-mine-' + mineDay, 'Enter', { timeout: 10000 }).catch(() => null);
+    await page.waitForFunction(() => !(window.tto.state.page.data.signals || []).some((s) => s.personal), null, { timeout: 30000 }).catch(() => null);
+    check('... an empty "Beklentim" takes it back: the own line gone', await page.evaluate(() => !(window.tto.state.page.data.signals || []).some((s) => s.personal)));
+    // B1: the card in two columns - the sentence, the trade and its levels left, the charts right -, "Ayrıntı" and "Gerekçe" folded,
+    // each user's choice kept (in this browser)
+    await page.evaluate(() => document.getElementById('quant-wirp-chart').scrollIntoView({ block: 'start' }));
+    await page.waitForSelector('#quant-wirp-chart .qcardcols .qcardleft #quant-sig-plain', { timeout: 20000 }).catch(() => null);
+    const cardFolds = await page.evaluate(() => {
+      const card = document.getElementById('quant-wirp-chart');
+      const a = document.getElementById('quant-card-ayrinti'), g = document.getElementById('quant-card-gerekce');
+      const r = card.getBoundingClientRect();
+      return { cols: card.querySelectorAll('.qcardleft, .qcardright').length, charts: card.querySelectorAll('.qcardright svg.chart').length,
+        folded: !!a && !a.open && !!g && !g.open, height: Math.round(r.height), vh: window.innerHeight };
+    });
+    await page.click('#quant-card-ayrinti > summary', { timeout: 10000 }).catch(() => null);
+    // (the details' "toggle" event comes after the click, in a task of its own: the choice is kept then)
+    await page.waitForFunction(() => { try { return Object.keys(localStorage).some((k) => /^tto\.quant\.card\..+\.ayrinti$/.test(k)); } catch (e) { return true; } },
+      null, { timeout: 5000 }).catch(() => null);
+    const cardKept = await page.evaluate(() => { try { return Object.keys(localStorage).filter((k) => /^tto\.quant\.card\..+\.ayrinti$/.test(k)).map((k) => localStorage.getItem(k)); } catch (e) { return []; } });
+    await open(page, 'quant-path');
+    await open(page, 'quant-wirp');
+    await page.waitForSelector('#quant-card-ayrinti', { timeout: 20000 }).catch(() => null);
+    const cardAgain = await page.evaluate(() => !!(document.getElementById('quant-card-ayrinti') || {}).open);
+    await page.click('#quant-card-ayrinti > summary').catch(() => null);
+    check('B1: the card in two columns (the sentence, the trade, its levels | the series and its score), no taller than the screen, "Ayrıntı" and "Gerekçe" '
+      + 'folded - opened, it stays so for this user',
+      cardFolds.cols === 2 && cardFolds.charts >= 1 && cardFolds.folded && cardFolds.height <= cardFolds.vh && cardKept.join() === '1' && cardAgain,
+    { cardFolds, cardKept, cardAgain });
 
     // ------------------------------------------------------------------ lead-lag (quantlead.py)
     console.log('lead-lag');
@@ -6575,7 +6678,8 @@ async function clipAfter(page, action) {
     const trendCard = await page.evaluate(async (line) => {
       const q = await import('/static/js/pages/quantbase.js');
       const s = { id: 'trend:FWD:USDTRY:1M', family: 'trend', family_label: 'Trend', kind: 'sys', daily: true, new: true, asset: 'Offshore', group: 'Offshore',
-        tier: null, tag: 'offshore limiti', expression: 'SAT USDTRY 1A forward', line, z: -1.2, entry_z: 1, strength: 'Güçlü', score_name: 'skor', gates: [],
+        tier: null, tag: 'offshore limiti', expression: 'SAT USDTRY 1A forward', line, trade_line: 'YENİ · SAT USDTRY 1A forward · 1 mn USD · offshore limiti',
+        z: -1.2, entry_z: 1, strength: 'Güçlü', score_name: 'skor', gates: [],
         legs: [{ key: 'FX:USDTRY', name: 'USDTRY 1A forward', action: 'Sell', side: -1, weight: 1, text: 'Sell USDTRY 1A forward' }], agree: 0, conflict: 0,
         parts: { z: 2.4, regime: 1, hl: 1, carry: 1 }, composite: 2.4, hold: 21, horizon_unit: 'gün', bt: null, direction: -1, unit: '', digits: 4,
         entry: 44.35, target: 44.05, stop: 44.55, pnl_unit: '%', exp_pnl: 0.68, trade_tr: 'USDTRY 1A forward sat', info: { size: '1,4 mn USD' },
@@ -6591,14 +6695,16 @@ async function clipAfter(page, action) {
       c.show(data);
       c.fillDetails(data);                       // (a one-day history draws no chart and no details: the score's row asked for here)
       const text = (sel) => (host.querySelector(sel) || {}).textContent || '';
-      const out = { cell: rows[0][head.indexOf('İşlem')].t, group: rows[0][head.indexOf('Grup')].t, plain: text('#quant-sig-plain'), trade: text('#quant-sig-trade'),
+      const out = { cell: rows[0][head.indexOf('İşlem')].t, tip: rows[0][head.indexOf('İşlem')].tip || '', group: rows[0][head.indexOf('Grup')].t,
+        plain: text('#quant-sig-plain'), trade: text('#quant-sig-trade'),
         score: ([...host.querySelectorAll('.qkv tr')].find((tr) => tr.firstChild && tr.firstChild.textContent === 'Skor') || {}).textContent || '' };
       c.destroy();
       return out;
     }, TREND_LINE);
-    check('... the Sinyaller list shows a Trend line in the plan\'s format ("YENİ · SAT USDTRY 1A forward · 1 mn USD · … · isabet %61 (148) · model: Trend"); '
-      + 'its card: the sentence, the trade at the line\'s size, the score without an entry threshold',
-      trendCard.cell === TREND_LINE && trendCard.group === 'Offshore · offshore limiti' && trendCard.plain.startsWith('YENİ - yön bugün döndü. SAT USDTRY 1A forward')
+    check('... the Sinyaller list shows a Trend line: its İşlem cell the trade and its size ("YENİ · SAT USDTRY 1A forward · 1 mn USD · offshore limiti" - toplu '
+      + '28.11), the plan\'s line ("… · isabet %61 (148) · model: Trend") in its tooltip; its card: the sentence, the trade at the line\'s size, the score '
+      + 'without an entry threshold',
+      trendCard.cell === 'YENİ · SAT USDTRY 1A forward · 1 mn USD · offshore limiti' && trendCard.tip.startsWith(TREND_LINE) && trendCard.group === 'Offshore · offshore limiti' && trendCard.plain.startsWith('YENİ - yön bugün döndü. SAT USDTRY 1A forward')
       && trendCard.trade === 'USDTRY 1A forward sat · 1,4 mn USD' && trendCard.score === 'Skorskor -1,20 · Güçlü', trendCard);
 
     // ------------------------------------------------------------------ launchpad, side drawer, pop-out, fast switching

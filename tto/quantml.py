@@ -1216,6 +1216,7 @@ def _words(line: Line, m: qf.Monitor, sg: Dict[str, Any], entry: float) -> str:
     side = sg["direction"]
     prob = p if side > 0 else 1.0 - p
     sg["expression"] = line_text(inst, side, prob, rec)
+    sg["trade_line"] = inst.line(side)                      # (the list's İşlem cell: the trade and its size - Düzen, 28.11.2026)
     up = "yükseliş" if side > 0 else "düşüş"
     why = line.why(line.now[1]) if line.now is not None else []
     told = ["%s (%s)" % (w["text"], "lehte" if (w["effect"] > 0) == (side > 0) else "aleyhte") for w in why]
