@@ -10,25 +10,29 @@ from tto.service import Service, ServiceError
 
 #: what a table hides until its user chooses: DİBS RV's own FX swap columns, the quant signal lists' secondary statistics
 #: (Düzen, 27.11.2026) - read from the service: the layout builders each add their tables' entries
-DEFAULTS = {t: list(c) for t, c in Service.DEFAULT_HIDDEN_COLUMNS.items()}
+#: (28.11.2026: a table with presets - DİBS Trading's summary, "Trading / RV / Risk / Tümü" under Sütunlar - opens on its first)
+PRESETS = Service.column_presets()
+DEFAULTS = dict({t: list(c) for t, c in Service.DEFAULT_HIDDEN_COLUMNS.items()}, **{t: list(p[0]["hide"]) for t, p in PRESETS.items()})
+#: what a user who never chose gets
+FRESH = {"tables": {}, "defaults": DEFAULTS, "presets": PRESETS}
 
 
 def _answer(tables, **more):
     """What ``columns`` answers: the tables the user chose for, the defaults of the tables they did not."""
     rest = {t: c for t, c in DEFAULTS.items() if t not in tables}
-    return dict({"tables": tables}, **({"defaults": rest} if rest else {}), **more)
+    return dict({"tables": tables}, **({"defaults": rest} if rest else {}), presets=PRESETS, **more)
 
 
 def test_each_user_keeps_their_own_hidden_columns(service):
     a = service.login("Sütun Ayşe")["user"]
     b = service.login("Sütun Mehmet")["user"]
-    assert service.columns(a) == {"tables": {}, "defaults": DEFAULTS}
+    assert service.columns(a) == FRESH
     # a table of a sheet by its view and panel, a column by its letter; twice the same column is one
     assert service.set_columns(a, "v/dibs/B5", ["B", "K", "B"]) == {"table": "v/dibs/B5", "hidden": ["B", "K"]}
     # one of the dashboard's own tables: a column by its caption
     service.set_columns(a, "eod/curve", ["Offshore · 1A"])
     assert service.columns(a)["tables"] == {"v/dibs/B5": ["B", "K"], "eod/curve": ["Offshore · 1A"]}
-    assert service.columns(b) == {"tables": {}, "defaults": DEFAULTS}      # one user's choice is nobody else's
+    assert service.columns(b) == FRESH      # one user's choice is nobody else's
     service.set_columns(b, "v/dibs/B5", ["C"])
     assert service.columns(a)["tables"]["v/dibs/B5"] == ["B", "K"]
     # every column shown again: the table is forgotten
@@ -49,7 +53,7 @@ def test_what_is_not_a_table_and_its_columns_is_refused(service, table, hidden):
     with pytest.raises(ServiceError) as err:
         service.set_columns(u, table, hidden)
     assert err.value.status == 400
-    assert service.columns(u) == {"tables": {}, "defaults": DEFAULTS}
+    assert service.columns(u) == FRESH
 
 
 def test_dibs_rvs_own_fx_swap_columns_are_hidden_until_a_user_shows_them(service):
@@ -67,7 +71,7 @@ def test_dibs_rvs_own_fx_swap_columns_are_hidden_until_a_user_shows_them(service
     assert service.columns(a) == _answer({"v/dibs/B3": ["Q", "BE", "BF", "BG", "BH", "BI", "BJ", "B"]})
     service.set_columns(a, "v/dibs/B3", [])
     assert service.columns(a) == _answer({"v/dibs/B3": []}) and service.store.get("cols." + a) == {"v/dibs/B3": []}
-    assert service.columns(b) == {"tables": {}, "defaults": DEFAULTS}
+    assert service.columns(b) == FRESH
     # (another table's empty choice is forgotten, as before)
     service.set_columns(a, "v/dibs/B5", ["C"])
     service.set_columns(a, "v/dibs/B5", [])
@@ -108,11 +112,11 @@ def test_how_much_a_user_may_keep_in_all(service, monkeypatch):
 def test_over_http(service):
     client = TestClient(create_app(service=service))                         # (no "with": the shared service stays up)
     h = auth(service, "Sütun Zeynep")
-    assert client.get("/api/columns", headers=h).json() == {"tables": {}, "defaults": DEFAULTS}
+    assert client.get("/api/columns", headers=h).json() == FRESH
     r = client.post("/api/columns", json={"table": "fx/board", "hidden": ["1M ATM ±1σ", "1M ↓1σ"]}, headers=h)
     assert r.status_code == 200 and r.json() == {"table": "fx/board", "hidden": ["1M ATM ±1σ", "1M ↓1σ"]}
-    assert client.get("/api/columns", headers=h).json() == {"tables": {"fx/board": ["1M ATM ±1σ", "1M ↓1σ"]}, "defaults": DEFAULTS}
-    assert client.get("/api/columns", headers=auth(service, "Sütun Başkası")).json() == {"tables": {}, "defaults": DEFAULTS}
+    assert client.get("/api/columns", headers=h).json() == dict(FRESH, tables={"fx/board": ["1M ATM ±1σ", "1M ↓1σ"]})
+    assert client.get("/api/columns", headers=auth(service, "Sütun Başkası")).json() == FRESH
     assert client.post("/api/columns", json={"table": "fx/board", "hidden": "1M"}, headers=h).status_code == 400
     assert client.post("/api/columns", content=b"[]", headers=dict(h, **{"Content-Type": "application/json"})).status_code == 400
     # without a session: nothing, and nothing is changed
@@ -173,7 +177,6 @@ def test_the_order_over_http(service):
     assert r.status_code == 200 and r.json() == {"table": "v/forward/B19", "order": ["X", "W"]}
     r = client.post("/api/columns", json={"table": "v/forward/B19", "order": ["W", "X"], "hidden": ["U"]}, headers=h)
     assert r.json() == {"table": "v/forward/B19", "order": ["W", "X"], "hidden": ["U"]}
-    assert client.get("/api/columns", headers=h).json() == {"tables": {"v/forward/B19": ["U"]}, "order": {"v/forward/B19": ["W", "X"]},
-                                                            "defaults": DEFAULTS}
+    assert client.get("/api/columns", headers=h).json() == dict(FRESH, tables={"v/forward/B19": ["U"]}, order={"v/forward/B19": ["W", "X"]})
     assert client.post("/api/columns", json={"table": "v/forward/B19", "order": "X"}, headers=h).status_code == 400
     assert client.post("/api/columns", json={"table": "v/forward/B19", "order": []}, headers=ANON).status_code == 401

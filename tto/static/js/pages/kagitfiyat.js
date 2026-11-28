@@ -6,17 +6,19 @@
 // and, under each bond, how the price and the projection were built.  The quote's width is the administrators' (typed
 // here, logged).
 import { api } from '../api.js';
-import { h, clear, toast, errorToast } from '../ui.js';
+import { h, clear, toast, errorToast, foldNote } from '../ui.js';
 import { num } from '../format.js';
 import { bondCardLinks } from '../bonds.js';
 import { isNum, yld, px, bp, sig, day, hitText, hitTip, sigmaTip, quoteText, marketTip, horizonOf, horizonSwitch, projAt, projTip, tl,
-  modelShort, aswTip } from '../kagitblock.js';
+  modelShort, aswTip, copyDeskQuote, alarmButton } from '../kagitblock.js';
 
 const COLS = 18;                                       // the details' table's columns (the how-line and a reason span them)
 const WHY_SPAN = 3;                                    // a bond not priced: its reason over the fair…
 const REST_SPAN = 11;                                  // …and nothing over the quote, the levels, the market and the context
 const ASW = [['ois', "OIS'e göre"], ['fx', "FX swap'a göre"]];
-const MAIN_COLS = 18;                                  // the main table's columns (a bond's details span them)
+// the main table's columns (a bond's details span them): ▸, Kâğıt (its ISIN in its tip - the same bond column on every bond
+// table, 28.11.2026), Vade, the rest
+const MAIN_COLS = 17;
 const HEAD_LINE = 'Fiyatı olmayan kâğıtlara eğriden fiyat: masanın listesindeki her sabit kuponlu, bono ve kuponsuz kâğıt. Fiyat: bugün '
   + 'piyasa fiyatı varsa o (piyasa: iki taraflı kotanın ortası ya da bugünkü son işlem); yoksa vade kovasının tabanı + kâğıdın son kapanışta '
   + 'tabana farkı (eğri + son fark: masanın geçmişinde en iyi tahmin). Kendi geçmişi de yoksa: sabit kuponlu Nelson-Siegel eğrisinden (eğri); '
@@ -40,9 +42,11 @@ function setPref(key, value) {
 }
 
 function panel(id, title, note) {
-  const body = h('div', { class: 'body' });
-  const el = h('section', { class: 'panel wide', id }, h('header', null, h('h2', null, title)), body,
-    note ? h('div', { class: 'note' }, note) : null);
+  // (until the first answer: "hesaplanıyor", not an empty page - B7, 28.11.2026; the note two lines, "devamı" the rest - B2)
+  const body = h('div', { class: 'body' }, h('div', { class: 'empty kf-wait' }, 'hesaplanıyor…'));
+  const noteEl = note ? h('div', { class: 'note' }, note) : null;
+  if (noteEl) foldNote(noteEl);
+  const el = h('section', { class: 'panel wide', id }, h('header', null, h('h2', null, title)), body, noteEl);
   return { el, body };
 }
 
@@ -63,8 +67,14 @@ export class KagitFiyatPage {
     const tools = h('div', { class: 'page-tools kf-tools', id: 'kf-tools' });
     this.info = h('span', { class: 'muted', id: 'kf-info' });
     this.ufuk = h('span', { id: 'kf-ufuk' });
-    tools.append(h('b', null, 'Kâğıt Fiyatlama'), this.info, h('span', { class: 'grow' }), h('span', { class: 'muted' }, 'Öngörülen ufku'), this.ufuk,
-      h('span', { class: 'muted', id: 'kf-time' }));
+    // the desk's quote of every priced bond of the trading list, to send (A14, 28.11.2026: "masanın kotası, Bloomberg'inki değil")
+    this.copyBtn = h('button', { class: 'btn sm', type: 'button', id: 'kf-copy', disabled: true,
+      title: 'Masanın kotası (Kotan: adil ± kovanın kotasyon genişliğinin yarısı) - trading listesindeki fiyatlanan her kâğıdın bid / ask getirisi '
+        + 've temiz fiyatı, sohbete hazır; dil Kotasyon kopyala\'nın seçimiyle. Tek kâğıt: ▸ ayrıntıda, her valörde: kâğıt kartındaki kotasyon fişi' },
+    'Kotasyon kopyala (masanın)');
+    this.copyBtn.addEventListener('click', () => { if (this.data) copyDeskQuote(this.data.rows || [], 'kagit-fiyat', day(this.data.today)); });
+    tools.append(h('b', null, 'Kâğıt Fiyatlama'), this.info, h('span', { class: 'grow' }), this.copyBtn, h('span', { class: 'muted' }, 'Öngörülen ufku'),
+      this.ufuk, h('span', { class: 'muted', id: 'kf-time' }));
     this.host.appendChild(tools);
     // (27.11.2026, "Düzen": the explanation folded to two lines - "devamı" opens it -, the quote's widths a chip of the
     // rules line whose click opens their table under it: the desk's table first on the page)
@@ -112,6 +122,7 @@ export class KagitFiyatPage {
       return;
     }
     this.hz = horizonOf(d.projection);
+    this.copyBtn.disabled = !(d.rows || []).some((r) => r.priced && r.quote);
     this.drawInfo(d);
     this.drawHorizon(d);
     this.drawWidths(d);
@@ -194,7 +205,7 @@ export class KagitFiyatPage {
   drawTable(d) {
     const t = h('table', { class: 'plain kf kf-main-table', id: 'kf-table' });
     const g = (text, span, tip) => h('th', { class: 'kf-g kf-sep', colspan: String(span), title: tip || null }, text);
-    t.appendChild(h('tr', { class: 'kf-main-groups' }, g('Kâğıt', 4), g('Piyasa', 3, 'Bugünkü piyasa fiyatı: iki taraflı kotanın ortası ya da bugünkü son '
+    t.appendChild(h('tr', { class: 'kf-main-groups' }, g('Kâğıt', 3), g('Piyasa', 3, 'Bugünkü piyasa fiyatı: iki taraflı kotanın ortası ya da bugünkü son '
         + 'işlem (trading listesi: DİBS RV; diğerleri: Tüm Kâğıtlar) - getirisi ve temiz fiyatı'),
       g('Eğri', 2, 'Sabit kuponlu: fiyatı olan kâğıtlara şimdi uydurulan Nelson-Siegel eğrisi, kâğıdın kendi nakit akışlarında (uydurmadaki kâğıt '
         + 'için kendisi dışarıda bırakılarak). Bono / kuponsuz: vade kovasının tabanı (adil getirinin ağırlıkları: 1 yıla kadar %75 OIS sıfır '
@@ -210,7 +221,7 @@ export class KagitFiyatPage {
         + 'temiz fiyatı (rvfair)'),
       g("FX swap'a göre", 1, "DİBS Trading'in \"FX swap'a göre\" sütunları: kâğıdın ASW FX'i DİBS ASW'nin FX swap ima eğrisindeki ASW eğrisinde "
         + 'dursaydı getirisi ve valördeki temiz fiyatı (rvfair)'), g('', 1)));
-    const heads = [['', ''], ['Kâğıt', 'l'], ['ISIN', 'l'], ['Vade', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Kaynak', 'l'],
+    const heads = [['', 'kf-fz0'], ['Kâğıt', 'l kf-fz1'], ['Vade', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Kaynak', 'l'],
       ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Getiri %', 'kf-sep'], ['Temiz', ''], ['Nereden', 'l'], ['bp', 'kf-sep'],
       ['Getiri % · temiz', 'kf-sep'], ['Model', ''], ['Getiri % · temiz', 'kf-sep'], ['Getiri % · temiz', 'kf-sep'], ['Kart', '']];
     t.appendChild(h('tr', { class: 'kf-main-heads' }, ...heads.map(([x, c]) => h('th', { class: c || null }, x))));
@@ -220,7 +231,10 @@ export class KagitFiyatPage {
     for (const k of d.kinds || []) {
       const mine = rows.filter((r) => r.kind === k.kind);
       if (!mine.length) continue;
-      t.appendChild(h('tr', { class: 'kf-kind' }, h('td', { class: 'l', colspan: String(MAIN_COLS) }, k.title + ' · ' + mine.length)));
+      // (the kind's value date as the bond pages write it - "valör T1 · 04.11", 28.11.2026; several when its bonds differ)
+      const valors = [...new Set(mine.map((r) => r.valor).filter(Boolean))];
+      t.appendChild(h('tr', { class: 'kf-kind' }, h('td', { class: 'l', colspan: String(MAIN_COLS) }, k.title + ' · ' + mine.length
+        + (valors.length ? ' · valör ' + valors.join(', ') : ''))));
       for (const r of mine) this.drawMain(t, r, old[r.isin], d);
     }
     if (!rows.length) t.appendChild(h('tr', null, h('td', { class: 'l muted', colspan: String(MAIN_COLS) }, d.why || 'Masanın listesinde fiyatlanacak kâğıt yok')));
@@ -236,7 +250,7 @@ export class KagitFiyatPage {
     const tr = h('tr', { class: 'kf-main' + (r.price ? '' : ' kf-off') });
     tr.dataset.isin = r.isin;
     const isOpen = this.open.has(r.isin);
-    const toggle = h('td', { class: 'act kf-toggle', title: 'Ayrıntılar: adil, kota, iyi seviyeler, σ, isabet, piyasa, nasıl fiyatlandı' }, isOpen ? '▾' : '▸');
+    const toggle = h('td', { class: 'act kf-toggle kf-fz0', title: 'Ayrıntılar: adil, kota, iyi seviyeler, σ, isabet, piyasa, nasıl fiyatlandı' }, isOpen ? '▾' : '▸');
     const m = r.market, cv = r.curve, p = r.price;
     const mTip = m ? m.source + ': temiz ' + px(m.clean) + ' → getiri ' + yld(m.yield) + ' (bileşik), ' + yld(m.simple) + ' (basit) · valör ' + day(r.value_date)
       : 'Bugün piyasa fiyatı yok (iki taraflı kota da bugünkü işlem de yok)';
@@ -244,7 +258,9 @@ export class KagitFiyatPage {
       + cv.fit + ' · getiri ' + yld(cv.yield) + ' (bileşik), ' + yld(cv.simple) + ' (basit) · temiz ' + px(cv.clean)
       + ' (valör ' + day(r.value_date) + ')' : (r.curve_why || 'eğri yok');
     const pTip = p ? (p.how || '') : (r.why || 'fiyatı yok');
-    tr.append(toggle, cell(r.label || r.isin, { cls: 'l b', tip: r.name || r.isin }), cell(r.isin, { cls: 'l kf-isin' }), cell(day(r.maturity)),
+    // (the bond's name: its ISIN in the tip, a click opens its card; ▸ and the name stay in view sideways)
+    tr.append(toggle, cell(r.label || r.isin, { cls: 'l b bondlink kf-fz1', tip: r.isin + (r.name ? ' · ' + r.name : '') + (r.valor ? ' · valör ' + r.valor : '')
+      + ' · tıklayınca kâğıt kartı' }), cell(day(r.maturity)),
       cell(m ? yld(m.yield) : '—', { cls: 'kf-mkt-y kf-sep' + (m ? '' : ' soft'), tip: mTip }), cell(m ? px(m.clean) : '—', { cls: 'kf-mkt-p' + (m ? '' : ' soft'), tip: mTip }),
       cell(m ? m.source : '—', { cls: 'l kf-mkt-src' + (m ? '' : ' soft') }),
       cell(cv ? yld(cv.yield) : '—', { cls: 'kf-crv-y kf-sep' + (cv ? '' : ' soft'), tip: cTip }), cell(cv ? px(cv.clean) : '—', { cls: 'kf-crv-p' + (cv ? '' : ' soft'), tip: cTip }),
@@ -362,6 +378,11 @@ export class KagitFiyatPage {
     how.dataset.isin = r.isin;
     const td = h('td', { class: 'l', colspan: String(COLS) }, h('span', { class: 'muted' }, 'Nasıl fiyatlandı: '), r.line || '',
       r.note ? h('span', { class: 'muted kf-note' }, ' (' + r.note + ')') : '');
+    // the bond's own: the desk's quote to send (A14) and its AL / SAT as alarms (C13, 28.11.2026)
+    const one = h('button', { class: 'btn sm kf-copy-one', type: 'button', id: 'kf-copy-' + r.isin,
+      title: 'Bu kâğıdın masa kotası (adil ± genişliğin yarısı), sohbete hazır' }, 'Kotayı kopyala');
+    one.addEventListener('click', () => copyDeskQuote([r], 'kagit-fiyat', day(r.value_date)));
+    td.appendChild(h('div', { class: 'kf-row-acts' }, one, alarmButton(r)));
     if (e) {
       td.appendChild(h('span', { class: 'kf-proj-how' }, h('span', { class: 'muted' }, 'Öngörülen: '), e.line || e.why || '',
         h('span', { class: 'muted' }, ' · ' + e.record + (e.why && e.line ? ' · ' + e.why : ''))));

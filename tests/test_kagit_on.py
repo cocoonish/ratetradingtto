@@ -413,7 +413,10 @@ def test_dibs_rv_shows_each_on_beside_its_yield(svc):
     p = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")
     d = p["data"]
     at = d["c"].index
-    assert d["c"][at("S"):at("S") + 7] == ["S", "T", ON, "U", ON_BID, "V", ON_ASK] and d["fz"] == 2         # (ISIN, Kaynak: the page's freeze since the layout work)
+    # (each O/N right of its yield; the compound yield and its O/N right after the valör since 28.11.2026 - B16: the results
+    # on the first screen -, the bid's and the ask's after them; the bond's name and ISIN kept in view)
+    assert d["c"][at("P"):at("P") + 3] == ["P", "T", ON] and d["c"][at("U"):at("U") + 4] == ["U", ON_BID, "V", ON_ASK]
+    assert d["c"][:2] == ["Kâğıt", "A"] and d["fz"] == 2
     assert not set(d["c"]) & {"BK", "BL", "BM", "BN"}                        # ("ASW / DM → temiz fiyat": its own table)
     head = d["rows"][d["r"].index(4)]
     assert [head[at(c)]["t"] for c in (ON, ON_BID, ON_ASK)] == ["ON karşılık %", "Alış ON %", "Satış ON %"]
@@ -431,34 +434,32 @@ def test_dibs_rv_shows_each_on_beside_its_yield(svc):
 
 
 def test_dibs_trading_tuem_kagitlar_genel_and_the_card_show_the_on(svc):
-    """DİBS Trading's summary: "ON karşılık %" right of "Getiri %" in "OIS'e göre", DİBS RV's for each bond (none for a
-    floater); Tüm Kâğıtlar: "ON karşılık % (RV)" right of "Getiri % (RV)" for a bond of the trading list, its first two
-    columns kept in view; the card: right after the compound yield; DİBS RV · Genel: in "Getiri", after its two yields."""
+    """DİBS Trading's summary - the bond table's one home since 28.11.2026 (DİBS RV · Genel's table moved there) -: "ON
+    karşılık" right of the compound yield in "Getiri %", DİBS RV's for each bond (none for a floater); Tüm Kâğıtlar: "ON
+    karşılık % (RV)" right of "Getiri % (RV)" for a bond of the trading list, its first two columns (the bond's name and
+    ISIN) kept in view; the card: right after the compound yield."""
     s = svc
     u = s.login("ON özet")["user"]
     d = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]
     heads = [c.get("t") for c in d["rows"][1]]
-    assert heads[heads.index("Getiri %") + 1] == s.ON_HEAD
+    on_at = d["c"].index(s._trading_keys()["on"])
+    assert heads[on_at - 1:on_at + 1] == ["Bileşik", "ON karşılık"]
     for isin in (BILL, FIXED, LONG, FLOATER):
         line = next(row for row in d["rows"] if len(row) > 2 and row[2].get("t") == isin)
         want = cell(s, "%s!%s%d" % (RV, ON, row_of(s, u, isin)), u)
-        got = line[heads.index(s.ON_HEAD)]
+        got = line[on_at]
         assert got["t"] == (("%.2f%%" % (want * 100)).replace(".", ",") if isinstance(want, float) else ""), isin
+        assert got["t"] == cell_text(s, u, "%s!%s%d" % (RV, ON, row_of(s, u, isin))), isin
     k = next(p for p in s.view(u, "kagitlar")["panels"] if p["id"] == "U1")["data"]
     caps = k["rows"][k["r"].index(4)]
     i = k["c"].index(ex.UNI_ON[0])
-    assert caps[i - 1]["t"] == "Getiri % (RV)" and caps[i]["t"] == ex.UNI_ON[1] and k["fz"] == 2
-    by = {row[0].get("t"): row[i]["t"] for row in k["rows"]}
+    assert caps[i - 1]["t"] == "Getiri % (RV)" and caps[i]["t"] == ex.UNI_ON[1] and k["fz"] == 2 and k["c"][:2] == ["B", "A"]
+    by = {row[k["c"].index("A")].get("t"): row[i]["t"] for row in k["rows"]}
     assert by[FIXED] == ("%.2f%%" % (cell(s, "%s!%s%d" % (RV, ON, row_of(s, u, FIXED)), u) * 100)).replace(".", ",")
     assert by[FLOATER] == "" and by["TRT280432T14"] == ""                     # (a floater; a bond off the trading list)
     rv = [x["name"] for x in s.bond_card(u, FIXED)["rv"]]
     assert rv[rv.index("BIST bileşik getiri") + 1] == "ON karşılık %"
-    # DİBS RV · Genel (the entry's first tab): in "Getiri", right of the compound and the simple yield
-    t = s.dibsgenel.view(u)["table"]
-    assert t["c"][t["c"].index("ysimple") + 1] == "on" and t["rows"][1][t["c"].index("on")]["t"] == "ON karşılık %"
-    for isin in (FIXED, FLOATER):
-        got = t["rows"][t["isin"].index(isin)][t["c"].index("on")]
-        assert got["t"] == cell_text(s, u, "%s!%s%d" % (RV, ON, row_of(s, u, isin))), isin
+    assert "table" not in s.dibsgenel.view(u)                               # (Genel: its table is DİBS Trading's now)
 
 
 def test_the_on_is_soft_where_its_price_is_no_live_quote(svc):
@@ -472,13 +473,12 @@ def test_the_on_is_soft_where_its_price_is_no_live_quote(svc):
     line = d["rows"][d["r"].index(r)]
     assert "soft" in line[d["c"].index(ON)]["cls"] and "soft" in line[d["c"].index("T")]["cls"]
     assert "soft" not in (line[d["c"].index(ON_BID)].get("cls") or "")
-    rows = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
-    heads = [c.get("t") for c in rows[1]]
-    on = next(row for row in rows if len(row) > 2 and row[2].get("t") == FIXED)[heads.index(s.ON_HEAD)]
+    d = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]
+    on = next(row for row in d["rows"] if len(row) > 2 and row[2].get("t") == FIXED)[d["c"].index(s._trading_keys()["on"])]
     assert "soft" in on["cls"] and "iki taraflı canlı kota yok" in on["tip"]
     assert next(x for x in s.bond_card(u, FIXED)["rv"] if x["name"] == "ON karşılık %").get("soft") is True
     k = next(p for p in s.view(u, "kagitlar")["panels"] if p["id"] == "U1")["data"]
-    line = next(row for row in k["rows"] if row[0].get("t") == FIXED)
+    line = next(row for row in k["rows"] if row[k["c"].index("A")].get("t") == FIXED)
     assert "soft" in line[k["c"].index(ex.UNI_ON[0])]["cls"] and "soft" in line[k["c"].index("N")]["cls"]
     s.reset_inputs(u, "tto")
 

@@ -1308,7 +1308,7 @@ def test_a_change_at_the_desk_reaches_a_page_of_ones_own_at_once(tmp_path):
         again = svc.view(u, "dibs", since=first["gen"])
         assert not again.get("unchanged")
         b3 = next(p for p in again["panels"] if p["id"] == "B3")["data"]
-        row = next(r for r in b3["rows"] if r and r[0].get("t") == "TRT160431T35")
+        row = next(r for r in b3["rows"] if r and r[b3["c"].index("A")].get("t") == "TRT160431T35")
         assert any("BGC" in (c.get("t") or "") for c in row)
         # a market move alone is still held back for a few seconds (nothing at the desk changed)
         svc.bump(market=True)

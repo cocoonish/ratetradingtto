@@ -40,29 +40,32 @@
   {
    "id": "H1",
    "type": "table",
+   "bonds": {"key": "A", "first": 9, "last": 22, "unless": "A7"},
    "title": "Kâğıt 1",
    "range": "A5:Q22",
-   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "P", "Q", "M", "N", "O"],
+   "cols": ["A", "B", "C", "D", "E", "P", "F", "G", "H", "I", "J", "K", "L", "Q", "M", "N", "O"],
    "wide": true,
-   "note": "Teklif satırına nominal (100m, 2,5mn, 500k gibi de yazılır) ve şu üçünden birini yazın: temiz fiyat, basit ya da bileşik getiri (birden çoğu yazılırsa önce temiz, sonra basit). Kirli = temiz + valördeki birikmiş faiz; gönderilecek kirli 3 haneye yuvarlanır, tutar onunla hesaplanır. Getiriler DİBS RV'nin BIST tanımıyla: sabit kuponluda basit getiri kuponları dönem başına (1 + y/2) ile iskonto eder, bileşik = (1 + basit/2)² − 1; bono ve kuponsuzda basit = (100/P − 1)·365/gün, bileşik = (100/P)^(365/gün) − 1. TLREF'te getiri yoktur; TÜFE reel fiyat ve reel getiriyle, tutar Bloomberg'in valördeki endeks oranıyla. İhale bitince açıklanan asgari, ortalama ve azami kirli fiyatı yazın: çok fiyatlı ihalede asgari fiyatın üstündeki teklif kendi fiyatından gerçekleşir, asgari fiyattaki kısmen gerçekleşebilir (gerçekleşen nominali yazabilirsiniz)."
+   "note": "Teklif satırına nominal (100m, 2,5mn, 500k gibi de yazılır) ve şu üçünden birini yazın: temiz fiyat, basit ya da bileşik getiri (birden çoğu yazılırsa önce temiz, sonra basit). Kirli = temiz + valördeki birikmiş faiz; gönderilecek kirli 3 haneye yuvarlanır, tutar onunla hesaplanır. Getiriler DİBS RV'nin BIST tanımıyla: sabit kuponluda basit getiri kuponları dönem başına (1 + y/2) ile iskonto eder, bileşik = (1 + basit/2)² − 1; bono ve kuponsuzda basit = (100/P − 1)·365/gün, bileşik = (100/P)^(365/gün) − 1. TLREF'te getiri yoktur; TÜFE reel fiyat ve reel getiriyle, tutar Bloomberg'in valördeki endeks oranıyla. İhale bitince açıklanan asgari, ortalama ve azami kirli fiyatı yazın: çok fiyatlı ihalede asgari fiyatın üstündeki teklif kendi fiyatından gerçekleşir, asgari fiyattaki kısmen gerçekleşebilir (gerçekleşen nominali yazabilirsiniz). Girdiler önde: teklif sütunlarının hemen yanında Gerçekleşen nom. (yaz). ISIN yazılmamış kâğıdın tablosu ISIN satırına katlıdır."
   },
   {
    "id": "H2",
    "type": "table",
+   "bonds": {"key": "A", "first": 29, "last": 42, "unless": "A27"},
    "title": "Kâğıt 2",
    "range": "A25:Q42",
-   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "P", "Q", "M", "N", "O"],
+   "cols": ["A", "B", "C", "D", "E", "P", "F", "G", "H", "I", "J", "K", "L", "Q", "M", "N", "O"],
    "wide": true,
-   "note": "Kâğıt 1'deki gibi: nominal ve temiz fiyat / basit / bileşik getiriden biri → gönderilecek kirli; ihale bitince asgari, ortalama ve azami kirli fiyat."
+   "note": "Kâğıt 1'deki gibi: nominal ve temiz fiyat / basit / bileşik getiriden biri → gönderilecek kirli; ihale bitince asgari, ortalama ve azami kirli fiyat. ISIN yazılana kadar tablo ISIN satırına katlı."
   },
   {
    "id": "H3",
    "type": "table",
+   "bonds": {"key": "A", "first": 49, "last": 62, "unless": "A47"},
    "title": "Kâğıt 3",
    "range": "A45:Q62",
-   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "P", "Q", "M", "N", "O"],
+   "cols": ["A", "B", "C", "D", "E", "P", "F", "G", "H", "I", "J", "K", "L", "Q", "M", "N", "O"],
    "wide": true,
-   "note": "Kâğıt 1'deki gibi: nominal ve temiz fiyat / basit / bileşik getiriden biri → gönderilecek kirli; ihale bitince asgari, ortalama ve azami kirli fiyat."
+   "note": "Kâğıt 1'deki gibi: nominal ve temiz fiyat / basit / bileşik getiriden biri → gönderilecek kirli; ihale bitince asgari, ortalama ve azami kirli fiyat. ISIN yazılana kadar tablo ISIN satırına katlı."
   },
   {
    "id": "H9",

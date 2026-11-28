@@ -211,6 +211,44 @@ def month_label(bond: Dict[str, Any]) -> str:
     return "%s%02d" % (_MONTHS[d.month - 1], d.year % 100)
 
 
+def business_days_after(today: _dt.date, day: _dt.date, holidays: Iterable[str] = ()) -> Optional[int]:
+    """The TRY business days from ``today`` to ``day`` (0: the same day; ``holidays``: ISO days, the desk's TRY list) -
+    ``None`` for a day before today."""
+    if day < today:
+        return None
+    hol = holidays if isinstance(holidays, (set, frozenset)) else frozenset(holidays)
+    n, d = 0, today
+    while d < day:
+        d += _dt.timedelta(days=1)
+        if d.weekday() < 5 and d.isoformat() not in hol:
+            n += 1
+    return n
+
+
+def valor_label(day: _dt.date, today: _dt.date, holidays: Iterable[str] = ()) -> Tuple[str, Optional[int]]:
+    """A value date as the bond pages write it (the desk, 28.11.2026: "T1 · 04.11") - the TRY business days after today,
+    then the day and month - and that count (``None``, and the date alone, for a day before today)."""
+    n = business_days_after(today, day, holidays)
+    return ("T%d · %s" % (n, day.strftime("%d.%m")) if n is not None else day.strftime("%d.%m.%Y")), n
+
+
+def value_day(today: _dt.date, n: int, holidays: Iterable[str] = ()) -> _dt.date:
+    """The value date ``n`` TRY business days after today (T0: today itself when it is a business day, else the next one)."""
+    hol = holidays if isinstance(holidays, (set, frozenset)) else frozenset(holidays)
+
+    def business(d: _dt.date) -> bool:
+        return d.weekday() < 5 and d.isoformat() not in hol
+
+    d = today
+    while not business(d):
+        d += _dt.timedelta(days=1)
+    for _ in range(max(0, int(n))):
+        d += _dt.timedelta(days=1)
+        while not business(d):
+            d += _dt.timedelta(days=1)
+    return d
+
+
 def candidates(date: Optional[str] = None, month: Optional[str] = None, kind: Optional[str] = None,
                extra: Iterable[Dict[str, Any]] = ()) -> List[Dict[str, Any]]:
     """The bonds a chat line can mean: maturing on ``date`` (ISO) or in ``month`` ("2028-03"), of ``kind``

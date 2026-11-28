@@ -1,9 +1,10 @@
 """DİBS RV · Genel (``tto/dibsgenel.py``): one menu entry with three tabs (Genel, the RV and the ASW hesap tablosu - the old
-pages' addresses and boxes keep working), the bond table whose every figure is its source's (DİBS RV's cell, rvfair's fair
-value - the same as DİBS Trading's and the card's -, DİBS ASW on the FX swap implied curve, the live fit), the zero-coupon
-fit that is quantcurve's on the same inputs (Nelson-Siegel on the fixed coupon bonds, the bills priced on it, not fitted)
-and steady on the trading list's bonds, a bond added in the middle of the trading list followed by its ISIN, the charts'
-points, the tables of the hesap tablosu tabs shown as their pages draw them, and the HTTP endpoint."""
+pages' addresses and boxes keep working); the bond table's one home is DİBS Trading's summary since 28.11.2026 (Genel links to
+it: its columns, each figure its source's, are test_toplu_tahvil's) - the FX swap figures the same there and on the card,
+the zero-coupon fit that is quantcurve's on the same inputs (Nelson-Siegel on the fixed coupon bonds, the bills priced on
+it, not fitted) and steady on the trading list's bonds, the summary's zero-coupon cells that fit's, a bond added in the
+middle of the trading list followed by its ISIN, the charts' points, the tables of the hesap tablosu tabs shown as their
+pages draw them, and the HTTP endpoint."""
 from __future__ import annotations
 
 import datetime as dt
@@ -39,9 +40,11 @@ def genel(s, user):
 
 
 def line(d, isin):
-    t = d["table"]
-    i = t["isin"].index(isin)
-    return dict(zip(t["c"], t["rows"][i]))
+    """A bond's cells in DİBS Trading's summary (``d``: its data), by the names Genel's table had (``Service._trading_keys``)."""
+    from tto.service import Service
+    keys = Service._trading_keys()
+    by = summary_line(d, isin)
+    return {name: by[key] for name, key in keys.items()}
 
 
 def summary(s, user):
@@ -78,70 +81,37 @@ def test_dibs_rv_is_one_menu_entry_with_three_tabs(service):
     assert dg.menu([{"id": "usd", "title": "USD"}]) == [{"id": "usd", "title": "USD"}]
 
 
-# ---------------------------------------------------------------------------------------------- the table
-def test_every_figure_of_the_table_is_its_sources(service):
+# ---------------------------------------------------------------------------------------------- Genel without a table
+def test_genel_is_the_charts_the_fit_and_a_link_to_the_one_home(service):
+    """Genel's answer: the zero-coupon fit, the yield curve, the settings the figures read (each typed in the RV hesap
+    tablosu's Ayarlar, in the panel it is in), the mirrored tables - and the link to the bond table's one home, DİBS Trading's
+    summary, with the trading list's bonds counted by kind (the desk, 28.11.2026: "Genel yalnız grafikler + Trading tablosuna
+    bağlantı")."""
     s = service
     u = s.login("Genel Kaynak")["user"]
     d = genel(s, u)
-    t = d["table"]
-    assert [c.get("t") for c in t["rows"][0] if not c.get("sk")] == ["Kâğıt", "Fiyat", "Getiri", "OIS ASW", dg.FX_GROUP,
-                                                                     "Sıfır kupon eğrisi (NS)", "Risk", "Carry", "Broker", ""]
-    assert dg.ZERO_GROUP == "Sıfır kupon eğrisi (NS)"
-    assert t["c"][:4] == ["bond", "isin", "due", "left"] and t["c"][-2:] == ["card", "flag"]
-    assert [c["t"] for c in t["rows"][1]][9:12] == ["Bileşik %", "Basit %", "ON karşılık %"]        # (the O/N: 26.11.2026)
-    assert [c["t"] for c in t["rows"][1]][24:27] == ["Model getiri %", "Pahalı / ucuz", "Adil fiyat"]
-    # the trading list's bonds, kind by kind (bills first), by maturity: each row its bond's
+    assert "table" not in d and d["fit"]["ok"] and d["chart"]["series"] and len(d["mirrors"]) == 5
+    assert d["trading"] == dict(dg.TRADING, n=19, kinds=[{"kind": "B", "title": "Bono · kuponsuz", "n": 2},
+                                                          {"kind": "S", "title": "Sabit kuponlu", "n": 14},
+                                                          {"kind": "T", "title": "TLREF'e endeksli", "n": 3}])
     listed = [v for v in s._list_values(u, "tto", "DİBS RV!A5:A54") if v]
-    bonds = [x for x in t["isin"] if x]
-    assert sorted(bonds) == sorted(listed) and len(bonds) == 19
-    captions = [row[0]["t"] for row, x in zip(t["rows"][2:], t["isin"][2:]) if x is None]
-    assert captions == ["Bono · kuponsuz · 2", "Sabit kuponlu · 14", "TLREF'e endeksli · 3"]
-    fixed = [x for x in bonds if x.startswith("TRT") and rv(s, "D", row_of(s, x)) == "S"]
-    mats = [rv(s, "E", row_of(s, x)) for x in fixed if type(rv(s, "E", row_of(s, x))) is float]
-    assert mats == sorted(mats)
-    # DİBS RV's own cells
-    loc = numfmt.get_locale("tr")
-    R = s.renderers["tto"]
-    book = s.books["tto"]
-    si = book.model.sheet_index["DİBS RV"]
-    for isin in (FIXED, BILL, TLREF):
-        r = row_of(s, isin)
-        x = line(d, isin)
-        for key, col in (("ycomp", "T"), ("ysimple", "S"), ("ois_asw", "Z"), ("ois_rc", "AB"), ("ois_sig", "AC"), ("dur", "AG"),
-                         ("dv01", "AI"), ("hedge", "AJ"), ("cr", "AO"), ("clean", "O"), ("left", "F")):
-            want = s.et.call(lambda r=r, col=col: R.cell(s._calc(u, book), si, r, col_to_index(col), loc))
-            assert x[key]["t"] == want.get("t", ""), (isin, key)
-            assert x[key].get("v") == want.get("v"), (isin, key)
-        assert x["card"]["t"] == "▸" and isin in x["card"]["tip"] and "flag on" in x["flag"]["cls"] and x["flag"]["tip"].endswith(isin)
-    # rvfair's fair values (DİBS RV's OIS curve; DİBS ASW on the FX swap implied curve) - DİBS Trading's
-    summ = summary(s, u)
-    for isin in (FIXED, BILL):
-        x, y = line(d, isin), summary_line(summ, isin)
-        assert (x["ois_fy"]["v"], x["ois_fp"]["v"]) == (y["Y"]["v"], y["Z"]["v"]) and x["ois_fy"]["tip"] == y["Y"]["tip"]
-        assert (x["fx_fy"]["v"], x["fx_fp"]["v"], x["fx_asw"]["v"], x["fx_rc"]["v"]) == (y["AB"]["v"], y["AC"]["v"], y["AA"]["v"], y["AD"]["v"])
-        assert x["fx_sig"]["t"] == y["AE"]["t"] and x["fx_sig"]["t"] in ("UCUZ", "PAHALI", "–")
-    # the OIS curve's ASW at the bond's years: DİBS RV's AA for a fixed coupon bond (the bill is not in the curve)
-    assert line(d, FIXED)["ois_curve"]["v"] == pytest.approx(rv(s, "AA", row_of(s, FIXED)), abs=0.05)
-    assert rv(s, "AA", row_of(s, BILL)) == "" and type(line(d, BILL)["ois_curve"]["v"]) is float
-    # a TLREF floater: its DM, no fair value, not on the zero-coupon curve - the reasons in the cells
-    x = line(d, TLREF)
-    assert type(x["ois_asw"]["v"]) is float and x["ois_fy"]["t"] == "–" and "TLREF'e endeksli" in x["ois_fy"]["tip"]
-    assert x["z_rc"]["t"] == "–" and "TLREF'e endeksli" in x["z_rc"]["tip"] and x["fx_fy"]["t"] == "–"
-    # a bond with no price: dashes that say why
-    x = line(d, NO_PRICE)
-    assert x["z_rc"]["t"] == "–" and "getirisi yok" in x["z_rc"]["tip"] and "Fiyat yok" in x["ois_fy"]["tip"]
-    # the settings the figures read: DİBS RV's, typed in its tab
+    assert d["trading"]["n"] == len(listed)
     sets = {x["ref"]: x for x in d["settings"]}
     assert set(sets) == {"DİBS RV!P2", "DİBS RV!J2", "DİBS RV!X2", "DİBS RV!Z2", "DİBS RV!B2"}
-    assert sets["DİBS RV!X2"]["t"] == "ORTA" and all(x["view"] == "dibs" and x["panel"] == "B1" for x in sets.values())
+    assert sets["DİBS RV!X2"]["t"] == "ORTA" and all(x["view"] == "dibs" for x in sets.values())
+    assert {x["panel"] for x in sets.values()} == {"B1", "B1b"} and sets["DİBS RV!P2"]["panel"] == "B1b"
+    # the zero-coupon group of the summary is Genel's fit's, named as before
+    assert dg.ZERO_GROUP == "Sıfır kupon eğrisi (NS)" and dg.ZERO_GROUP in [c.get("t") for c in summary(s, u)["rows"][0]]
 
 
 def test_the_fx_figures_are_the_same_on_dibs_trading_the_card_and_genel(service):
-    """The FX swap side everywhere a trader reads one is DİBS ASW's FX swap implied TRY curve (EK_FX): the summary, the
-    card and Genel show the same ASW, cheap / rich, signal, fair yield and fair price - DİBS ASW's own figures on that curve."""
+    """The FX swap side everywhere a trader reads one is DİBS ASW's FX swap implied TRY curve (EK_FX): the summary (the bond
+    table's one home, Genel's link) and the card show the same ASW, cheap / rich, signal, fair yield and fair price - DİBS
+    ASW's own figures on that curve."""
     s = service
     u = s.login("Genel FX")["user"]
-    d, summ = genel(s, u), summary(s, u)
+    summ = summary(s, u)
+    d = summ
     book = s.books["asw"]
     ai = book.model.sheet_index["ASW"]
     for isin in (FIXED, BILL, "TRT130928T38"):
@@ -155,9 +125,10 @@ def test_the_fx_figures_are_the_same_on_dibs_trading_the_card_and_genel(service)
         assert (g["fx_asw"]["v"], g["fx_rc"]["v"]) == (r_fx, t_fx)
         # (not DİBS RV's own FX columns: those are on the offshore ICAP curve, its tab only)
         assert g["fx_asw"]["v"] != rv(s, "BF", row_of(s, isin))
-    # ... told as DİBS ASW tells it, one decimal (the last bond's: −163,9 on the recorded data of a fresh service - the
-    # session's service may have had its sources changed by the tests before this one, so the sheet's own value now)
-    assert summary_line(summ, "TRT130928T38")["AA"]["t"] == ("%.1f" % r_fx).replace(".", ",")
+    # ... in whole bp, as every spread of the bond pages (the desk's one rule, 28.11.2026; −164 for −163,9 on the recorded
+    # data of a fresh service - the session's service may have had its sources changed by the tests before this one, so the
+    # sheet's own value now), the value whole
+    assert summary_line(summ, "TRT130928T38")["AA"]["t"] == "%d" % round(r_fx) and summary_line(summ, "TRT130928T38")["AA"]["v"] == r_fx
 
 
 # ---------------------------------------------------------------------------------------------- the zero-coupon curve
@@ -202,9 +173,9 @@ def test_the_zero_coupon_fit_is_quantcurves_on_the_same_inputs(service):
         x = rows[b["isin"]]
         assert x["resid"] == pytest.approx(b["resid"], abs=1e-9) and x["model"] == pytest.approx(b["model"], abs=1e-12), b["isin"]
         assert x["fitted"] == b["fitted"] == (b["kind"] == "fixed") and (x["weight"] is None) == (b["weight"] is None) == (b["kind"] == "bill")
-    # the page's cells are those numbers
-    d = genel(s, u)
-    assert d["fit"]["rmse"] == pytest.approx(built["rmse"], abs=1e-9)
+    # the page's line and DİBS Trading's summary (the bond table's one home) are those numbers
+    assert genel(s, u)["fit"]["rmse"] == pytest.approx(built["rmse"], abs=1e-9)
+    d = summary(s, u)
     for isin in (FIXED, BILL):
         x = line(d, isin)
         assert x["z_rc"]["v"] == pytest.approx(rows[isin]["resid"], abs=1e-9) and x["z_model"]["v"] == pytest.approx(rows[isin]["model"] / 100, abs=1e-12)
@@ -283,34 +254,34 @@ def test_a_bond_added_in_the_middle_is_followed_by_its_isin(module_service):
     bond's figures stay its own (keyed by ISIN, not by row); taken off, it is gone."""
     s = module_service
     u = s.login("Genel Takip")["user"]
-    before = genel(s, u)
+    before = summary(s, u)
     # (a bond's own figures; what reads a fitted curve moves when a fixed coupon bond comes into the fits)
-    own = ("bond", "isin", "due", "left", "src", "bid", "ask", "last", "clean", "ycomp", "ysimple", "ois_asw", "fx_asw", "dur", "dv01",
-           "hedge", "cr", "card", "flag")
+    own = ("bond", "isin", "due", "left", "valor", "bid", "ask", "last", "clean", "ycomp", "ysimple", "ois_asw", "fx_asw", "dur", "dv01",
+           "hedge", "cr", "card", "star")
     keep = {isin: {k: line(before, isin)[k].get("t") for k in own} for isin in (FIXED, BILL, TLREF)}
     empty = next(r for r in range(5, 55) if not rv(s, "A", r))
     new = "TRT190128T14"
     assert s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % empty, "value": new}])["errors"] == []
     try:
-        after = genel(s, u)
-        assert new in after["table"]["isin"]
+        after = summary(s, u)
+        isins = [row[2].get("t") if len(row) > 2 else None for row in after["rows"]]
+        assert new in isins
         for isin, cells in keep.items():
             assert {k: line(after, isin)[k].get("t") for k in own} == cells, isin
         # in its kind's group, by maturity
-        t = after["table"]
         groups, cap = {}, None
-        for row, x in zip(t["rows"][2:], t["isin"][2:]):
-            if x is None:
+        for row in after["rows"][2:]:
+            if "grouphead" in (row[0].get("cls") or ""):
                 cap = row[0]["t"].split(" · ")[0]
             else:
-                groups.setdefault(cap, []).append(x)
+                groups.setdefault(cap, []).append(row[2]["t"])
         kind = {"bill": "Bono", "zero": "Bono", "fixed": "Sabit kuponlu", "float": "TLREF'e endeksli"}[bd.by_isin(new)["kind"]]
-        assert new in groups[kind] and line(after, new)["isin"]["t"] == new
+        assert new in groups[kind] and line(after, new)["isin"]["t"] == new and line(after, new)["bond"]["cls"] == "bondlink"
         mats = [bd.by_isin(x)["maturity"] for x in groups[kind]]
         assert mats == sorted(mats)
     finally:
         s.set_inputs(u, "tto", [{"ref": "DİBS RV!A%d" % empty, "value": ""}])
-    assert new not in genel(s, u)["table"]["isin"]
+    assert new not in [row[2].get("t") for row in summary(s, u)["rows"] if len(row) > 2]
 
 
 # ---------------------------------------------------------------------------------------------- the charts and the mirrors
@@ -352,7 +323,8 @@ def test_over_http(module_service):
     r = client.get("/api/dibs/genel", headers=h)
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] and body["table"]["rows"] and body["fit"]["ok"] and body["chart"]["series"] and body["tabs"][0] == {"id": "dibs-genel", "title": "Genel"}
+    assert body["ok"] and body["trading"]["view"] == "dibslive" and body["fit"]["ok"] and body["chart"]["series"]
+    assert body["tabs"][0] == {"id": "dibs-genel", "title": "Genel"} and "table" not in body
     assert client.get("/api/dibs/genel", headers=ANON).status_code == 401
     nav = client.get("/api/nav", headers=h).json()["pages"]
     assert [p["id"] for p in nav if p.get("menu") == dg.MENU_ID] == ["dibs-genel", "dibs", "asw"]

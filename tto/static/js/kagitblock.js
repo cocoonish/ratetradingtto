@@ -2,8 +2,10 @@
 // fair values on DİBS Trading's two ASW curves (OIS'e göre, FX swap'a göre), the quote around the fair, the good levels, the
 // market now against them, the context and how the price was built - what the page shows in a row and the bond's card in
 // a block.
-import { h, clear } from './ui.js';
-import { num } from './format.js';
+import { h, clear, toast, errorToast, copyText } from './ui.js';
+import { num, parseNumber } from './format.js';
+import { api } from './api.js';
+import { quoteLang } from './kotasyon.js';
 
 export const isNum = (v) => typeof v === 'number' && isFinite(v);
 /** A yield (per cent) as the DİBS pages show it: 37,69. */
@@ -217,3 +219,175 @@ function fillBlock(box, row, rules, projection, hz, redraw) {
 }
 
 export { short as shortDay };
+
+// ------------------------------------------------------------------ the desk's quote: copied, logged (A14, 28.11.2026)
+/**
+ * A quote given, into the day's quote log (Günlük İşlemler · "Verilen kotalar": done / not done, the hit ratio) - when the
+ * dashboard has it (``POST /api/quote-log``); without it nothing happens: the copy is the user's either way.
+ */
+export function logQuote(entry) {
+  return api.post('/api/quote-log', Object.assign({ product: 'DİBS', status: 'open' }, entry)).catch(() => null);
+}
+
+/** The desk's quote of bonds (Kâğıt Fiyatlama's "Kotan": fair ± half the bucket's width) as a message: a line a bond. */
+export function deskQuoteText(rows, lang, day0) {
+  const en = lang === 'en';
+  const n = (v, d) => (isNum(v) ? (en ? v.toFixed(d) : num(v, d, false)) : '–');
+  const head = (en ? 'TRY govt bonds · our quote' : 'DİBS · masanın kotası') + (day0 ? ' · ' + day0 : '')
+    + (en ? ' · yield % (compound) bid / ask · clean price' : ' · bileşik getiri % bid / ask · temiz fiyat');
+  const w = Math.max(8, ...rows.map((r) => (r.label || r.isin).length));
+  return [head].concat(rows.map((r) => (r.label || r.isin).padEnd(w + 2) + n(r.quote.bid.yield, 2) + ' / ' + n(r.quote.ask.yield, 2)
+    + '   ' + n(r.quote.bid.clean, 3) + ' / ' + n(r.quote.ask.clean, 3) + (r.valor ? '   ' + (en ? 'value ' : 'valör ') + r.valor : ''))).join('\n');
+}
+
+/** Copy the desk's quote of these bonds (each logged as a quote given). */
+export async function copyDeskQuote(rows, page, day0) {
+  const priced = rows.filter((r) => r && r.priced && r.quote);
+  if (!priced.length) { toast('Kotası olan kâğıt yok (adil kurulamadı)', 'warn'); return false; }
+  const lang = quoteLang();
+  const ok = await copyText(deskQuoteText(priced, lang, day0), 'Masanın kotası kopyalandı (' + priced.length + ' kâğıt)');
+  if (ok) {
+    for (const r of priced) {
+      logQuote({ instrument: r.isin, levels: { bid: r.quote.bid.yield, ask: r.quote.ask.yield, mid: r.fair.yield },
+        source: 'Kâğıt Fiyatlama · masanın kotası (' + (r.label || r.isin) + ', ' + num(r.quote.width, 1, false) + ' bp)', page });
+    }
+  }
+  return ok;
+}
+
+// ------------------------------------------------------------------ AL / SAT as alarms (C13, 28.11.2026)
+/**
+ * "Piyasa AL / SAT'a gelince alarm": two alarms of the user's on the bond's screen yield (DİBS RV!T) against Kâğıt
+ * Fiyatlama's levels, by their names ("[12.09.29 getiri] − [12.09.29 AL] ≥ 0 bp" - the AL level follows the fair as it
+ * moves), so the page need not be open.
+ */
+export function alarmButton(row, idp) {
+  const b = h('button', { class: 'btn sm kf-alarm', type: 'button', id: (idp || 'kf-alarm-') + row.isin,
+    title: 'İki alarm kurar (İzleme · Alarmlar): ekran getirisi AL seviyesine (adil + 2σ, ucuz) çıkınca ve SAT seviyesine (adil − 2σ, '
+      + 'pahalı) inince. Seviyeler Kâğıt Fiyatlama\'nın - adil oynadıkça onlar da oynar; alarm adlarında [' + (row.label || row.isin)
+      + ' adil / AL / SAT]' }, 'Piyasa AL / SAT\'a gelince alarm');
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    const name = row.label || row.isin;
+    const sets = [['AL', '>=', 'ucuz: al'], ['SAT', '<=', 'pahalı: sat']];
+    try {
+      for (const [lvl, op, what] of sets) {
+        await api.post('/api/alarms/add', { subject: { kind: 'expr', text: '[' + row.isin + ' getiri] - [' + row.isin + ' ' + lvl + ']' },
+          op, level: 0, label: name + ' ' + lvl + ' seviyesinde', note: 'Kâğıt Fiyatlama: ekran getirisi ' + lvl + ' seviyesine geldi (' + what + ')' });
+      }
+      toast(name + ': AL ve SAT alarmları kuruldu (İzleme · Alarmlar)', 'ok', 5000);
+    } catch (err) { errorToast(err); } finally { b.disabled = false; }
+  });
+  return b;
+}
+
+// ------------------------------------------------------------------ the quote ticket at any value date (C10, 28.11.2026)
+const TICKET_PREF = 'tto.kf.fis';                     // the ticket's last nominal, centre and value date (this browser)
+
+function ticketPref() {
+  try { return JSON.parse(window.localStorage.getItem(TICKET_PREF) || '{}') || {}; } catch (e) { return {}; }
+}
+
+function setTicketPref(p) {
+  try { window.localStorage.setItem(TICKET_PREF, JSON.stringify(p)); } catch (e) { /* (a private window: this page only) */ }
+}
+
+/**
+ * The quote ticket of one bond (the bond card's Kâğıt Fiyatlama block): value date (T0 / T1 / T2 or a date), nominal, centre
+ * (piyasa, Kâğıt Fiyatlama fiyatı, adil or a yield typed) and spread (bp, bid to ask) → bid / ask yields (compound, simple),
+ * clean and dirty prices at that value date, the amounts, the nominal's DV01 and its OIS hedge (``GET
+ * /api/kagit-fiyat?ticket=1``); "Kopyala" the quote to send (logged as a quote given), "İşlem gir" Günlük İşlemler filled.
+ */
+export function ticketBox(ctx, isin, opts = {}) {
+  const pref = ticketPref();
+  const box = h('div', { class: 'kf-ticket', id: 'kf-ticket' });
+  const st = { valor: opts.valor || pref.valor || 'T1', nominal: pref.nominal || '10m', center: pref.center || '', level: '', spread: '' };
+  const seg = h('span', { class: 'seg kf-ticket-valor', id: 'kf-ticket-valor', title: 'Valör: T0 bugün, T1 ertesi iş günü, T2 iki iş günü sonra (TRY tatilleri) - ya da bir tarih yazın' });
+  const date = h('input', { class: 'inp kf-ticket-date', id: 'kf-ticket-date', placeholder: 'tarih', size: '9', title: 'Başka bir valör: tarih (gg.aa.yyyy)' });
+  const nominal = h('input', { class: 'inp kf-ticket-nominal', id: 'kf-ticket-nominal', size: '9', value: st.nominal, title: 'Nominal (TL): 10m, 2,5mn, 500k ya da sayı' });
+  const center = h('select', { class: 'inp kf-ticket-center', id: 'kf-ticket-center', title: 'Merkez: kotanın ortası' });
+  const level = h('input', { class: 'inp kf-ticket-level hidden', id: 'kf-ticket-level', size: '6', placeholder: 'getiri %', title: 'Merkez bileşik getiri (%): 39,50' });
+  const spread = h('input', { class: 'inp kf-ticket-spread', id: 'kf-ticket-spread', size: '5', placeholder: 'bp', title: 'Spread (bp, bid ile ask arası): boşsa kovanın kotasyon genişliği' });
+  const out = h('div', { class: 'kf-ticket-out', id: 'kf-ticket-out' }, h('p', { class: 'muted' }, 'hesaplanıyor…'));
+  const copy = h('button', { class: 'btn sm', type: 'button', id: 'kf-ticket-copy', disabled: true }, 'Kopyala');
+  const buy = h('button', { class: 'btn sm', type: 'button', id: 'kf-ticket-buy', disabled: true, title: 'Günlük İşlemler: alış (masanın bid\'i), kâğıt, nominal ve temiz fiyat dolu' }, 'İşlem gir · alış (bid)');
+  const sell = h('button', { class: 'btn sm', type: 'button', id: 'kf-ticket-sell', disabled: true, title: 'Günlük İşlemler: satış (masanın ask\'i), kâğıt, nominal ve temiz fiyat dolu' }, 'İşlem gir · satış (ask)');
+  box.append(h('div', { class: 'kf-ticket-in' },
+    h('label', { class: 'field inline' }, 'Valör', seg, date), h('label', { class: 'field inline' }, 'Nominal', nominal),
+    h('label', { class: 'field inline' }, 'Merkez', center, level), h('label', { class: 'field inline' }, 'Spread (bp)', spread)), out,
+  h('div', { class: 'kf-ticket-acts' }, copy, buy, sell));
+  let last = null;
+  let seq = 0;
+  const fill = (t) => {
+    // the value dates offered (T0 / T1 / T2: each its day) and the centres the bond has
+    clear(seg);
+    for (const v of t.valors || []) {
+      const b = h('button', { type: 'button', class: v.key === st.valor ? 'on' : null, id: 'kf-ticket-' + v.key, title: v.date }, v.text);
+      b.addEventListener('click', () => { st.valor = v.key; date.value = ''; run(); });
+      seg.appendChild(b);
+    }
+    clear(center);
+    for (const [k, name] of [['piyasa', 'Piyasa'], ['fiyat', 'Kâğıt Fiyatlama fiyatı'], ['adil', 'Adil'], ['yazilan', 'Yazılan getiri']]) {
+      const c = (t.centers || {})[k];
+      if (k !== 'yazilan' && !c) continue;
+      center.appendChild(h('option', { value: k, selected: t.center.kind === k ? 'selected' : null },
+        name + (c ? ' · ' + yld(c.yield) : '')));
+    }
+    level.classList.toggle('hidden', t.center.kind !== 'yazilan');
+    if (!spread.value) spread.placeholder = num(t.width, 1, false) + ' bp';
+    const tr = (name, f, d, id) => h('tr', { id: id || null }, h('th', { class: 'l' }, name), h('td', null, f(t.bid, d)), h('td', null, f(t.ask, d)));
+    const v = (x, k, d) => (isNum(x[k]) ? num(x[k], d, k === 'amount') : '–');
+    const tbl = h('table', { class: 'plain nums kf-ticket-table', id: 'kf-ticket-table' },
+      h('tr', null, h('th', null, ''), h('th', null, 'Bid (alış)'), h('th', null, 'Ask (satış)')),
+      tr('Bileşik getiri %', (x) => v(x, 'yield', 2), 2, 'kf-ticket-y'), tr('Basit getiri %', (x) => v(x, 'simple', 2), 2, 'kf-ticket-s'),
+      tr('Temiz fiyat', (x) => v(x, 'clean', 3), 3, 'kf-ticket-c'), tr('Kirli fiyat', (x) => v(x, 'dirty', 3), 3, 'kf-ticket-d'),
+      tr('Tutar (TL)', (x) => v(x, 'amount', 0), 0, 'kf-ticket-a'));
+    const hedge = t.hedge || {};
+    clear(out).append(tbl, h('p', { class: 'muted kf-ticket-line', id: 'kf-ticket-line' },
+      'Valör ' + day(t.valor.date) + ' (' + t.valor.t + ') · merkez ' + t.center.name + ' ' + yld(t.center.yield)
+      + ' · spread ' + num(t.spread, 1, false) + ' bp · DV01 ', h('b', { id: 'kf-ticket-dv01' }, isNum(t.dv01) ? num(t.dv01, 0) + ' TL' : '–'),
+      ' · OIS hedge ', h('b', { id: 'kf-ticket-hedge', title: hedge.how || '' }, isNum(hedge.nominal) ? num(hedge.nominal, 0) + ' TL' : '–'),
+      isNum(hedge.ratio) ? ' (oran ' + num(hedge.ratio, 3, false) + ')' : ''));
+    out.title = t.center.how || '';
+    copy.disabled = buy.disabled = sell.disabled = false;
+  };
+  const run = async () => {
+    const my = ++seq;
+    const q = { ticket: 1, isin, valor: date.value.trim() || st.valor, nominal: nominal.value.trim() || '10m', language: quoteLang() };
+    if (center.value) q.center = center.value;
+    if (center.value === 'yazilan') q.level = level.value.trim();
+    if (spread.value.trim()) q.spread = String(parseNumber(spread.value.trim()));
+    setTicketPref({ valor: st.valor, nominal: nominal.value.trim(), center: center.value || st.center });
+    try {
+      const t = await api.get('/api/kagit-fiyat', q);
+      if (my !== seq) return;
+      last = t;
+      fill(t);
+    } catch (err) {
+      if (my !== seq) return;
+      last = null;
+      copy.disabled = buy.disabled = sell.disabled = true;
+      clear(out).appendChild(h('p', { class: 'muted', id: 'kf-ticket-why' }, (err && err.message) || 'Fiyatlanmadı'));
+    }
+  };
+  for (const el of [date, nominal, level, spread]) el.addEventListener('change', run);
+  center.addEventListener('change', () => { level.classList.toggle('hidden', center.value !== 'yazilan'); if (center.value !== 'yazilan' || level.value.trim()) run(); });
+  copy.addEventListener('click', async () => {
+    if (!last) return;
+    const ok = await copyText(last.text, 'Kotasyon kopyalandı');
+    if (ok) {
+      logQuote({ instrument: last.isin, size: last.nominal, levels: { bid: last.bid.yield, ask: last.ask.yield, mid: last.mid.yield },
+        source: 'Kotasyon fişi · ' + last.label + ' · valör ' + day(last.valor.date), page: opts.page || 'kagit-fiyat' });
+    }
+  });
+  const trade = (dir) => {
+    if (!last || !ctx.openTrade) return;
+    const side = dir === 'B' ? last.bid : last.ask;
+    ctx.openTrade({ kind: 'bond', dir, instrument: last.isin, amount: String(Math.round(last.nominal)), price: num(side.clean, 3, false),
+      note: 'Kotasyon fişi · valör ' + day(last.valor.date) + ' (' + last.valor.t + ') · getiri ' + yld(side.yield) + ' (bileşik)' });
+  };
+  buy.addEventListener('click', () => trade('B'));
+  sell.addEventListener('click', () => trade('S'));
+  run();
+  return box;
+}

@@ -4664,6 +4664,83 @@ def _man_tw(model: Model) -> None:
                                           % (17 + len(MAN_TW))))
 
 
+MAN_TICKET_NAME = "Manuel Tahvil kotasyon fişi"
+#: the quote ticket's block on the sheet's free columns (the desk, 28.11.2026: "Her valörde tahvil kotasyon fişi"): its
+#: inputs (nominal, centre, spread), then bid / ask - compound and simple yield, clean and dirty price at the page's
+#: valör, the amount -, the nominal's DV01 and its OIS hedge
+MAN_TICKET = ("AR", "AU", 2, 18)
+MAN_TICKET_INPUTS = {"nominal": "AS5", "center": "AS6", "spread": "AS7"}
+MAN_TICKET_ROWS = (10, 13)               # the rows of bid / ask: compound, simple, clean, dirty (the quote message's)
+MAN_TICKET_SPREAD = 10.0                 # bp, bid to ask (Kâğıt Fiyatlama's default width of every bucket)
+
+
+def _man_ticket_check(model: Model) -> None:
+    _need_sheets(model, MAN_SHEET, "OIS_MAIN")
+    c1, c2, r1, r2 = MAN_TICKET
+    _need_empty(model, MAN_SHEET, "%s%d:%s%d" % (c1, r1, c2, r2))
+    # its prices are the page's own: the target yield's clean price (J10, man_clean_from_yield), the accrued (F3), the
+    # compound yield (F8) of the page's price, its DV01 per 1 mn (F11) and OIS hedge ratio (I6); the OIS page's rounding
+    _need_formula(model, MAN_SHEET, "J10", man_clean_from_yield("$I$10/100").replace("($I$10/100)", "$I$10/100"))
+    _need_formula(model, MAN_SHEET, "F11", "$F$9*$F$4")
+    _need_formula(model, MAN_SHEET, "I6", "$F$11/($F$14*100)")
+    _need_formula(model, MAN_SHEET, "I7", "OIS_MAIN!$H$2")
+    _need_formula(model, MAN_SHEET, "F8", "$B$8")
+
+
+def _man_ticket(model: Model) -> None:
+    """Manuel Tahvil's quote ticket (``views/62_manuel.json`` B12; the desk, 28.11.2026, C10): the bond of the page (its ISIN,
+    B17, or the terms typed) at the page's valör (B3: T0 / T1 / T2 or a date, typed in Girdiler) quoted around a centre -
+    the compound yield of the page's price (F8: the ISIN's price, or a price / yield typed on the page), or one typed - with a
+    spread (bp, bid to ask): bid = centre + spread / 2 (the desk buys higher), ask = centre − spread / 2, each as BIST's
+    compound and simple yield, its clean price (the page's own inverse: J10's, ``man_clean_from_yield``) and dirty price at
+    the valör, the amount of the nominal; the nominal's DV01 (F11 per 1 mn) and its OIS hedge nominal (the hedge ratio I6;
+    rounded as the OIS page rounds, OIS_MAIN!H2).  The inputs are each user's own (the page's are); "Kota mesajı" copies the
+    quote, a right click on a clean price enters the trade (Günlük İşlemler)."""
+    b = SheetBuilder(model, MAN_SHEET)
+    nominal, center, spread = (MAN_TICKET_INPUTS[k] for k in ("nominal", "center", "spread"))
+    a_n, a_c, a_s = (_absolute(x) for x in (nominal, center, spread))
+    b.set("AR2", "Kotasyon fişi · masanın kotası", bold=True)
+    b.set("AR3", "Kâğıt", bold=True)
+    b.set("AS3", '=IF(TRIM($B$17&"")="","(ISIN yok: koşullar Girdiler\'de)",IF(%s<>"",%s,$B$17))&" · valör "&TEXT($B$3,"dd.mm.yyyy")'
+          % (_man_cell("label"), _man_cell("label")))
+    b.set("AR4", "Valör", bold=True)
+    b.set("AS4", "=$B$3", fmt=DATE)
+    b.note("AT4", "Girdiler'de (B3): T0 bugün, ON ertesi iş günü, TN iki iş günü sonra ya da tarih")
+    b.set("AR5", "Nominal", bold=True)
+    b.input(nominal, 10000000.0, fmt="#,##0")
+    b.set("AR6", "Merkez · bileşik getiri %", bold=True)
+    b.input(center, "=$F$8", fmt="0.00%")
+    b.note("AT6", "Varsayılan: sayfanın fiyatının getirisi (F8); yazılan önce gelir, silince sayfanınki döner")
+    b.set("AR7", "Spread (bp, bid–ask)", bold=True)
+    b.input(spread, MAN_TICKET_SPREAD, fmt="0.0")
+    b.note("AT7", "Bid = merkez + spread / 2 (masa yüksek getiriden alır), ask = merkez − spread / 2")
+    b.head("AR9", ["", "Bid (alış)", "Ask (satış)", "ISIN"])
+    rows = (("Bileşik getiri %", "0.00%"), ("Basit getiri %", "0.00%"), ("Temiz fiyat", "0.000"), ("Kirli fiyat (valör)", "0.000"),
+            ("Tutar (TL)", "#,##0"))
+    first = MAN_TICKET_ROWS[0]
+    for k, (caption, fmt) in enumerate(rows):
+        r = first + k
+        b.set("AR%d" % r, caption, bold=True)
+        for col, sign in (("AS", "+"), ("AT", "-")):
+            yc, ys, cl, dt = ("%s%d" % (col, first + j) for j in range(4))
+            text = {0: '=IF(AND(ISNUMBER(%s),ISNUMBER(%s)),%s%s%s/2/10000,"")' % (a_c, a_s, a_c, sign, a_s),
+                    1: '=IF(ISNUMBER(%s),$B$8*((1+%s)^(1/$B$8)-1),"")' % (yc, yc),
+                    2: '=IF(ISNUMBER(%s),%s,"")' % (ys, man_clean_from_yield(ys)),
+                    3: '=IF(ISNUMBER(%s),%s+$F$3,"")' % (cl, cl),
+                    4: '=IF(AND(ISNUMBER(%s),ISNUMBER(%s)),%s*%s/100,"")' % (dt, a_n, a_n, dt)}[k]
+            b.set("%s%d" % (col, r), text, fmt=fmt)
+        b.set("AU%d" % r, '=IF(TRIM($B$17&"")="","",$B$17)')
+    r = first + len(rows)
+    b.set("AR%d" % r, "DV01 (TL, nominalin)", bold=True)
+    b.set("AS%d" % r, '=IF(AND(ISNUMBER($F$11),ISNUMBER(%s)),$F$11*%s/1000000,"")' % (a_n, a_n), fmt="#,##0")
+    b.set("AR%d" % (r + 1), "OIS hedge nominali", bold=True)
+    b.set("AS%d" % (r + 1), '=IF(AND(ISNUMBER($I$6),ISNUMBER(%s)),ROUND($I$6*%s/OIS_MAIN!$H$2,0)*OIS_MAIN!$H$2,"")' % (a_n, a_n),
+          fmt="#,##0")
+    b.note("AT%d" % (r + 1), "Hedge oranı (I6) × nominal, OIS sayfasının yuvarlamasıyla (OIS_MAIN!H2)")
+    b.set("AR%d" % (r + 2), "OIS hedge (tam)", bold=True)
+    b.set("AS%d" % (r + 2), '=IF(AND(ISNUMBER($I$6),ISNUMBER(%s)),$I$6*%s,"")' % (a_n, a_n), fmt="#,##0")
+
+
 ASW_TW_NAME = "DİBS ASW iki yönlü"
 #: DİBS ASW's bond rows (ASW_LIST): the ASW (R) and the dirty price at the sheet's spot (O) typed in place of the manual
 #: clean price (D, typed in its own cell) - member, store -, and which of them prices the row
@@ -8627,6 +8704,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             # past Motor's daily calendar the TRY list's own sheet gives)
             (ISG_NAME, _isg_check, _tto_isgunu),
             (RV_TW_NAME, _rv_tw_check, _rv_tw), (SW_TW_NAME, _sw_tw_check, _sw_tw), (MAN_TW_NAME, _man_tw_check, _man_tw),
+            (MAN_TICKET_NAME, _man_ticket_check, _man_ticket),
             (UNI_ON_NAME, _universe_on_check, _tto_universe_on),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),

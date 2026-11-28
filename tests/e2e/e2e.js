@@ -1769,8 +1769,9 @@ async function clipAfter(page, action) {
       p.querySelector('.body').scrollLeft = 700;
       return { before, after: at(), scrolled: p.querySelector('.body').scrollLeft };
     });
-    // (the page's own choice since the layout work, 27.11.2026: ISIN and Kaynak - "Ad", the same name on every row, scrolls)
-    check('columns frozen on DİBS RV (ISIN, Kaynak) stay in view when the table scrolls sideways',
+    // (the page's own choice: the bond's short name and its ISIN since 28.11.2026 - the same bond column on every bond table;
+    // "Ad", the same name on every row, scrolls)
+    check('columns frozen on DİBS RV (Kâğıt, ISIN) stay in view when the table scrolls sideways',
       frozen.before.length === 2 && frozen.scrolled > 300 && JSON.stringify(frozen.before) === JSON.stringify(frozen.after), frozen);
 
     await open(page, 'usd');
@@ -2837,9 +2838,10 @@ async function clipAfter(page, action) {
     check('ASW table has the bonds of the recorded day', (await cellText(page, 'ASW!B7')).trim() === 'TRB100227T13' && /^-?\d+/.test((await cellText(page, 'ASW!R9')).trim()));
     const aswRows = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="tbl"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim())));
     const aswCaps = aswRows.filter((r) => /· \d+ kâğıt$/.test(r[0])).map((r) => r[0]);
+    // (the bond's short name first since 28.11.2026, its ISIN - the list's input - beside it)
     check('DİBS ASW table: its bonds only (no empty rows), kind by kind as the trading list has them',
-      aswCaps.length === 3 && aswCaps[0] === 'Bono · 2 kâğıt' && aswRows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[0])).length === 19
-      && !aswRows.some((r) => r[0] === ''), aswCaps);
+      aswCaps.length === 3 && aswCaps[0] === 'Bono · 2 kâğıt' && aswRows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[1])).length === 19
+      && !aswRows.some((r) => r[0] === '') && aswRows.some((r) => r[0] === '15.03.28' && r[1] === 'TRT150328T24'), aswCaps);
     // the history chart against OIS (as before), the offshore curve or both: a small selector on the chart writes the
     // user's own "Geçmiş grafiği" (ASW!N3, Parametreler) - Offshore draws the same chart on the offshore calculation
     const pickState = () => page.evaluate(() => {
@@ -3678,7 +3680,7 @@ async function clipAfter(page, action) {
       const p = document.querySelector('.panel[data-panel="B3"]');
       const rows = [...p.querySelectorAll('table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
       const head = rows.find((r) => r.includes('Broker bid')) || [];
-      const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
+      const bond = rows.find((r) => r[1] === 'TRT150328T24') || [];
       return { head: head.slice(-7, -1), bond: bond.slice(-7, -1) };          // the dashboard's own columns, on the right (▸ last)
     });
     check('DİBS RV: the day\'s broker chat next to each bond - the best bid and ask, whose and how old, the yield of the mid against the screen',
@@ -3697,11 +3699,11 @@ async function clipAfter(page, action) {
       // (a change made through the API reaches this tab with the next generation - within a second: the page kept from
       // before shows until then)
       await page.waitForFunction(() => {
-        const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[0] || {}).textContent === 'TRT160431T35');
+        const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[1] || {}).textContent === 'TRT160431T35');
         return !!tr && /BGC/.test(tr.textContent);
       }, null, { timeout: 20000 }).catch(() => {});
       const rvStale = await page.evaluate(() => {
-        const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[0] || {}).textContent === 'TRT160431T35');
+        const tr = [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].find((x) => (x.children[1] || {}).textContent === 'TRT160431T35');
         const cells = tr ? [...tr.children].slice(-7, -1) : [];
         return { text: cells.map((td) => td.textContent), grey: cells.map((td) => td.classList.contains('stale')) };
       });
@@ -3740,7 +3742,7 @@ async function clipAfter(page, action) {
       onTw.bo.anchor && onTw.bo.t === '34,00%' && onTw.v === 0.34 && typeof onTw.n === 'number' && onTw.n < onMkt.o
       && onTw.j === 'ON karşılığından (yazılan)' && !onTw.after.bo.anchor && onTw.after.o === onMkt.o, onTw);
     // a bond added from the catalog of the desk's list
-    const rvIsins = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent).filter((t) => /^TR/.test(t || '')));
+    const rvIsins = () => page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')].map((tr) => (tr.children[1] || {}).textContent).filter((t) => /^TR/.test(t || '')));
     const rvBefore = await rvIsins();
     await page.click('.panel[data-panel="B3"] button[data-action="add-isin"]');
     await page.waitForSelector('#isin-table tr:nth-child(5)');
@@ -3758,7 +3760,7 @@ async function clipAfter(page, action) {
     await page.fill('#isin-text', 'TRT280432T14');
     await page.click('#isin-add');
     await page.waitForFunction((n) => [...document.querySelectorAll('.panel[data-panel="B3"] table.grid tr')]
-      .filter((tr) => /^TR/.test((tr.children[0] || {}).textContent || '')).length === n + 2, rvBefore.length, { timeout: 30000 });
+      .filter((tr) => /^TR/.test((tr.children[1] || {}).textContent || '')).length === n + 2, rvBefore.length, { timeout: 30000 });
     const rvAfter = await rvIsins();
     check('... an FRN picked and an ISIN typed go to the first empty rows of the list, for everyone',
       rvAfter.length === rvBefore.length + 2 && rvAfter.includes('TRT280432T14') && /2 kâğıt eklendi/.test(await page.textContent('#toasts'))
@@ -4380,9 +4382,9 @@ async function clipAfter(page, action) {
     const liveRow = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('.panel[data-panel="L1"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
       const head = rows.find((r) => r.includes('T1 bid')) || [];
-      const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
+      const bond = rows.find((r) => r[1] === 'TRT150328T24') || [];          // (the name first since 28.11.2026, the ISIN beside it)
       const at = (name) => bond[head.indexOf(name)];
-      return { label: bond[1], t1: [at('T1 bid'), at('T1 ask'), at('T1 son işlem'), at('T1 son işlem günü')], t0: at('T0 bid'),
+      return { label: bond[0], t1: [at('T1 bid'), at('T1 ask'), at('T1 son işlem'), at('T1 son işlem günü')], t0: at('T0 bid'),
         broker: [at('Broker bid'), at('Broker ask')], card: bond[bond.length - 1],
         sources: (rows.find((r) => r.includes('ISL0')) || []).filter((x) => /^(ISL[0-9N]|BGN)$/.test(x)) };
     });
@@ -4413,7 +4415,7 @@ async function clipAfter(page, action) {
     await page.waitForSelector('.panel[data-panel="U1"] table.grid');
     const uni = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
-      return { bonds: rows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[0])).length, captions: rows.filter((r) => /· \d+ kâğıt$/.test(r[0])).map((r) => r[0]),
+      return { bonds: rows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[1])).length, captions: rows.filter((r) => /· \d+ kâğıt$/.test(r[0])).map((r) => r[0]),
         stars: document.querySelectorAll('.panel[data-panel="U1"] td.flag.on').length, open: document.querySelectorAll('.panel[data-panel="U1"] td.flag:not(.on)').length };
     });
     check('Tüm Kâğıtlar: the 77 bonds of the desk\'s list kind by kind (TLREF and FRN apart), the ones on the trading list starred',
@@ -4422,8 +4424,8 @@ async function clipAfter(page, action) {
       const rows = [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
       const head = rows.find((r) => r.includes('Getiri % (RV)')) || [];
       const at = head.indexOf('Getiri % (RV)');
-      const bond = rows.find((r) => r[0] === 'TRT150328T24') || [];
-      return { next: head[at + 1], on: bond[at + 1], off: (rows.find((r) => r[0] === 'TRT280432T14') || [])[at + 1] };
+      const bond = rows.find((r) => r[1] === 'TRT150328T24') || [];
+      return { next: head[at + 1], on: bond[at + 1], off: (rows.find((r) => r[1] === 'TRT280432T14') || [])[at + 1] };
     });
     uniOn.rv = await ktT('tto', 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24'));
     check('Tüm Kâğıtlar: "ON karşılık % (RV)" right of "Getiri % (RV)" - DİBS RV\'s O/N of a trading list bond, none off the list',
@@ -4443,24 +4445,50 @@ async function clipAfter(page, action) {
     const listsOf = async (isin) => (await api(page, 'ayşe yilmaz', 'GET', '/api/bonds/catalog')).json.bonds.find((b) => b.isin === isin).lists;
     const offBoth = await listsOf('TRT130127T11');
     check('... and ★ takes it off - off the DİBS ASW list too', unstarred && !offBoth.includes('dibs') && !offBoth.includes('asw'), offBoth);
-    // the summary's columns in groups, each bond's fair yield and price on DİBS RV's fitted ASW curves (OIS, FX swap)
+    // the summary's columns in groups - one order on the bond pages, each measure with its curves side by side (28.11.2026:
+    // the bond table's one home) -, each bond's fair yield and price on DİBS RV's fitted ASW curves (OIS, FX swap)
     const sumRows = await summaryRows();
     const groupRow = sumRows[0];
     const capRow = sumRows[1];
     const mar28 = sumRows.find((r) => r[2] === 'TRT150328T24') || [];
-    const fairAt = capRow.indexOf('Adil getiri %');
-    check('DİBS Trading: the summary in groups (Fiyat · OIS\'e göre · FX swap\'a göre · Risk · Carry · Broker), each bond\'s fair yield and price',
-      ['Fiyat', "OIS'e göre", "FX swap'a göre", 'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0
-      && capRow.lastIndexOf('Adil getiri %') > fairAt && /^\d+,\d\d%$/.test(mar28[fairAt]) && /^\d+,\d{3}$/.test(mar28[fairAt + 1])
-      && capRow[2] === 'ISIN' && capRow[1] === 'Kâğıt', { groupRow, capRow, mar28 });
+    const sumKeys = await page.evaluate(() => document.querySelector('.panel[data-panel="L0"] table.grid').__grid.data.c);
+    const fairAt = sumKeys.indexOf('Y');                                  // (Adil getiri % · OIS: its key since 26.11.2026)
+    check('DİBS Trading: the summary in groups (Fiyat · Getiri % · ASW · Eğri ASW · Adil getiri % · Adil fiyat · Ucuz / pahalı · Sinyal · '
+      + 'Sıfır kupon eğrisi · Risk · Carry · Broker), each bond\'s fair yield and price',
+      ['Fiyat', 'Getiri %', 'ASW (bp)', 'Eğri ASW (bp)', 'Adil getiri %', 'Adil fiyat', 'Ucuz / pahalı (bp, + ucuz)', 'Sinyal', 'Sıfır kupon eğrisi (NS)',
+        'Risk', 'Carry', 'Broker'].every((g) => groupRow.includes(g)) && fairAt > 0 && capRow[fairAt] === 'OIS' && capRow[fairAt + 1] === 'FX'
+      && /^\d+,\d\d%$/.test(mar28[fairAt]) && /^\d+,\d{3}$/.test(mar28[sumKeys.indexOf('Z')])
+      && capRow[2] === 'ISIN' && capRow[1] === 'Kâğıt' && mar28[1] === '15.03.28' && mar28[5] === 'T1 · 04.11', { groupRow, capRow, mar28 });
     const fairTip = await page.evaluate((i) => { const tr = [...document.querySelectorAll('.panel[data-panel="L0"] table.grid tr')]
       .find((x) => x.children[2] && x.children[2].textContent === 'TRT150328T24'); return tr ? tr.children[i].title : ''; }, fairAt);
     check('... a fair value says how it is made', /OIS ASW eğrisi/.test(fairTip) && /annuity/.test(fairTip), fairTip);
-    const onAt = capRow.indexOf('ON karşılık %');
+    const onAt = capRow.indexOf('ON karşılık');
     const onRv = await ktT('tto', 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24'));
-    check('DİBS Trading: "ON karşılık %" right of "Getiri %" in "OIS\'e göre" - DİBS RV\'s O/N of the bond\'s yield (DİBS: getirinin ON karşılığı)',
-      onAt > 0 && onAt === capRow.indexOf('Getiri %') + 1 && /^\d+,\d\d%$/.test(mar28[onAt]) && mar28[onAt] === onRv,
+    check('DİBS Trading: "ON karşılık" right of the compound yield in "Getiri %" - DİBS RV\'s O/N of the bond\'s yield (DİBS: getirinin ON karşılığı)',
+      onAt > 0 && onAt === capRow.indexOf('Bileşik') + 1 && /^\d+,\d\d%$/.test(mar28[onAt]) && mar28[onAt] === onRv,
       { onAt, caps: capRow.slice(9, 14), mar28: mar28[onAt], onRv });
+    // toplu tahvil (28.11.2026): the summary read three ways under "Sütunlar" - a user who never chose sees Trading; RV one click
+    const presetsSeen = async () => page.evaluate(() => {
+      const g = document.querySelector('.panel[data-panel="L0"] table.grid').__grid;
+      const hid = (key) => g.columns.hid.has(g.data.c.indexOf(key));
+      return { chip: (document.querySelector('.panel[data-panel="L0"] .colschip') || {}).textContent || '', isin: hid('C'), bid: hid('G'),
+        zero: hid('AK'), fair: hid('Y'), dur: hid('O') };
+    });
+    const presets0 = await presetsSeen();
+    await page.click('.panel[data-panel="L0"] .tools .colsbtn');
+    await page.waitForSelector('#colpresets button[data-v="RV"]');
+    const presetNames = await page.evaluate(() => [...document.querySelectorAll('#colpresets button')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')));
+    await page.click('#colpresets button[data-v="RV"]');
+    await page.waitForFunction(() => /^Görünüm: RV/.test((document.querySelector('.panel[data-panel="L0"] .colschip') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    const presetsRv = await presetsSeen();
+    check('toplu tahvil · DİBS Trading: Sütunlar → Görünüm (Trading / RV / Risk / Tümü) - Trading for a user who never chose (no ISIN, fair or '
+      + 'zero-coupon columns), RV one click (the curves and the zero-coupon curve, no bid / ask)',
+      presetNames.join() === 'Trading*,RV,Risk,Tümü' && /^Görünüm: Trading · \d+ sütun gizli$/.test(presets0.chip) && presets0.isin && presets0.zero
+      && presets0.fair && !presets0.bid && /^Görünüm: RV · \d+ sütun gizli$/.test(presetsRv.chip) && !presetsRv.zero && !presetsRv.fair && presetsRv.bid,
+      { presetNames, presets0, presetsRv });
+    await page.click('.panel[data-panel="L0"] .tools .colsbtn');
+    await page.waitForSelector('#colpresets button[data-v="Trading"]');
+    await page.click('#colpresets button[data-v="Trading"]');
     // "+ ISIN ekle" on DİBS Trading: the bond goes onto the DİBS ASW list too (the toast says so); ★ takes it off both
     await page.click('.panel[data-panel="L1"] button[data-action="add-isin"]');
     await page.fill('#isin-text', 'TRT190128T14');
@@ -4472,7 +4500,7 @@ async function clipAfter(page, action) {
     await open(page, 'asw');
     await page.waitForSelector('.panel[data-panel="tbl"] table.grid');
     const onAsw = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="tbl"] table.grid tr')]
-      .some((tr) => tr.children[0] && tr.children[0].textContent.trim() === 'TRT190128T14'));
+      .some((tr) => tr.children[1] && tr.children[1].textContent.trim() === 'TRT190128T14'));
     check('a bond added on DİBS Trading ("+ ISIN ekle") is on the DİBS ASW list too, the toast says so', toldAsw && onAsw, { toldAsw, onAsw });
     await open(page, 'dibslive');
     await page.waitForSelector(flagOf('L0', 'TRT190128T14'));
@@ -4482,7 +4510,7 @@ async function clipAfter(page, action) {
     const tradingGone = await listsOf('TRT190128T14');
     check('... and ★ off takes it off both lists', !tradingGone.includes('dibs') && !tradingGone.includes('asw'), tradingGone);
     // the value dates: the rows that hold no bond (DİBS RV's group separators, the unused rows) are not shown
-    const liveIsins = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="L1"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent || ''));
+    const liveIsins = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="L1"] table.grid tr')].map((tr) => (tr.children[1] || {}).textContent || ''));
     const firstBond = liveIsins.findIndex((t) => /^TR[A-Z0-9]{9}\d$/.test(t));
     check('DİBS Trading · valörler: only the rows that hold a bond', firstBond > 0
       && liveIsins.slice(firstBond, firstBond + 19).every((t) => /^TR[A-Z0-9]{9}\d$/.test(t)), liveIsins);
@@ -4495,42 +4523,38 @@ async function clipAfter(page, action) {
     check('Tahvil → DİBS RV: one menu entry with three tabs (Genel, RV hesap tablosu, ASW hesap tablosu), no separate entries',
       dibsMenu.tabs === 'dibs-genel dibs asw' && /DİBS RV/.test(dibsMenu.label) && dibsMenu.alone.length === 0, dibsMenu);
     await open(page, 'dibs-genel');
-    await page.waitForFunction(() => document.querySelector('#dg-grid') && document.querySelectorAll('#dg-asw-fx svg.chart circle.mk').length > 0
+    await page.waitForFunction(() => document.querySelector('#dg-trading-link') && document.querySelectorAll('#dg-asw-fx svg.chart circle.mk').length > 0
       && document.querySelector('#dg-switch table.grid') && document.querySelectorAll('#dg-yield svg.chart circle.mk').length > 0, null, { timeout: 60000 });
     const gData = (await api(page, 'ayşe yilmaz', 'GET', '/api/dibs/genel')).json;
     const mirrors = (await api(page, 'ayşe yilmaz', 'POST', '/api/panels', { items: gData.mirrors.map((m) => ({ view: m.view, panel: m.panel, key: m.key })) })).json;
     const dgMarks = (data) => data.series.filter((x) => x.marker || x.noline).reduce((n, x) => n + x.x.length, 0);
     const genelSeen = await page.evaluate(() => {
-      const rows = [...document.querySelectorAll('#dg-grid tr')].map((tr) => [...tr.children].map((td) => td.textContent));
       const n = (sel) => document.querySelectorAll(sel).length;
+      const link = document.getElementById('dg-trading-link');
       return { tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent), on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page),
-        lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page), groups: rows[0] || [],
-        bonds: rows.filter((r) => /^TR[A-Z0-9]{9}\d$/.test(r[1] || '')).map((r) => r[1]),
+        lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page), table: n('#dg-grid'),
+        link: link ? link.getAttribute('href') : '', line: (document.getElementById('dg-trading') || {}).textContent || '',
         yieldMk: n('#dg-yield svg.chart circle.mk'), yieldPt: n('#dg-yield svg.chart text.pt'), oisMk: n('#dg-asw-ois svg.chart circle.mk'),
         fxMk: n('#dg-asw-fx svg.chart circle.mk'), histLines: n('#dg-hist svg.chart path'), fit: (document.querySelector('#dg-fit') || {}).textContent || '',
-        sets: n('#dg-settings .dg-set') };
+        sets: n('#dg-settings .dg-set'), notes: n('#content .panel .note.clamp') };
     });
-    const gBonds = gData.table.isin.filter(Boolean);
     await shot(page, '12b-dibs-genel');
-    check('DİBS RV · Genel: its three tabs, the entry lit, the table in its groups (OIS ASW · FX swap ASW on the FX swap ima eğrisi · sıfır kupon) with every bond of the trading list',
+    check('DİBS RV · Genel: its three tabs, the entry lit, no table of its own - a link to the bond table\'s one home (DİBS Trading\'s summary: '
+      + 'every bond of the trading list, its RV view), the fit, the settings; the notes folded to two lines',
       genelSeen.tabs.join('|') === 'Genel|RV hesap tablosu|ASW hesap tablosu' && genelSeen.on.join() === 'dibs-genel' && genelSeen.lit.join() === 'tahvil.dibsrv'
-      && genelSeen.groups.includes('OIS ASW') && genelSeen.groups.includes('Sıfır kupon eğrisi (NS)') && genelSeen.groups.some((g) => /^FX swap ASW · FX swap ima eğrisi \(TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden/.test(g))
-      && genelSeen.bonds.length === gBonds.length && gBonds.length >= 19 && genelSeen.bonds.every((x) => gBonds.includes(x)) && /RMSE \d+,\d bp · LOO RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5,
-    { genelSeen, gBonds: gBonds.length });
+      && genelSeen.table === 0 && genelSeen.link === '#/dibslive?p=L0' && gData.trading.n >= 19 && new RegExp(gData.trading.n + ' kâğıt').test(genelSeen.line)
+      && /Sütunlar → Görünüm: RV/.test(genelSeen.line) && /RMSE \d+,\d bp · LOO RMSE \d+,\d bp/.test(genelSeen.fit) && genelSeen.sets === 5 && genelSeen.notes >= 3,
+    { genelSeen, gTrading: gData.trading });
     check('... its three charts with their points: the yield curve (bonds and OIS), ASW · OIS and ASW · FX swap as DİBS ASW draws them',
       genelSeen.yieldMk === dgMarks(gData.chart) && gData.chart.series[0].x.length >= 15 && genelSeen.yieldPt >= 8
       && genelSeen.yieldPt <= gData.chart.series[0].x.length
       && genelSeen.oisMk === dgMarks(mirrors.panels.asw_ois.entry.data) && genelSeen.fxMk === dgMarks(mirrors.panels.asw_fx.entry.data) && genelSeen.fxMk > 10,
     { genelSeen, want: [dgMarks(gData.chart), dgMarks(mirrors.panels.asw_ois.entry.data), dgMarks(mirrors.panels.asw_fx.entry.data)] });
-    const genelOn = await page.evaluate(() => {
-      const rows = [...document.querySelectorAll('#dg-grid tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim()));
-      const head = rows.find((r) => r.includes('Basit %')) || [];
-      const bond = rows.find((r) => r[1] === 'TRT150328T24') || [];
-      return { next: head[head.indexOf('Basit %') + 1], on: bond[head.indexOf('ON karşılık %')] };
-    });
-    genelOn.rv = await ktT('tto', 'DİBS RV!BO' + await ktRow('tto', 'DİBS RV!A', 5, 'TRT150328T24'));
-    check('... its "Getiri" group: the yield\'s O/N on TLREF\'s convention after the compound and the simple yield (DİBS: getirinin ON karşılığı)',
-      genelOn.next === 'ON karşılık %' && /^\d+,\d\d%$/.test(genelOn.on) && genelOn.on === genelOn.rv, genelOn);
+    // (its link opens DİBS Trading's summary, where Genel's columns are now; the switch / pair's empty table one line)
+    const genelSwitch = await page.evaluate(() => ({ none: (document.getElementById('dg-none-switch') || {}).textContent || '',
+      hidden: document.querySelector('#dg-switch table.grid').classList.contains('hidden') }));
+    check('... the switch / pair table without a pair: one line saying where pairs are typed, not an empty table (B17)',
+      /^Switch \/ pair yok: RV hesap tablosu sekmesinde yazılır/.test(genelSwitch.none) && genelSwitch.hidden, genelSwitch);
     // a setting shown on Genel opens in the RV hesap tablosu, its cell selected; a tab of the entry opens the sheet's page
     const selectedRef = () => page.evaluate(() => { const td = document.querySelector('#content table.grid td.cur'); const g = td && td.closest('table').__grid;
       return g ? g.ref(td.__i, td.__j) : null; });
@@ -4543,7 +4567,9 @@ async function clipAfter(page, action) {
     check('... a setting on Genel (Sinyal eşiği) opens in the RV hesap tablosu tab, its cell selected; #/dibs is that tab of the entry',
       setRef === 'DİBS RV!P2' && rvTabs.tabs.join() === 'dibs-genel,dibs,asw' && rvTabs.on.join() === 'dibs' && rvTabs.lit.join() === 'tahvil.dibsrv', { setRef, rvTabs });
     await open(page, 'dibs-genel');
-    await page.waitForSelector('#dg-switch table.grid td.in');
+    await page.waitForSelector('#dg-switch table.grid td.in', { state: 'attached' });
+    await page.click('#dg-fold-switch');                                  // (no pair: "Tümü" shows the empty table)
+    await page.waitForSelector('#dg-switch table.grid td.in', { state: 'visible', timeout: 15000 });
     const swRef = await page.evaluate(() => { const td = document.querySelector('#dg-switch table.grid td.in'); const g = td.closest('table').__grid; return g.ref(td.__i, td.__j); });
     await page.click('#dg-switch table.grid td.in');
     await page.waitForFunction(() => window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 });
@@ -4699,8 +4725,41 @@ async function clipAfter(page, action) {
       && kfCard20['proj-how'].includes('geri test') && kfCard20.ois.includes(kfAsw('ois', 0) + ' / ' + kfAsw('ois', 1))
       && kfCard20.fx.includes(kfAsw('fx', 0)),
     { kfCard, kfCard20 });
+    // toplu tahvil (28.11.2026): the card's quote ticket at any value date (C10) and AL / SAT as alarms (C13)
+    await page.waitForSelector('.modal.bondcard #kf-ticket-table', { timeout: 30000 }).catch(() => {});
+    const ticketRead = () => page.evaluate(() => ({ y: (document.getElementById('kf-ticket-y') || {}).textContent || '',
+      c: (document.getElementById('kf-ticket-c') || {}).textContent || '', line: (document.getElementById('kf-ticket-line') || {}).textContent || '',
+      valors: [...document.querySelectorAll('#kf-ticket-valor button')].map((b) => b.textContent + (b.classList.contains('on') ? '*' : '')),
+      copy: !(document.getElementById('kf-ticket-copy') || { disabled: true }).disabled, alarm: !!document.getElementById('kf-card-alarm-TRT150328T24') }));
+    const ticket1 = await ticketRead();
+    const kfTicket = (await api(page, 'ayşe yilmaz', 'GET', '/api/kagit-fiyat?ticket=1&isin=TRT150328T24&valor=T2&nominal=10m')).json;
+    await page.click('.modal.bondcard #kf-ticket-T2');
+    await page.waitForFunction(() => /\(T2\)/.test((document.getElementById('kf-ticket-line') || {}).textContent || ''), null, { timeout: 20000 }).catch(() => {});
+    const ticket2 = await ticketRead();
+    check('toplu tahvil · the bond card\'s quote ticket: T0 / T1 / T2 (T1 first), bid / ask yields and clean prices, DV01 and OIS hedge; T2 a click - '
+      + 'the same centre priced at its value date; Kopyala ready; "Piyasa AL / SAT\'a gelince alarm" beside the block',
+      ticket1.valors.join() === 'T0 · 03.11,T1 · 04.11*,T2 · 05.11' && /^Bileşik getiri %\d+,\d\d\d+,\d\d$/.test(ticket1.y) && /DV01 [\d.]+ TL/.test(ticket1.line)
+      && /OIS hedge [\d.]+ TL/.test(ticket1.line) && ticket1.copy && ticket1.alarm && /\(T2\)/.test(ticket2.line)
+      && ticket2.c === 'Temiz fiyat' + kfTicket.bid.clean.toFixed(3).replace('.', ',') + kfTicket.ask.clean.toFixed(3).replace('.', ','),
+    { ticket1, ticket2, api: kfTicket.bid });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
+    const kfActs = await page.evaluate(() => ({ copy: !(document.getElementById('kf-copy') || { disabled: true }).disabled,
+      one: !!document.getElementById('kf-copy-TRT150328T24'), alarm: !!document.getElementById('kf-alarm-TRT150328T24'),
+      name: (document.querySelector('#kf-table tr.kf-main[data-isin="TRT150328T24"] td.bondlink') || {}).title || '',
+      kind: [...document.querySelectorAll('#kf-table tr.kf-kind td')].map((td) => td.textContent),
+      isinCol: document.querySelectorAll('#kf-table td.kf-isin').length }));
+    check('toplu tahvil · Kâğıt Fiyatlama: "Kotasyon kopyala (masanın)" for every priced bond, each bond\'s own copy and its AL / SAT alarms in its '
+      + 'details; the bond\'s name its card (ISIN in the tip, no ISIN column); each kind\'s value date "T1 · 04.11" in its heading',
+      kfActs.copy && kfActs.one && kfActs.alarm && /^TRT150328T24 · .*tıklayınca kâğıt kartı$/.test(kfActs.name) && kfActs.isinCol === 0
+      && kfActs.kind.some((t) => /^Sabit kuponlu · \d+ · valör T1 · 04\.11$/.test(t)) && kfActs.kind.some((t) => /valör T0 · 03\.11/.test(t)), kfActs);
+    await page.click('#kf-alarm-TRT150328T24');
+    await page.waitForFunction(() => /AL ve SAT alarmları kuruldu/.test(document.querySelector('#toasts').textContent), null, { timeout: 20000 }).catch(() => {});
+    const kfAlarms = ((await api(page, 'ayşe yilmaz', 'GET', '/api/watch')).json.alarms || []).filter((a) => /15\.03\.28 (AL|SAT) seviyesinde/.test(a.label || ''));
+    check('... the alarms by their names: [TRT150328T24 getiri] − [TRT150328T24 AL] ≥ 0 bp and − [… SAT] ≤ 0 (Kâğıt Fiyatlama\'s levels, read without the page)',
+      kfAlarms.length === 2 && kfAlarms.some((a) => a.op === '>=' && /\[TRT150328T24 AL\]/.test(a.subject.text))
+      && kfAlarms.some((a) => a.op === '<=' && /\[TRT150328T24 SAT\]/.test(a.subject.text)), kfAlarms.map((a) => [a.label, a.op, a.subject.text]));
+    for (const a of kfAlarms) await api(page, 'ayşe yilmaz', 'POST', '/api/alarms/remove', { id: a.id });
     // an administrator's width (1–3Y 12 bp): the quote follows; back to 10 (the widths' table opens from its chip in the rules
     // line - 27.11.2026, "Düzen": closed under it, the explanation folded to two lines)
     const duzenTahvilKf = await page.evaluate(() => ({ folded: document.getElementById('kf-head-line').classList.contains('kf-fold'),
@@ -4726,12 +4785,37 @@ async function clipAfter(page, action) {
     // "+ ISIN ekle" on Tüm Kâğıtlar: onto the desk's list, its kind from Bloomberg (offline it waits for it); ✕ takes it off
     await open(page, 'kagitlar');
     await page.waitForSelector('.panel[data-panel="U1"] table.grid');
+    // toplu tahvil (28.11.2026, C12): every bond's yield - Kâğıt Fiyatlama's - off the trading list too; the name opens the card
+    await page.waitForFunction(() => { const g = document.querySelector('.panel[data-panel="U1"] table.grid').__grid;
+      const at = g.data.c.indexOf('Eğri fiyatı · getiri %');
+      return at >= 0 && g.data.rows.some((row) => (row[1] || {}).t === 'TRT240227T17' && /%$/.test((row[at] || {}).t || '')); }, null, { timeout: 90000 }).catch(() => {});
+    const uniKf = await page.evaluate(() => {
+      const g = document.querySelector('.panel[data-panel="U1"] table.grid').__grid;
+      const row = (isin) => g.data.rows.find((r) => (r[1] || {}).t === isin) || [];
+      const at = (cap) => g.data.c.indexOf(cap);
+      const fixed = g.data.rows.filter((r) => /^TRT/.test((r[1] || {}).t || '') && (r[g.data.c.indexOf('C')] || {}).t === 'Sabit');
+      return { off: [row('TRT240227T17')[at('Getiri % (piyasa)')], row('TRT240227T17')[at('Eğri fiyatı · getiri %')]].map((c) => (c || {}).t),
+        on: (row('TRT150328T24')[at('Getiri % (piyasa)')] || {}).t, fixed: fixed.length, priced: fixed.filter((r) => /%$/.test((r[at('Eğri fiyatı · getiri %')] || {}).t || '')).length,
+        hidden: ['A', 'C', 'F', 'R'].map((k) => g.columns.hid.has(g.data.c.indexOf(k))) };
+    });
+    check('toplu tahvil · Tüm Kâğıtlar: every fixed coupon bond with a yield - the market\'s, else the curve\'s price (a bond off the trading list too); '
+      + 'ISIN, Tür, Kalan gün, Kaynak hidden by default (one click under Sütunlar)',
+      uniKf.off[0] === '' && /^\d+,\d\d%$/.test(uniKf.off[1]) && /^\d+,\d\d%$/.test(uniKf.on) && uniKf.fixed >= 26 && uniKf.priced === uniKf.fixed
+      && uniKf.hidden.every(Boolean), uniKf);
+    await page.click('.panel[data-panel="U1"] table.grid td.bondlink[title^="TRT150328T24"]');
+    await page.waitForSelector('.modal.bondcard', { timeout: 20000 });
+    check('... a click on a bond\'s name opens its card (the same bond column on every bond table)',
+      /15\.03\.28 · TRT150328T24/.test(await page.textContent('.modal.bondcard header')));
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.modal.bondcard'));
     await page.click('.panel[data-panel="U1"] button[data-action="add-isin"]');
     await page.fill('#isin-text', 'TRT080931T14');
     await page.click('#isin-add');
     const unlistOf = (isin) => '.panel[data-panel="U1"] table.grid td.unlist[title$="' + isin + '"]';
     await page.waitForSelector(unlistOf('TRT080931T14'), { timeout: 30000 });
-    const firstCells = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')].map((tr) => (tr.children[0] || {}).textContent || ''));
+    // (a caption row's text in its first cell; a bond's ISIN in its second since 28.11.2026 - its name first)
+    const firstCells = await page.evaluate(() => [...document.querySelectorAll('.panel[data-panel="U1"] table.grid tr')]
+      .flatMap((tr) => [(tr.children[0] || {}).textContent || '', (tr.children[1] || {}).textContent || '']));
     check('Tüm Kâğıtlar: "+ ISIN ekle" puts a new bond on the desk\'s list, for everyone (offline its kind waits for Bloomberg)',
       firstCells.includes('Türü bekleniyor (Bloomberg) · 1 kâğıt') && firstCells.includes('TRT080931T14') && /bekleniyor/.test(await page.textContent('#toasts'))
       && (await api(page, 'mehmet demir', 'GET', '/api/bonds/catalog')).json.bonds.some((b) => b.isin === 'TRT080931T14'), firstCells.slice(-6));
@@ -4994,26 +5078,40 @@ async function clipAfter(page, action) {
       const folded = (pid) => rows(pid).filter((tr) => tr.classList.contains('grow-hidden')).length;
       const all = (pid) => (document.querySelector('#content .panel[data-panel="' + pid + '"] .grow-all') || {}).textContent || '';
       return { b3: folded('B3'), b3all: all('B3'), b4: folded('B4'), b4all: all('B4'),
-        order: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel).slice(0, 5) };
+        order: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel).slice(0, 5) };      // (Ayarlar in two: 28.11.2026)
     });
     check('düzen · DİBS RV: the rows without a bond folded - the main table and SWITCH / PAIR show the rows in use and one more ("Tümü" all) -, '
       + 'the DV01 strip beside the ASW curve read-outs', duzenTahvilRv.b3 > 10 && /^Tümü \(\d+\)$/.test(duzenTahvilRv.b3all)
-      && duzenTahvilRv.b4 >= 9 && /^Tümü \(\d+\)$/.test(duzenTahvilRv.b4all) && duzenTahvilRv.order.join() === 'B1,B3D,B2,B2b,B3', duzenTahvilRv);
+      && duzenTahvilRv.b4 >= 9 && /^Tümü \(\d+\)$/.test(duzenTahvilRv.b4all) && duzenTahvilRv.order.join() === 'B1,B1b,B3D,B2,B2b', duzenTahvilRv);
     await open(page, 'dibs-genel');
-    await page.waitForSelector('#dg-switch table.grid', { timeout: 60000 });
-    const duzenTahvilGenel = await page.evaluate(() => ({ fz: document.querySelectorAll('#dg-grid td.fz').length,
+    await page.waitForSelector('#dg-switch table.grid', { state: 'attached', timeout: 60000 });
+    const duzenTahvilGenel = await page.evaluate(() => ({ grid: document.querySelectorAll('#dg-grid').length,
       folded: document.querySelectorAll('#dg-switch table.grid tr.grow-hidden').length,
       all: (document.getElementById('dg-fold-switch') || {}).textContent || '' }));
-    check('düzen · DİBS RV · Genel: the bond\'s name stays in view when the table scrolls sideways; the switch / pair rows folded as on DİBS RV',
-      duzenTahvilGenel.fz > 15 && duzenTahvilGenel.folded >= 9 && /^Tümü \(\d+\)$/.test(duzenTahvilGenel.all), duzenTahvilGenel);
+    // (Genel's own table is DİBS Trading's summary since 28.11.2026: its frozen columns there)
+    check('düzen · DİBS RV · Genel: no table of its own (the bond table\'s one home is DİBS Trading); the switch / pair rows folded as on DİBS RV',
+      duzenTahvilGenel.grid === 0 && /^(Tümü \(\d+\)|Dolu satırlar)$/.test(duzenTahvilGenel.all), duzenTahvilGenel);
     await open(page, 'manuel');
     const duzenTahvilMan = await page.evaluate(() => ({ order: [...document.querySelectorAll('#content .panel')].map((p) => p.dataset.panel),
       periods: document.querySelectorAll('#content .panel[data-panel="B7"] table.grid tr.grow-hidden').length }));
     check('düzen · Manuel Tahvil: the ISIN first (a strip of its own), "Hedef → temiz fiyat" beside it, the results, then the inputs; the '
-      + 'period table shows its periods and one more', duzenTahvilMan.order.slice(0, 4).join() === 'B2i,B5,B3,B4' && duzenTahvilMan.periods > 20, duzenTahvilMan);
+      + 'period table shows its periods and one more', duzenTahvilMan.order.slice(0, 5).join() === 'B2i,B5,B3,B12,B4' && duzenTahvilMan.periods > 20, duzenTahvilMan);
+    const manTicket = await page.evaluate(() => {
+      const p = document.querySelector('#content .panel[data-panel="B12"]');
+      const g = p && p.querySelector('table.grid').__grid;
+      return { title: p ? p.querySelector('h2').textContent : '', heads: g ? g.data.rows.map((r) => (r[1] || {}).t) : [],
+        quote: !!(p && p.querySelector('button[data-action="quote"]')), inputs: p ? p.querySelectorAll('td.in').length : 0 };
+    });
+    check('toplu tahvil · Manuel Tahvil: the quote ticket (Kotasyon fişi · masanın kotası) right after Sonuç - nominal, centre, spread typed; '
+      + 'bid / ask; Kota mesajı', manTicket.title === 'Kotasyon fişi · masanın kotası' && manTicket.heads.includes('Bid (alış)')
+      && manTicket.quote && manTicket.inputs >= 3, manTicket);
     await open(page, 'ihale');
-    const duzenTahvilIhale = await page.evaluate(() => document.querySelector('#content .panel[data-panel="H1"] table.grid').__grid.data.c.slice(11, 14).join());
-    check('düzen · Hazine İhalesi: the realized nominal typed after the auction (P) right after the bid\'s result', duzenTahvilIhale === 'L,P,Q', duzenTahvilIhale);
+    const duzenTahvilIhale = await page.evaluate(() => ({ c: document.querySelector('#content .panel[data-panel="H1"] table.grid').__grid.data.c.slice(4, 7).join(),
+      rows: ['H2', 'H3'].map((p) => document.querySelectorAll('#content .panel[data-panel="' + p + '"] table.grid tbody > tr').length) }));
+    // (28.11.2026, B17: the inputs first - the realized nominal typed after the auction (P) beside the bids' inputs -; a block
+    // without its ISIN folded to its ISIN row)
+    check('düzen · Hazine İhalesi: the realized nominal typed after the auction (P) beside the bids\' inputs; Kâğıt 2 / 3 without an ISIN folded to their ISIN row',
+      duzenTahvilIhale.c === 'E,P,F' && duzenTahvilIhale.rows.every((n) => n > 0 && n <= 4), duzenTahvilIhale);
     await open(page, 'bulk');
     const duzenTahvilBulk = await page.evaluate(() => [...document.querySelectorAll('#content .panel[data-panel="B1"] table.grid td')]
       .filter((td) => /Invalid Security/.test(td.textContent)).length);

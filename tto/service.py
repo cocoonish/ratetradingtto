@@ -3540,13 +3540,50 @@ class Service(object):
         key = self.require_user(user)
         tables = self.store.get("cols." + key) or {}
         out: Dict[str, Any] = {"tables": tables}
-        defaults = {t: list(c) for t, c in self.DEFAULT_HIDDEN_COLUMNS.items() if t not in tables}
+        defaults = {t: list(c) for t, c in self._hidden_defaults().items() if t not in tables}
         if defaults:
             out["defaults"] = defaults
         order = self.store.get("colorder." + key) or {}
         if order:
             out["order"] = order
+        presets = self.column_presets()
+        if presets:
+            out["presets"] = presets
         return out
+
+    def _hidden_defaults(self) -> Dict[str, Tuple[str, ...]]:
+        """What each table hides for a user who never chose (``DEFAULT_HIDDEN_COLUMNS``) and the tables with presets, their
+        first preset's choice (DİBS Trading's summary: Trading)."""
+        out = dict(self.DEFAULT_HIDDEN_COLUMNS)
+        for table, presets in self.column_presets().items():
+            out.setdefault(table, tuple(presets[0]["hide"]))
+        return out
+
+    @classmethod
+    def column_presets(cls) -> Dict[str, List[Dict[str, Any]]]:
+        """Ready views of a table under its "Sütunlar" (the desk, 28.11.2026: the bond table's one home, DİBS Trading's
+        summary, read three ways - "Trading / RV / Risk"; "Tümü" every column): ``{table: [{"name", "hide": [keys]}]}``.
+        A preset is a choice of hidden columns like any other (one click sets it, kept with the account); the table's
+        default for a user who never chose is the first one's (``_hidden_defaults``)."""
+        keys = cls._trading_keys()
+        every = list(keys.values())
+        board = ["bk%d" % k for k in range(len(cls._BOARD_HEADS))]
+        out = []
+        for name, shown in cls.TRADING_PRESETS:
+            want = {keys[x] for x in shown + (board if name == "Trading" else [])} if shown is not None else set(every)
+            out.append({"name": name, "hide": [k for k in every if k not in want]})
+        return {cls.TRADING_TABLE: out}
+
+    #: DİBS Trading's summary read three ways (the desk, 28.11.2026: "sütun ön ayarları (Trading / RV / Risk)"): the
+    #: columns each shows (:meth:`_trading_keys`' names; the Broker board with Trading) - the rest one click away
+    TRADING_PRESETS: Tuple[Tuple[str, Optional[List[str]]], ...] = (
+        ("Trading", ["star", "bond", "due", "left", "valor", "bid", "ask", "last", "when", "ysimple", "ycomp", "on", "ois_asw",
+                     "fx_asw", "ois_rc", "ois_sig", "fx_sig", "dv01", "usd", "cr", "card"]),
+        ("RV", ["star", "bond", "due", "left", "valor", "clean", "ysimple", "ycomp", "on", "ois_asw", "fx_asw", "ois_curve",
+                "fx_curve", "ois_fy", "fx_fy", "ois_fp", "fx_fp", "ois_rc", "fx_rc", "ois_sig", "fx_sig", "z_model", "z_rc", "z_fp",
+                "cr", "card"]),
+        ("Risk", ["star", "bond", "due", "left", "valor", "clean", "ycomp", "dur", "dv01", "usd", "hedge", "cr", "repo", "card"]),
+        ("Tümü", None))
 
     #: the columns of one table a user may name in an order of their own
     MAX_ORDER_COLUMNS = 400
@@ -3556,6 +3593,11 @@ class Service(object):
     #: agreeing and the gates (the card shows all four; a held line's reason stays in "Bileşik / neden") -, never the trade,
     #: its levels, P&L, record or carry
     DEFAULT_HIDDEN_COLUMNS["quant/signals"] = ("Varlık", "Yarı ömür (g)", "Rejim", "Uyum", "Kapılar")
+    #: the bond tables (the desk, 28.11.2026: one bond column - the short name, its ISIN in the tip - and "Tüm Kâğıtlar'da
+    #: Tür, Kalan gün, Kaynak varsayılan gizli"): Tüm Kâğıtlar' ISIN, Tür, Kalan gün and Kaynak; the value dates' ISIN;
+    #: DİBS Trading's summary opens on its Trading preset (:attr:`TRADING_PRESETS`: ``_hidden_defaults``)
+    DEFAULT_HIDDEN_COLUMNS["v/kagitlar/U1"] = ("A", "C", "F", "R")
+    DEFAULT_HIDDEN_COLUMNS["v/dibslive/L1"] = ("A",)
 
     def set_column_order(self, user: Optional[str], table: Any, order: Any) -> Dict[str, Any]:
         """The order this user puts the columns of one table in (by the same keys as hiding them; an empty list: the
@@ -3596,7 +3638,7 @@ class Service(object):
             raise ServiceError("bir tabloda en fazla %d sütun gizlenebilir" % self.MAX_HIDDEN_COLUMNS)
         with self._columns_lock:
             saved = self.store.get("cols." + key) or {}
-            if cols or table in self.DEFAULT_HIDDEN_COLUMNS:
+            if cols or table in self._hidden_defaults():
                 saved[table] = cols
             else:
                 saved.pop(table, None)
@@ -5369,9 +5411,15 @@ class Service(object):
         calc = self._calc(user, book)
         said = self._board_bonds(user)
         flag_at = cols.index("H") if "H" in cols else None
+        isin_at, name_at = (cols.index("A") if "A" in cols else None), (cols.index("B") if "B" in cols else None)
+        sig_at = cols.index("P") if "P" in cols else None
         kind_col, mat_col = parse_a1("%s1" % ex.UNI_KIND) % COLS, parse_a1("E1") % COLS
         desk = bd.desk()
-        extra = len(self._BOARD_HEADS) + 2
+        # (every bond's yield, Kâğıt Fiyatlama's - C12, the desk's 28.11.2026: "Tüm Kâğıtlar'da her kâğıda getiri"; its last
+        # snapshot, made again in a thread of its own when it is old: never on this thread)
+        kf = getattr(self, "kagitfiyat", None)
+        snap = kf.snapshot() if kf is not None else {}
+        extra = len(self._BOARD_HEADS) + 2 + len(self.UNI_KF)
         width = len(cols) + extra
         blank = [{"t": "", "k": ""} for _ in range(extra)]
         top: List[Tuple[List[Dict[str, Any]], int]] = []
@@ -5384,7 +5432,8 @@ class Service(object):
                 if r == 4:
                     row.extend([{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in self._BOARD_HEADS]
                                + [{"t": "Kart", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdın bütün bilgisi tek pencerede"},
-                                  {"t": "Çıkar", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdı Tüm Kâğıtlar listesinden çıkar (herkes için)"}])
+                                  {"t": "Çıkar", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdı Tüm Kâğıtlar listesinden çıkar (herkes için)"}]
+                               + [{"t": t, "k": "s", "b": 1, "f": "hd", "tip": tip} for t, tip in self.UNI_KF])
                 else:
                     row.extend(dict(c) for c in blank)
                 (top if r < ex.UNI_FIRST else foot).append((row, r))
@@ -5395,12 +5444,19 @@ class Service(object):
                 continue
             if flag_at is not None and flag_at < len(row):
                 row[flag_at] = self._flag_cell(code, calc.get(si, r, 8) == "★")
+            if sig_at is not None and sig_at < len(row):
+                row[sig_at] = self._signal_colour(dict(row[sig_at]))
             who = desk["added"].get(code)
-            if who and who.get("by") and row:
-                row[0] = dict(row[0], tip="Listeye ekleyen: %s · %s" % (who["by"], str(who.get("at") or "")[:16].replace("T", " ")))
+            if who and who.get("by") and isin_at is not None and isin_at < len(row):
+                row[isin_at] = dict(row[isin_at], tip="Listeye ekleyen: %s · %s" % (who["by"], str(who.get("at") or "")[:16].replace("T", " ")))
+            if name_at is not None and name_at < len(row):
+                # (the bond's name: its ISIN in the tip, a click opens its card - the same bond column everywhere)
+                row[name_at] = dict(row[name_at], **{k: v for k, v in self._bond_label_cell(
+                    code, label=str(row[name_at].get("t") or "").strip() or None).items() if k in ("cls", "tip")})
             row.extend(self._bond_cells(said.get(code), loc)
                        + [{"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code},
-                          {"t": "✕", "k": "s", "cls": "act unlist", "tip": "Tüm Kâğıtlar listesinden çıkar: " + code}])
+                          {"t": "✕", "k": "s", "cls": "act unlist", "tip": "Tüm Kâğıtlar listesinden çıkar: " + code}]
+                       + self._universe_kf_cells(snap, code, loc))
             mat = calc.get(si, r, mat_col)
             item = ((mat if type(mat) is float else 1e9, code), row, r)
             kind = calc.get(si, r, kind_col)
@@ -5428,8 +5484,59 @@ class Service(object):
         data["rows"] = [row for row, _ in out]
         data["r"] = [r for _, r in out]
         self._universe_quote_marks(book, calc, si, data["rows"], data["r"], cols, loc)
-        data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart", "Çıkar"]
+        data["c"] = cols + [h for h, _ in self._BOARD_HEADS] + ["Kart", "Çıkar"] + [h for h, _ in self.UNI_KF]
         data["added"] = int(data.get("added") or 0) + extra
+
+    #: Tüm Kâğıtlar' yields of every bond (the desk, 28.11.2026, C12: "★ olmayan kâğıtlara da piyasa getirisi, eğri fiyatı ve
+    #: farkı"): Kâğıt Fiyatlama's main table, its snapshot (``KagitFiyat.snapshot``) - caption, tip
+    UNI_KF = (("Getiri % (piyasa)", "Kâğıt Fiyatlama: bugünkü piyasa fiyatının getirisi - iki taraflı kotanın ortası ya da bugünkü son "
+                                    "işlem (trading listesi: DİBS RV; diğerleri: Tüm Kâğıtlar), BIST bileşik, kâğıdın valöründe"),
+              ("Eğri fiyatı · getiri %", "Kâğıt Fiyatlama'nın fiyatı: piyasa fiyatı varsa o; yoksa vade kovasının tabanı + kâğıdın son "
+                                         "farkı (eğri + son fark), sabit kuponluda eğri, bono / kuponsuzda taban + akran farkı - "
+                                         "üzerine gelince nasıl ve tipik hatası"),
+              ("Eğri fiyatı · temiz", "Kâğıt Fiyatlama'nın fiyatı: valördeki temiz fiyat"),
+              ("Piyasa − eğri (bp)", "Kâğıt Fiyatlama: piyasa getirisi − eğri (sabit kuponluda Nelson-Siegel, bono / kuponsuzda kovanın "
+                                     "tabanı), bp - + ise piyasa eğriden ucuz"))
+
+    def _universe_kf_cells(self, snap: Dict[str, Any], code: str, loc) -> List[Dict[str, Any]]:
+        """A bond of Tüm Kâğıtlar as Kâğıt Fiyatlama prices it (``UNI_KF``): its market yield, its price (the market's,
+        else the curve's - how in the tip) and the market's gap to the curve; "hesaplanıyor" while its first snapshot is
+        being made, the reason where it has none."""
+        if not snap:
+            return [{"t": "hesaplanıyor", "k": "s", "cls": "soft", "tip": "Kâğıt Fiyatlama'nın hesabı bekleniyor (sayfa birazdan yenilenir)"}] \
+                + [{"t": "", "k": ""} for _ in self.UNI_KF[1:]]
+        c = (snap.get("curves") or {}).get(code)
+        if c is None:
+            why = "Kâğıt Fiyatlama yalnız sabit kuponlu, bono ve kuponsuz kâğıtları eğriye göre fiyatlar"
+            return [{"t": "", "k": "", "tip": why} for _ in self.UNI_KF]
+
+        def fmt(v: Any, f: str) -> str:
+            return numfmt.format_value(v, f, loc)
+
+        vd = "valör %s" % _dt.date.fromisoformat(c["value_date"]).strftime("%d.%m.%Y") if c.get("value_date") else ""
+        m, p, diff = c.get("market"), c.get("price"), c.get("diff")
+        if m is not None:
+            cell1 = {"t": fmt(m["yield"] / 100.0, "0.00%"), "v": m["yield"] / 100.0, "k": "n",
+                     "tip": "%s: temiz %s → getiri %s (bileşik), %s (basit) · %s" % (
+                         m.get("source") or "piyasa", fmt(m["clean"], "0.000"), fmt(m["yield"] / 100.0, "0.00%"),
+                         fmt((m.get("simple") or 0.0) / 100.0, "0.00%") if m.get("simple") is not None else "–", vd)}
+        else:
+            cell1 = {"t": "", "k": "", "tip": "Bugün piyasa fiyatı yok (iki taraflı kota da bugünkü işlem de yok)"}
+        if p is not None and p.get("yield") is not None:
+            how = "%s · %s" % (p.get("label") or "", p.get("how") or "")
+            cell2 = {"t": fmt(p["yield"] / 100.0, "0.00%"), "v": p["yield"] / 100.0, "k": "n", "tip": how}
+            cell3 = ({"t": fmt(p["clean"], "0.000"), "v": p["clean"], "k": "n", "tip": how} if p.get("clean") is not None
+                     else {"t": "", "k": ""})
+            if p.get("kind") != "market":
+                cell2["cls"] = cell3["cls"] = "kf-curve"
+        else:
+            why = c.get("why") or c.get("curve_why") or "fiyatı yok"
+            cell2, cell3 = {"t": "–", "k": "s", "al": "r", "cls": "soft", "tip": why}, {"t": "", "k": ""}
+        cell4 = {"t": "", "k": ""}
+        if type(diff) is float:
+            cell4 = {"t": ("+" if round(diff) > 0 else "") + fmt(diff, "0"), "v": diff, "k": "n",
+                     "tip": "Piyasa getirisi − eğri (%s) bp" % ((c.get("curve") or {}).get("base") or "eğri")}
+        return [cell1, cell2, cell3, cell4]
 
     def _universe_quote_marks(self, book, calc, si: int, rows, rnums, cols: List[str], loc) -> None:
         """Tüm Kâğıtlar: each bond's bid / ask ("–" where no order stands, the size of a live one in the tip) and,
@@ -5495,8 +5602,6 @@ class Service(object):
     USD_DV01 = 1000.0
     USD_DV01_STEP = 5e6
     USD_DV01_HEAD = "1.000$ DV01 nominal"
-    #: the trading summary's column of the yield's O/N equivalent (DİBS RV's BO; the desk, 26.11.2026), beside the yield
-    ON_HEAD = "ON karşılık %"
 
     @staticmethod
     def _usdtry_mid(book: Book, calc) -> Optional[float]:
@@ -5520,15 +5625,36 @@ class Service(object):
                   numfmt.format_value(exact, "#,##0", loc)))
         return {"t": numfmt.format_value(nominal / 1e6, "#,##0", loc) + "m", "v": nominal, "k": "n", "tip": tip}
 
+    #: the trading summary as the user's column choice names it: the bond table's one home since 28.11.2026 (the desk: "kagit
+    #: kismi cok duzensiz ve her sey her yerde gibi" - DİBS RV · Genel's own columns moved here; Sütunlar → its presets,
+    #: :meth:`column_presets`)
+    TRADING_TABLE = "v/dibslive/L0"
+
+    @classmethod
+    def _trading_keys(cls) -> Dict[str, str]:
+        """The trading summary's columns by name -> their key (the letter each had when it came: what a user hid or a
+        launchpad box shows stays that column).  A .. S the first ones, the board, Kart; Y .. AF those of 26.11.2026 (the
+        fair values and ASW FX; the yield's O/N equivalent the 8th); AG .. AN those of 28.11.2026 (one home)."""
+        board = len(cls._BOARD_HEADS)
+        old = ["star", "bond", "isin", "due", "left", "valor", "bid", "ask", "last", "when", "ycomp", "ois_asw", "ois_rc",
+               "ois_sig", "dur", "dv01", "usd", "cr", "repo"] + ["bk%d" % k for k in range(board)] + ["card"]
+        new = ["ois_fy", "ois_fp", "fx_asw", "fx_fy", "fx_fp", "fx_rc", "fx_sig", "on"]
+        home = ["clean", "ysimple", "ois_curve", "fx_curve", "z_model", "z_rc", "z_fp", "hedge"]
+        out = {name: index_to_col(k + 1) for k, name in enumerate(old)}
+        out.update({name: index_to_col(20 + board + 1 + k) for k, name in enumerate(new)})
+        out.update({name: index_to_col(20 + board + 1 + len(new) + k) for k, name in enumerate(home)})
+        return out
+
     def _trading_columns(self) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
-        """The trading summary's columns in their groups: ``[(group, [(caption, key, tip), ...]), ...]``.  A column's key
-        is its letter in the table as it was before the groups (what a user hid, or a launchpad box shows, stays that
-        column); the columns that came with the groups follow the old ones.  The FX swap group is on the FX swap implied TRY
-        curve (DİBS ASW's "ASW FX", ``rvfair.FX``)."""
+        """The trading summary's columns in their groups: ``[(group, [(caption, key, tip), ...]), ...]`` - one order on
+        every bond table (the desk, 28.11.2026): Kâğıt · Valör · Fiyat bid / ask · Getiri (basit / bileşik) · ON · ASW
+        OIS · ASW FX · Adil · Ucuz / pahalı · Sinyal · Süre · DV01 · Carry, each measure a group with the curve it is
+        read on under it (OIS: DİBS RV's TLREF OIS curve; FX: DİBS ASW's ASW FX on the FX swap implied TRY curve,
+        ``rvfair.FX``; the zero-coupon curve its own group, its yield BIST's simple one).  A column's key is the letter it
+        had when it came (:meth:`_trading_keys`)."""
+        from . import dibsgenel as dg
         from . import rvfair
-        board = len(self._BOARD_HEADS)
-        old = {k: index_to_col(k + 1) for k in range(19 + board + 1)}          # A .. S, the board, Kart
-        new = [index_to_col(20 + board + 1 + k) for k in range(8)]             # (the yield's O/N equivalent the 8th: 26.11.2026)
+        k = self._trading_keys()
         fair = ("Kâğıdın ASW'si DİBS RV'nin %s ASW eğrisinde (a + b·t + c·t², sabit kuponlulara uydurulan) dursaydı %s: kirli "
                 "@spot = PV@%s − eğri ASW × annuity / 100, valöre fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi "
                 "BIST bileşik. Bono eğriye girmez: eğrinin kâğıdın vadesindeki değeri. TLREF / FRN / TÜFE: yok (nedeni üzerinde)")
@@ -5536,37 +5662,66 @@ class Service(object):
                    + rvfair.FX_CURVE_TEXT + ") dursaydı %s: kirli @spot = PV − eğri ASW × annuity / 100 (DİBS ASW), valöre fonlama "
                    "çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi BIST bileşik (DİBS RV'nin nakit akışlarıyla). TLREF / "
                    "FRN / TÜFE: yok (nedeni üzerinde)")
+        fx = "DİBS ASW'nin ASW FX hesabı (%s)" % rvfair.FX_CURVE_TEXT
+        zero = ("Sıfır kupon eğrisi: trading listesinin sabit kuponlularına şimdi uydurulan %s eğrisi (quant'ın DİBS adil değeri "
+                "hesabı; bonolar eğride fiyatlanır, uydurmaya girmez). " % dg.qc.MODEL_TEXT[dg.qc.DIBS_MODEL])
         return [
-            ("", [("★", old[0], "Trading listesinden çıkar (herkes için; DİBS ASW listesinden de)"),
-                  ("Kâğıt", old[1], ""), ("ISIN", old[2], ""), ("Vade", old[3], ""),
-                  ("Kalan yıl", old[4], "Bugünden vadeye yıl (365,25 gün)")]),
-            ("Fiyat", [("Valör", old[5], "Kâğıdın DİBS RV'de fiyatlandığı Bloomberg kaynağı (ISL0: aynı gün valör, ISL1: ertesi iş günü)"),
-                       ("Bid", old[6], "DİBS RV: Bloomberg alış ('–': o tarafta emir yok)"),
-                       ("Ask", old[7], "DİBS RV: Bloomberg satış ('–': o tarafta emir yok)"),
-                       ("Son işlem", old[8], "Son işlem fiyatı (DİBS RV)"),
-                       ("Ne zaman", old[9], "Son işlemin günü; canlıda dashboard'un işlemi gördüğü saat")]),
-            ("OIS'e göre", [("Getiri %", old[10], "DİBS RV: BIST bileşik getiri (kullanılan temiz fiyattan)"),
-                            (self.ON_HEAD, new[7], "DİBS RV: getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş "
-                                                   "günlerinde bileşik (ACT/365; hafta sonu / tatilde son iş gününün faizi aradaki "
-                                                   "günler için tek adımda), TLREF ve repoyla karşılaştırılır · sabit kuponlu ve bono"),
-                            ("ASW / DM", old[11], "DİBS RV: TLREF OIS eğrisine göre ASW (bp; sabit kuponlu, bono) · TLREF'e endeksli kâğıtta DM"),
-                            ("Adil getiri %", new[0], fair % ("OIS", "getirisi", "OIS")),
-                            ("Adil fiyat", new[1], fair % ("OIS", "valördeki temiz fiyatı", "OIS")),
-                            ("Pahalı / ucuz", old[12], "DİBS RV: ASW − eğrinin ASW'si (bp; + ucuz) · sabit kuponlu"),
-                            ("Sinyal", old[13], "DİBS RV: pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI")]),
-            ("FX swap'a göre", [("ASW FX", new[2], "DİBS ASW: ASW (bp), " + rvfair.FX_CURVE_TEXT),
-                                ("Adil getiri %", new[3], fx_fair % "getirisi"),
-                                ("Adil fiyat", new[4], fx_fair % "valördeki temiz fiyatı"),
-                                ("Pahalı / ucuz", new[5], "DİBS ASW: ASW FX − FX eğrisinin ASW'si (bp; + ucuz)"),
-                                ("Sinyal", new[6], "Pahalı / ucuz DİBS RV'nin eşiğini (Eşik bp) aşınca UCUZ / PAHALI")]),
-            ("Risk", [("Mod. süre", old[14], "DİBS RV: modifiye süre"),
-                      ("DV01 / 1mn", old[15], "DİBS RV: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
-                      (self.USD_DV01_HEAD, old[16], "DV01'i 1.000 USD olan TL nominal: 1.000 × USDTRY ÷ DV01 / 1mn, 5 mn'a yuvarlı")]),
-            ("Carry", [("C+R (bp)", old[17], "DİBS RV: carry + roll-down (DİBS RV'nin Ufuk (ay) ayarıyla)"),
-                       ("T0→T1 repo %", old[18], "T0 ve T1 kirli fiyatlarının ima ettiği O/N repo (aynı güne ait fiyatlardan)")]),
-            ("Broker", [(h, old[19 + k], tip) for k, (h, tip) in enumerate(self._BOARD_HEADS)]),
-            ("", [("Kart", old[19 + board], "Kâğıdın bütün bilgisi tek pencerede")]),
+            ("", [("★", k["star"], "Trading listesinden çıkar (herkes için; DİBS ASW listesinden de)"),
+                  ("Kâğıt", k["bond"], "Kâğıdın kısa adı; ISIN'i üzerinde. Tıklayınca kâğıt kartı"),
+                  ("ISIN", k["isin"], "Kâğıdın ISIN'i (Kâğıt sütununun ipucunda da)"), ("Vade", k["due"], ""),
+                  ("Kalan yıl", k["left"], "Bugünden vadeye yıl (365,25 gün)")]),
+            ("Fiyat", [("Valör", k["valor"], "Kâğıdın DİBS RV'de fiyatlandığı valör: T0 aynı gün, T1 ertesi iş günü, T2 iki iş günü "
+                                              "sonra (TRY tatilleri); Bloomberg kaynağı (ISL0 / ISL1 / ISLN) üzerinde"),
+                       ("Bid", k["bid"], "DİBS RV: Bloomberg alış ('–': o tarafta emir yok)"),
+                       ("Ask", k["ask"], "DİBS RV: Bloomberg satış ('–': o tarafta emir yok)"),
+                       ("Son işlem", k["last"], "Son işlem fiyatı (DİBS RV)"),
+                       ("Ne zaman", k["when"], "Son işlemin günü; canlıda dashboard'un işlemi gördüğü saat"),
+                       ("Kullanılan temiz", k["clean"], "DİBS RV!O: hesapların kullandığı temiz fiyat (Fiyat tipi, manuel fiyat)")]),
+            ("Getiri %", [("Basit", k["ysimple"], "DİBS RV!S: BIST basit getiri (kullanılan temiz fiyattan)"),
+                          ("Bileşik", k["ycomp"], "DİBS RV!T: BIST bileşik getiri (kullanılan temiz fiyattan)"),
+                          ("ON karşılık", k["on"], "DİBS RV!BO: getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş "
+                                                    "günlerinde bileşik (ACT/365; hafta sonu / tatilde son iş gününün faizi aradaki "
+                                                    "günler için tek adımda), TLREF ve repoyla karşılaştırılır · sabit kuponlu ve bono")]),
+            ("ASW (bp)", [("OIS / DM", k["ois_asw"], "DİBS RV!Z: TLREF OIS eğrisine göre ASW (sabit kuponlu, bono) · TLREF'e endeksli "
+                                                     "kâğıtta DM"),
+                          ("FX", k["fx_asw"], fx + ": ASW")]),
+            ("Eğri ASW (bp)", [("OIS", k["ois_curve"], "DİBS RV'nin OIS ASW eğrisi (a + b·t + c·t², sabit kuponlulara uydurulan) "
+                                                       "kâğıdın vadesinde (sabit kuponluda DİBS RV!AA; bono eğriye girmez: eğrinin "
+                                                       "vadesindeki değeri)"),
+                               ("FX", k["fx_curve"], fx + ": uydurulan eğrinin kâğıdın vadesindeki ASW'si")]),
+            ("Adil getiri %", [("OIS", k["ois_fy"], fair % ("OIS", "getirisi", "OIS")), ("FX", k["fx_fy"], fx_fair % "getirisi")]),
+            ("Adil fiyat", [("OIS", k["ois_fp"], fair % ("OIS", "valördeki temiz fiyatı", "OIS")),
+                            ("FX", k["fx_fp"], fx_fair % "valördeki temiz fiyatı")]),
+            ("Ucuz / pahalı (bp, + ucuz)", [("OIS", k["ois_rc"], "DİBS RV!AB: ASW − eğrinin ASW'si · sabit kuponlu"),
+                                            ("FX", k["fx_rc"], fx + ": ASW FX − FX eğrisinin ASW'si")]),
+            ("Sinyal", [("OIS", k["ois_sig"], "DİBS RV!AC: pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI"),
+                        ("FX", k["fx_sig"], "FX'te pahalı / ucuz DİBS RV'nin eşiğini (Eşik bp) aşınca UCUZ / PAHALI")]),
+            (dg.ZERO_GROUP, [("Model getiri % (basit)", k["z_model"], zero + "Model getiri = getiri − ucuz / pahalı (BIST basit getiri "
+                                                                             "kuralıyla)"),
+                             ("Ucuz / pahalı (bp)", k["z_rc"], zero + "Getiri − model getiri (bp, basit getiri; + ucuz: al, − pahalı: sat)"),
+                             ("Adil fiyat", k["z_fp"], zero + "Nakit akışlarının eğrideki değeri (Σ CF·DF), valördeki temiz fiyat")]),
+            ("Risk", [("Mod. süre", k["dur"], "DİBS RV!AG: modifiye süre"),
+                      ("DV01 / 1mn", k["dv01"], "DİBS RV!AI: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
+                      (self.USD_DV01_HEAD, k["usd"], "DV01'i 1.000 USD olan TL nominal: 1.000 × USDTRY ÷ DV01 / 1mn, 5 mn'a yuvarlı"),
+                      ("OIS hedge oranı", k["hedge"], "DİBS RV!AJ: OIS hedge oranı (kâğıdın DV01'i ÷ aynı vadeli OIS'in DV01'i)")]),
+            ("Carry", [("C+R (bp)", k["cr"], "DİBS RV: carry + roll-down (DİBS RV'nin Ufuk (ay) ayarıyla)"),
+                       ("T0→T1 repo %", k["repo"], "T0 ve T1 kirli fiyatlarının ima ettiği O/N repo (aynı güne ait fiyatlardan)")]),
+            ("Broker", [(h, k["bk%d" % j], tip) for j, (h, tip) in enumerate(self._BOARD_HEADS)]),
+            ("", [("Kart", k["card"], "Kâğıdın bütün bilgisi tek pencerede")]),
         ]
+
+    def _valor_cell(self, valor: Any, src: Any, today: _dt.date, loc) -> Dict[str, Any]:
+        """A bond's value date as the bond pages write it (the desk, 28.11.2026: "T1 · 04.11"): the TRY business days
+        from today to it, then the day; the Bloomberg source (ISL0 / ISL1 / ISLN) and the date in full in the tip."""
+        code = str(src or "").strip()
+        if type(valor) is not float or not 20000 < valor < 80000:
+            return {"t": code, "k": "s", "cls": "soft", "tip": "Bloomberg fiyat kaynağı %s: valörü yok" % code if code else ""}
+        day = serial_to_date(valor)
+        hol = self.watch.holidays() if getattr(self, "watch", None) is not None else frozenset()
+        text, n = bd.valor_label(day, today, hol)
+        tip = "Valör %s%s · Bloomberg fiyat kaynağı: %s" % (
+            day.strftime("%d.%m.%Y"), (" (bugün)" if n == 0 else " (%d iş günü sonra)" % n) if n is not None else "", code or "—")
+        return {"t": text, "v": valor, "k": "s", "tip": tip}
 
     def _fair_cells(self, f: Dict[str, Any], side: str, fits: Dict[str, Any], valor: Any, own: Any, loc) -> List[Dict[str, Any]]:
         """A bond's fair yield and fair clean price on one of the fitted ASW curves (rvfair.py: DİBS RV's OIS curve, DİBS
@@ -5629,8 +5784,9 @@ class Service(object):
         src = "DİBS ASW · " + rvfair.FX_CURVE_TEXT
 
         def bp(key: str) -> Dict[str, Any]:
+            # (bp whole, as every spread of the bond pages: the desk's one rule of 28.11.2026; the value keeps its digits)
             v = f.get(key)
-            return {"t": numfmt.format_value(v, "0.0", loc), "v": v, "k": "n", "tip": src} if type(v) is float else {"t": "", "k": ""}
+            return {"t": numfmt.format_value(v, "0", loc), "v": v, "k": "n", "tip": src} if type(v) is float else {"t": "", "k": ""}
 
         own = bp("own")
         if own["t"] == "" and f.get("why"):
@@ -5642,19 +5798,27 @@ class Service(object):
         return [own, bp("curve"), bp("rich"), sig_cell]
 
     def _trading_table(self, user: Optional[str], loc) -> Dict[str, Any]:
-        """The trading list at a glance (generated): the bonds of DİBS RV kind by kind, by maturity, in groups of
-        columns - the price on the value date the bond is priced on (bid, ask, the last trade and when); against OIS what
-        DİBS RV makes of it (yield, ASW, cheap / rich, signal), against the FX swap implied curve what DİBS ASW makes of it
-        (ASW, cheap / rich; DİBS RV's threshold for the signal) and its fair yield and price on each fitted ASW curve
-        (rvfair.py); its risk (duration, DV01, the nominal of USD 1,000 DV01); carry and the repo
-        T0 -> T1 implies; today's chat board."""
+        """The trading list at a glance (generated) - the bond table's one home (the desk, 28.11.2026; DİBS RV · Genel
+        links to it): the bonds of DİBS RV kind by kind, by maturity, in groups of columns - the price on the value date
+        the bond is priced on ("T1 · 04.11"; bid, ask, the last trade and when, the clean price in use); the yields; each
+        measure on the curves it is read on - ASW, the fitted curve's ASW, the fair yield and price, cheap / rich and the
+        signal, against OIS (DİBS RV) and against the FX swap implied curve (DİBS ASW; DİBS RV's threshold for the signal;
+        rvfair.py) -, the zero-coupon curve fitted now (dibsgenel.py: Nelson-Siegel on the fixed coupon bonds, the bills
+        priced on it); its risk (duration, DV01, the nominal of USD 1,000 DV01, the OIS hedge ratio); carry and the repo
+        T0 -> T1 implies; today's chat board.  Which columns show is each user's (Sütunlar, its presets Trading / RV /
+        Risk: :meth:`column_presets`)."""
         from . import rvfair
         book = self.books.get("tto")
         groups = self._trading_columns()
         cols = [x for _, items in groups for x in items]
         width = len(cols)
         top: List[Dict[str, Any]] = []
-        group_tips = {"FX swap'a göre": "DİBS ASW'nin ASW FX hesabı: " + rvfair.FX_CURVE_TEXT}
+        group_tips = {"Fiyat": "Kâğıdın fiyatlandığı valörde (DİBS RV)",
+                      "ASW (bp)": "OIS: DİBS RV'nin TLREF OIS eğrisine göre · FX: DİBS ASW'nin ASW FX hesabı, " + rvfair.FX_CURVE_TEXT,
+                      "Adil getiri %": "Kâğıdın ASW'si uydurulan ASW eğrisinde dursaydı (OIS: DİBS RV; FX: DİBS ASW, " + rvfair.FX_CURVE_TEXT + ")",
+                      "Adil fiyat": "Kâğıdın ASW'si uydurulan ASW eğrisinde dursaydı valördeki temiz fiyatı (OIS: DİBS RV; FX: DİBS ASW)"}
+        from . import dibsgenel as dg
+        group_tips[dg.ZERO_GROUP] = dg.GROUP_TIPS[dg.ZERO_GROUP]
         for name, items in groups:
             top.append(dict({"t": name, "k": "s", "b": 1, "f": "hd", "al": "c"} if name else {"t": "", "k": ""},
                             **({"cs": len(items)} if len(items) > 1 else {}), **({"tip": group_tips[name]} if name in group_tips else {})))
@@ -5675,14 +5839,26 @@ class Service(object):
         fx = self._fx_curve(user)
         fits = rvfair.read_fits(calc, si, fx)
         threshold = calc.get(si, 2, parse_a1("P1") % COLS)
+        k = self._trading_keys()
+        calc_day = self._bond_day()                  # (the valör's T0 / T1 / T2: from the calculation's today, as the sheet's)
 
         def cell(c: str, r: int, s: int = si) -> Dict[str, Any]:
             got = R.cell(calc, s, r, parse_a1("%s1" % c) % COLS, loc)
-            keep = {k: got[k] for k in ("t", "v", "k", "c", "b") if k in got}
+            keep = {x: got[x] for x in ("t", "v", "k", "c", "b") if x in got}
             keep.setdefault("t", "")
             keep.setdefault("k", "")
             return keep
 
+        # the bonds against the zero-coupon curve fitted now (DİBS RV · Genel's fit, kept there: the same inputs, the same fit)
+        listed: List[Tuple[str, str]] = []
+        for r in range(5, 55):
+            isin = calc.get(si, r, 1)
+            if isinstance(isin, str) and isin.strip():
+                code = "".join(isin.split()).upper()
+                known = bd.by_isin(code)
+                listed.append((code, {"bill": "B", "zero": "B", "fixed": "S", "float": "T", "frn": "F", "cpi": "E"}.get(
+                    (known or {}).get("kind")) or calc.get(si, r, 4)))
+        zero = self.dibsgenel.zero_for(calc, book.model.sheet_index, self.history.today(), listed, loc) if listed else {}
         bonds: Dict[str, List[Tuple[Any, List[Dict[str, Any]]]]] = {g: [] for g, _ in self._TYPE_GROUPS}
         for r in range(5, 55):
             isin = calc.get(si, r, 1)
@@ -5708,6 +5884,8 @@ class Service(object):
             label = cell("B", r, live) if live is not None else {"t": code, "k": "s"}
             if known and label.get("t") in ("", code):
                 label = {"t": bd.short_label(known), "k": "s", "b": 1}
+            # (the bond's name: its ISIN in the tip, a click opens its card - the same bond column on every bond table)
+            label = dict(label, cls="bondlink", tip="%s%s · tıklayınca kâğıt kartı" % (code, " · " + known["name"] if (known or {}).get("name") else ""))
             due = cell("E", r)
             if not str(due.get("t") or "").strip() and type(mat) is float:
                 due = {"t": numfmt.format_value(mat, "dd.mm.yyyy", loc), "v": mat, "k": "n"}
@@ -5715,34 +5893,44 @@ class Service(object):
             # what DİBS RV works out of the price in use - and DİBS ASW on the FX swap implied curve: soft while no live
             # quote stands behind it
             f = rvfair.fair(calc, si, r, fits, fx)
-            fx_own, _, fx_rich, fx_signal = self._fx_cells(f["fx"], threshold, loc)
-            priced = {k: cell(c, r) for k, c in (("K", "T"), ("L", "Z"), ("M", "AB"), ("N", "AC"), ("on", ex.RV_ON[0][0]))}
-            priced.update({"fx": fx_own, "fx_rich": fx_rich, "fx_signal": fx_signal})
-            priced["N"] = dict(priced["N"], b=1)
+            fx_own, fx_curve, fx_rich, fx_signal = self._fx_cells(f["fx"], threshold, loc)
+            priced = {"ycomp": cell("T", r), "ysimple": cell("S", r), "ois_asw": cell("Z", r), "ois_rc": cell("AB", r),
+                      "ois_sig": dict(cell("AC", r), b=1), "on": cell(ex.RV_ON[0][0], r), "clean": cell("O", r),
+                      "fx_asw": fx_own, "fx_rc": fx_rich, "fx_sig": fx_signal}
             if q["stale"]:
-                priced = {k: self._soft(c, q["tip"]) for k, c in priced.items()}
+                priced = {x: self._soft(c, q["tip"]) for x, c in priced.items()}
             valor, own = calc.get(si, r, parse_a1("P1") % COLS), calc.get(si, r, parse_a1("T1") % COLS)
             ois_y, ois_p = self._fair_cells(f["ois"], "ois", fits, valor, own, loc)
             fx_y, fx_p = self._fair_cells(f["fx"], "fx", fits, valor, own, loc)
-            by = {"A": self._flag_cell(code, True), "B": label, "C": {"t": code, "k": "s", "cls": "soft"}, "D": due,
-                  "E": {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
-                  "F": {"t": str(src or ""), "k": "s", "cls": "soft"},
-                  "G": self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
-                  "H": self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), "I": dict(cell("AS", r), b=1), "J": when,
-                  "K": priced["K"], "L": priced["L"], "M": priced["M"], "N": priced["N"],
-                  "O": cell("AG", r), "P": cell("AI", r),
-                  "Q": self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
-                  "R": cell("AO", r), "S": self._repo_cell(cell, live, r)}
-            ois_keys = {cap: key for cap, key, _ in groups[2][1]}
-            fx_keys = [key for _, key, _ in groups[3][1]]
-            by.update({ois_keys[self.ON_HEAD]: priced["on"], ois_keys["Adil getiri %"]: ois_y, ois_keys["Adil fiyat"]: ois_p,
-                       fx_keys[0]: priced["fx"], fx_keys[1]: fx_y, fx_keys[2]: fx_p,
-                       fx_keys[3]: priced["fx_rich"], fx_keys[4]: priced["fx_signal"]})
-            board = self._bond_cells(said.get(code), loc)
-            for (_, key, _), c in zip(groups[6][1], board):
-                by[key] = c
-            by[groups[7][1][0][1]] = {"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}
-            line =[by[key] for _, key, _ in cols]
+            ois_curve: Dict[str, Any] = {"t": "", "k": ""}
+            if type(f["ois"].get("asw")) is float:
+                ois_curve = {"t": numfmt.format_value(f["ois"]["asw"], "0", loc), "v": f["ois"]["asw"], "k": "n",
+                             "tip": "DİBS RV'nin OIS ASW eğrisi kâğıdın %s yılında%s" % (numfmt.format_value(f["ois"]["t"], "0.00", loc),
+                                                                                    " (bono eğriye girmez)" if f["ois"].get("bill") else "")}
+                if f["ois"].get("stretched"):
+                    ois_curve["cls"] = "soft"
+            by = {k["star"]: self._flag_cell(code, True), k["bond"]: label, k["isin"]: {"t": code, "k": "s", "cls": "soft"}, k["due"]: due,
+                  k["left"]: {"t": numfmt.format_value(years, "0.00", loc), "v": years, "k": "n"} if years is not None else {"t": "", "k": ""},
+                  k["valor"]: self._valor_cell(valor, src, calc_day, loc),
+                  k["bid"]: self._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
+                  k["ask"]: self._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), k["last"]: dict(cell("AS", r), b=1),
+                  k["when"]: when, k["ois_curve"]: ois_curve, k["fx_curve"]: fx_curve,
+                  k["ois_fy"]: ois_y, k["ois_fp"]: ois_p, k["fx_fy"]: fx_y, k["fx_fp"]: fx_p,
+                  k["dur"]: cell("AG", r), k["dv01"]: cell("AI", r),
+                  k["usd"]: self._usd_dv01_cell(calc.get(si, r, parse_a1("AI1") % COLS), spot, kind, loc),
+                  k["hedge"]: cell("AJ", r), k["cr"]: cell("AO", r), k["repo"]: self._repo_cell(cell, live, r),
+                  k["card"]: {"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code}}
+            by.update({k[x]: c for x, c in priced.items()})
+            z = zero.get(code) or {}
+            for x in ("z_model", "z_rc", "z_fp"):
+                by[k[x]] = z.get(x) or {"t": "", "k": ""}
+                if q["stale"] and x != "z_fp":
+                    by[k[x]] = self._soft(by[k[x]], q["tip"])
+            for j, c in enumerate(self._bond_cells(said.get(code), loc)):
+                by[k["bk%d" % j]] = c
+            self._signal_colour(by[k["ois_sig"]])
+            self._signal_colour(by[k["fx_sig"]])
+            line = [by[key] for _, key, _ in cols]
             group = kind if kind in bonds else "S"
             bonds[group].append((mat if type(mat) is float else 1e9, line))
         for g, caption in self._TYPE_GROUPS:
@@ -5758,6 +5946,15 @@ class Service(object):
         # keeps rows of it by their number shows the same ones; the groups' row above is a caption of the dashboard's (0)
         out["r"] = [0] + list(range(1, len(rows)))
         return out
+
+    @staticmethod
+    def _signal_colour(cell: Dict[str, Any]) -> Dict[str, Any]:
+        """UCUZ / PAHALI in the bond tables' colours (the desk, 28.11.2026: one colour rule - Bugün's and Günlük İşlemler'
+        buy / sell): UCUZ green (al), PAHALI red (sat).  In place; the cell."""
+        t = str(cell.get("t") or "").strip().upper()
+        if t in ("UCUZ", "PAHALI") and "buy" not in (cell.get("cls") or "") and "sell" not in (cell.get("cls") or ""):
+            cell["cls"] = ((cell.get("cls") or "") + (" buy" if t == "UCUZ" else " sell")).strip()
+        return cell
 
     # ================================================================== watching the market
     def _watch_call(self, fn, *args):
@@ -6389,7 +6586,8 @@ class Service(object):
         def bp(v: Any, signed: bool = False) -> Dict[str, Any]:
             if type(v) is not float:
                 return {"t": "", "k": ""}
-            cell = {"t": (("+" if signed and v > 0 else "") + numfmt.format_value(v, "0.0", loc)), "v": v, "k": "n"}
+            # (bp whole, as every spread of the bond pages: the desk's one rule of 28.11.2026; the value keeps its digits)
+            cell = {"t": (("+" if signed and round(v) > 0 else "") + numfmt.format_value(v, "0", loc)), "v": v, "k": "n"}
             if signed:
                 cell["c"] = "pos" if v > 0 else ("neg" if v < 0 else None)
                 if cell["c"] is None:
@@ -6397,19 +6595,23 @@ class Service(object):
             return cell
 
         for i, r in enumerate(rnums):
+            code = rvfair.isin_of(base.get(si, r, 2)) if 7 <= r <= 56 else ""
             if r == 6:
                 rows[i].extend([{"t": "ASW FX ima (bp)", "k": "s", "b": 1, "f": "hd",
                                  "tip": "%s'ne göre ASW (EK_FX: %d / %d vade fiyatlı; %s). DİBS RV'nin ASW FX'i başka bir eğri: %s"
                                         % (self.ASW_FX_CURVE, swapped, len(ex.FXC_ROOTS), self.FX_RATES_READ, self.RV_FX_CURVE)},
                                 {"t": "FX ima − OIS (bp)", "k": "s", "b": 1, "f": "hd",
-                                 "tip": "ASW FX ima − ASW OIS (%s; OIS)" % self.ASW_FX_CURVE}])
+                                 "tip": "ASW FX ima − ASW OIS (%s; OIS)" % self.ASW_FX_CURVE},
+                                {"t": self.BOND_COL, "k": "s", "b": 1, "f": "hd", "tip": self.BOND_COL_TIP}])
             elif 7 <= r <= 56 and calc is not None:
                 ois, fx = base.get(si, r, r_col), calc.get(si, r, r_col)
-                rows[i].extend([bp(fx), bp(fx - ois if type(fx) is float and type(ois) is float else None, True)])
+                rows[i].extend([bp(fx), bp(fx - ois if type(fx) is float and type(ois) is float else None, True),
+                                self._bond_label_cell(code) if code else {"t": "", "k": ""}])
             else:
-                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""}])
-        data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS"]
-        data["added"] = int(data.get("added") or 0) + 2
+                rows[i].extend([{"t": "", "k": ""}, {"t": "", "k": ""},
+                                self._bond_label_cell(code) if code else {"t": "", "k": ""}])
+        data["c"] = list(data.get("c") or []) + ["ASW FX", "FX−OIS", self.BOND_COL]
+        data["added"] = int(data.get("added") or 0) + 3
 
     # ================================================================== the ASW history against the offshore curve
     #: a calculation's ASW history on the offshore curve, a layer over it: ``(user, HIST_FX)`` - ``""`` everybody's
@@ -6930,12 +7132,23 @@ class Service(object):
         paste still find them), and with ``order`` the bonds kind by kind (bono, kuponsuz, sabit kuponlu, TLREF, FRN,
         TÜFE - a caption each, as on Tüm Kâğıtlar), by maturity.  ``spec``: the list's ISIN column (``key``), its rows
         (``first``, ``last``); ``order``: the sheet's columns of a bond's type and maturity, when the desk's list does not
-        know the bond."""
+        know the bond; ``unless``: a cell of the sheet whose ISIN keeps every row (a block of one bond folded to its ISIN
+        row while it has none - Hazine İhalesi's Kâğıt 2 / 3, the desk's 28.11.2026: "boş Kâğıt 2 / 3 ISIN satırına
+        katlı")."""
         rows, rnums = data.get("rows") or [], data.get("r") or []
         if not rows or sheet not in book.model.sheet_index:
             return
         from .rowkeys import isin_of
         si = book.model.sheet_index[sheet]
+        if spec.get("unless"):
+            # (a block of one bond: every row while its ISIN cell holds one, else its rows from ``first`` to ``last`` folded)
+            usi, urc = book.cell(spec["unless"] if "!" in spec["unless"] else "%s!%s" % (sheet, spec["unless"]))
+            if isin_of(calc.get(usi, *divmod(urc, COLS))):
+                return
+            first, last = int(spec["first"]), int(spec["last"])
+            keep = [(row, r) for row, r in zip(rows, rnums) if not (isinstance(r, int) and first <= r <= last)]
+            data["rows"], data["r"] = [row for row, _ in keep], [r for _, r in keep]
+            return
         key, first, last = col_to_index(spec["key"]), int(spec["first"]), int(spec["last"])
         order = spec.get("order")
         top: List[Tuple[List[Dict[str, Any]], int]] = []
@@ -7163,16 +7376,39 @@ class Service(object):
                 mid_cell = {"t": "bayat", "k": "s", "al": "c", "cls": "stale soft",
                             "tip": "Taze broker kotası yok (bayat sınırı %d dk): getiri ve ekran farkı yalnız taze kotadan" % stale_min}
             rows[i].extend(self._bond_cells(q, loc) + [mid_cell, gap_cell])
-        # ▸: the bond's card
+        # ▸: the bond's card; the bond's short name (the same bond column on every bond table, the desk's 28.11.2026: its ISIN
+        # in the tip, a click opens its card - the page's "cols" shows it first)
+        live = book.model.sheet_index.get(ex.LIVE_SHEET)
         for i, r in enumerate(rnums):
             v = calc.get(si, r, 1) if 5 <= r <= 54 else None
             code = "".join(str(v).split()).upper() if isinstance(v, str) else ""
             if r == 4:
                 rows[i].append({"t": "Kart", "k": "s", "b": 1, "f": "hd", "tip": "Kâğıdın bütün bilgisi tek pencerede"})
+                rows[i].append({"t": self.BOND_COL, "k": "s", "b": 1, "f": "hd", "tip": self.BOND_COL_TIP})
             else:
                 rows[i].append({"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code} if code else {"t": "", "k": ""})
-        data["c"] = list(data.get("c") or []) + [h for h, _ in heads] + ["Kart"]
-        data["added"] = int(data.get("added") or 0) + len(heads) + 1
+                rows[i].append(self._bond_label_cell(code, calc, live, r) if code else {"t": "", "k": ""})
+        data["c"] = list(data.get("c") or []) + [h for h, _ in heads] + ["Kart", self.BOND_COL]
+        data["added"] = int(data.get("added") or 0) + len(heads) + 2
+
+    #: the bond column every bond table shows first (the desk, 28.11.2026: "kâğıt sütunu kısa ad ("12.09.29", ISIN ipucunda)
+    #: ve dondurulmuş"; a click on it opens the bond's card)
+    BOND_COL = "Kâğıt"
+    BOND_COL_TIP = "Kâğıdın kısa adı (ISIN'i üzerinde) - tıklayınca kâğıt kartı"
+
+    def _bond_label_cell(self, code: str, calc=None, live: Optional[int] = None, r: Optional[int] = None,
+                         label: Optional[str] = None) -> Dict[str, Any]:
+        """A bond's name as the bond tables write it - "12.09.29", "10.02.27 Bono" (the DİBS Trading sheet's, else the
+        desk's list's) - with its ISIN (and Bloomberg's name) in the tip; a click opens its card (``bondlink``,
+        bonds.js)."""
+        known = bd.by_isin(code)
+        if label is None and live is not None and calc is not None and r is not None:
+            v = calc.get(live, r, 2)
+            label = v.strip() if isinstance(v, str) and v.strip() and v.strip() != code else None
+        if not label:
+            label = bd.short_label(known) if known else code
+        name = (known or {}).get("name") or ""
+        return {"t": label, "k": "s", "b": 1, "cls": "bondlink", "tip": "%s%s · tıklayınca kâğıt kartı" % (code, " · " + name if name else "")}
 
     # ================================================================== live quotes: the sizes of the orders
     #: DİBS RV's columns worked out of the clean price in use (their headers start so): soft while no live quote
@@ -7226,9 +7462,13 @@ class Service(object):
         row whose price is no live quote, what it works out of that price soft."""
         rows, rnums, cols = data.get("rows") or [], data.get("r") or [], list(data.get("c") or [])
         at = {c: cols.index(c) for c in ["K", "L"] + self._rv_priced_cols(book) if c in cols}
+        signals = [cols.index(c) for c in ("AC", "BI") if c in cols]
         for i, r in enumerate(rnums):
             if not ex.LIVE_FIRST <= r <= ex.LIVE_LAST or not calc.get(si, r, 1):
                 continue
+            for j in signals:
+                if j < len(rows[i]) and isinstance(rows[i][j], dict):
+                    rows[i][j] = self._signal_colour(dict(rows[i][j]))
             q = self._rv_quote(calc, si, r)
             for col, j in at.items():
                 if j >= len(rows[i]):
@@ -7268,6 +7508,11 @@ class Service(object):
                 continue
             isin = calc.get(si, r, 1)
             isin = "".join(str(isin).split()).upper() if isinstance(isin, str) else ""
+            if isin and "B" in cols and cols.index("B") < len(rows[i]):
+                # (the bond's name: its ISIN in the tip, a click opens its card - the same bond column everywhere)
+                j = cols.index("B")
+                rows[i][j] = dict(rows[i][j], **{k: v for k, v in self._bond_label_cell(
+                    isin, label=str(rows[i][j].get("t") or "").strip() or None).items() if k in ("cls", "tip")})
             for col, (j, sec_col) in where.items():
                 sec = calc.get(si, r, parse_a1("%s1" % sec_col) % COLS)
                 seen = self.trades_seen(sec) if isinstance(sec, str) and sec else None
@@ -7351,7 +7596,10 @@ class Service(object):
             px = x["price"]
             side = {"ask": "offer alındı", "bid": "bid'e verildi"}.get(x["side"], "")
             rows.append([
-                {"t": x["time"], "k": "s"}, {"t": x["label"], "k": "s", "b": 1}, {"t": x["isin"], "k": "s", "cls": "soft"},
+                # (the bond's name a link to its card, its ISIN in the tip: the same bond column everywhere, 28.11.2026)
+                {"t": x["time"], "k": "s"},
+                dict({"t": x["label"], "k": "s", "b": 1}, **({"cls": "bondlink", "tip": x["isin"] + " · tıklayınca kâğıt kartı"} if x["isin"] else {})),
+                {"t": x["isin"], "k": "s", "cls": "soft"},
                 {"t": numfmt.format_value(px, "0.000" if x["unit"] == "px" else "0.00", loc), "v": px, "k": "n",
                  "cls": "buy" if x["side"] == "ask" else ("sell" if x["side"] == "bid" else "")} if type(px) is float else {"t": "", "k": ""},
                 {"t": numfmt.format_value(x["yield"], "0.00", loc), "v": x["yield"], "k": "n", "cls": "soft"}
@@ -8389,10 +8637,14 @@ class Service(object):
         """Kâğıt Fiyatlama: every fixed coupon bond and bill of the trading list - the fair yield (the neighbours' curve
         and OIS, each plus the bond's spread at the last close, weighted by maturity), the quote, the good levels, the
         market against them and how the price was built (:mod:`tto.kagitfiyat`); ``query["isin"]``: that bond alone
-        (the card's block).  A request it cannot answer is a 400 with the reason in Turkish."""
+        (the card's block); ``query["ticket"]``: the bond's quote ticket at a value date (``KagitFiyat.ticket``: valör,
+        nominal, centre, spread).  A request it cannot answer is a 400 with the reason in Turkish."""
         from .kagitfiyat import KagitError
         q = query or {}
         try:
+            if str(q.get("ticket") or "") in ("1", "true"):
+                # the quote ticket at any value date (the bond card's block; C10, 28.11.2026)
+                return self.kagitfiyat.ticket(user, q)
             return self.kagitfiyat.view(user, q["isin"] if "isin" in q else None)
         except KagitError as exc:
             raise ServiceError(str(exc))
