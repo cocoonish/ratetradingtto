@@ -520,7 +520,8 @@
    "ranked": true,
    "range": "A28:L44",
    "hidden": false,
-   "grow": {"key": "B", "first": 30, "extra": 1, "last": 44}
+   "grow": {"key": "B", "first": 30, "extra": 1, "last": 44},
+   "trade": {"strategy": "spread", "first": 30, "last": 44, "tenor_col": "B", "cells": {"C": "ois"}}
   },
   {
    "id": "B10",
@@ -529,7 +530,8 @@
    "ranked": true,
    "range": "A46:L62",
    "hidden": false,
-   "grow": {"key": "B", "first": 48, "extra": 1, "last": 62}
+   "grow": {"key": "B", "first": 48, "extra": 1, "last": 62},
+   "trade": {"strategy": "fly", "first": 48, "last": 62, "tenor_col": "B", "cells": {"C": "ois"}}
   },
   {
    "id": "B11",
@@ -541,7 +543,12 @@
    "append": "fra_buckets",
    "hidden": false,
    "freeze": 2,
-   "grow": {"key": "B", "first": 66, "extra": 1, "last": 80}
+   "grow": {"key": "B", "first": 66, "extra": 1, "last": 80},
+   "trade": {"strategy": "fra", "first": 66, "last": 80, "tenor_col": "B", "cells": {"C": "ois"}},
+   "quote": {"prefix": "TRY OIS FRA", "label": "B", "first": 66, "last": 80,
+             "sets": [{"id": "par", "name": "Piyasa", "mid": "C", "scale": 100, "digits": 2}]},
+   "client_quote": {"pair": "TRY OIS", "title": "FRA", "rows": "66:80", "label": "B", "head": "FRA", "head_en": "FRA",
+                    "try": {"src": "C", "label": "FRA %", "label_en": "FRA rate %"}}
   },
   {
    "id": "interp",
@@ -568,6 +575,10 @@
    "title": "MPC OIS",
    "range": "A82:M99",
    "hidden": false,
+   "quote": {"prefix": "TRY OIS MPC", "label": "A", "first": 84, "last": 99,
+             "sets": [{"id": "boot", "name": "Piyasa", "mid": "D", "scale": 100, "digits": 2}]},
+   "client_quote": {"pair": "TRY OIS", "title": "MPC", "rows": "84:99", "label": "A", "head": "Dönem", "head_en": "Period",
+                    "start": "B", "end": "C", "try": {"src": "D", "label": "OIS %", "label_en": "OIS rate %"}},
    "trade": {
     "first": 84,
     "last": 99,
@@ -601,7 +612,8 @@
    "type": "table",
    "title": "MPC SPREAD – MPCk vs MPCk+1",
    "range": "A101:K117",
-   "hidden": false
+   "hidden": false,
+   "trade": {"strategy": "mpcspread", "first": 103, "last": 117, "tenor_col": "A", "cells": {"B": "ois"}}
   },
   {
    "id": "PPK2",
@@ -658,7 +670,8 @@
    "title": "TÜM SPREADLER",
    "range": "A131:K285",
    "hidden": false,
-   "collapsed": true
+   "collapsed": true,
+   "trade": {"strategy": "spread", "first": 133, "last": 285, "tenor_col": "A", "cells": {"B": "ois"}}
   },
   {
    "id": "B20",
@@ -666,7 +679,8 @@
    "title": "TÜM FLY'LAR",
    "range": "A287:K332",
    "hidden": false,
-   "collapsed": true
+   "collapsed": true,
+   "trade": {"strategy": "fly", "first": 289, "last": 332, "tenor_col": "A", "cells": {"B": "ois"}}
   },
   {
    "id": "B21",
@@ -677,6 +691,7 @@
    "append": "fra_buckets",
    "hidden": false,
    "collapsed": true,
+   "trade": {"strategy": "fra", "first": 336, "last": 438, "tenor_col": "A", "cells": {"B": "ois"}},
    "note": "\"Hedef FRA\": bir FRA hedefi yazın. \"Gereken bitiş bacağı\": başlangıç bacağının dolumuyla (\"Başl. bacağı dolum\"; boşsa piyasa) bu FRA'yı veren bitiş bacağı oranı; \"Gereken başl. bacağı\": bitiş bacağının dolumuyla (\"Bitiş bacağı dolum\"; boşsa piyasa) bu FRA'yı veren başlangıç bacağı oranı. \"Gerçekleşen FRA\"nın formülünün tersi, (R·P − Q·O) / (P − O): bulunan oran dolum sütununa yazılınca Gerçekleşen FRA hedefe eşit olur. Spot başlangıçlı satırda bitiş bacağı FRA'nın kendisidir. OIS eğrisi (TLREF, ACT/365)."
   },
   {

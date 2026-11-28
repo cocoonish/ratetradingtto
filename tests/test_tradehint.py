@@ -57,6 +57,8 @@ def test_every_trade_hint_is_well_formed(service, vp):
     for k in ("date_col", "tenor_col", "start_col", "end_col", "isin_col"):
         if hint.get(k):
             assert c1 <= col_to_index(hint[k]) <= c2, (p["id"], k)
+    for key, col in (hint.get("tenor_cols") or {}).items():
+        assert c1 <= col_to_index(col) <= c2 and (not shown or col in shown), (p["id"], key, col)
     for side, col in (hint.get("yield_price") or {}).items():
         assert side in th.SIDES and c1 <= col_to_index(col) <= c2, p["id"]
     if hint.get("date"):
@@ -69,9 +71,11 @@ def test_every_trade_hint_is_well_formed(service, vp):
 def test_the_tables_that_take_part():
     """The forward tables of Masa and Forward, the RET rows, the calculators, OIS quotes, the bond lists, VİOP."""
     names = {"%s/%s" % (v["id"], p["id"]) for v, p in HINTED}
+    # (the OIS lists - EN İYİ / TÜM spread, fly, FRA, MPC SPREAD - and Masa's OIS signals: the desk, 28.11.2026, A1)
     assert names == {"masa/EKS", "masa/EKSE", "masa/B3", "masa/B8", "masa/B10", "masa/B15", "masa/B22", "forward/FR1",
                      "forward/FR2", "forward/EKF1", "forward/EKF5", "forward/B19", "forward/BK1", "ois/B3", "ois/B13", "dibs/B3",
-                     "dibslive/L1", "kagitlar/U1", "asw/tbl"}
+                     "dibslive/L1", "kagitlar/U1", "asw/tbl", "ois/B9", "ois/B10", "ois/B11", "ois/B15", "ois/B19", "ois/B20",
+                     "ois/B21", "masa/B18"}
     with pytest.raises(ValueError):
         th.parse("sp mid")
     assert th.parse("try ask") == ("try", "ask") and th.parse("ois") == ("ois", None)
@@ -223,6 +227,82 @@ def test_ois_quotes(service):
     assert [th.prefill(hint, 9, c, "36,37", read, None)["side"] for c in "BC"] == ["PAY", "RECEIVE"]
 
 
+def test_ois_names_as_the_lists_write_them():
+    """The OIS lists' instruments: a tenor, "short / long", "wing/body/wing", a FRA's start and length ("18M6M",
+    "Spot3M", "1Y1Y" - months from the OIS spot), a meeting spread "MPCk / MPCk+1"; anything else refused with a word."""
+    assert th.ois_name("2Y") == ("outright", {"tenors": ["2Y"]})
+    assert th.ois_name("1M / 18M") == ("spread", {"tenors": ["1M", "18M"]})
+    assert th.ois_name(" 15m / 10y ") == ("spread", {"tenors": ["15M", "10Y"]})
+    assert th.ois_name("2M/3M/6M") == ("fly", {"tenors": ["2M", "3M", "6M"]})
+    assert [th.ois_name(x) for x in ("Spot3M", "18M6M", "1Y1Y", "102M3M", "7Y3Y", "3M2Y")] == [
+        ("fra", {"months": m}) for m in ([0, 3], [18, 24], [12, 24], [102, 105], [84, 120], [3, 27])]
+    assert th.ois_name("MPC1 / MPC2") == ("mpcspread", {"mpc": [1, 2]})
+    for bad, said in (("", "ad yok"), ("1M / 7M", "7M: OIS vadesi değil"), ("MPC1 / MPC3", "ardışık"), ("9Y3Y", "120"),
+                      ("1M/2M/3M/6M", "okunamadı"), ("Spread", "OIS vadesi değil"), ("1M5M", "3'ün katı")):
+        with pytest.raises(th.HintError) as exc:
+            th.ois_name(bad)
+        assert said in str(exc.value), (bad, str(exc.value))
+    # a table of several strategies: each price's own name column; a key of no OIS price, a column that is none: refused
+    hint = {"strategy": "auto", "tenor_col": "B", "tenor_cols": {"J": "I"}, "cells": {"C": "ois", "J": "ois"}}
+    assert th.check(hint) == [] and th.check(dict(hint, tenor_col=None)) == [
+        "OIS auto: tenor_col gerekli (enstrümanın adı satırın hangi sütununda)"]
+    assert th.check(dict(hint, tenor_col=None, tenor_cols={"C": "B", "J": "I"})) == []
+    assert th.check(dict(hint, tenor_cols={"K": "I"})) == ["tenor_cols: 'K' bir OIS fiyat hücresinin anahtarı değil"]
+    assert th.check(dict(hint, tenor_cols={"J": "i9"})) == ["tenor_cols: 'i9' bir sütun olmalı"]
+    assert th.check(dict(hint, strategy="butterfly")) == ["OIS stratejisi: 'butterfly'"]
+    # a side by the column (a quote of ours): at its bid the desk buys - a steepener, the body paid, the later period paid
+    for strategy, name, sides in (("spread", "1M / 2Y", ["STEEPENER", "FLATTENER"]), ("fly", "1Y/2Y/3Y", ["PAY GÖVDE", "REC GÖVDE"]),
+                                  ("fra", "6M3M", ["PAY", "RECEIVE"])):
+        h = {"strategy": strategy, "tenor_col": "A", "cells": {"B": "ois bid", "C": "ois ask"}}
+        assert [th.prefill(h, 9, c, "-25", {"A9": name}.get, None)["side"] for c in "BC"] == sides, strategy
+    with pytest.raises(th.HintError) as exc:
+        th.prefill({"strategy": "fly", "tenor_col": "A", "cells": {"B": "ois"}}, 9, "B", "-25", {"A9": "1M / 2Y"}.get, None)
+    assert str(exc.value) == "1M / 2Y: fly değil"
+    from tto import blotter as bl
+    assert th.OIS_SIDES["mpcspread"] == bl.MPC_SPREAD_SIDES == ("PAY K+1 / REC K", "REC K+1 / PAY K")    # (the form's own)
+
+
+def test_the_ois_lists_as_trades(service):
+    """EN İYİ / TÜM SPREADLER, FLY'LAR, FRA (OIS · PPK) and Masa's OIS signals (spreads, flies and FRAs in one table, the
+    fly's name in its own column): the row's instrument as the form takes it, the price clicked as the level (a mid: no
+    side); the MPC SPREAD row's three days from the MPC OIS table, as its name counts the meetings.  The form prices each
+    one as the list does (its market is the list's Piyasa)."""
+    def name(ref):
+        return cell(service, "OIS_MAIN!" + ref)
+
+    sp = go(service, "ois", "B9", "C30", "-78", label="1M / 18M · Piyasa (bp)")
+    assert sp == {"kind": "ois", "strategy": "spread", "side": None, "tenors": [t.strip() for t in name("B30").split("/")],
+                  "level": "-78", "note": "Fiyat: 1M / 18M · Piyasa (bp) (OIS · PPK · EN İYİ 15 SPREAD)"}
+    fly = go(service, "ois", "B10", "C48", "76")
+    assert (fly["strategy"], fly["tenors"], fly["side"]) == ("fly", name("B48").split("/"), None)
+    fra = go(service, "ois", "B11", "C66", "36,90%")
+    assert (fra["strategy"], fra["months"], fra["level"]) == ("fra", th.ois_name(name("B66"))[1]["months"], "36,90%")
+    assert go(service, "ois", "B19", "B140", "1")["tenors"] == [t.strip() for t in name("A140").split("/")]
+    assert go(service, "ois", "B20", "B300", "1")["strategy"] == "fly"
+    assert go(service, "ois", "B21", "B338", "34,89%")["months"] == [cell(service, "OIS_MAIN!M338"), cell(service, "OIS_MAIN!N338")]
+    # Masa's signals: the strategy is the name's - a spread and a fly side by side, the FRAs below
+    masa = cell(service, "MASA!B134"), cell(service, "MASA!I134"), cell(service, "MASA!B141")
+    got = [go(service, "masa", "B18", ref, "1") for ref in ("C134", "J134", "C141")]
+    assert [g["strategy"] for g in got] == ["spread", "fly", "fra"]
+    assert got[1]["tenors"] == masa[1].split("/") and got[2]["months"] == th.ois_name(masa[2])[1]["months"]
+    assert "OIS vadesi değil" in str(refused(service, "masa", "B18", "C140", "1"))            # the FRA block's caption row
+    # MPC SPREAD: "MPC1 / MPC2" - the first two meeting periods of the MPC OIS table, end to end
+    ms = go(service, "ois", "B15", "B103", "-30,81")
+    assert (ms["strategy"], ms["start"], ms["mid"], ms["end"], ms["side"], ms["level"]) == (
+        "mpcspread", cell(service, "OIS_MAIN!B84"), cell(service, "OIS_MAIN!C84"), cell(service, "OIS_MAIN!C85"), None, "-30,81")
+    k = int(name("A110").split("/")[0].strip()[3:])
+    assert go(service, "ois", "B15", "B110", "1")["mid"] == cell(service, "OIS_MAIN!C%d" % (83 + k))
+    # each, priced by the form, is the list's own market (its Piyasa) - the side chosen
+    form = {"spread": lambda s: {"short": s["tenors"][0], "long": s["tenors"][1], "side": "STEEPENER"},
+            "fly": lambda s: {"wing1": s["tenors"][0], "body": s["tenors"][1], "wing2": s["tenors"][2], "side": "PAY GÖVDE"},
+            "fra": lambda s: {"start_months": s["months"][0], "end_months": s["months"][1], "side": "PAY"},
+            "mpcspread": lambda s: {"start": s["start"], "mid": s["mid"], "end": s["end"], "side": "PAY K+1 / REC K"}}
+    # (the spread and fly lists say whole bp, MPC SPREAD two decimals)
+    for spec, market, near in ((sp, name("C30"), 0.51), (fly, name("C48"), 0.51), (fra, name("C66"), 1e-12), (ms, name("B103"), 0.006)):
+        q = service.quote_ois("Fiyat İşlem", dict(form[spec["strategy"]](spec), strategy=spec["strategy"], level=spec["level"]))
+        assert q["info"]["market"] == pytest.approx(market, abs=near), spec["strategy"]
+
+
 # ---------------------------------------------------------------------------------------------- bonds and VİOP
 def test_bonds(service):
     """A bond's price: the row's ISIN, bought at the bid, sold at the ask; a yield at its own side's price (the yield in
@@ -283,5 +363,5 @@ def test_over_http(service):
     assert r.status_code == 200 and r.json()["spec"]["value"] == "39,049"                   # (the user's number format)
     r = client.post("/api/trade/prefill", json=dict(body, view="masa", panel="B15", row=110, col="D"), headers=h)
     assert r.status_code == 400 and "VİOP" in r.json()["error"]
-    assert client.post("/api/trade/prefill", json=dict(body, panel="B9"), headers=h).status_code == 404
+    assert client.post("/api/trade/prefill", json=dict(body, panel="B4"), headers=h).status_code == 404      # IMPLIED RATES
     assert client.post("/api/trade/prefill", json=body, headers=ANON).status_code == 401

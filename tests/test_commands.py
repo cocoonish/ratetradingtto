@@ -107,9 +107,81 @@ def test_islem_gir_says_what_it_expected(node_run):
     assert all("cmd" not in one(node_run, t) for t in ("işlem gir usdtry 1x 10mn", "işlem gir 1m usdtry"))
 
 
+def test_islem_gir_an_ois_fra_meeting_swap_and_bond_in_the_book(node_run):
+    """The desk, 28.11.2026 (A4): "işlem gir" fills Günlük İşlemler's OIS and bond forms too - the strategy from what is
+    typed (a tenor, two or three, a FRA "9x12" / "1y1y", a meeting by its month), the side in the strategy's words, a
+    size (DV01 under a million, a nominal from it), a level "@" - and every suggestion names the book (the position)."""
+    def spec(text):
+        got = one(node_run, text)
+        assert got.get("cmd") == "blotter", (text, got)
+        return got["spec"]
+
+    got = one(node_run, "işlem gir ois 2y rec 10k")
+    assert got == {"cmd": "blotter", "spec": {"kind": "ois", "strategy": "outright", "side": "RECEIVE", "tenors": ["2Y"], "size": "10k",
+                                              "sizeMode": "dv01"},
+                   "label": "Günlük İşlemler: TRY OIS · 2Y · RECEIVE · DV01 10k $/bp", "note": "pozisyona girer · form dolar, kaydetmek sizin"}
+    assert spec("işlem gir 1y2y steepener") == {"kind": "ois", "strategy": "spread", "side": "STEEPENER", "tenors": ["1Y", "2Y"]}
+    assert spec("işlem gir 1y/2y flattener -125bp") == {"kind": "ois", "strategy": "spread", "side": "FLATTENER", "tenors": ["1Y", "2Y"],
+                                                         "level": "-125"}
+    assert spec("işlem gir 1y/2y/3y rec gövde") == {"kind": "ois", "strategy": "fly", "side": "REC GÖVDE", "tenors": ["1Y", "2Y", "3Y"]}
+    assert spec("işlem gir 9x12 pay") == {"kind": "ois", "strategy": "fra", "side": "PAY", "months": [9, 12]}
+    assert spec("işlem gir 1y1y rec") == {"kind": "ois", "strategy": "fra", "side": "RECEIVE", "months": [12, 24]}
+    assert spec("işlem gir fra 18m6m pay dv01 3k")["months"] == [18, 24]
+    assert spec("işlem gir dec mpc pay") == {"kind": "ois", "strategy": "mpc", "side": "PAY", "mpc_month": 12}
+    assert spec("İŞLEM GİR MPC ARALIK REC") == {"kind": "ois", "strategy": "mpc", "side": "RECEIVE", "mpc_month": 12}
+    assert spec("işlem gir mpc spread ocak pay") == {"kind": "ois", "strategy": "mpcspread", "side": "PAY K+1 / REC K", "mpc_month": 1}
+    assert spec("işlem gir ois 2y pay @35,50 500m") == {"kind": "ois", "strategy": "outright", "side": "PAY", "tenors": ["2Y"], "level": "35,50",
+                                                         "size": "500m", "sizeMode": "nominal"}
+    assert spec("işlem gir ois 3a pay 5000")["tenors"] == ["3M"] and spec("işlem gir ois 12m pay")["tenors"] == ["1Y"]
+    assert spec("işlem gir ois 2y nom 50k pay")["sizeMode"] == "nominal"
+    assert spec("işlem gir ois 1y 2y") == {"kind": "ois", "strategy": "spread", "tenors": ["1Y", "2Y"]}             # (no side: the user's)
+    assert "yönü seçin" in one(node_run, "işlem gir ois 1y 2y")["note"]
+    # a bond: an ISIN or the desk's name of it (the server finds the ISIN)
+    got = one(node_run, "işlem gir dibs mar28 50m al")
+    assert got["spec"] == {"kind": "bond", "instrument": "mar28", "amount": "50m", "dir": "B"}
+    assert got["label"] == "Günlük İşlemler: DİBS mar28 · alış · 50m nominal" and "ISIN'i sunucu bulur" in got["note"]
+    assert spec("işlem gir TRT150328T24 10m sat @98,75") == {"kind": "bond", "instrument": "TRT150328T24", "amount": "10m", "dir": "S",
+                                                              "price": "98,75"}
+    assert spec("işlem gir 15.03.28 5m al")["instrument"] == "15.03.28" and spec("işlem gir tahvil eyl29 1m sat")["instrument"] == "eyl29"
+    # what it cannot read: said
+    for text, said in (("işlem gir 2y rec 4m", "4M OIS formunun vadelerinden değil"), ("işlem gir 1y2y/3y pay", "okunamadı"),
+                       ("işlem gir 1y/2y rec", "steepener ya da flattener"), ("işlem gir mpc pay", "toplantının ayı bekleniyor"),
+                       ("işlem gir 2x5 pay", "3'ün katı"), ("işlem gir ois 2y gövde", "gövdenin yönü"),
+                       ("işlem gir dibs 50m al", "kâğıt bekleniyor"), ("işlem gir dibs mar28 foo", "tutar (50m), al / sat ya da @fiyat")):
+        got = one(node_run, text)
+        assert "cmd" not in got and said in got["error"], (text, got)
+    # the forwards stay as they were - a date written with "/" too
+    assert spec("işlem gir usdtry 15/12/2026 1m") == {"kind": "fwd", "pair": "USDTRY", "basis": "RET_MID", "date": "15/12/2026", "amount": "1m"}
+
+
+def test_fiyatla_opens_fiyatlama_filled_through_its_address(node_run):
+    """"fiyatla …": the page's address with /api/pricing's fields - asset, pair, start, end, side, size_kind, size, price,
+    price_kind - as typed (the page reads them, nothing is kept until then); a swap without a start starts at spot, a
+    price is the one said or none."""
+    got = one(node_run, "fiyatla ois 2y3m rec 10k")
+    assert got == {"cmd": "page", "id": "fiyatlama?asset=ois&start=&end=2Y3M&side=RECEIVE&size_kind=dv01&size=10k&price=",
+                   "label": "Fiyatlama: TRY OIS · 2Y3M · RECEIVE · DV01 10k", "note": "Fiyatlama dolu açılır · hiçbir şey kaydedilmez"}
+    assert one(node_run, "fiyatla fra 12x15")["id"] == "fiyatlama?asset=fra&start=12&end=15&price="
+    assert one(node_run, "fiyatla 9x12 pay")["id"] == "fiyatlama?asset=fra&start=9&end=12&side=PAY&price="
+    assert one(node_run, "fiyatla usdtry 3m al 10m")["id"] == "fiyatlama?asset=fx&pair=USDTRY&end=3M&side=AL&size_kind=amount&size=10m&price="
+    assert one(node_run, "fiyatla eur 1y sat 5m @58,25")["id"] == (
+        "fiyatlama?asset=fx&pair=EURTRY&end=1Y&side=SAT&size_kind=amount&size=5m&price=58%2C25&price_kind=outright")
+    assert one(node_run, "fiyatla ois 1y 2y pay 500m 38%")["id"] == (
+        "fiyatlama?asset=ois&start=1Y&end=2Y&side=PAY&size_kind=nominal&size=500m&price=38%25&price_kind=rate")
+    assert one(node_run, "fiyatla xccy 5y pay dv01 20k")["id"] == "fiyatlama?asset=xccy&start=&end=5Y&side=PAY&size_kind=dv01&size=20k&price="
+    assert one(node_run, "fiyatla") == {"cmd": "page", "id": "fiyatlama", "label": "Fiyatlama'yı aç",
+                                       "note": "fiyatla <ois | fra | xccy | parite> … formu doldurur"}
+    assert one(node_run, "fiyatla ois 1y al")["error"].startswith("yön rec ya da pay bekleniyor")
+    assert one(node_run, "fiyatla usdtry 1m pay")["error"] == "forward'ın yönü al ya da sat"
+    assert '"xyz" okunamadı' in one(node_run, "fiyatla ois xyz")["error"]
+    assert one(node_run, "fiy") == {"complete": "fiyatla ", "label": "fiyatla <ois | fra | xccy | parite> …",
+                                   "note": "Fiyatlama dolu açılır, örn. fiyatla ois 2y3m rec 10k"}
+
+
 def test_trade_fills_the_trades_form_by_product(node_run):
     assert one(node_run, "trade ois 1y 5mn") == {"cmd": "trades", "spec": {"product": "ois", "tenor": "1Y", "notional": "5mn"},
-                                                 "label": "Trades formu: TRY OIS · 1Y · 5mn", "note": "form dolar, kaydetmek sizin"}
+                                                 "label": "Trades formu: TRY OIS · 1Y · 5mn",
+                                                 "note": "izleme, pozisyona girmez · form dolar, kaydetmek sizin"}
     assert one(node_run, "TRADE OİS 2y 10m rec")["spec"] == {"product": "ois", "tenor": "2Y", "notional": "10m", "side": "receive"}
     assert one(node_run, "trade sofr 5y dv01 25k pay")["spec"] == {"product": "sofr", "tenor": "5Y", "dv01": "25k", "side": "pay"}
     assert one(node_run, "trade dibs trt150328t24 10m al")["spec"] == {"product": "dibs", "isin": "TRT150328T24", "notional": "10m", "side": "B"}

@@ -753,6 +753,52 @@ FWD_TW_HEAD = ["Yazılan TRY bid %", "Yazılan TRY ask %", "Yazılan puan bid", 
 FWD_ON, FWD_TW_ON = ("AV", "AW"), ("AX", "AY")
 FWD_ON_HEAD = ["ON bid %", "ON ask %"]
 FWD_TW_ON_HEAD = ["Yazılan ON bid %", "Yazılan ON ask %"]
+#: the general row's width (the desk, 28.11.2026: "A - Yildizlilari yap", A14 - both general spreads defaulted to MASA!I60,
+#: so every quote went out as 34,38 / 34,38): its label, its cell - two-way with the general ask spread (E, in place;
+#: tto/twoway.py, the view's group "ekfwd-width"): a width typed puts the spreads at the desk's spread ∓ ½ width (bid,
+#: ask = bid + width; a bid typed keeps the width above it), a spread typed shows the width the two make - and where a
+#: typed width is kept (the group's store; the row has no other one), and the warning: how many value dates quote their
+#: TRY ask at or below their bid
+FWD_WIDTH_LABEL, FWD_WIDTH, FWD_WIDTH_STORE, FWD_WARN = "H", "I", "AN", "J"
+#: how a quote without a width reads: the red of a pay (the USD sheet's look, ``LOOK_YON_RULES``)
+FWD_WARN_LOOK = {"color": "9C0006", "fill": "FFC7CE", "bold": True}
+FWD_WIDTH_NOTE = ("Genişlik (bp) iki yönlüdür: yazılınca 'Tümü' spread'leri iki yana yarımşar açılır (bid = spread − genişlik/2, ask = "
+                  "bid + genişlik; bid yazılırsa genişlik onun üstüne), spread yazılınca ikisinin farkını gösterir. Ask'i bid'inden "
+                  "yüksek olmayan vade (TRY ask ≤ bid: kota sıfır ya da ters genişlikte gider) kırmızıdır, sayısı 'Tümü' satırında.")
+
+
+def _look_if(b: "SheetBuilder", rng: str, condition: str, look: Dict[str, Any]) -> None:
+    """Excel's conditional format with a look (a fill, a font colour): where ``condition`` (written for the range's first
+    cell) holds, the cells read in ``look`` - how they read only, nothing is written (as :func:`_tto_look`)."""
+    r1, c1, _, _ = parse_range(rng.split()[0])
+    b.model.dxfs.append(dict(look))
+    b.sheet.cf.append({"sqref": rng, "type": "expression", "op": None, "text": None, "stop": False,
+                       "priority": max([x.get("priority", 0) for x in b.sheet.cf] + [0]) + 1,
+                       "dxf": len(b.model.dxfs) - 1, "anchor": r1 * COLS + c1,
+                       "formulas": [to_template(condition, r1, c1)]})
+
+
+def _fwd_width_cells(b: "SheetBuilder", g: int, rows: Tuple[int, int], bid0: str, ask0: str) -> None:
+    """A matrix's general spreads (its "Tümü" row ``g``: D bid, E ask - inputs, defaults ``bid0`` / ``ask0``), its
+    two-way width (:data:`FWD_WIDTH`, its store in :data:`FWD_WIDTH_STORE`) and the ask ≤ bid warning over its value-date
+    rows (``rows``).  Nothing typed: the spreads are their defaults as before, the width what they make (0 when both are
+    the desk's spread).  A width typed (w): bid = the defaults' middle − w/2, ask = bid + w - centred, as Kota mesajı's
+    width; a bid typed with it moves both."""
+    f = {"g": g, "s": "$%s$%d" % (FWD_WIDTH_STORE, g), "bid0": bid0, "ask0": ask0, "r1": rows[0], "r2": rows[1],
+         "mk": FWD_SPREAD_MARKET}
+    b.input("D%(g)d" % f, '=IF(ISNUMBER(%(s)s),IFERROR((%(bid0)s+%(ask0)s)/2-%(s)s/2,""),%(bid0)s)' % f, fmt="0", align="center")
+    b.input("E%(g)d" % f, '=IF(ISNUMBER(%(s)s),IFERROR($D$%(g)d+%(s)s,""),%(ask0)s)' % f, fmt="0", align="center")
+    b.set("%s%d" % (FWD_WIDTH_LABEL, g), "Genişlik (bp) →", color=NOTE_COLOR, align="right")
+    b.input("%s%d" % (FWD_WIDTH, g), '=IF(ISBLANK(%(s)s),IFERROR(IF(AND(ISNUMBER($D$%(g)d),ISNUMBER($E$%(g)d)),$E$%(g)d-$D$%(g)d,""),""),'
+                                     '%(s)s)' % f, fmt="0", align="center")
+    b.input("%s%d" % (FWD_WIDTH_STORE, g), None, fmt="0")
+    # how many value dates quote no width (their TRY ask at or below their bid): said in the general row
+    n = 'SUMPRODUCT(($C$%(r1)d:$C$%(r2)d<>"")*($N$%(r1)d:$N$%(r2)d<=$M$%(r1)d:$M$%(r2)d))' % f
+    b.set("%s%d" % (FWD_WARN, g), '=IFERROR(IF(%s>0,"⚠ "&%s&" vadede ask ≤ bid (genişlik yok)",""),"")' % (n, n), bold=True,
+          color=FWD_WARN_LOOK["color"])
+    _look_if(b, "D%(r1)d:E%(r2)d M%(r1)d:N%(r2)d" % f, 'AND($C%(r1)d<>"",$N%(r1)d<=$M%(r1)d)' % f, FWD_WARN_LOOK)
+    _look_if(b, "D%(g)d:E%(g)d %(w)s%(g)d" % dict(f, w=FWD_WIDTH),
+             'AND($B$%(g)d<>"%(mk)s",ISNUMBER($D$%(g)d),ISNUMBER($E$%(g)d),$E$%(g)d<=$D$%(g)d)' % f, FWD_WARN_LOOK)
 
 
 def fwd_outright(spot: str, rate: str, major: str, days: str) -> str:
@@ -865,13 +911,14 @@ def _tto_forward(model: Model) -> None:
     b.input("B%d" % g, FWD_SPREAD_OWN, align="center")
     b.dropdown("B%d" % g, (FWD_SPREAD_OWN, FWD_SPREAD_MARKET))
     b.set("C%d" % g, "bp →", color=NOTE_COLOR, align="right")
-    b.input("D%d" % g, "=MASA!$I$60", fmt="0", align="center")      # starts from the desk sheet's single spread
-    b.input("E%d" % g, "=MASA!$I$60", fmt="0", align="center")
+    # starts from the desk sheet's single spread; a width typed spreads them around it (and warns of none)
+    _fwd_width_cells(b, g, FWD_ROWS, "MASA!$I$60", "MASA!$I$60")
     b.set("F%d" % g, "=VIOP!$L$99", fmt=NUM4)
     b.set("G%d" % g, "=VIOP!$L$100", fmt=NUM4)
     b.set("X2", "Yardımcı: her eğrinin spot→valör iskonto faktörü ve ACT/360 basit faizi (%)", color=NOTE_COLOR)
     b.head("X3", ["OIS gün"] + ["DF " + name for _, name, _ in FWD_DF_SOURCES] + list(FWD_CURVES))
-    b.set("AN2", "İki yönlü: yazılan TRY % / puan / fwd (yazılan spread D:E'de) ve yazılanın verdiği TRY faizi", color=NOTE_COLOR)
+    b.set("AN2", "İki yönlü: yazılan TRY % / puan / fwd (yazılan spread D:E'de) ve yazılanın verdiği TRY faizi; 'Tümü' satırında "
+                 "(AN4) yazılan genişlik (bp)", color=NOTE_COLOR)
     b.head("AN3", FWD_TW_HEAD)
     b.head(FWD_ON[0] + "3", FWD_ON_HEAD)
     b.head(FWD_TW_ON[0] + "3", FWD_TW_ON_HEAD)
@@ -915,7 +962,8 @@ def _tto_forward(model: Model) -> None:
               fmt="0.0000")
     b.note("A%d" % (r2 + 1), "TRY faizi = seçilen OIS eğrisinin spot→valör ACT/360 basit faizi + spread (bp); eğriler MASA 'Tarih arası faiz' "
                              "bloğundaki iskonto faktörleriyle aynı. Spread bp; 'Tümü' satırı bütün vadelere, vade satırındaki değer yalnız o vadeye uygulanır. "
-                             "Piyasa bid / ask = offshore (ICAP) ima TRY faizi − OIS: 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır.")
+                             "Piyasa bid / ask = offshore (ICAP) ima TRY faizi − OIS: 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır. "
+                             + FWD_WIDTH_NOTE)
     b.note("A%d" % (r2 + 2), "Fwd bid = spot bid·(1+TRY bid·g/360)/(1+USD·g/360), ask tarafı spot ask ve TRY ask ile (Forward fiyatlama "
                              "tablosuyla aynı formül). Puan = (fwd − spot)·10000; P/gün = puan/gün. 'Bid/Ask − RET' = aynı valörde RET bid/ask faiziyle çıkan puana fark. "
                              "Yazılan puan / fwd: fwd = spot + puan/10000, TRY = ((fwd/spot)·(1+USD·g/360) − 1)·360/g, spread = TRY − OIS. "
@@ -1858,13 +1906,14 @@ def _tto_fwd_eur(model: Model) -> None:
     b.input("B%d" % g, "=$B$%d" % FWD_ALL, align="center")             # one's own spreads or the market's: as USDTRY unless set
     b.dropdown("B%d" % g, (FWD_SPREAD_OWN, FWD_SPREAD_MARKET))
     b.set("C%d" % g, "bp →", color=NOTE_COLOR, align="right")
-    b.input("D%d" % g, "=$D$%d" % FWD_ALL, fmt="0", align="center")
-    b.input("E%d" % g, "=$E$%d" % FWD_ALL, fmt="0", align="center")
+    # the USDTRY matrix's general spreads (its width with them) unless set apart - an EURTRY width of its own centred on them
+    _fwd_width_cells(b, g, FWD_EUR_ROWS, "$D$%d" % FWD_ALL, "$E$%d" % FWD_ALL)
     b.input("F%d" % g, "=IF(ISNUMBER(Forward!$F$198),Forward!$F$198,Forward!$G$2)", fmt=NUM4)
     b.input("G%d" % g, "=IF(ISNUMBER(Forward!$G$198),Forward!$G$198,Forward!$G$2)", fmt=NUM4)
     b.set("X%d" % c, "Yardımcı: her eğrinin spot→valör iskonto faktörü ve ACT/360 basit faizi (%), TRY eğrilerinin günü", color=NOTE_COLOR)
     b.head("X%d" % h, ["OIS gün"] + ["DF " + name for _, name, _ in FWD_DF_SOURCES] + list(FWD_CURVES) + ["TRY gün"])
-    b.set("AN%d" % c, "İki yönlü: yazılan TRY % / puan / fwd (yazılan spread D:E'de) ve yazılanın verdiği TRY faizi", color=NOTE_COLOR)
+    b.set("AN%d" % c, "İki yönlü: yazılan TRY % / puan / fwd (yazılan spread D:E'de) ve yazılanın verdiği TRY faizi; 'Tümü' satırında "
+                      "(AN" + str(g) + ") yazılan genişlik (bp)", color=NOTE_COLOR)
     b.head("AN%d" % h, FWD_TW_HEAD)
     b.head("%s%d" % (FWD_ON[0], h), FWD_ON_HEAD)
     b.head("%s%d" % (FWD_TW_ON[0], h), FWD_TW_ON_HEAD)
@@ -1910,7 +1959,8 @@ def _tto_fwd_eur(model: Model) -> None:
     b.note("A%d" % (r2 + 1), "TRY faizi = seçilen OIS eğrisinin spot→valör ACT/360 basit faizi + spread (bp), USDTRY matrisiyle aynı eğriler. "
                              "'Tümü' satırı bütün vadelere, vade satırındaki değer yalnız o vadeye uygulanır; spread'ler ve eğri başlangıçta "
                              "USDTRY matrisinindir, EURTRY için ayrıca yazılabilir. Spot: Bloomberg EURTRY bid / ask (yazılabilir). Piyasa bid / ask = "
-                             "offshore (ICAP) ima TRY faizi − OIS; 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır.")
+                             "offshore (ICAP) ima TRY faizi − OIS; 'Tümü' satırında 'Piyasa spread' seçilince her vade onunla fiyatlanır. "
+                             + FWD_WIDTH_NOTE)
     b.note("A%d" % (r2 + 2), "Fwd bid = spot bid·(1+TRY bid·g/360)/(1+EUR·g/360), ask tarafı spot ask ve TRY ask ile; g = valör − EURTRY spot "
                              "valörü, EUR faizi EUR OIS eğrisinden. Puan = (fwd − spot)·10000; P/gün = puan/gün. 'Bid/Ask − RET' = aynı valörde "
                              "RET bid/ask faiziyle çıkan puana fark. Ay vadeleri TRY ya da EUR tatiline düşerse ikisinin de açık olduğu sonraki güne. "

@@ -1969,3 +1969,7 @@ a.golink { text-decoration: none; white-space: nowrap; }
 .swaption .swpt-col > #swpt-range-panel { flex: 0 0 auto; align-self: flex-start; }
 .swaption .swpt-col > #swpt-realized-panel { flex: 0 0 auto; }
 .swaption #swpt-result > #swpt-schedule-panel { flex: 0 1 auto; }
+/* ---- İşlem girişi (K4, 28.11.2026, the desk's A5): the checks before "İşlemi kaydet" - what deserves a second look, one
+   line each, in the warning's colour ------------------------------------------------------------------------------------ */
+#blotter-check .checklist { margin: 0 0 10px 18px; padding: 0; }
+#blotter-check .checklist li { margin: 4px 0; color: var(--neg); line-height: 1.4; }

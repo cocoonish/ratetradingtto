@@ -85,11 +85,13 @@ def panel_of(view_id, panel_id):
 
 def test_the_calculators_named_give_a_quote():
     """Masa's forward tables, KIRIK VADE & KARŞILIK, TARİH ARASI FORWARD, the Forward page's calculators and its
-    forward tables, and the VİOP Target (on its page and in Masa's summary)."""
+    forward tables, and the VİOP Target (on its page and in Masa's summary) - and since 28.11.2026 (the desk's A14) the
+    OIS rates: OIS · PPK's MPC OIS and EN İYİ FRA, Masa's TARİH ARASI FAİZ."""
     assert set(QUOTED) == {("masa", "EKS"), ("masa", "EKSE"), ("masa", "B10"), ("masa", "B22"), ("masa", "B17"),
                            ("forward", "B7"), ("forward", "B8"), ("forward", "B9"), ("forward", "B10"), ("forward", "B21"),
                            ("forward", "B18"), ("forward", "FR1"), ("forward", "FR2"), ("forward", "FR3"),
-                           ("forward", "EKF1"), ("forward", "EKF5"), ("viop", "B33")}
+                           ("forward", "EKF1"), ("forward", "EKF5"), ("viop", "B33"), ("ois", "B11"), ("ois", "B13"),
+                           ("masa", "B9")}
 
 
 @pytest.mark.parametrize("view_id, panel_id", QUOTED, ids=["%s/%s" % x for x in QUOTED])
@@ -129,7 +131,9 @@ def test_every_table_quotes_its_planted_values_in_both_languages(view_id, panel_
         data = [line for line in lines[lines.index("") + 2:]] if "" in lines else []
         assert len(data) == 2, text
         one = qt.quote_text(spec, plant(spec, sheet), sheet, lang, TODAY, row=rows[0])
-        assert WRITTEN["outright"][k] in one and one.count("\n") >= 3
+        # (the row's own numbers in it: its outright - an OIS rate table has its rate alone)
+        own = "outright" if qt.field(spec, "outright") else "try"
+        assert WRITTEN[own + ("2" if isinstance(qt.field(spec, own)["src"], list) else "")][k] in one and one.count("\n") >= 1
         if spec.get("label"):
             assert "1M" in one.split("\n")[0]
         with pytest.raises(qt.QuoteError):
@@ -218,6 +222,38 @@ def test_the_viop_target_row_its_side_and_a_contract_kept_as_text():
     assert en.split("\n")[-1] == "LONG            Spot  31 Dec 2026    57     49.9970        2.4061          52.4031                34.55"
     with pytest.raises(qt.QuoteError):
         qt.quote_text(spec, lambda ref: (None, "General"), "VIOP", "tr", TODAY)          # no target typed: nothing to quote
+
+
+def test_the_ois_rates_word_for_word():
+    """The OIS rate tables (the desk, 28.11.2026, A14: "Kota mesajı her tabloda"): a table of one rate per row - MPC OIS's
+    periods with their two days, EN İYİ FRA's FRAs, TARİH ARASI FAİZ's curves under the block's dates - in the quote's
+    language, the rate in per cent as its cell shows it."""
+    v, p = panel_of("ois", "B13")
+    spec = p["client_quote"]
+    assert qt.quote_text(spec, plant(spec, "OIS_MAIN"), "OIS_MAIN", "tr", TODAY) == "\n".join([
+        "TRY OIS MPC · 17.11.2026",
+        "",
+        "Dönem  Başlangıç   Vade tarihi  OIS %",
+        "1M     04.11.2026  04.12.2026   34,38",
+        "2M     04.11.2026  04.12.2026   34,38",
+    ])
+    v, p = panel_of("ois", "B11")
+    spec = p["client_quote"]
+    assert qt.quote_text(spec, plant(spec, "OIS_MAIN"), "OIS_MAIN", "en", TODAY, row=66) == "\n".join([
+        "TRY OIS FRA 1M · 17 Nov 2026",
+        "FRA rate %  34.38",
+    ])
+    v, p = panel_of("masa", "B9")
+    spec = p["client_quote"]
+    assert qt.quote_text(spec, plant(spec, "MASA"), "MASA", "tr", TODAY) == "\n".join([
+        "TRY OIS tarih arası faiz · 17.11.2026",
+        "Başlangıç    04.11.2026",
+        "Vade tarihi  04.12.2026 (30 gün)",
+        "",
+        "Eğri  Dönem + spread % (360)",
+        "1M                     34,38",
+        "2M                     34,38",
+    ])
 
 
 def test_numbers_are_the_cells_format_in_the_quotes_language():
@@ -309,6 +345,28 @@ def test_on_the_workbook_the_numbers_are_the_tables_own(service):
         assert cell(service, "Forward!AH10", u) == pytest.approx(0.4)
     finally:
         service.reset_inputs(u, "tto")
+
+
+def test_the_ois_rates_on_the_workbook(service):
+    """On the recorded market: MPC OIS's first period, EN İYİ FRA's first FRA and the date-to-date block's curves - each
+    rate as its table shows it; the tables carry both buttons (Kota mesajı: their rows' mid ± a width)."""
+    u = service.login("Kotasyon OIS")["user"]
+    ois = {p["id"]: p for p in service.view(u, "ois", locale="tr")["panels"]}
+    for pid, row, col in (("B13", 84, "D"), ("B11", 66, "C")):
+        data = ois[pid]["data"]
+        shown = data["rows"][data["r"].index(row)][data["c"].index(col)]["t"].replace("%", "")
+        text = service.client_quote(u, "ois", pid, row=row, language="tr")["text"]
+        assert text.split("\n")[-1].endswith(shown), (pid, shown, text)
+        assert ois[pid]["client_quote"] == {"rows": {"B13": "84:99", "B11": "66:80"}[pid]}
+        assert [s.get("mid") for s in ois[pid]["quote"]["sets"]] == [col]
+    masa = {p["id"]: p for p in service.view(u, "masa", locale="tr")["panels"]}
+    data = masa["B9"]["data"]
+    text = service.client_quote(u, "masa", "B9", language="tr")["text"]
+    for row in range(62, 69):
+        line = data["rows"][data["r"].index(row)]
+        name, rate = line[data["c"].index("B")]["t"], line[data["c"].index("F")]["t"].replace("%", "")
+        assert any(x.startswith(name) and x.endswith(rate) for x in text.split("\n")), (name, rate, text)
+    assert [s["mid"] for s in masa["B9"]["quote"]["sets"]] == ["F", "D", "C", "E"]
 
 
 def test_the_quote_over_http(service):

@@ -809,6 +809,17 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().quote_bond, _user(request), await _body(request), _lang(request)))
 
     @handler
+    async def blotter_check(request: Request):
+        # the checks before "İşlemi kaydet" (the desk, 28.11.2026, A5): what deserves a second look - nothing is kept
+        return ok(await call(svc().blotter_check, _user(request), await _body(request), _lang(request)))
+
+    @handler
+    async def blotter_checks(request: Request):
+        # their desk-wide thresholds (POST: changed) and the counterparty list of the entry form
+        payload = await _body(request) if request.method == "POST" else None
+        return ok(await call_free(svc().blotter_checks, _user(request), payload, _lang(request)))
+
+    @handler
     async def add_bond(request: Request):
         return ok(await call(svc().add_bond, _user(request), await _body(request), _lang(request)))
 
@@ -1436,6 +1447,8 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/ois", add_ois, methods=["POST"]),
         Route("/api/blotter/ois-market", ois_market),
         Route("/api/blotter/quote/bond", quote_bond, methods=["POST"]),
+        Route("/api/blotter/check", blotter_check, methods=["POST"]),
+        Route("/api/blotter/checks", blotter_checks, methods=["GET", "POST"]),
         Route("/api/blotter/bond", add_bond, methods=["POST"]),
         Route("/api/blotter/trade/{trade_id:int}", delete_trade, methods=["DELETE"]),
         Route("/api/blotter/trade/{trade_id:int}", edit_trade, methods=["POST"]),

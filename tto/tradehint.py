@@ -10,6 +10,11 @@ column's own in a table of two pairs (TOPLU FORWARD's USDTRY and EURTRY columns:
 clicked, as it was on screen.  The side follows the column, as the desk quotes it: at its bid the desk buys (the currency forward, the
 bond; an OIS rate: PAY - Broker Chat's rule for a quote of ours), at its ask it sells; a mid leaves the side to the
 user.  The answer is what ``ctx.openTrade`` (the browser) takes: nothing is saved until the user saves.
+
+The OIS lists (the desk, 28.11.2026: "A - Yildizlilari yap", A1): an OIS price is an outright, a spread, a fly, a FRA, a
+meeting swap or a meeting spread - each named in its row the way OIS · PPK's lists name it (:func:`ois_name`: "2Y",
+"1M / 18M", "2M/3M/6M", "18M6M" / "Spot3M", "MPC1 / MPC2"); ``"strategy": "auto"`` takes the strategy from the name
+itself (Masa's signals: spreads, flies and FRAs in one table), ``"tenor_cols"`` a price's own name column.
 """
 from __future__ import annotations
 
@@ -24,15 +29,59 @@ from .xl.values import serial_to_date
 WHATS = {"sp": ("fwd", "SP"), "fwd": ("fwd", "FWD"), "try": ("fwd", "TRY"), "ret": ("fwd", "RET"),
          "ois": ("ois", None), "price": ("bond", None), "yield": ("bond", None), "none": (None, None)}
 SIDES = ("bid", "ask")
-#: the OIS strategies a price can be filled as, with their [buy, sell] sides (the buyer pays the rate)
-OIS_SIDES = {"outright": ("PAY", "RECEIVE"), "mpc": ("PAY", "RECEIVE")}
+#: the OIS strategies a price can be filled as, with their [buy, sell] sides: the buyer pays the rate - a spread's buyer
+#: pays the long leg (a steepener), a fly's the body, a meeting spread's the later window ("PAY K+1 / REC K", OIS_MAIN's
+#: own word for it, kept upper case as the form keeps it)
+OIS_SIDES = {"outright": ("PAY", "RECEIVE"), "mpc": ("PAY", "RECEIVE"), "fra": ("PAY", "RECEIVE"),
+             "spread": ("STEEPENER", "FLATTENER"), "fly": ("PAY GÖVDE", "REC GÖVDE"),
+             "mpcspread": bl.MPC_SPREAD_SIDES}
+#: the strategies whose instrument is named in a row's cell (``tenor_col``); "auto": the name says which (:func:`ois_name`)
+NAMED = ("outright", "spread", "fly", "fra", "mpcspread", "auto")
+#: OIS_MAIN's MPC OIS table: the k-th meeting period from B(83 + k) to C(83 + k) - where a meeting spread "MPCk / MPCk+1"
+#: of MPC SPREAD finds its three days (the meetings as the table has them now, as the row's own name says them)
+MPC_TABLE = ("OIS_MAIN", 84, 99)
 _KEY = re.compile(r"^[A-Z]{1,3}\d*$")
 _ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}\d$")
 _TENOR = re.compile(r"^\d{1,3}[WMY]$")
+_FRA = re.compile(r"^(SPOT|\d{1,3}[MY])(\d{1,3}[MY])$")
+_MPC = re.compile(r"^MPC(\d{1,2})$")
 
 
 class HintError(ValueError):
     """A price that cannot be filled as a trade - said to the user."""
+
+
+def _months(tenor: str) -> int:
+    return int(tenor[:-1]) * (12 if tenor[-1] == "Y" else 1)
+
+
+def ois_name(text: Any) -> Tuple[str, Dict[str, Any]]:
+    """An OIS instrument as OIS · PPK's lists name it -> ``(strategy, what the form takes)``: "2Y" an outright
+    (``tenors``), "1M / 18M" a spread (short / long), "2M/3M/6M" a fly (wing / body / wing), "18M6M" / "Spot3M" / "1Y1Y"
+    a FRA - its start and its length (``months``: [start, end] from the OIS spot) -, "MPC1 / MPC2" a meeting spread
+    (``mpc``: [k, k + 1], meetings counted as OIS_MAIN's MPC table counts them).  :class:`HintError` for a name that is
+    none of them, or a tenor the entry form does not list."""
+    s = " ".join(str(text if text is not None else "").split()).upper()
+    parts = [p.strip() for p in s.split("/")] if s else []
+    if len(parts) == 2 and all(_MPC.match(p) for p in parts):
+        k1, k2 = (int(_MPC.match(p).group(1)) for p in parts)
+        if k1 < 1 or k2 != k1 + 1:
+            raise HintError("%s: ardışık iki toplantı değil" % s)
+        return "mpcspread", {"mpc": [k1, k2]}
+    if len(parts) == 1:
+        m = _FRA.match(parts[0])
+        if m:
+            start = 0 if m.group(1) == "SPOT" else _months(m.group(1))
+            end = start + _months(m.group(2))
+            if start % 3 or end % 3 or end > 120:
+                raise HintError("%s: FRA ayları 3'ün katı olmalı (bitiş en çok 120 ay)" % s)
+            return "fra", {"months": [start, end]}
+    if 1 <= len(parts) <= 3 and all(parts):
+        missing = [p for p in parts if p not in bl.OIS_TENORS]
+        if missing:
+            raise HintError("%s: OIS vadesi değil" % ", ".join(missing))
+        return ("outright", "spread", "fly")[len(parts) - 1], {"tenors": parts}
+    raise HintError("%s: OIS enstrümanı okunamadı" % (s or "ad yok"))
 
 
 def parse(text: Any) -> Tuple[str, Optional[str]]:
@@ -41,6 +90,13 @@ def parse(text: Any) -> Tuple[str, Optional[str]]:
     if not parts or parts[0] not in WHATS or len(parts) > 2 or (len(parts) == 2 and parts[1] not in SIDES):
         raise ValueError("fiyat hücresi anlaşılamadı: %r" % (text,))
     return parts[0], parts[1] if len(parts) == 2 else None
+
+
+def _ois_entry(text: Any) -> bool:
+    try:
+        return parse(text)[0] == "ois"
+    except ValueError:
+        return False
 
 
 def check(hint: Any) -> List[str]:
@@ -93,12 +149,27 @@ def check(hint: Any) -> List[str]:
             out.append(str(exc))
         if len([k for k in ("date", "date_col", "tenor_col") if hint.get(k)]) != 1:
             out.append("forward valörü: date, date_col ya da tenor_col (yalnız biri)")
+    names = hint.get("tenor_cols")
+    if names is not None:
+        if not isinstance(names, dict) or not names:
+            out.append("tenor_cols bir nesne olmalı")
+            names = {}
+        for key, col in names.items():
+            try:
+                ois = key in cells and parse(cells[key])[0] == "ois"
+            except ValueError:
+                ois = True                               # (the cell's own entry says what is wrong with it)
+            if not ois:
+                out.append("tenor_cols: %r bir OIS fiyat hücresinin anahtarı değil" % (key,))
+            if not isinstance(col, str) or not re.match(r"^[A-Z]{1,3}$", col):
+                out.append("tenor_cols: %r bir sütun olmalı" % (col,))
     if "ois" in whats:
         strategy = hint.get("strategy") or "outright"
-        if strategy not in OIS_SIDES:
+        if strategy not in OIS_SIDES and strategy != "auto":
             out.append("OIS stratejisi: %r" % strategy)
-        elif strategy == "outright" and not hint.get("tenor_col"):
-            out.append("OIS outright: tenor_col gerekli")
+        elif strategy in NAMED and not hint.get("tenor_col") and not all(
+                k in (names or {}) for k, t in cells.items() if _ois_entry(t)):
+            out.append("OIS %s: tenor_col gerekli (enstrümanın adı satırın hangi sütununda)" % strategy)
         elif strategy == "mpc" and not (hint.get("start_col") and hint.get("end_col")):
             out.append("OIS MPC: start_col ve end_col gerekli")
     if whats & {"price", "yield"} and not hint.get("isin_col"):
@@ -199,18 +270,39 @@ def prefill(hint: Dict[str, Any], row: int, col: str, text: Any, read: Callable[
                 "date": serial_to_date(when).strftime("%d.%m.%Y"), "basis": basis, "value": value, "note": note}
     if product == "ois":
         strategy = hint.get("strategy") or "outright"
-        out: Dict[str, Any] = {"kind": "ois", "strategy": strategy, "level": value, "note": note,
-                               "side": None if buy is None else OIS_SIDES[strategy][0 if buy else 1]}
+        out: Dict[str, Any] = {"kind": "ois", "level": value, "note": note}
         if strategy == "mpc":
             start, end = _date(cell(hint["start_col"])), _date(cell(hint["end_col"]))
             if start is None or end is None or end <= start:
                 raise HintError("satırda toplantı tarihleri yok")
             out.update({"start": start, "end": end})
         else:
-            tenor = _text(cell(hint["tenor_col"])).upper()
-            if tenor not in bl.OIS_TENORS:
-                raise HintError("%s: OIS vadesi değil" % (tenor or "vade yok"))
-            out["tenors"] = [tenor]
+            # the instrument as the row names it ("2Y", "1M / 18M", "2M/3M/6M", "18M6M", "MPC1 / MPC2"): the price's
+            # own name column, else the table's
+            names = hint.get("tenor_cols") or {}
+            name = _text(cell(names.get("%s%d" % (col, row)) or names.get(col) or hint["tenor_col"]))
+            if strategy == "outright" and name.upper() not in bl.OIS_TENORS:
+                raise HintError("%s: OIS vadesi değil" % (name or "vade yok"))
+            got, fields = ois_name(name)
+            if strategy != "auto" and got != strategy:
+                raise HintError("%s: %s değil" % (name, {"outright": "vade", "spread": "spread", "fly": "fly", "fra": "FRA",
+                                                        "mpcspread": "MPC spread"}.get(strategy, strategy)))
+            strategy = got
+            if strategy == "mpcspread":
+                # the three days of the two meeting periods, as OIS_MAIN's MPC OIS table has them now
+                sheet, first, last = MPC_TABLE
+                k1 = fields["mpc"][0]
+                if first + k1 > last:
+                    raise HintError("%s: MPC OIS tablosunda yok" % name)
+                days = [_date(read("%s!B%d" % (sheet, first + k1 - 1))), _date(read("%s!C%d" % (sheet, first + k1 - 1))),
+                        _date(read("%s!C%d" % (sheet, first + k1)))]
+                if any(d is None for d in days) or not days[0] < days[1] < days[2]:
+                    raise HintError("%s: toplantı tarihleri yok" % name)
+                out.update({"start": days[0], "mid": days[1], "end": days[2]})
+            else:
+                out.update(fields)
+        out["strategy"] = strategy
+        out["side"] = None if buy is None else OIS_SIDES[strategy][0 if buy else 1]
         return out
     isin = "".join(_text(cell(hint["isin_col"])).split()).upper()
     if not _ISIN.match(isin):

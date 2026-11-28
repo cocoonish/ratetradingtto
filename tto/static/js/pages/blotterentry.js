@@ -9,7 +9,7 @@ import { pendingWrites, trackWrite } from '../grid.js';
 export const KIND_SHORT = { fwd: 'FX', ois: 'OIS', bond: 'Tahvil' };
 const KIND_LONG = { fwd: 'FX Forward', ois: 'OIS', bond: 'Tahvil' };
 const BASIS_TEXT = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask', TRY: 'TRY faizi', FWD: 'Forward kur', SP: 'Swap puanı' };
-const STRATEGY_TEXT = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', mpc: 'MPC' };
+const STRATEGY_TEXT = { outright: 'Outright', spread: 'Spread', fly: 'Fly', fra: 'FRA', mpc: 'MPC', mpcspread: 'MPC spread' };
 const monthText = (m) => (m === 0 ? 'Spot' : (m % 12 === 0 ? (m / 12) + 'Y' : m + 'M'));
 
 const SPEC_ORDER = { fwd: ['pair', 'dir', 'amount', 'quote_amount', 'date', 'basis', 'spot', 'cpt', 'note'],
@@ -29,7 +29,7 @@ function specValue(s, k) {
     case 'strategy': return STRATEGY_TEXT[v] || v;
     case 'tenors': return v.join('/');
     case 'months': return v.map(monthText).join('→');
-    case 'mpc': return (v[0] ? 'MPC' + v[0] : 'Spot') + '→MPC' + v[1];
+    case 'mpc': return (v[0] ? 'MPC' + v[0] : 'Spot') + v.slice(1).map((k) => '→MPC' + k).join('');
     case 'size': return v + (s.sizeMode === 'nominal' ? ' TL' : ' $/bp');
     case 'value': case 'sizeMode': case 'kind': return '';           // (with their basis, their size)
     default: return String(v);

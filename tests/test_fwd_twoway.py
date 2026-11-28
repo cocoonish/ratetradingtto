@@ -9,6 +9,7 @@ import pytest
 
 from conftest import cell
 from tto import extras
+from tto.render import fill_tone, tone
 from tto.xl.model import COLS, parse_a1
 
 USD_ROWS = range(extras.FWD_ROWS[0], extras.FWD_ROWS[0] + 6)             # 1M … 12M
@@ -246,15 +247,15 @@ def test_formulas_on_the_matrix(svc):
 
 
 def test_the_pages_marks_note_and_the_desks_summary(svc):
-    """The page: all five pairs typeable (the matrices' inputs: 114 / 116), the typed value marked, the others worked out
-    from it, the note under both matrices; Masa's summary is two-way as well (a TRY rate typed there moves the spread);
-    "İşlem gir" on a typed rate prices it."""
+    """The page: all five pairs typeable (the matrices' inputs: 115 / 117 - the general row's width too, 28.11.2026), the
+    typed value marked, the others worked out from it, the note under both matrices; Masa's summary is two-way as well (a
+    TRY rate typed there moves the spread); "İşlem gir" on a typed rate prices it."""
     u = svc.login("çy sayfa")["user"]
     page = svc.view(u, "forward")
     panels = {p["id"]: p for p in page["panels"]}
     want = "İki yönlü: spread, TRY %, ON karşılık, puan ya da fwd - hangisini yazarsanız o kalır, diğerleri ondan hesaplanır"
-    for pid, n in (("EKF1", 114), ("EKF5", 116)):
-        assert panels[pid]["note"].startswith(want)
+    for pid, n in (("EKF1", 115), ("EKF5", 117)):
+        assert want in panels[pid]["note"]                                       # (the general row's width's note beside it)
         assert len([c for row in panels[pid]["data"]["rows"] for c in row if c.get("i")]) == n
     assert "note" not in panels["EKF2"] or not (panels["EKF2"]["note"] or "").startswith(want)
     _, m = panel(svc, u, "masa", "EKS")
@@ -269,3 +270,80 @@ def test_the_pages_marks_note_and_the_desks_summary(svc):
     assert (spec["basis"], spec["dir"], spec["value"], spec["pair"]) == ("TRY", "S", f["N7"]["t"], "USDTRY")
     # nobody else's matrix moved
     assert cell(svc, "EK_FWD!N7") == pytest.approx(ois + cell(svc, "EK_FWD!E4") / 100, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------------------------- the general row's width
+def look(c):
+    return (c.get("c"), c.get("f"), c.get("b"))
+
+
+WARN = (tone(extras.FWD_WARN_LOOK["color"]), fill_tone(extras.FWD_WARN_LOOK["fill"]), 1)
+
+
+def test_no_width_is_said_and_a_width_spreads_the_general_row(svc):
+    """The desk, 28.11.2026 (A14): both general spreads default to MASA!I60, so every quote went out as 34,38 / 34,38.
+    Nothing typed: the same numbers as before, the width 0, the value dates whose TRY ask is not above their bid red and
+    counted in the general row.  "Genişlik (bp)" typed: the spreads at the desk's spread ∓ ½ width, every date's TRY ask
+    the width above its bid, nothing red; two-way with the ask spread - the last typed wins -; a bid typed keeps the
+    width above it; Delete: back to the defaults.  EURTRY follows USDTRY's spreads (its width with them) or has its own,
+    centred on USDTRY's."""
+    u = svc.login("çy genişlik")["user"]
+    desk = cell(svc, "MASA!I60", u)
+    g = extras.FWD_ALL
+    assert [cell(svc, "EK_FWD!%s4" % c, u) for c in "DEI"] == [desk, desk, 0.0] and cell(svc, "EK_FWD!H4", u) == "Genişlik (bp) →"
+    dated = [r for r in range(extras.FWD_ROWS[0], extras.FWD_ROWS[1] + 1) if cell(svc, "EK_FWD!C%d" % r, u) != ""]
+    assert len(dated) == 6 and all(cell(svc, "EK_FWD!N%d" % r, u) == cell(svc, "EK_FWD!M%d" % r, u) for r in dated)
+    assert cell(svc, "EK_FWD!J4", u) == "⚠ 6 vadede ask ≤ bid (genişlik yok)"
+    _, m = panel(svc, u, "masa", "EKS")
+    assert look(m["M5"]) == look(m["N5"]) == look(m["D5"]) == look(m["D4"]) == look(m["I4"]) == WARN
+    assert look(m["H5"]) != WARN and look(m["M11"]) != WARN                                # (a free row without a date)
+    assert m["I4"]["i"] == "u" and m["J4"]["t"].startswith("⚠ 6 vadede")
+    # a width typed: bid and ask either side of the desk's spread, every quote two-way
+    put(svc, u, {"I4": 20})
+    assert stored(svc, u) == {"AN4": 20.0}
+    assert [cell(svc, "EK_FWD!%s4" % c, u) for c in "DEI"] == [desk - 10, desk + 10, 20.0] and cell(svc, "EK_FWD!J4", u) == ""
+    for r in dated:
+        assert cell(svc, "EK_FWD!N%d" % r, u) - cell(svc, "EK_FWD!M%d" % r, u) == pytest.approx(0.20, abs=1e-12)
+    _, m = panel(svc, u, "masa", "EKS")
+    assert look(m["M5"]) != WARN and look(m["D4"]) != WARN and m["I4"]["an"] == "Spread ask" and m["E4"]["ao"] == "Genişlik (bp) · I4"
+    assert cell(svc, "EK_FWD!N7") == cell(svc, "EK_FWD!M7")                                # (nobody else's matrix moved)
+    # a bid typed: the width stays above it
+    put(svc, u, {"D4": desk - 30})
+    assert [cell(svc, "EK_FWD!%s4" % c, u) for c in "DEI"] == [desk - 30, desk - 10, 20.0]
+    # the ask typed: the last typed wins - the width is what the two spreads make now
+    put(svc, u, {"E4": desk + 5})
+    assert stored(svc, u) == {"D4": desk - 30, "E4": desk + 5} and cell(svc, "EK_FWD!I4", u) == 35.0
+    put(svc, u, {"D4": "", "E4": ""})
+    assert stored(svc, u) == {} and [cell(svc, "EK_FWD!%s4" % c, u) for c in "DEI"] == [desk, desk, 0.0]
+    # an inverted width is said too
+    put(svc, u, {"I4": -6})
+    assert cell(svc, "EK_FWD!J4", u) == "⚠ 6 vadede ask ≤ bid (genişlik yok)"
+    put(svc, u, {"I4": ""})
+    assert stored(svc, u) == {}
+    # EURTRY: the USDTRY general row's spreads (its width with them), or a width of its own around their middle
+    e = extras.FWD_EUR_ALL
+    put(svc, u, {"I4": 10})
+    assert [cell(svc, "EK_FWD!%s%d" % (c, e), u) for c in "DEI"] == [desk - 5, desk + 5, 10.0]
+    put(svc, u, {"I%d" % e: 30})
+    assert [cell(svc, "EK_FWD!%s%d" % (c, e), u) for c in "DEI"] == [desk - 15, desk + 15, 30.0]
+    assert cell(svc, "EK_FWD!N%d" % (e + 1), u) - cell(svc, "EK_FWD!M%d" % (e + 1), u) == pytest.approx(0.30, abs=1e-12)
+    assert stored(svc, u) == {"AN4": 10.0, "AN%d" % e: 30.0}
+    svc.reset_inputs(u, "tto")
+    # "Piyasa spread": the general row is not used - not red for its own sake
+    put(svc, u, {"B4": extras.FWD_SPREAD_MARKET})
+    _, m = panel(svc, u, "masa", "EKS")
+    assert look(m["D4"]) != WARN
+    svc.reset_inputs(u, "tto")
+
+
+def test_the_width_groups_and_their_store(svc):
+    """Declared on Masa's page (its summaries show the general rows): the ask spread in place, the width kept in AN of
+    the general row - a cell no input ever stood on, shown among the Forward page's helpers."""
+    book = svc.books["tto"]
+    for gid, g in (("ekfwd-width", extras.FWD_ALL), ("ekfwd-eur-width", extras.FWD_EUR_ALL)):
+        grp = svc.twoway.groups[gid]
+        assert [m.name for m in grp.members] == ["Spread ask", "Genişlik (bp)"] and grp.view == "masa"
+        assert grp.members[0].own and grp.members[0].cells == book.cells_of("EK_FWD!E%d" % g)
+        assert grp.members[1].store == book.cells_of("EK_FWD!AN%d" % g)
+        assert book.inputs[grp.members[1].store[0]].scope == "user"
+    assert svc.twoway.problems == {}
