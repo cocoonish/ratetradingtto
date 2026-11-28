@@ -18,6 +18,7 @@ import { h, clear, toast, errorToast, foldNote } from '../ui.js';
 import { num, isoToTr } from '../format.js';
 import { landing, setLanding } from '../layout.js';
 import { level } from './broker.js';
+import { bondCardLinks } from '../bonds.js';
 import { setupGoLinks } from '../golink.js';
 
 // (the dashboard's own links in tables - Masa's Kontrol chips - are followed from here: this module is loaded with the app)
@@ -209,8 +210,8 @@ export class BugunPage {
     card('kontrol', 'Kontrol · sabah', 'Masa', 'Masa · Genel bakış: Kontrol şeridi (her çip kontrol ettiği tabloya götürür)', hash('masa'));
     card('trades', 'Trades · açık işlemler', 'Trades', 'Trades sayfası: MTM yenile, işlemler, kapanış', hash('trades'));
     card('quant', 'Quant · yeni AL / SAT', 'Sinyaller', 'Quant › Sinyaller: bütün liste, kartlar, kayıt', hash('quant'));
-    card('dibs', 'DİBS · sinyali dönen kâğıtlar', 'DİBS RV · Genel', 'DİBS RV · Genel: trading listesinin kâğıtları OIS ASW, FX swap ASW ve sıfır kupon eğrisine göre',
-      hash('dibs-genel'));
+    card('dibs', 'DİBS · sinyali dönen kâğıtlar', 'DİBS Trading', 'DİBS Trading · özet (kâğıt tablosunun tek evi): trading listesinin kâğıtları OIS ASW, FX swap ASW ve sıfır kupon eğrisine göre',
+      hash('dibslive?p=L0'));
     card('chat', 'Girilmemiş işlemler', 'Chat ↔ Günlük İşlemler', 'Masanın chat\'teki işlemleri Günlük İşlemler\'in yanında: eşleştir, yok say, gir',
       () => this.ctx.openRecon().catch(errorToast));
     card('agenda', 'Ajanda · takvim', 'Ajanda', 'Ajanda: bugünün işleri, deadline\'lar, tekrarlayan işler', hash('agenda'));
@@ -608,10 +609,11 @@ export class BugunPage {
       h('th', { class: 'l' }, 'Sıfır kupon'), h('th', { class: 'l' }, '')));
     for (const r of rows) {
       table.appendChild(h('tr', { 'data-isin': r.isin, class: r.turned.length ? 'turned' : null },
-        td(r.label, 'l', r.isin), td(sigText(r.ois), 'l ' + sigClass(r.ois)), td(sigText(r.fx), 'l ' + sigClass(r.fx)),
-        td(sigText(r.z), 'l ' + sigClass(r.z)), td(r.turned.length ? 'döndü' : '', 'l muted')));
+        td(r.label, 'l bondlink', r.isin + ' · tıklayınca kâğıt kartı'), td(sigText(r.ois), 'l ' + sigClass(r.ois)),
+        td(sigText(r.fx), 'l ' + sigClass(r.fx)), td(sigText(r.z), 'l ' + sigClass(r.z)), td(r.turned.length ? 'döndü' : '', 'l muted')));
     }
     b.appendChild(table);
+    bondCardLinks(this.ctx, table);
     this.setCount(c, (x.turned || []).length, true);
   }
 
