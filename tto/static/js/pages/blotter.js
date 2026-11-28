@@ -591,6 +591,8 @@ export class BlotterPage {
     this.markCopied(null);
     const done = this.fillForm(Object.assign({ dir: null }, PREFILL_CLEARS[spec.kind], spec));
     if (!done) return false;
+    // a quote of the quote log ("Bu fiyattan işlem gir": its id, ``quote_log``): the forward saved from it is written on it
+    if (spec.kind === 'fwd' && spec.quote_log) this.fromQuote = spec.quote_log;
     toast(said + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
     return true;
   }
@@ -614,6 +616,7 @@ export class BlotterPage {
    */
   fillForm(spec) {
     if (!spec || !this.showTab || !['fwd', 'ois', 'bond'].includes(spec.kind)) return null;
+    this.fromQuote = null;                 // (the form holds another trade now: only takePrefill links it to a quote again)
     const has = (k) => Object.prototype.hasOwnProperty.call(spec, k);
     const text = (k, el) => { if (has(k)) el.value = spec[k] === null || spec[k] === undefined ? '' : String(spec[k]); };
     const missing = [];                    // what the form has no option for (a tenor it does not list)
@@ -1235,6 +1238,12 @@ export class BlotterPage {
     try {
       if (!(await this.checkBeforeSave('fwd', pl))) return;      // (the checks before "İşlemi kaydet": one click confirms)
       const rec = await api.post('/api/blotter/forward', pl);
+      if (this.fromQuote) {                 // (the quote it came from: done, with this trade - the save never waits for it)
+        const id = this.fromQuote;
+        this.fromQuote = null;
+        api.post('/api/quote-log/' + encodeURIComponent(id), { status: 'done', trade_id: rec.id })
+          .then(() => { if (this.qlog) this.qlog.refresh(); }).catch(() => { /* (the log is told best-effort) */ });
+      }
       toast(rec.pair + ' ' + (rec.dir === 'B' ? 'alış ' : 'satış ') + num(rec.amount, 0) + ' ' + rec.pair.slice(0, 3) + ' · ' + serialDate(rec.value_date) + ' · '
         + num(rec.forward, 4) + ' → ' + num(rec.tl, 2) + ' ' + rec.pair.slice(3) + (rec.typed === 'quote' ? ' (yazılan)' : '') + ' kaydedildi', 'ok', 4200);
       for (const el of [f.amount, f.quoteAmount]) { el.value = ''; el.title = ''; }

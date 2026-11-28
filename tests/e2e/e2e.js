@@ -88,14 +88,17 @@ async function typeInto(page, ref, text) {
 }
 
 /** "İşlemi kaydet" of a new trade on Günlük İşlemler: the checks before it (the desk, 28.11.2026, A5: an OIS level far
- *  from mid, a size ~10× the usual …) may ask once - "Yine de kaydet" is clicked then. */
+ *  from mid, a size ~10× the usual …) may ask once - "Yine de kaydet" is clicked then.  The check's answer says whether
+ *  the dialog comes (no blind wait: the form re-quotes soon after a save, and the checks after it read its tiles). */
 async function saveTrade(page) {
   const checked = page.waitForResponse((r) => /\/api\/blotter\/check(\?|$)/.test(r.url()) && r.request().method() === 'POST', { timeout: 30000 })
     .catch(() => null);
   await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
-  if (await checked) {
-    const asked = await page.waitForSelector('#blotter-check-go', { timeout: 1500 }).catch(() => null);
-    if (asked) await asked.click();
+  const res = await checked;
+  const said = res ? await res.json().catch(() => null) : null;
+  if (said && Array.isArray(said.warnings) && said.warnings.length) {
+    await page.waitForSelector('#blotter-check-go', { timeout: 20000 });
+    await page.click('#blotter-check-go');
   }
 }
 
@@ -8053,6 +8056,33 @@ async function clipAfter(page, action) {
       islemAsked.length === 1 && /^far:Seviye mid'den (49|50|51),\d bp uzak/.test(islemAsked[0]) && islemNone === islemBefore, { islemAsked, islemNone });
     const islemKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.pop();
     await api(page, 'ayşe yilmaz', 'DELETE', '/api/blotter/trade/' + islemKept.id);
+    // a forward filled from a quote of the quote log ("Bu fiyattan işlem gir": the spec's quote_log) and saved: the quote is
+    // told "done" with the trade (POST /api/quote-log/<id> - answered here by the browser, the log is Fiyatlama's)
+    let islemTold = null;
+    const islemRoute = '**/api/quote-log/4242*';
+    await page.route(islemRoute, async (route) => {
+      islemTold = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quote: { id: 4242, status: 'done' } }) });
+    });
+    const islemIds = new Set((await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.map((t) => t.id));
+    await page.evaluate(() => {
+      sessionStorage.setItem('tto.trade.prefill', JSON.stringify({ kind: 'fwd', pair: 'USDTRY', dir: 'B', date: '3M', basis: 'RET_MID',
+        amount: '1m', quote_log: 4242, said: 'İşlem kotadan dolduruldu (kota #4242)' }));
+      window.tto.state.page.takePrefill();
+    });
+    await page.waitForFunction(() => window.tto.state.page.tab === 'fwd'
+      && /\d/.test((document.querySelector('.entry .pad:not(.hidden) .quote .q.big .v') || {}).textContent || ''), null, { timeout: 20000 });
+    await saveTrade(page);
+    let islemFromQuote = null;
+    for (let k = 0; k < 100 && !(islemFromQuote && islemTold); k++) {
+      if (!islemFromQuote) islemFromQuote = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.find((t) => !islemIds.has(t.id)) || null;
+      if (!(islemFromQuote && islemTold)) await page.waitForTimeout(200);
+    }
+    check('a forward filled from a quote of the quote log and saved: the quote is told "done" with the trade ({status, trade_id})',
+      !!islemTold && islemTold.status === 'done' && !!islemFromQuote && String(islemTold.trade_id) === String(islemFromQuote.id),
+      { islemTold, trade: islemFromQuote && islemFromQuote.id });
+    await page.unroute(islemRoute);
+    if (islemFromQuote) await api(page, 'ayşe yilmaz', 'DELETE', '/api/blotter/trade/' + islemFromQuote.id);
     // Ctrl+K "işlem gir dec mpc pay": the meeting swap from the December decision
     await page.keyboard.press('Control+k');
     await page.keyboard.type('işlem gir dec mpc pay');
@@ -8092,14 +8122,21 @@ async function clipAfter(page, action) {
     check('MPC OIS: "Kota mesajı" and "Kotasyon kopyala"; the message each period\'s mid ± half the width',
       JSON.stringify(mpcButtons) === '[true,true]' && /^TRY OIS MPC · piyasa/.test(mpcMessage) && /MPC1→2[^\n]*\d+,\d\d \/ \d+,\d\d/.test(mpcMessage),
       { mpcButtons, mpcMessage: mpcMessage.slice(0, 160) });
-    // FORWARD KOTASYON: no width is said; a width typed spreads the general row ∓ ½ around the desk's spread (A14)
+    // FORWARD KOTASYON: no width is said; a width typed spreads the general row ∓ ½ around the desk's spread (A14) - from the
+    // general row's defaults (the bid spread typed above, −300, put back: both spreads the desk's MASA!I60)
     await open(page, 'masa');
     await tab(page, 'fwd');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!D4', 'EK_FWD!E4', 'EK_FWD!I4'] });
     const deskSpread = Number((await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent('MASA!I60'))).json.cell.v);
+    await waitCell(page, 'EK_FWD!D4', "t.trim() === '" + Math.round(deskSpread) + "'").catch(() => null);
+    await page.waitForFunction(() => /^⚠/.test(((window.tto.findCell('EK_FWD!J4') || {}).textContent || '').trim()), null, { timeout: 20000 })
+      .catch(() => null);
     const warnBefore = ((await cellText(page, 'EK_FWD!J4')) || '').trim();
     await typeInto(page, 'EK_FWD!I4', '20');
     await waitCell(page, 'EK_FWD!I4', "t.trim() === '20'");
-    await page.waitForFunction(() => { const td = window.tto.findCell('EK_FWD!J4'); return td && td.textContent.trim() === ''; }, null, { timeout: 20000 });
+    await waitCell(page, 'EK_FWD!E4', "t.trim() === '" + Math.round(deskSpread + 10) + "'").catch(() => null);
+    await page.waitForFunction(() => { const td = window.tto.findCell('EK_FWD!J4'); return td && td.textContent.trim() === ''; }, null, { timeout: 20000 })
+      .catch(() => null);
     const widthRow = [((await cellText(page, 'EK_FWD!D4')) || '').trim(), ((await cellText(page, 'EK_FWD!E4')) || '').trim()];
     check('FORWARD KOTASYON: "⚠ … ask ≤ bid" with no width; Genişlik 20 puts the spreads 10 bp either side of the desk\'s, the warning gone',
       /^⚠ \d+ vadede ask ≤ bid/.test(warnBefore) && widthRow[0] === String(Math.round(deskSpread - 10))

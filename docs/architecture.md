@@ -621,6 +621,9 @@ Günlük İşlemler's entry is filled from other pages; nothing below saves a tr
   (`blotter.js` `checkBeforeSave`). `/api/blotter/checks` (GET / POST) gives and sets the thresholds and the
   counterparty list (`_counterparties`: the names of the last year, the most used first, then Broker Chat's houses) the
   form's `<datalist>` offers. Nothing there writes a trade; an edit and a paste are not checked.
+- **A forward from a quote of the quote log** ("Bu fiyattan işlem gir": the spec's `quote_log`, the quote's id):
+  `takePrefill` keeps the id (`fromQuote`; any later `fillForm` - a template, a copy, an edit - drops it) and `saveFwd`,
+  once the trade is kept, posts `/api/quote-log/<id>` {status: "done", trade_id} - best-effort, the save never waits for it.
 - **TOPLU FORWARD's rows** ("İşleme al"; [desk-decisions.md](desk-decisions.md), *TOPLU FORWARD → işlem*):
   the header button (`"action": "toplu-islem"`, `view.js` → `blotterentry.js` `bookBulkForward`) → `GET
   /api/blotter/bulk/toplu-forward` (`Service.bulk_from_forward`: the user's EK_BULK rows read on the engine thread →

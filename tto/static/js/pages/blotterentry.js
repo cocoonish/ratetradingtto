@@ -243,14 +243,16 @@ function rowText(kind, t) {
 /** "Excel'den yapıştır": trades copied from Excel - read, mapped to the form's fields, each checked as the form checks it
  * (the preview), then the valid ones kept together, in one go.  A row with an error is never kept: after the save it stays
  * in the box (with the header) to be fixed.
- * ``from``: another table's rows as such a paste (TOPLU FORWARD's "İşleme al", ``bookBulkForward``) - {kind, text, said,
- * saved(rows, preview) → {text, warn}}: its product fixed, the box filled with its rows (the page's own paste left as it
- * was), ``said`` over the box, and ``saved`` told the rows the save kept (its answer goes into the toast). */
+ * ``from``: another table's rows as such a paste (TOPLU FORWARD's "İşleme al", ``bookBulkForward``; Fiyatlama's hedges and
+ * Toplu lines) - {kind, text, said, title?, saved?(rows, preview) → {text, warn}}: its product fixed, the box filled with its
+ * rows (the page's own paste left as it was), ``said`` over the box, ``title`` the dialog's (TOPLU FORWARD's when none), and
+ * ``saved`` told the rows the save kept (its answer goes into the toast). */
 export function openBulk(page, from) {
   const st = from ? { kind: from.kind, text: from.text, mapping: null, header: null, preview: null, previewed: null, seq: 0 }
     : (page.bulk || (page.bulk = { kind: 'fwd', text: '', mapping: null, header: null, preview: null, previewed: null, seq: 0 }));
   if (!from) try { const k = localStorage.getItem('tto.blotter.bulk'); if (KIND_LONG[k] && !st.text) st.kind = k; } catch (e) { /* ignore */ }
-  const m = modal({ title: from ? 'TOPLU FORWARD → işlem girişi' : 'Excel\'den toplu işlem girişi', width: 1100, onClose: () => { run.cancel(); } });
+  const m = modal({ title: from ? (from.title || 'TOPLU FORWARD → işlem girişi') : 'Excel\'den toplu işlem girişi', width: 1100,
+    onClose: () => { run.cancel(); } });
   m.box.id = 'bulk-dialog';
   const text = h('textarea', { id: 'bulk-text', class: 'inp chatbox', rows: '8', spellcheck: 'false', autocomplete: 'off' });
   text.value = st.text;
