@@ -78,6 +78,10 @@ RT_FIELDS = {"BID": "BID", "ASK": "ASK", "MID": "MID", "LAST_PRICE": "LAST_PRICE
              "BID_SIZE": "BID_SIZE", "ASK_SIZE": "ASK_SIZE",      # order sizes of the BIST swap quotes
              "VOLUME": "VOLUME"}                                  # the day's volume: it grows with every trade (DİBS Canlı)
 
+#: the real-time fields that are a price - a quote whose age the pages show (``Provider.quote_times``, age.py); an order's
+#: size, the day's volume, high and low are not
+PRICE_FIELDS = ("BID", "ASK", "MID", "LAST_PRICE")
+
 #: Real-time fields that are gone when a tick carries them without a value: the size of an order.  Shown as
 #: "#N/A N/A" then, as in Excel, so that a quote which was withdrawn does not stay on the page.  (A price
 #: without a value is left at its last one: for a quote that updates rarely that is all there is.)
@@ -643,6 +647,19 @@ class BloombergProvider(Provider):
             return None
         with self._lock:
             return self._source(security, rt)
+
+    def quote_times(self, keys=None) -> Dict[Tuple, Tuple[float, float]]:
+        """As :meth:`Provider.quote_times`: each price quote's ``_Item.at`` (when its value last changed) and value."""
+        out: Dict[Tuple, Tuple[float, float]] = {}
+        with self._lock:
+            for key in (keys if keys is not None else list(self._items)):
+                it = self._items.get(key)
+                if it is None or not it.rt or not it.at or RT_FIELDS.get(key[2]) not in PRICE_FIELDS:
+                    continue
+                v = self._values.get(key)
+                if type(v) is float:
+                    out[key] = (it.at, v)
+        return out
 
     # ================================================================== kept for a restart of the same day
     def preload(self, answers) -> None:

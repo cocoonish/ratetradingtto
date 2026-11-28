@@ -1893,6 +1893,17 @@ async function clipAfter(page, action) {
     await page.waitForTimeout(300);
     await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!B11'] });
     await waitCell(page, 'EK_FWD!B11', 't.trim() === ""');
+    // a date typed without its year (the desk, 28.11.2026: "26/12 yazdigimda otomatik 2026, 1/2 yazdigimda otomatik 2027"):
+    // the next such day from today - the replay's 03.11.2026 -, what was typed in the tooltip as for a shortcut
+    await typeInto(page, 'EK_FWD!B11', '26/12');
+    await waitCell(page, 'EK_FWD!B11', "t.trim() === '26.12.2026'").catch(() => {});
+    await page.waitForFunction(() => /Kısayol: 26\/12 → 26\.12\.2026/.test(window.tto.findCell('EK_FWD!B11').title || ''), null,
+      { timeout: 10000 }).catch(() => {});
+    const yearless = { t: (await cellText(page, 'EK_FWD!B11')).trim(), tip: await page.evaluate(() => window.tto.findCell('EK_FWD!B11').title) };
+    check('a date typed without its year ("26/12") is the next such day - 26.12.2026 on the replay\'s 03.11.2026 -, the tooltip says what was typed',
+      yearless.t === '26.12.2026' && (yearless.tip || '').includes('Kısayol: 26/12 → 26.12.2026'), yearless);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!B11'] });
+    await waitCell(page, 'EK_FWD!B11', 't.trim() === ""');
     // the date-to-date forward: its start / end dates and spread typed in TARİH ARASI FAİZ's first row, in its own tab (one
     // dates row for the two: the desk's layout review, 27.11.2026)
     const days0 = (await cellText(page, 'MASA!G60')).trim();

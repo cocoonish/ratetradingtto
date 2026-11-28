@@ -13,6 +13,9 @@
 * **Settings the desk may tune** (``ops.settings`` in the store; the administrators change them on the alarms
   page): the market hours, how long without a tick counts as stale, and Bloomberg's hours (``bbg_open`` /
   ``bbg_close``: when it may be asked again - the provider's quiet hours, ``marketdata/bloomberg.py``).
+* **A quote's age** (``quote_old``, 28.11.2026; ``marketdata/age.py``): one price that stopped while the feed flows is
+  not caught by the stale badge - in market hours a price unchanged ``quote_old`` minutes of today's market is old: its
+  cell fades on the page and the status counts them (:meth:`Ops.quotes`: how many, the oldest named).
 * **The data folder** (datadir.py): on a network drive the database runs without its write-ahead log - said loud at
   the start (console, log) and in the status, red; the status also shows the lock of one dashboard per data folder.
 * **The database.**  ``PRAGMA quick_check`` at every start (a failure is said on the console, in the log, in the
@@ -107,14 +110,20 @@ DEFAULTS: Dict[str, Any] = {
     # weekends and on TR holidays no refresh and no poll at all - subscriptions keep streaming (the desk, 24.11.2026)
     "bbg_open": "08:00",
     "bbg_close": "19:00",
+    # a quote's age (marketdata/age.py; the desk, 28.11.2026): in market hours a price unchanged this many minutes of
+    # today's market is old - its cell fades, the data status counts it; 0: never
+    "quote_old": 30,
 }
 #: the bounds of the numbers among them
-RANGES = {"tick_stale": (10, 3600), "feed_minutes": (1, 240)}
+RANGES = {"tick_stale": (10, 3600), "feed_minutes": (1, 240), "quote_old": (0, 600)}
 #: their names in the desk's log of changes
 NAMES = {"market_open": "piyasa açılışı", "market_close": "piyasa kapanışı", "tick_stale": "bayat sayılma (sn)",
          "feed_alarm": "veri akışı alarmı", "feed_minutes": "veri akışı alarmı (dk)", "tlref_alarm": "TLREF alarmı",
          "tlref_due": "TLREF saati", "db_alarm": "veritabanı alarmı", "trades_close": "Trades kapanış saati",
-         "bbg_open": "Bloomberg sorgu başlangıcı", "bbg_close": "Bloomberg sorgu bitişi"}
+         "bbg_open": "Bloomberg sorgu başlangıcı", "bbg_close": "Bloomberg sorgu bitişi",
+         "quote_old": "kota eskime süresi (dk)"}
+#: the old quotes the data status names (the oldest first)
+QUOTES_NAMED = 8
 #: the system alarms, in the order the page lists them
 SYSTEM_KINDS = tuple(SYSTEM)
 _HHMM = re.compile(r"^([01]?\d|2[0-3])[:.]([0-5]\d)$")
@@ -522,7 +531,32 @@ class Ops(object):
         et = self.svc.et
         return {"engine": {"queue": et.queued(), "busy": round(et.busy_for(), 1)}, "last_error": self.last_error,
                 "feed": self.feed(prov), "market": self.in_market(), "log": log_file(), "settings": self.settings(),
-                "db": self.db_status()}
+                "db": self.db_status(), "quotes": self.quotes()}
+
+    def quotes(self, now: Optional[_dt.datetime] = None, market: Optional[bool] = None) -> Dict[str, Any]:
+        """The prices on the screens that are old (marketdata/age.py: in market hours, unchanged ``quote_old`` minutes of
+        today's market): ``{"old": n, "of": prices with a time, "minutes", "market", "open", "close", "oldest": [{"ticker",
+        "field", "at": "10:42", "min": 37}, …]}`` - none in replay (nothing moves), outside market hours or with the
+        setting at 0.  What the provider keeps in memory: nothing is asked."""
+        from .marketdata.age import is_old, market_minutes
+        st = self.settings()
+        minutes = int(st.get("quote_old") or 0)
+        market = self.in_market() if market is None else bool(market)
+        out: Dict[str, Any] = {"old": 0, "of": 0, "minutes": minutes, "market": market, "open": st["market_open"],
+                               "close": st["market_close"], "oldest": []}
+        if self.svc.mode != "live":
+            return out
+        try:
+            times = self.svc.provider.quote_times()
+        except Exception:  # noqa: BLE001 - a count on the status never fails it
+            return out
+        now = now or _dt.datetime.now()
+        opening = hhmm(st["market_open"]) or _dt.time(9, 0)
+        old = sorted((at, key) for key, (at, _v) in times.items() if is_old(at, now, minutes, opening, market))
+        out.update(old=len(old), of=len(times),
+                   oldest=[{"ticker": key[1], "field": key[2], "at": clock_text(at)[:5],
+                            "min": int(market_minutes(at, now, opening))} for at, key in old[:QUOTES_NAMED]])
+        return out
 
     # ================================================================== the database: its check, its backups
     def check_database(self) -> Dict[str, Any]:

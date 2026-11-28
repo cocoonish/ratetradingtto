@@ -357,6 +357,12 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call_free(svc().progress.view))
 
     @handler
+    async def quote_age(request: Request):
+        # a quote's age (marketdata/age.py): the desk's rule and how many prices are old now - a page with market cells
+        # asks it once a minute to fade the old ones (quoteage.js); counters read, nothing computed
+        return ok(await call_free(svc().ops.quotes))
+
+    @handler
     async def nav(request: Request):
         return ok({"pages": await call_free(svc().nav, _user(request))})
 
@@ -1371,6 +1377,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/users", users),
         Route("/api/presence", presence, methods=["GET", "POST"]),
         Route("/api/status", status),
+        Route("/api/quotes/age", quote_age),
         Route("/api/progress", progress),
         Route("/api/nav", nav),
         Route("/api/bugun", bugun),

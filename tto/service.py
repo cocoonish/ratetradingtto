@@ -42,7 +42,7 @@ from . import tradehint as th
 from . import volcarry as vc
 from .books import Book, formula_text, load_books, snapshot_today
 from .config import Settings
-from .inputs import InputError, parse_amount, parse_clipboard, parse_date, parse_input, parse_number
+from .inputs import InputError, parse_amount, parse_clipboard, parse_date, parse_input, parse_number, yearless
 from .marketdata import ReplayProvider
 from .marketdata.replay import snapshot_from_model
 from .render import Renderer
@@ -435,6 +435,11 @@ class Service(object):
         if not self.books:
             raise ServiceError("model dosyaları bulunamadı: %s" % s.models_dir, 500)
         self.renderers = {bid: Renderer(b) for bid, b in self.books.items()}
+        if self.mode == "live":
+            # a quote's age (marketdata/age.py): when the price a market cell shows last changed - its "qa" on the page
+            from .marketdata.age import CellQuotes
+            for bid, rn in self.renderers.items():
+                rn.quotes = CellQuotes(self.books[bid], provider)
         self.views = [v for v in load_views() if v["book"] in self.books]
         self.view_index = {v["id"]: v for v in self.views}
         self._shortcut_cache: Dict[str, List[Dict[str, Any]]] = {}
@@ -2871,7 +2876,8 @@ class Service(object):
             raw = it.get("date") if isinstance(it, dict) else it
             name = it.get("name") if isinstance(it, dict) else None
             name = " ".join(str(name).split())[:80] if name is not None else ""
-            serial = float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else parse_date(str(raw or ""))
+            serial = (float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool)
+                      else parse_date(str(raw or ""), self._typed_today()))      # ("1/1": the next one)
             try:
                 day = serial_to_date(serial) if serial is not None else None
             except (ValueError, OverflowError):
@@ -3052,9 +3058,11 @@ class Service(object):
             shared_forms.pop((si, rc), None)
             cal = mt.key_of(book, si, rc)
             if cal is not None:
-                # a meeting's date: the list changes through the calendar only, which moves what belongs to a meeting
+                # a meeting's date: the list changes through the calendar only, which moves what belongs to a meeting;
+                # a day typed without its year is the next one (the desk, 28.11.2026)
+                day = parse_date(raw, serial_to_date(book.engine.clock.today())) if yearless(raw) else None
                 try:
-                    got = self.history.parse_dates([it.get("value")])
+                    got = self.history.parse_dates([day if day is not None else it.get("value")])
                 except ValueError as exc:
                     errors.append("%s: %s" % (ref, exc))
                     continue
@@ -3091,12 +3099,25 @@ class Service(object):
                     text = serial_to_date(day).strftime("%d.%m.%Y")
                     typed_dates[str(shown)] = {"typed": " ".join(raw.split()), "date": day, "text": text}
                     raw = text                                    # (a list of days kept as text takes it as its item)
+            # a day typed without its year ("26/12", the desk 28.11.2026): the next such day - from the start of the
+            # period it ends on, when that is later -, the last one in a cell that asks about the past (datecells.PAST)
+            today = past = after = None
+            if (yearless(raw) and d.kind not in ("amount", "text", "check")
+                    and (d.kind == "date" or numfmt.is_date_format(fmt) or options)):
+                pending = dict(shared_vals)
+                pending.update(user_vals)
+                today, past, after = self._typed_day_rule(book, fsi, frc, d, calc, pending)
             try:
                 val = parse_input(raw, numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt),
-                                  d.kind, options, lang, d.aliases)
+                                  d.kind, options, lang, d.aliases, today, bool(past), after)
             except InputError as exc:
                 errors.append("%s: %s" % (shown, exc))
                 continue
+            if today is not None and type(val) is float and 20000 < val < 80000:
+                typed_dates[str(shown)] = {"typed": " ".join(raw.split()), "date": val,
+                                           "text": serial_to_date(val).strftime("%d.%m.%Y")}
+            elif today is not None and isinstance(val, str) and val != raw and parse_date(val) is not None:
+                typed_dates[str(shown)] = {"typed": " ".join(raw.split()), "date": parse_date(val), "text": val}
             if d.scope == "shared":
                 if val is None and (rc in sheet.fml or tw is not None):
                     shared_clear.append((si, rc))      # a desk input with a formula default: the formula, for everybody
@@ -4177,20 +4198,9 @@ class Service(object):
                 decl["pair"] = pair
             if start_at is not None and d.tenor is None:     # (a page definition without "from": from the spot)
                 decl["from"] = start_at
-        r, c = divmod(rc, COLS)
 
         def place(spec: Any) -> Optional[Tuple[int, int]]:
-            if isinstance(spec, tuple):                           # a cell the formulas name (_date_context)
-                return spec
-            spec = str(spec or "").strip()
-            if re.match(r"^[A-Z]{1,3}$", spec):                   # a column: the cell of this row
-                return si, r * COLS + col_to_index(spec)
-            if re.match(r"^\d+$", spec):                          # a row: the cell of this column
-                return si, int(spec) * COLS + c
-            try:
-                return book.cell(spec if "!" in spec else "%s!%s" % (book.model.sheets[si].name, spec))
-            except (KeyError, ValueError):
-                return None
+            return self._date_place(book, si, rc, spec)
 
         def value(at: Tuple[int, int]) -> Any:
             if at in pending:
@@ -4230,15 +4240,60 @@ class Service(object):
                 start = add_week_days(today, 1, holidays)
         return float(date_to_serial(shortcuts.resolve(sc, start, today, holidays)))
 
+    @staticmethod
+    def _date_place(book: Book, si: int, rc: int, spec: Any) -> Optional[Tuple[int, int]]:
+        """The cell a date input's ``tenor`` names (tto/views/__init__.py): a cell (``"C167"``, ``"Forward!I2"``), a
+        column of the same row (``"B"``), a row of the same column (``"40"``) - or the cell the formulas name
+        (:meth:`_date_context`)."""
+        if isinstance(spec, tuple):
+            return spec
+        spec = str(spec or "").strip()
+        r, c = divmod(rc, COLS)
+        if re.match(r"^[A-Z]{1,3}$", spec):                       # a column: the cell of this row
+            return si, r * COLS + col_to_index(spec)
+        if re.match(r"^\d+$", spec):                              # a row: the cell of this column
+            return si, int(spec) * COLS + c
+        try:
+            return book.cell(spec if "!" in spec else "%s!%s" % (book.model.sheets[si].name, spec))
+        except (KeyError, ValueError):
+            return None
+
+    def _typed_day_rule(self, book: Book, si: int, rc: int, d, calc,
+                        pending: Dict[Tuple[int, int], Any]) -> Tuple[_dt.date, bool, Optional[_dt.date]]:
+        """How a day typed without its year counts in a date input (tto/inputs.py ``day_month``, the desk 28.11.2026):
+        (today - the workbooks' TODAY() -, whether the cell asks about the past - ``datecells.PAST`` -, the start of the
+        period it ends - the cell its page definition's ``"from"`` or its formulas name (:meth:`_date_context`), as
+        typed in the same write or as the user's calculation has it; ``None``: none, or not a date)."""
+        today = serial_to_date(book.engine.clock.today())
+        if (si, rc) in datecells.past_cells(book.id, book.model):
+            return today, True, None
+        spec = (d.tenor or {}).get("from") if d is not None else None
+        if spec is None and (d is None or d.tenor is None):
+            spec = self._date_context(book, si, rc)[1]
+        at = self._date_place(book, si, rc, spec) if spec else None
+        if at is None or at == (si, rc):
+            return today, False, None
+        got = pending[at] if at in pending else calc.get(at[0], *divmod(at[1], COLS))
+        if isinstance(got, str):
+            got = parse_date(got)
+        return today, False, (serial_to_date(got) if type(got) is float and 20000 < got < 80000 else None)
+
     def quote_forward(self, user: Optional[str], payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         return self.et.call(self._quote_forward, user, payload, lang)
+
+    def _typed_today(self) -> _dt.date:
+        """The day a date typed without its year counts from (tto/inputs.py ``day_month``): the workbooks' TODAY()."""
+        book = self.books.get("tto")
+        return serial_to_date(book.engine.clock.today()) if book is not None else _dt.date.today()
 
     def _fwd_payload(self, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         lang = lang or self.settings.locale
         p = dict(payload)
         vd = p.get("value_date")
         if isinstance(vd, str):
-            d = parse_date(vd)
+            d = parse_date(vd, self._typed_today())          # (a day without its year: the next one - "26/12")
+            if d is not None and yearless(vd):
+                p["value_date_typed"] = " ".join(vd.split())  # (the form says what it became: "26/12 → 26.12.2026")
             if d is None:
                 # "3M", "1A", "2H", "ay sonu", "IMM", "+5": from the pair's spot, on its calendar
                 d = self._tenor_date(vd, str(p.get("pair") or "USDTRY"))
@@ -4345,10 +4400,13 @@ class Service(object):
         p = dict(payload)
         p["_lang"] = lang
         strategy = str(p.get("strategy", "outright")).lower()
+        today = self._typed_today()
         for k in ("start", "end"):
             v = p.get(k)
             if isinstance(v, str):
-                p[k] = parse_date(v)
+                # a day without its year: the next one - an end from its start on ("26/12", the desk 28.11.2026)
+                start = p.get("start") if k == "end" and type(p.get("start")) is float else None
+                p[k] = parse_date(v, today, after=start)
                 if p[k] is None and v.strip():
                     raise ServiceError("tarih anlaşılamadı: %r" % v)
             elif isinstance(v, bool) or not isinstance(v, (int, float)):

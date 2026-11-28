@@ -100,7 +100,14 @@ never on the page kept:
 
 **A typed input** goes `POST /api/inputs` → `Service.set_inputs` → `_set_inputs` on the engine thread at WRITE
 priority:
-- **Parsing:** `inputs.parse_input`; date shortcuts go through `shortcuts.date_shortcut`.
+- **Parsing:** `inputs.parse_input`; date shortcuts go through `shortcuts.date_shortcut`. A day typed without its
+  year (`26/12`, the desk 28.11.2026) is read by the one parser of typed dates, `inputs.parse_date(text, today, past,
+  after)`: the next such day from the workbooks' TODAY() on - from the cell's start on when that is later
+  (`Service._typed_day_rule`: the page's `"from"` or the formulas' start, `_date_place`) -, the last one in a cell
+  that asks about the past (`datecells.PAST`); what was typed goes back for the tooltip as a shortcut's does
+  (`shortcuts` in the answer). Every other typed date (Günlük İşlemler, Fiyatlama, Trades, holidays, the meeting
+  calendar's box in the browser: `history.js parseTrDate`) reads it the same way; a value read from a workbook or a
+  store is never given a year (no `today` passed).
 - **Formulas:** a value starting with `=` goes to `InputFormulas.accept`.
 - **Storing:** a shared input goes to `engine.set_inputs` plus the `shared_inputs` table. A personal one goes to the
   `user_inputs` table plus `engine.set_user_inputs`.
@@ -369,11 +376,11 @@ figures' number format and Masa chart 2's RET ask colour.
 | Group | Modules |
 |---|---|
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `twoway` (two-way tables), `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `decimals` (each user's own decimals, on the answers), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
-| Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
+| Market data | `marketdata/{base,bloomberg,bbg_process,replay,age}` (`age`: a quote's age - when the price a market cell shows last changed, the old ones), `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve` (also "TLREF over a window": a meeting window's rate ↔ its O/N on business days, the PPK step's one conversion - EK_PPK, Broker Chat), `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption` - `vol_unit` also a premium or breakeven, `<kind>:<measure>`, two-way), `bonds` (catalog) |
 | Pages and features | `varrisk` (DV01 Risk → VaR: the realized covariances of the OIS and offshore DV01 buckets from the history, written into EK_VAR), `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
-| Ops | `ops` (log, backups, freshness), `progress`, `datadir` (one dashboard per data folder, the network drive), `recover` (`kurtar`: a damaged database read back) |
+| Ops | `ops` (log, backups, freshness - the whole feed's and each price's: `quote_old`, `Ops.quotes`), `progress`, `datadir` (one dashboard per data folder, the network drive), `recover` (`kurtar`: a damaged database read back) |
 
 ## Store (`tto/store.py`)
 

@@ -205,6 +205,13 @@ class Provider(object):
         ``[(key, answer), ...]``.  What the desk asks about when the status says tickers are unknown."""
         return []
 
+    def quote_times(self, keys: Optional[Sequence[Tuple]] = None) -> Dict[Tuple, Tuple[float, float]]:
+        """When the value of each price quote last changed: ``{key: (epoch seconds, value)}`` - a ``BDP`` of a price
+        (bid, ask, mid, last: ``bloomberg.PRICE_FIELDS``) that holds a number; its answer, a tick of its subscription, a
+        poll that brought another value.  ``keys``: those of them only (``None``: every one the workbooks read).  Kept in
+        memory, nothing is asked (tto/marketdata/age.py: a quote's age).  None in replay: nothing moves there."""
+        return {}
+
     def history(self, items: Sequence[Tuple[str, str]], start: str, end: str,
                 timeout: float = 60.0) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
         """Daily closes of ``(security, FIELD)`` items between two dates (``YYYYMMDD``), outside of any

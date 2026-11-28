@@ -244,6 +244,7 @@ class Renderer(object):
     def __init__(self, book: Book):
         self.book = book
         self._cf: Dict[int, _CfIndex] = {}
+        self.quotes = None                  # live: when a market cell's price last changed (marketdata/age.py CellQuotes)
 
     def cf(self, si: int) -> _CfIndex:
         idx = self._cf.get(si)
@@ -386,6 +387,10 @@ class Renderer(object):
                 out["ik"] = d.kind
         if rc in sheet.fml:
             out["fx"] = 1
+            if self.quotes is not None and tv is float and "m" not in out and (si, rc) in self.quotes.cells():
+                at = self.quotes.at(calc, si, r, c, v)
+                if at:
+                    out["qa"] = int(at)            # the quote's age: when the price it shows last changed (epoch s)
         note = sheet.comments.get(rc)
         if note:
             out["n"] = note

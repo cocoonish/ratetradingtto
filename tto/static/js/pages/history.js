@@ -15,20 +15,35 @@ const SKIP = () => ({ t: '', k: '', sk: 1 });
 const serialOf = (iso) => Math.round(Date.parse(iso + 'T00:00:00Z') / 86400000) + 25569;
 const shortDate = (iso) => (iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) : '');
 
-/** "10.12.2026", "10/12/2026", "2026-12-10" -> "2026-12-10" (null when it is not a date). */
-export function parseTrDate(text) {
+/** "10.12.2026", "10/12/2026", "2026-12-10" -> "2026-12-10" (null when it is not a date).  A day without its year
+ *  ("26/12", "26.12", "26-12"; the desk, 28.11.2026) is the next such day from ``opts.today`` on (ISO; the computer's
+ *  day when not given) - ``opts.past``: the last one up to it; 29.02 the nearest that exists that way: the server's rule
+ *  (tto/inputs.py ``day_month``). */
+export function parseTrDate(text, opts) {
   const s = (text || '').trim();
+  const real = (y, m, d) => {                                                  // 31.02 is not a day
+    const t = new Date(Date.UTC(y, m - 1, d));
+    return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? t.toISOString().slice(0, 10) : null;
+  };
   let y, m, d;
   let x = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(s);
-  if (x) { d = +x[1]; m = +x[2]; y = +x[3]; } else {
-    x = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
-    if (!x) return null;
+  if (x) { d = +x[1]; m = +x[2]; y = +x[3]; } else if ((x = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s))) {
     y = +x[1]; m = +x[2]; d = +x[3];
-  }
+  } else if ((x = /^(\d{1,2})[./-](\d{1,2})$/.exec(s))) {
+    d = +x[1]; m = +x[2];
+    const now = new Date();
+    const today = (opts && opts.today) || (now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-'
+      + String(now.getDate()).padStart(2, '0'));
+    const past = !!(opts && opts.past);
+    for (let k = 0, y0 = +today.slice(0, 4); k < 9; k++) {                   // (29 Februaries: at most 8 years apart)
+      const iso = real(y0 + (past ? -k : k), m, d);
+      if (!iso) { if (m === 2 && d === 29) continue; return null; }
+      if (past ? iso <= today : iso >= today) return iso;
+    }
+    return null;
+  } else return null;
   if (y < 2000 || y > 2100 || m < 1 || m > 12 || d < 1 || d > 31) return null;
-  const t = new Date(Date.UTC(y, m - 1, d));
-  if (t.getUTCMonth() !== m - 1 || t.getUTCDate() !== d) return null;        // 31.02 is not a day
-  return t.toISOString().slice(0, 10);
+  return real(y, m, d);
 }
 
 /** A number as a cell (a blank cell when there is none). */
