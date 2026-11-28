@@ -187,6 +187,8 @@ def _line(picks: List[Dict[str, Any]], side: int, reg: Any) -> Dict[str, Any]:
     ref = (info.get("universe") or inst or best["id"])
     sg.update({"id": PREFIX + str(ref), "family": "konsensus", "family_label": GROUP, "families": [s["family"] for s in picks],
                "group": GROUP, "tier": None, "priority": PRIORITY, "tag": "", "gated": "", "line": text, "expression": text,
+               # (the list's İşlem cell: the trade and its combined size - the levels have their columns: Düzen, 28.11.2026)
+               "trade_line": "%s · birleşik %s" % (head, size),
                "agree": len(picks), "agree_with": names, "conflict": 0, "conflict_with": [], "live": any(s.get("live") for s in picks),
                "info": dict(info, model="%s · %d aile" % (GROUP, len(picks)), size=size, k=k),
                "consensus": {"n": len(picks), "side": side, "ref": best["id"], "best": best["family"], "k": k, "size": size, "families": fams}})

@@ -401,7 +401,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `calendar.parked` | `meetings` |
 | `hist.settings`, `hist.fetch`, `mpc.archive`, `mpc.autoroll` | `history` |
 | `bbg.hits` | service (the day's Bloomberg hit count: `day`, `hits`, `kinds` by what they were for, `limit` the day Bloomberg's own daily limit was reached) |
-| `quant.*` | quant modules |
+| `quant.*` | quant modules (`quant.wirp.mine`: each user's own "Beklentim" on WIRP, `{user: {bank: {meeting ISO: rate %}}}` - by the meeting's date, `quantpath.align_mine` follows a corrected one) |
 | `watch.items`, `watch.alarms`, `watch.open:<day>`, `watch.fired:<day>` | `watch` (`meetings` also moves them) |
 | `migrated.*` | one-time migrations |
 | `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state |

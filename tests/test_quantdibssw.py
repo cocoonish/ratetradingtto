@@ -155,9 +155,16 @@ def test_the_duration_band_keeps_a_switch_to_bonds_of_a_similar_duration(planted
     assert not any((a in SHORT and b in LONG) or (a in LONG and b in SHORT) for a, b in keys)
     every = [(a, b) for i, a in enumerate(dur) for b in list(dur)[i + 1:]]
     assert len(keys) == sum(1 for a, b in every if ratio(dur[a], dur[b]) <= qd.DUR_RATIO) == tab["pairs"]
-    # each pair in one orientation - the shorter bond first, its level y_short − y_long
-    mat = {i: v[0] for i, v in BONDS.items()}
-    assert all(mat[a] < mat[b] for a, b in keys)
+    # each pair in one orientation - the week's AL (the higher composite) first, its level y_AL − y_SAT (28.11.2026: one
+    # sign convention - the list, the card, the table and the log alike)
+    comp = {b["isin"]: b["comp"] for b in tab["bonds"]}
+    assert all(comp[a] >= comp[b] for a, b in keys)
+    for m in mons:
+        a, b = m.sid.split(":", 1)[1].split("/")
+        ya, yb = ctx.series["DIBS:" + a], ctx.series["DIBS:" + b]
+        last = max(set(ya) & set(yb))
+        assert m.values[-1] == pytest.approx((ya[last] - yb[last]) * 100.0) and m.level == pytest.approx(m.values[-1]), m.sid
+        assert m.info["al"] == a and m.info["sat"] == b and (m.z or 0.0) <= 0.0          # (the side taken: AL − SAT falling)
     # a wider band takes in the pairs across the clusters
     monkeypatch.setattr(qd, "DUR_RATIO", 5.0)
     wide, _ = fit(*market())
@@ -252,8 +259,10 @@ def test_the_levels_are_calibrated_on_the_switches_paths_and_applied_to_the_line
         assert sg["levels"]["ok"] and sg["gated"] == "" and sg["rr"] == pytest.approx(lv["m"] / lv["k"])
         assert abs(sg["target"] - sg["entry"]) == pytest.approx(lv["m"] * sig_h) and abs(sg["stop"] - sg["entry"]) == pytest.approx(lv["k"] * sig_h)
         assert sg["exp_pnl"] == pytest.approx(lv["exp"] * sig_h)
-        # the trade's side: the AL bond's yield falling against the SAT bond's - the difference AL − SAT down
-        assert sg["direction"] == s["way"] and (sg["target"] - sg["entry"]) * s["way"] > 0
+        # the trade's side: the AL bond's yield falling against the SAT bond's - the difference AL − SAT down, the level
+        # itself AL − SAT (the table's "Giriş → şimdi" and the card's sentence say the same number: 28.11.2026)
+        assert sg["direction"] == -1 and sg["target"] < sg["entry"] < sg["stop"]
+        assert sg["entry"] == pytest.approx(m.level) and "şimdi %s bp" % qf._sg(m.level, 1) in sg["plain"]
 
 
 def test_the_line_is_in_the_plan_s_format(planted):
@@ -261,10 +270,14 @@ def test_the_line_is_in_the_plan_s_format(planted):
     lv = qlv.Book.from_json(tab["levels"]).line("DİBS")
     s = tab["switches"][0]
     sg = sigs[s["sid"]]
-    pat = (r"^AL (TRT\w+) / SAT (TRT\w+) · switch · \d+ mn / \d+ mn · C\+R [+-][\d,]+ bp/ay · 1A momentum (lehte|aleyhte) · "
-           r"hedef \+[\d,]+ bp · stop -[\d,]+ bp · beklenen [+-][\d.,]+( bin| mn)? TL · isabet %\d+ \(\d+\)$")
+    # (the bonds by the desk's names - "15.02.28" -, not their ISINs: 28.11.2026; the ISINs in the table's tooltip)
+    pat = (r"^AL (\d\d\.\d\d\.\d\d(?: Bono)?) / SAT (\d\d\.\d\d\.\d\d(?: Bono)?) · switch · \d+ mn / \d+ mn · C\+R [+-][\d,]+ bp/ay · "
+           r"1A momentum (lehte|aleyhte) · hedef \+[\d,]+ bp · stop -[\d,]+ bp · beklenen [+-][\d.,]+( bin| mn)? TL · isabet %\d+ \(\d+\)$")
     m = re.match(pat, sg["line"])
-    assert m and (m.group(1), m.group(2)) == (s["al"], s["sat"]) and sg["expression"] == sg["line"], sg["line"]
+    assert m and (m.group(1), m.group(2)) == (s["al_label"], s["sat_label"]) and sg["expression"] == sg["line"], sg["line"]
+    assert "TRT" not in sg["line"] and "TRT" not in sg["instrument"] and all("TRT" not in l["name"] for l in sg["legs"])
+    assert sg["trade_line"] == "AL %s / SAT %s · switch · %s" % (s["al_label"], s["sat_label"], s["size_text"])
+    assert all("TRT" not in t["expression"] for t in tab["backtest"]["trades"]) and all("TRT" not in w["text"] for w in tab["weeks"])
     assert m.group(3) == "lehte" and s["size_text"] in sg["line"] and "isabet %%%d (%d)" % (round(lv["hit"] * 100), lv["n"]) in sg["line"]
     assert "hedef +%s bp" % qf._g(abs(sg["target"] - sg["entry"]), 1) in sg["line"] and "stop -%s bp" % qf._g(abs(sg["stop"] - sg["entry"]), 1) in sg["line"]
     assert "beklenen %s" % qf._money(sg["money"]["total"], "TL") in sg["line"]
@@ -276,6 +289,26 @@ def test_the_line_is_in_the_plan_s_format(planted):
         assert (1.0 <= abs(mon.z) <= 2.0) if mon.sid in taken else abs(mon.z) < 1.0, mon.sid
         assert (mon.sid in sigs) == (mon.sid in taken)
     assert abs(next(x for x in mons if x.sid == tab["switches"][0]["sid"]).z) == 2.0
+
+
+def test_one_sign_convention_in_the_list_the_card_the_table_and_the_page(planted):
+    """28.11.2026: the same switch read −6,2 in the list, +6,2 in the card's sentence and −10,0 → +6,2 in the table - one
+    convention now, the yield difference AL − SAT everywhere: the list's entry (the monitor's level), the card's "şimdi",
+    the table's "Giriş → şimdi" (at the rebalance, now) and the P&L since (its fall); the series the card draws too."""
+    ctx, reg, mons, tab, sigs = planted
+    by = {m.sid: m for m in mons}
+    v = {"signals": list(sigs.values()), "gated": [], "tables": {}}
+    fit = {"tables": {"dibssw": tab}, "mons": by, "cfg": ctx.cfg, "ctx": ctx, "coverage": []}
+    page = {s["sid"]: s for s in qd.view(None, "dibssw", {}, v, fit)["dibssw"]["switches"]}
+    for s in tab["switches"]:
+        m, sg, row = by[s["sid"]], sigs[s["sid"]], page[s["sid"]]
+        a, b = ctx.series["DIBS:" + s["al"]], ctx.series["DIBS:" + s["sat"]]
+        formed = (a[tab["formed"]] - b[tab["formed"]]) * 100.0
+        assert s["level_formed"] == pytest.approx(formed) and m.values[m.days.index(tab["formed"])] == pytest.approx(formed)
+        assert sg["entry"] == pytest.approx(m.level) and row["now"] == pytest.approx(m.level)
+        assert row["so_far"] == pytest.approx(-(m.level - formed)) and "şimdi %s bp" % qf._sg(m.level, 1) in sg["plain"]
+        assert m.series_label.startswith("getiri farkı AL − SAT: %s − %s" % (s["al_label"], s["sat_label"]))
+        assert m.name == "%s / %s switch" % (s["al_label"], s["sat_label"])
 
 
 def test_the_sheet_s_live_c_and_r_is_the_line_s(planted):

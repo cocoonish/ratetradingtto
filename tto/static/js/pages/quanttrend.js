@@ -92,10 +92,12 @@ class TrendPage extends QuantPage {
         const labels = r.labels || ['1A', '3A', '1Y'];
         const hit = isNum(r.hit) ? pct(r.hit) + ' (' + r.trades + (r.scope === 'grup' ? ', grup' : '') + ')' : (r.trades ? '' : '— (0)');
         const note = r.why || (r.stopped ? 'stop oldu' + (r.stopped_at ? ' (' + isoToTr(r.stopped_at) + ')' : '') + ': yeni dönüşe kadar pozisyon yok' : '');
-        // (the line's levels in the instrument's own price - an FX forward's -, as its line in the Sinyaller list; a trailing stop has no target)
+        // (the line's levels in the instrument's own price - an FX forward's -, as its line in the Sinyaller list; a trailing stop
+        // has no target - "iz süren stop" -, a line with no gain to aim at none either - "—" -: 28.11.2026)
         const px = r.px || null;
-        const lv = (k) => (px ? N(px[k], px.digits, k === 'target' ? { empty: 'iz süren stop' } : {})
-          : N(r[k], isNum(r.digits) ? r.digits : 2, k === 'target' && r.sid && isNum(r.entry) ? { empty: 'iz süren stop' } : {}));
+        const none = r.trail ? 'iz süren stop' : '—';
+        const lv = (k) => (px ? N(px[k], px.digits, k === 'target' ? { empty: none } : {})
+          : N(r[k], isNum(r.digits) ? r.digits : 2, k === 'target' && r.sid && isNum(r.entry) ? { empty: none } : {}));
         const side = sideClass(r.verb);
         return [T((r.verb ? r.verb + ' ' : '') + r.label + (r.new ? ' · YENİ' : ''), Object.assign({ b: 1, tip: r.line || '' }, side ? { cls: side } : {})),
           lv('entry'), lv('target'), lv('stop'),

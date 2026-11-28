@@ -459,10 +459,11 @@ def test_a_pairs_y_leg_is_told_in_its_own_level_the_x_leg_held():
             # the yield now; at a zero residual α + β × OIS at its maturity
             x = qf._pair_now(ctx, next(sp for sp in qf.pair_specs(ctx) if sp["pid"] == pid), {})[1]
             assert q["entry"] == pytest.approx(ctx.last("DIBS:TRT150130T11")) and q["base"] == pytest.approx(row["alpha"] + row["beta"] * x)
-            assert s["legs"][0]["level"]["level"] == pytest.approx(q["entry"]) and q["inst"] == "TRT150130T11"
+            # (the bond named as the desk names it - its maturity, "dd.mm.yy" -, not its ISIN: 28.11.2026)
+            assert s["legs"][0]["level"]["level"] == pytest.approx(q["entry"]) and q["inst"] == md.strftime("%d.%m.%y")
         else:
             # the floater's price now (its own level: price = 100 − margin × years / 100), cheaper as its margin widens
-            assert q["entry"] == pytest.approx(ctx.last("DIBS:TRD150130T11")) and q["inst"] == "TRD150130T11 fiyatı" and q["scale"] < 0
+            assert q["entry"] == pytest.approx(ctx.last("DIBS:TRD150130T11")) and q["inst"] == md.strftime("%d.%m.%y") + " fiyatı" and q["scale"] < 0
         k = by.get("kalman:" + pid)
         if k is not None:
             k.score({}, {})

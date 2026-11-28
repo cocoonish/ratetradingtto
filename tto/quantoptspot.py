@@ -948,6 +948,7 @@ def _finish(line: Line, sg: Dict[str, Any]) -> None:
              "beklenen " + _money_line(sg, line.k), "isabet %%%s (%d)" % (_pct(hit), n)]
     text = "%s%s → %s" % (drv["text"], drv["tail"], " · ".join(parts + ([inst.tag] if inst.tag else [])))
     sg["expression"] = sg["line"] = text
+    sg["trade_line"] = head                                 # (the list's İşlem cell: the trade and its size - Düzen, 28.11.2026)
     conf = min(1.0, 1.0 / d["f"]) if d["f"] else 1.0
     if conf < 1.0 and not sg.get("gated"):
         sg["composite"] = sg["composite"] * conf

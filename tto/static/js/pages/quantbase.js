@@ -1,14 +1,14 @@
 // What the quant pages share (quant.js: Sinyaller; quantviews.js: the analysis pages): cell helpers, a table in a panel
 // whose rows can be picked, the chart of one signal (its series with ±z bands and entry / target / stop) and the page
 // frame - load, a refresh when the server's result moved, the status and data-coverage tables.
-import { api } from '../api.js';
-import { h, clear, errorToast, toast } from '../ui.js';
+import { api, session } from '../api.js';
+import { h, clear, errorToast, toast, modal } from '../ui.js';
 import { Grid, plainData, copyGrid } from '../grid.js';
 import { toolsOf } from '../columns.js';
 import { Chart } from '../chart.js';
 import { num, isoToTr } from '../format.js';
 import { readLine, isInfo } from './quantread.js';
-import { bookLine } from './trades.js';
+import { bookLine, openTradeForm } from './trades.js';
 
 export const BLUE = '4F81BD', GREY = '7F7F7F', PURPLE = '8064A2', GREEN = '9BBB59', RED = 'C0504D', ORANGE = 'F79646';
 export const isNum = (v) => typeof v === 'number' && isFinite(v);
@@ -211,8 +211,11 @@ export function panel(id, title, opts = {}) {
   const fold = h('button', { class: 'iconbtn qfold', type: 'button', title: 'Daralt / aç' }, folded ? '▸' : '▾');
   tools.appendChild(fold);
   const header = h('header', null, head, h('span', { class: 'grow' }), ...(opts.right || []), tools);
-  const el = h('section', { class: 'panel ' + (opts.wide ? 'wide' : 'fit') + (opts.cls ? ' ' + opts.cls : '') + (folded ? ' collapsed' : ''), id },
-    header, read, opts.top || null, body, note);
+  // ``opts.side``: a chart beside the table it draws (the table at its width, the chart the rest; under it when narrow) -
+  // not over the page's width above it (Düzen, 28.11.2026: Opsiyon's ATM term structure, PCA's loadings, WIRP's history)
+  const main = opts.side ? h('div', { class: 'qside' }, body, h('div', { class: 'qsidechart' }, opts.side)) : body;
+  const el = h('section', { class: 'panel ' + (opts.wide ? 'wide' : 'fit') + (opts.cls ? ' ' + opts.cls : '') + (opts.side ? ' qsidep' : '')
+    + (folded ? ' collapsed' : ''), id }, header, read, opts.top || null, main, note);
   const toggle = (now) => {
     el.classList.toggle('collapsed', now);
     fold.textContent = now ? '▸' : '▾';
@@ -314,6 +317,22 @@ export class GridBox {
 }
 
 // ------------------------------------------------------------------------------------------------ one signal, drawn
+// The card (Düzen, 28.11.2026: "Quant kartı bir ekranı geçmesin"): two columns - the sentence, the trade, "İşleme al" and
+// the levels on the left, the series and its score charted on the right -, "Ayrıntı" (thesis, score, regime, record,
+// packages, gates) and "Gerekçe" (the days most like today, what would undo it) folded below them, each person's choice
+// kept (in this browser, by user: as the menu's folds).
+const CARD_FOLD = 'tto.quant.card.';
+const CHART_H = 200;                                             // px: each of the right column's two charts
+
+/** A folded section of the card (``<details>``), open or not as this user last left it. */
+function cardFold(key, title, hint, body, id) {
+  const pkey = CARD_FOLD + (session.user || '') + '.' + key;
+  const el = h('details', { class: 'qfoldsec', id: id || null }, h('summary', null, h('b', null, title), hint ? h('span', { class: 'muted' }, ' · ' + hint) : null), body);
+  el.open = pref(pkey, '0') === '1';
+  el.addEventListener('toggle', () => keep(pkey, el.open ? '1' : '0'));
+  return el;
+}
+
 /** The series of a signal (or of any monitor): the level with its window mean, ±entry and ±stop bands (in z), the
  * entry / target / stop lines; below it the score day by day against ±entry and ±stop. */
 export class SignalChart {
@@ -322,7 +341,7 @@ export class SignalChart {
     this.host = host;
     this.ids = opts.ids !== false;
     this.charts = {};
-    this.el = h('div', { class: 'seriesview qchart' });
+    this.el = h('div', { class: 'seriesview qchart qcard2' });
     this.titleEl = h('div', { class: 'ct svtitle' });
     this.statEl = h('div', { class: 'muted svstat' });
     this.levelHead = h('div', { class: 'ct' });
@@ -332,11 +351,22 @@ export class SignalChart {
     this.zBox = h('div', null, this.zHead, this.zHost);
     this.plots = h('div', { class: 'volcharts svcharts' }, h('div', null, this.levelHead, this.levelHost), this.zBox);
     this.details = h('div', { class: 'qdetails' });
-    this.lead = h('div', { class: 'qlead' });                   // the signal in plain words: first, above the charts
+    this.reasons = h('div', { class: 'qdetails' });
+    this.lead = h('div', { class: 'qlead' });                   // the signal in plain words: the left column
+    this.cols = h('div', { class: 'qcardcols' }, h('div', { class: 'qcardleft' }, this.lead), h('div', { class: 'qcardright' }, this.plots));
+    this.more = cardFold('ayrinti', 'Ayrıntı', 'tez, skor, rejim, geri test, paketler, kapılar', this.details, this.id('quant-card-ayrinti'));
+    this.why = cardFold('gerekce', 'Gerekçe', 'bugüne benzeyen günler, geçersiz kılanlar', this.reasons, this.id('quant-card-gerekce'));
     this.empty = h('div', { class: 'empty' }, 'Bir sinyale ya da satıra tıklayın: serisi, ±z bantları ve giriş / hedef / stop burada çizilir.');
-    this.el.append(this.titleEl, this.statEl, this.lead, this.plots, this.details, this.empty);
+    this.el.append(this.titleEl, this.statEl, this.cols, this.more, this.why, this.empty);
     this.plots.classList.add('hidden');
+    this.folds(false);
     host.appendChild(this.el);
+  }
+
+  /** The two folded sections shown (with something in them) or not. */
+  folds(on) {
+    this.more.classList.toggle('hidden', !on || !this.details.childNodes.length);
+    this.why.classList.toggle('hidden', !on || !this.reasons.childNodes.length);
   }
 
   destroy() {
@@ -354,6 +384,8 @@ export class SignalChart {
     this.titleEl.textContent = title || '';
     clear(this.lead);
     clear(this.details);
+    clear(this.reasons);
+    this.folds(false);
     this.empty.textContent = 'Yükleniyor…';
     this.empty.classList.remove('hidden');
     this.plots.classList.add('hidden');
@@ -366,6 +398,8 @@ export class SignalChart {
     this.statEl.textContent = '';
     clear(this.lead);
     clear(this.details);
+    clear(this.reasons);
+    this.folds(false);
     this.empty.textContent = text;
     this.empty.classList.remove('hidden');
     this.plots.classList.add('hidden');
@@ -388,6 +422,8 @@ export class SignalChart {
     const vals = hist.values || [];
     this.titleEl.textContent = (m.family_label ? m.family_label + ' · ' : '') + (s ? s.expression : m.name || '');
     clear(this.details);
+    clear(this.reasons);
+    this.folds(false);
     clear(this.lead);
     if (s) this.lead.appendChild(this.plainBlock(s));
     if (days.length < 2) {
@@ -430,7 +466,7 @@ export class SignalChart {
     // (an FX signal's series is the analysis' own - its trade is told in prices below)
     this.levelHead.textContent = (m.series_label ? 'Analiz serisi: ' + m.series_label : 'Seviye' + (unit ? ' (' + unit + ')' : ''))
       + (mr ? ' · ortalama, ±giriş ve ±stop bantları penceresinin σ\'sıyla' : '');
-    if (this.charts.level) this.charts.level.update(level); else this.charts.level = new Chart(this.levelHost, level, { height: 250 });
+    if (this.charts.level) this.charts.level.update(level); else this.charts.level = new Chart(this.levelHost, level, { height: CHART_H });
     const zs = (hist.z || []).slice();
     const hasZ = zs.some(isNum);
     this.zBox.classList.toggle('hidden', !hasZ);
@@ -446,7 +482,7 @@ export class SignalChart {
           { name: '±stop', kind: 'line', color: RED, dash: true, data: zf(stopZ), marker: false },
           { name: '−stop', kind: 'line', color: RED, dash: true, data: zf(-stopZ), marker: false, legend: 0 }] };
       this.zHead.textContent = (m.score_name || 'z') + ' · gün gün';
-      if (this.charts.z) this.charts.z.update(zspec); else this.charts.z = new Chart(this.zHost, zspec, { height: 250 });
+      if (this.charts.z) this.charts.z.update(zspec); else this.charts.z = new Chart(this.zHost, zspec, { height: CHART_H });
     }
     // (a level of the model's own: the traded instrument's level first, the gap beside it - "Şimdi 6x9 FRA %38,720 (+6,9 bp …)")
     const sq = s && !s.px && s.quote ? s.quote : null;
@@ -551,6 +587,7 @@ export class SignalChart {
     if (m.note) extra.push(m.note);
     for (const t of extra) box.appendChild(h('div', { class: 'muted qline' }, t));
     this.fillRationale(d);
+    this.folds(true);                                           // ("Ayrıntı" and "Gerekçe": folded as this user left them)
   }
 
   /** The signal as the desk reads it: the trade in desk words, entry / target / stop in the instrument's own price (FX:
@@ -650,7 +687,7 @@ export class SignalChart {
   fillRationale(d) {
     const r = d.rationale;
     if (!r) return;
-    const box = h('div', { class: 'qrationale' }, h('div', { class: 'ct' }, 'Gerekçe'));
+    const box = h('div', { class: 'qrationale' });                   // (its title is its fold's: "Gerekçe")
     const sm = r.summary;
     const s = d.signal || {};
     const unit = (sm && sm.unit) || s.pnl_unit || '';
@@ -683,7 +720,7 @@ export class SignalChart {
       for (const x of r.invalidation) ul.appendChild(h('li', null, x));
       box.appendChild(ul);
     }
-    this.details.appendChild(box);
+    this.reasons.appendChild(box);
   }
 }
 
@@ -692,10 +729,19 @@ export class SignalChart {
 // spot - opens the Trades form filled from it (tto/tradequant.py; the server says which: ``s.book``); the others say why not.
 const BOOK_TIP = 'Trades formunu bu satırla doldur: ürün, bacaklar, yön, DV01\'den nominal, giriş (şimdiki seviye), hedef ve stop - kaydedene kadar hiçbir şey kaydolmaz';
 
+/** "İşleme al": the desk's lines by Trades' own lookup (``/api/trades/from-quant``); a user's own line - a WIRP line
+ * against their "Beklentim", in no list of the desk's - made again for them by the quant (``/api/quant/book``). */
+export async function bookAny(s) {
+  if (!s.personal) { bookLine(s); return; }
+  try {
+    openTradeForm(await api.get('/api/quant/book', { id: s.id, scope: 'personal' }));
+  } catch (err) { errorToast(err); }
+}
+
 /** The list's cell: the button, or a dash with the reason in its tooltip. */
 export function bookCell(s) {
   const b = s.book || {};
-  if (b.ok) return { t: '', k: '', cls: 'act', act: { id: 'book', label: 'İşleme al', title: BOOK_TIP, fn: () => bookLine(s) } };
+  if (b.ok) return { t: '', k: '', cls: 'act', act: { id: 'book', label: 'İşleme al', title: BOOK_TIP, fn: () => bookAny(s) } };
   return T('—', { cls: 'soft', tip: 'Trades\'e alınamaz: ' + (b.why || 'bilinmiyor') });
 }
 
@@ -704,7 +750,7 @@ export function bookButton(s, id) {
   const b = s.book || {};
   const el = h('button', { class: 'btn sm', type: 'button', id: id || null, disabled: !b.ok, title: b.ok ? BOOK_TIP : 'Trades\'e alınamaz: ' + (b.why || 'bilinmiyor') },
     'İşleme al');
-  if (b.ok) el.addEventListener('click', () => bookLine(s));
+  if (b.ok) el.addEventListener('click', () => bookAny(s));
   return el;
 }
 
@@ -737,7 +783,18 @@ export function sideClass(text) {
 /** A line's side for its colour: an FX line's by its direction (its trade is the instrument's price), else its words. */
 export function tradeSide(s) {
   if (s.px && isNum(s.direction) && s.direction !== 0) return s.direction > 0 ? 'buy' : 'sell';
-  return sideClass(s.line || s.expression || '');
+  return sideClass(s.trade_line || s.line || s.expression || '');
+}
+
+/** The list's İşlem cell: the trade and its size alone - its levels have their own columns (Düzen, 28.11.2026: "İşlem
+ * hücresi yalnız işlem ve büyüklük"; a systematic family's one-line format - Trend's, DİBS switch's … - is the cell's
+ * tooltip): the family's own ``trade_line``, else the trade, a rates package with its main leg's DV01. */
+export function tradeCellText(s) {
+  if (s.trade_line) return s.trade_line;
+  const t = s.expression || '';
+  const mo = s.money || {};
+  if (!s.px && isNum(mo.per_bp) && isNum(mo.dv01_usd) && !/DV01/.test(t)) return t + ' · ' + num(mo.dv01_usd, 0) + ' $ DV01';
+  return t;
 }
 
 /** The rows of a signal list. Every list starts with the trade (Düzen, 27.11.2026): İşlem (AL green / SAT red) · Giriş ·
@@ -755,9 +812,10 @@ export function signalRows(list, opts = {}) {
     // an FX trade's entry / target / stop in the instrument's own price (the forward of the holding), the series' in its tooltip
     const at = px ? { tip: px.inst + ' · giriş: ' + px.note + (px.tenor ? ' · spot ' + fmt(px.spot, px.digits) : '') + ' · analiz serisi ' + fmt(s.entry, s.digits) + ' ' + (s.unit || '') }
       : {};
-    // a level of the model's own in the traded instrument's (the FRA's rate …), the model's gap in its tooltip
+    // a level of the model's own in the traded instrument's (the FRA's rate …), the model's gap in its tooltip; a line with
+    // no target says so - "iz süren stop" (Trend's trailing stop), else "—" (never the entry: 28.11.2026)
     const lvCell = (k) => {
-      const trail = k === 'target' && s.trail ? { empty: 'iz süren stop' } : {};
+      const trail = k === 'target' ? { empty: s.trail ? 'iz süren stop' : '—' } : {};
       if (px) return N(px[k], px.digits, Object.assign(k === 'entry' ? at : {}, trail));
       if (q) return N(q[k], q.digits, Object.assign({ tip: q.inst + ': ' + gapText(q, s[k]) + (k === 'entry' && q.note ? ' · ' + q.note : '') }, trail));
       return N(s[k], s.digits, Object.assign({ tip: sheetText(s, s[k]).trim() || undefined }, trail));
@@ -765,9 +823,13 @@ export function signalRows(list, opts = {}) {
     const rr = isNum(s.rr) ? s.rr : (px && isNum(mo.target) && isNum(mo.stop) && mo.stop < 0 ? mo.target / -mo.stop : null);
     const side = tradeSide(s);
     if (opts.rank) row.push({ t: String(i + 1), v: i + 1, k: 'n' });
-    // (a systematic family's line - Trend's - in the plan's one-line format: "SAT USDTRY 1A forward · 1 mn USD · giriş … · model: Trend")
-    row.push(T(s.line || s.expression, Object.assign({ b: 1, tip: (s.plain ? s.plain + '\n' : '') + (s.thesis ? s.thesis + '\n' : '')
-      + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') }, side ? { cls: side } : {})),
+    // (the trade and its size; a systematic family's whole line - Trend's "SAT USDTRY 1A forward · 1 mn USD · giriş … · model:
+    // Trend" - in its tooltip first; a long trade wraps, never cut: Düzen, 28.11.2026)
+    const cell = tradeCellText(s);
+    const whole = s.line || s.expression || '';                 // (the family's whole line: Trend's, ML's "… · olasılık %65 · isabet …")
+    row.push(T(cell, Object.assign({ b: 1, tip: (whole && whole !== cell ? whole + '\n' : '') + (s.plain ? s.plain + '\n' : '')
+      + (s.thesis ? s.thesis + '\n' : '') + (s.legs || []).map((l) => l.text).join('\n') + (s.note ? '\n' + s.note : '') },
+    { cls: ('qtrade' + (side ? ' ' + side : '')) })),
       lvCell('entry'), lvCell('target'), lvCell('stop'),
       pnlCell(s),
       ...levelCells(s, rr),
@@ -787,7 +849,7 @@ export function signalRows(list, opts = {}) {
     row.push(T(s.asset), N(s.half_life, 1), T(s.regime || '—'),
       T(s.agree + (s.conflict ? ' / −' + s.conflict : ''), { tip: (s.agree_with || []).join(', ') + (s.conflict ? '\nters: ' + s.conflict_with.join(', ') : '') }),
       T(gateText(s), { cls: 'qgate', tip: (s.gates || []).map((g) => (g.ok ? '✓ ' : '✗ ') + g.name + ': ' + (g.text || '')).join('\n') }));
-    if (opts.gated || s.gated) row.push(T(s.gated, { cls: 'soft' }));
+    if (opts.gated || s.gated) row.push(T(s.gated, { cls: 'soft qwrap' }));           // (a long reason wraps: Düzen, 28.11.2026)
     else row.push(N(s.composite, 2, { b: 1, tip: '|z| ' + fmt(s.parts.z, 2) + ' × rejim ' + fmt(s.parts.regime, 2) + ' × yarı ömür ' + fmt(s.parts.hl, 2) + ' × carry ' + fmt(s.parts.carry, 2) }));
     row.push(T((s.live ? '● ' : '') + (s.time || ''), { tip: s.live ? 'canlı değerle' : 'son kapanışla' }));
     return row;
@@ -979,16 +1041,27 @@ export class QuantPage {
     this.chart.idle(why || 'Bu sayfada şu an sinyal yok: tablolardan bir satıra tıklayınca serisi ve seviyeleri burada çizilir.');
   }
 
-  /** The card in view after a click on a row (the tables below it - Eğri's DİBS, PCA's - would update it off screen),
-   * opened if folded; left where it is when its top is already in the upper part of the screen. */
-  revealCard() {
-    const card = this.chart && this.chart.host.closest ? this.chart.host.closest('.panel') : null;
-    if (!card) return;
-    if (card.__open) card.__open();
+  /** The page's card panel (``null``: none). */
+  cardPanel() {
+    return this.chart && this.chart.host.closest ? this.chart.host.closest('.panel') : null;
+  }
+
+  /** Whether the card is off screen for a click on a row: its top not in the upper part of the screen (the tables below
+   * it - Eğri's DİBS, PCA's, the signal list's long body - would update it out of sight). */
+  cardAway() {
+    const card = this.cardPanel();
+    if (!card || !card.isConnected) return false;
     const r = card.getBoundingClientRect();
     const vh = window.innerHeight || document.documentElement.clientHeight || 800;
-    if (r.top >= 0 && r.top < vh * 0.6) return;
-    card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return !(r.top >= 0 && r.top < vh * 0.6);
+  }
+
+  /** The card after a click on a row, opened if folded: left where it is when its top is in the upper part of the
+   * screen; off screen it opens in the card window instead of the page scrolling to it (Düzen, 28.11.2026: "kart ekran
+   * dışındaysa kayma yerine kart penceresinde aç") - ``pick`` does, once the card's answer is read. */
+  revealCard() {
+    const card = this.cardPanel();
+    if (card && card.__open) card.__open();
   }
 
   fillStatus() {
@@ -1041,14 +1114,43 @@ export class QuantPage {
   async pick(sid, click) {
     if (!sid || !this.chart) return;
     this.picked = sid;
+    const away = !!click && this.cardAway();
     this.chart.loading('');
     if (click) this.revealCard();
     try {
       const d = await api.get('/api/quant/signal', { id: sid });
       if (this.dead || this.picked !== sid) return;
       this.chart.show(d);
+      // (off screen: the same card in its window over the row clicked - the page's card follows it too, for later)
+      if (away) cardWindow(sid, { data: d, go: ['Sayfadaki karta git', 'Pencereyi kapat, sayfadaki karta in', () => showPanel(this.cardPanel())] });
       if (this.afterPick) this.afterPick();
     } catch (e) { errorToast(e); }
   }
+}
+
+/** A signal's card in a window of its own - the page's card without its element ids: over a box's list (a launchpad, the
+ * side drawer: pageboxes.js), or over a quant page whose own card is off screen (Düzen, 28.11.2026).  ``opts.data``: the
+ * card's answer already read (else asked here); ``opts.go``: [label, title, fn] a button beside "Kapat" (the box's
+ * "Sinyaller sayfasında aç", the page's "Sayfadaki karta git"). */
+export async function cardWindow(sid, opts = {}) {
+  let chart = null;
+  const m = modal({ title: 'Sinyal', width: 1080, onClose: () => { if (chart) chart.destroy(); } });
+  m.box.classList.add('qcard', 'quantpage');                // (the card's own look: the quant pages')
+  chart = new SignalChart(m.body, { ids: false });
+  chart.loading('');
+  if (opts.go) {
+    const [label, title, fn] = opts.go;
+    const go = h('button', { class: 'btn', type: 'button', title: title || '' }, label);
+    go.addEventListener('click', () => { m.close(); fn(); });
+    m.foot.append(go);
+  }
+  m.foot.append(h('button', { class: 'btn primary', type: 'button', onclick: () => m.close() }, 'Kapat'));
+  try {
+    const d = opts.data || await api.get('/api/quant/signal', { id: sid });
+    if (!m.el.isConnected) return m;
+    chart.show(d);
+    m.box.querySelector('header h2').textContent = chart.titleEl.textContent || 'Sinyal';
+  } catch (err) { m.close(); errorToast(err); }
+  return m;
 }
 

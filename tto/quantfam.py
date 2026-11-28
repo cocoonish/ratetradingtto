@@ -26,6 +26,7 @@ Families (``FAMILIES``) and what they score:
     model     L2 logistic regression of next week's direction, walk-forward validated
     imapath   the implied MPC / FOMC path against its grid: a period's kink against its neighbours (quantpath.py)
     imacal    the priced bigger move against what was decided: a calibration bias (quantpath.py)
+    wirp      a meeting's implied policy rate (WIRP) against the PPK survey - or a user's own expectation (quantpath.py)
     leadlag   who moves first: a follower that has not caught up with its leader's move yet (quantlead.py)
 
 Units: rates are kept in per cent and move in bp; spreads, flies, residuals and CDS are in bp; FX levels move in per
@@ -71,6 +72,7 @@ FAMILIES: Dict[str, Tuple[str, str, str]] = {
     "ipath": ("USDTRY carry patikası", "mr", "quant-intraday"),
     "imapath": ("İma patikası ayrıklığı", "mr", "quant-path"),       # quantpath.py: kinks of the implied path
     "imacal": ("İma kalibrasyonu", "model", "quant-path"),          # quantpath.py: a bias of the priced bigger move
+    "wirp": ("TCMB WIRP", "model", "quant-wirp"),                   # quantpath.py: a meeting's implied rate against the survey
     "leadlag": ("Öncü-takipçi", "model", "quant-lead"),             # quantlead.py: a follower that has not caught up
 }
 
@@ -1277,8 +1279,11 @@ def make_signal(m: Monitor, cfg: Dict[str, Any], stamp: str) -> Optional[Dict[st
             gated = "stop bölgesinde (|z| ≥ %s)" % ("%g" % stop_z).replace(".", ",")
         gates.append(_gate("Stop bölgesi", not gated, gated or "|z| %s < stop %s" % (_g(abs(m.z), 2), _g(stop_z, 1))))
     else:
-        target = m.level + s * (m.reward or 0.0)
-        stop = m.level - s * (m.risk or 0.0)
+        # the family's own move to its target and to its stop; a family that gives none (no gain to aim at, no scale yet)
+        # has no target / no stop - never one at the entry (Trend's lines said "hedef —" while the list showed the entry
+        # as the target: 28.11.2026; a backtest closed such a trade at once, "at its target")
+        target = m.level + s * m.reward if m.reward else None
+        stop = m.level - s * m.risk if m.risk else None
         scale = m.risk or None
     legs = [signal_leg(leg, pkg_s) for leg in m.legs]
     if m.explicit and len(legs) > 1:
@@ -2309,6 +2314,26 @@ def _months_between(a: _dt.date, b: _dt.date) -> float:
     return (b - a).days / 30.4375
 
 
+#: DİBS RV's kind of a bond (the history's ``type``) as the bond catalog's (``bonds.short_label``'s tail)
+_DIBS_KIND = {"S": "fixed", "B": "bill", "T": "float", "F": "frn", "E": "cpi"}
+
+
+def dibs_label(meta: Dict[str, Any], isin: str) -> str:
+    """A DİBS as the desk names it - "12.09.29", "10.02.27 Bono", "09.01.30 TLREF": the catalog's, else from its maturity
+    and kind - never Bloomberg's NAME, "TURKIYE GOVERNMENT BOND" on every bond (Çiftler's 13 rows read it: 28.11.2026);
+    the ISIN when neither is known."""
+    from . import bonds as bd
+    try:
+        cat = bd.by_isin(isin)
+        if cat:
+            return bd.short_label(cat)
+        if (meta or {}).get("maturity"):
+            return bd.short_label({"isin": isin, "maturity": str(meta["maturity"])[:10], "kind": _DIBS_KIND.get(str(meta.get("type") or "").upper())})
+    except (TypeError, ValueError):
+        pass
+    return isin
+
+
 def pair_specs(ctx: Ctx) -> List[Dict[str, Any]]:
     """The pairs the scanner tests: ``{pid, label, group, y, x (key or series), units …}``."""
     specs: List[Dict[str, Any]] = []
@@ -2358,7 +2383,7 @@ def pair_specs(ctx: Ctx) -> List[Dict[str, Any]]:
             ys[d] = (100.0 - v) / (months / 12.0) * 100.0 if floater else v
         if len(xs) < ctx.min_obs():
             continue
-        name = info.get("name") or k[5:]
+        name = dibs_label(info, k[5:])
         specs.append({"pid": ("frn:" if floater else "dibs:") + k[5:], "label": ("%s TLREF FRN marjı / OIS" if floater else "%s getiri / OIS") % name,
                       "group": "TLREF FRN − OIS" if floater else "DİBS − OIS", "asset": "DİBS", "y": k, "x": "OISAT:" + k[5:],
                       "ys": ys, "xs": xs, "scale": 1.0 if floater else 100.0, "maturity": md, "floater": floater})
@@ -2410,7 +2435,7 @@ def _pair_now(ctx: Ctx, spec: Dict[str, Any], live: Dict[str, float]) -> Tuple[O
 
 def _pair_legs(ctx: Ctx, spec: Dict[str, Any], beta: float) -> List[Dict[str, Any]]:
     y, x = spec["y"], spec["x"]
-    yname = ctx.label(y) if not y.startswith("DIBS:") else (ctx.meta[y].get("name") or y[5:])
+    yname = ctx.label(y) if not y.startswith("DIBS:") else dibs_label(ctx.meta.get(y) or {}, y[5:])
     if spec.get("points"):
         yname = "USDTRY 3M swap puanı"
     xname = ctx.label(x) if not x.startswith("OISAT:") else "OIS (vadesine göre)"
@@ -2436,7 +2461,7 @@ def _pair_quote(ctx: Ctx, spec: Dict[str, Any], calc: Callable[[Dict[str, float]
     if not pid.startswith(("dibs:", "frn:", "viop:")):
         return None
     y = spec["y"]
-    yname = ctx.label(y) if not y.startswith("DIBS:") else (ctx.meta[y].get("name") or y[5:])
+    yname = ctx.label(y) if not y.startswith("DIBS:") else dibs_label(ctx.meta.get(y) or {}, y[5:])
     oisat = spec["x"].startswith("OISAT:")
     xname = "OIS (vadesine göre)" if oisat else ctx.label(spec["x"])
 

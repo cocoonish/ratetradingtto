@@ -181,7 +181,7 @@ class SignalsPage extends QuantPage {
     }
     // (a family at its calibrated levels: its out-of-sample record and today's k / m; one that keeps its own: its own trades and why)
     const rows = (d.rows || []).map((r) => [T(r.type ? '   ' + r.type : r.label, { b: r.type ? 0 : 1 }),
-      T(r.levels || '', { cls: r.calibrated ? '' : 'soft', tip: r.levels || '' }), N(r.trades, 0), T(pct(r.hit)), N(r.avg_sigma, 2, { sign: true }),
+      T(r.levels || '', { cls: (r.calibrated ? '' : 'soft ') + 'qwrap', tip: r.levels || '' }), N(r.trades, 0), T(pct(r.hit)), N(r.avg_sigma, 2, { sign: true }),
       T(isNum(r.avg) ? sgn(r.avg, 2) + ' ' + (r.unit || '') : ''), N(isNum(r.avg_try) ? r.avg_try / 1000 : null, 1, { sign: true }), N(r.sharpe, 2, { sign: true }), N(r.max_dd, 1)]);
     this.boxes.bt.set(['Aile / grup', 'Seviyeler (bugün)', 'İşlem', 'İsabet', 'Ort. K/Z σ', 'Ort. K/Z', 'Ort. bin TL', 'Sharpe', 'En büyük düşüş σ'], rows, null, 'Geri testte işlem yok');
     this.btPanel.setTitle('Geri test · ' + isoToTr(d.first) + ' – ' + isoToTr(d.last) + ' · ' + d.n_trades + ' işlem · ' + d.refits + ' yeniden kurma'
@@ -194,7 +194,7 @@ class SignalsPage extends QuantPage {
     const d = await api.get('/api/quant/log');
     if (this.dead) return;
     // (the log follows each family's own level; the entry's levels in the traded instrument's own - the FRA's rate … - in the tooltip)
-    const rows = (d.entries || []).slice(0, 120).map((e) => [T(isoToTr(e.day) + ' ' + (e.time || '')), T(e.family_label), T(e.expression, { b: 1 }), Z(e.z),
+    const rows = (d.entries || []).slice(0, 120).map((e) => [T(isoToTr(e.day) + ' ' + (e.time || '')), T(e.family_label), T(e.expression, { b: 1, cls: 'qtrade', tip: e.expression }), Z(e.z),
       N(e.level, e.digits, e.levels_text ? { tip: 'Girişte: ' + e.levels_text } : {}), N(e.target, e.digits), N(e.stop, e.digits),
       T(e.status === 'open' ? 'açık' : e.status, { b: e.status !== 'open' ? 1 : 0 }),
       T(e.closed_day ? isoToTr(e.closed_day) : ''), N(e.closed_level, e.digits), N(e.pnl, 2, { sign: true }), N(e.pnl_sigma, 2, { sign: true }), N(e.held, 0)]);

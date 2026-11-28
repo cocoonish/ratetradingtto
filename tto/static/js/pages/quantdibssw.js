@@ -20,7 +20,7 @@ class DibsSwitchPage extends QuantPage {
     const sp = panel('quant-' + this.what + '-signals', 'DİBS switch · bu haftanın satırları', { wide: true });
     sp.note.textContent = 'Her switch bir satır (Sinyaller listesinde de, DİBS grubunda): AL / SAT kâğıtlar ve nominalleri, aylık carry + roll farkı, '
       + 'son bir ayın getiri hareketi, hedef ve stop getiri farkının işlem yönündeki hareketi olarak (bp), beklenen K/Z TL. Giriş / hedef / stop '
-      + 'sütunları çiftin kendi serisinde (kısa vadeli kâğıdın getirisi − uzun vadelininki); "sıra" 2 haftanın en güçlü switch\'i, 1 en zayıfı. '
+      + 'sütunları her yerdeki gibi getiri farkı AL − SAT (bp; switch fark düşünce kazanır); "sıra" 2 haftanın en güçlü switch\'i, 1 en zayıfı. '
       + 'Kapı yok: yalnız geçmiş kaydı zarar ettiren seviyeler satırı "düşük güven" yapar. Satıra tıklayın: düz anlatımı ve serisi aşağıda.';
     this.boxes.sig = new GridBox(sp, SIGNALS_TABLE, (sid, click) => this.pick(sid, click), { freeze: 1 });
     const cp = panel('quant-' + this.what + '-chart', 'Seçili switch', { wide: true, cls: 'qcardp' });
@@ -77,7 +77,7 @@ class DibsSwitchPage extends QuantPage {
     // (the reason, when there is no ranking, once: in the head line above; the switches' and the backtest's tables say no more)
     this.swPanel.el.classList.toggle('qsaid', !t.ok);
     this.btPanel.el.classList.toggle('qsaid', !t.ok);
-    this.boxes.sw.set(['Switch', 'Giriş → şimdi (getiri farkı, bp)', 'Hedef (bp, lehte)', 'Stop (bp, aleyhte)', 'Beklenen', 'Ödül / risk', 'İsabet', '#',
+    this.boxes.sw.set(['Switch', 'Giriş → şimdi (AL − SAT, bp)', 'Hedef (bp, lehte)', 'Stop (bp, aleyhte)', 'Beklenen', 'Ödül / risk', 'İsabet', '#',
       'Nominal AL / SAT', 'DV01 AL / SAT (TL)', 'Süre AL / SAT', 'Hareket (bp, lehte)', 'σ hafta (bp)', 'Skor farkı', 'C+R bp / ay', 'Momentum 1A bp'],
     sw.map((s) => {
       const z = s.size || {};

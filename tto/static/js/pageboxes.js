@@ -15,7 +15,7 @@ import { plainData } from './grid.js';
 import { isoToTr, num } from './format.js';
 import { BOX_TYPES } from './boxes.js';
 import { OwnBox } from './pagebox.js';
-import { SignalChart, signalRows, signalHead, SIGNALS_TABLE, isNum } from './pages/quantbase.js';
+import { cardWindow, signalRows, signalHead, SIGNALS_TABLE, isNum } from './pages/quantbase.js';
 import { CONTRACT_HEAD, contractRows, levelsTitle, drawLevels } from './pages/quantviop.js';
 import { FX_SUMMARY_HEAD, fxSummaryRows } from './pages/quantviews.js';
 import { wirpHead, wirpRows } from './pages/quantpath.js';
@@ -24,23 +24,10 @@ import { OP, KIND_TEXT, changeText, spark, band, savedDays } from './pages/watch
 
 const mark = (on) => (on ? '✓ ' : '    ');
 
-/** A signal's (or a monitor's) card over the box: the Sinyaller page's card - the sentence, the series with its bands,
- *  entry / target / stop - without the page's element ids; "Sinyaller sayfasında aç" opens it there. */
-async function openCard(box, sid) {
-  let chart = null;
-  const m = modal({ title: 'Sinyal', width: 1040, onClose: () => { if (chart) chart.destroy(); } });
-  m.box.classList.add('qcard', 'quantpage');                // (the card's own look: the Sinyaller page's)
-  chart = new SignalChart(m.body, { ids: false });
-  chart.loading('');
-  const go = h('button', { class: 'btn', type: 'button', title: 'Sinyaller sayfasında, kartıyla' }, 'Sinyaller sayfasında aç');
-  go.addEventListener('click', () => { m.close(); box.goTo('quant', 'sig:' + sid); });
-  m.foot.append(go, h('button', { class: 'btn primary', type: 'button', onclick: () => m.close() }, 'Kapat'));
-  try {
-    const d = await api.get('/api/quant/signal', { id: sid });
-    if (!m.el.isConnected) return;
-    chart.show(d);
-    m.box.querySelector('header h2').textContent = chart.titleEl.textContent || 'Sinyal';
-  } catch (err) { m.close(); errorToast(err); }
+/** A signal's (or a monitor's) card over the box: the card window (quantbase.js ``cardWindow`` - the quant pages' card,
+ *  two columns, "Ayrıntı" and "Gerekçe" folded - without the page's element ids); "Sinyaller sayfasında aç" opens it there. */
+function openCard(box, sid) {
+  return cardWindow(sid, { go: ['Sinyaller sayfasında aç', 'Sinyaller sayfasında, kartıyla', () => box.goTo('quant', 'sig:' + sid)] });
 }
 
 /** The frame with where a box goes to: its page (a window of its own opens it in the main window). */

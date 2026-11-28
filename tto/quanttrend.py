@@ -637,8 +637,9 @@ class _Line(object):
         exp_m, ccy = _money_at(sg, "total", k, inst.ccy)
         tgt_m, _ = _money_at(sg, "target", k, inst.ccy)
         stp_m, _ = _money_at(sg, "stop", k, inst.ccy)
-        # the target: a level move to it; the entry when the carry alone makes the expected gain; none without a gain
-        has_target = (sg.get("reward") or 0.0) > 0.0
+        # the target: a level move to it; none when the carry alone makes the expected gain (the level is not expected to
+        # move: a target at the entry was no target - 28.11.2026), none without a gain
+        has_target = sg.get("target") is not None and (sg.get("reward") or 0.0) > 0.0
         by_carry = not has_target and (sg.get("exp_pnl") or 0.0) > 0.0
         stats = self.stats
         # the calibrated trailing stop (quantlevels): no target; a stop that lost money all the same is "düşük güven"
@@ -656,9 +657,11 @@ class _Line(object):
                                                   "beklenen " + qf._money(exp_m, ccy), _levels_hit(lv), "model: Trend"]
         else:
             parts = (["YENİ"] if new else []) + [inst.line(s, k), "giriş " + _price(sg, "entry"),
-                                                  "hedef " + (_price(sg, "target") if has_target or by_carry else "—"), "stop " + _price(sg, "stop"),
+                                                  "hedef " + (_price(sg, "target") if has_target else "—"), "stop " + _price(sg, "stop"),
                                                   "beklenen " + qf._money(exp_m, ccy), _hit_text(stats), "model: Trend"]
         sg["line"] = " · ".join(parts)
+        # the list's İşlem cell: the trade and its size alone - its levels have their own columns (Düzen, 28.11.2026)
+        sg["trade_line"] = " · ".join((["YENİ"] if new else []) + [inst.line(s, k)])
         incl = " (forward primi dahil)" if sg.get("px") is not None and sg.get("carry_h") is not None else (
             " (carry + roll dahil)" if sg.get("carry_h") is not None else "")
         hold = sg.get("hold")
@@ -685,8 +688,8 @@ class _Line(object):
                 ends = "Hedef %s (%s), stop %s (%s); yön dönene ya da stopa kadar tut." % (
                     _price(sg, "target"), qf._money(tgt_m, ccy), _price(sg, "stop"), qf._money(stp_m, ccy))
             elif by_carry:
-                ends = "Hedef giriş seviyesi (%s): beklenen kazancın tamamı carry'den. Stop %s (%s); yön dönene ya da stopa kadar tut." % (
-                    _price(sg, "entry"), _price(sg, "stop"), qf._money(stp_m, ccy))
+                ends = ("Hedef yok: beklenen kazancın tamamı carry'den, seviyenin bir hareketi beklenmiyor. Stop %s (%s); yön dönene ya da "
+                        "stopa kadar tut." % (_price(sg, "stop"), qf._money(stp_m, ccy)))
             else:
                 ends = ("Hedef yok: bu güçteki geçmiş satırlar ortalamada kazandırmadı. Stop %s (%s); yön dönene ya da stopa kadar." % (
                     _price(sg, "stop"), qf._money(stp_m, ccy)))
@@ -865,7 +868,9 @@ def view(quant: Any, what: str, base: Dict[str, Any], v: Dict[str, Any], fit: Di
             r.update({"line": sg.get("line"), "exp": tm.get("total"), "ccy": tm.get("ccy"), "hold": sg.get("hold"),
                       "entry": sg.get("entry"), "target": sg.get("target"), "stop": sg.get("stop"), "px": sg.get("px"),
                       "unit_level": sg.get("unit"), "digits": sg.get("digits"), "bucket": (sg.get("trend") or {}).get("bucket"),
-                      "rr": sg.get("rr")})            # (the table starts with the trade: Düzen, 27.11.2026 - its reward / risk too)
+                      "rr": sg.get("rr"),             # (the table starts with the trade: Düzen, 27.11.2026 - its reward / risk too)
+                      # (no target: a trailing stop's line says "iz süren stop", any other "—" - 28.11.2026)
+                      "trail": bool(sg.get("trail")), "trade_line": sg.get("trade_line")})
     base["trend"] = tab
     base["signals"] = [s for s in v["signals"] + v["gated"] if s.get("page") == VIEWS[what]]
     base["settings"] = fit["cfg"]
