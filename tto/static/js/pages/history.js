@@ -1,13 +1,16 @@
 // Pages built on the dashboard's own history: the end-of-day change matrix, the pricing of every MPC meeting
 // over time, and the settings behind them (the meeting calendar).
 import { api } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, modal, copyText } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, modal, copyText, foldNote } from '../ui.js';
 import { Grid, copyGrid } from '../grid.js';
 import { Chart } from '../chart.js';
 import { num, pct, isoToTr } from '../format.js';
 import { SeriesView } from '../serieschart.js';
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
+/** A TRY rate's decimals on the end-of-day matrix (OIS, offshore, TLREF, a meeting's TLREF after it, a bond's yield): two,
+ *  as on the header strip and the pricing tables (the desk, 25.11.2026; for this page 28.11.2026: B19). */
+export const TRY_DIGITS = 2;
 const HD = (t, extra) => Object.assign({ t, k: 's', b: 1, f: 'hd' }, extra || {});
 const TXT = (t, extra) => Object.assign({ t: t || '', k: 's' }, extra || {});
 const EMPTY = () => ({ t: '', k: '' });
@@ -104,7 +107,8 @@ function scaleOf(values, floor) {
 }
 
 /** A panel; ``fit``: as wide as its table (side by side with another when they fit); ``fold``: a ▾ / ▸ in its header
- *  folds it - ``folded`` by default, each user's own choice kept in this browser (``tto.hist.fold.<id>``). */
+ *  folds it - ``folded`` by default, each user's own choice kept in this browser (``tto.hist.fold.<id>``); ``clamp``: its
+ *  note two lines, "devamı" the rest (the desk, 28.11.2026: Gün Sonu's notes folded). */
 function panel(title, opts = {}) {
   const body = h('div', { class: 'body' });
   const tools = h('div', { class: 'tools' });
@@ -114,8 +118,15 @@ function panel(title, opts = {}) {
   if (opts.id) el.dataset.panel = opts.id;
   const note = h('div', { class: 'note hidden' });
   el.appendChild(note);
+  const clamp = opts.clamp ? foldNote(note) : null;
   const p = { el, body, tools, head, title: h2, note,
-    setNote(text) { note.textContent = text || ''; note.classList.toggle('hidden', !text); } };
+    setNote(text) {
+      if (!clamp) { note.textContent = text || ''; note.classList.toggle('hidden', !text); return; }
+      while (note.firstChild && note.firstChild !== clamp.more) note.removeChild(note.firstChild);
+      if (text) note.insertBefore(document.createTextNode(text), clamp.more);
+      note.classList.toggle('hidden', !text);
+      clamp.check();
+    } };
   if (opts.fold && opts.id) {
     const key = 'tto.hist.fold.' + opts.id;
     let kept = null;
@@ -296,12 +307,13 @@ export class EodPage extends HistoryPage {
       h('span', { class: 'grow' }), this.stateEl, now));
     this.banner = h('div', { class: 'banner hidden' });
     this.host.appendChild(this.banner);
-    // the three tables at their own width: OIS · Offshore and PPK side by side when they fit (the desk, 27.11.2026)
-    this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { fit: true, id: 'curve', onCell: (i, j) => this.pickCurve(i, j) });
-    this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { fit: true, id: 'mpc', onCell: (i, j) => this.pickMpc(i, j) });
-    this.bonds = gridPanel('DİBS — getiri ve değişim', { fit: true, id: 'dibs', onCell: (i) => this.pickBond(i) });
+    // the three tables at their own width: OIS · Offshore beside PPK with DİBS under it - the page on one screen (the desk,
+    // 27.11.2026; proposal B19 "Gün Sonu'nda DİBS PPK'nın altına", approved 28.11.2026); their notes two lines, "devamı" the rest
+    this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { fit: true, clamp: true, id: 'curve', onCell: (i, j) => this.pickCurve(i, j) });
+    this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { fit: true, clamp: true, id: 'mpc', onCell: (i, j) => this.pickMpc(i, j) });
+    this.bonds = gridPanel('DİBS — getiri ve değişim', { fit: true, clamp: true, id: 'dibs', onCell: (i) => this.pickBond(i) });
     // the series of the row clicked (as on Realized Vol · Carry): level, the window's mean and ±2σ, z day by day
-    this.seriesPanel = panel('Seçili seri', { wide: true, id: 'eod-series' });
+    this.seriesPanel = panel('Seçili seri', { wide: true, clamp: true, id: 'eod-series' });
     const close = h('button', { class: 'iconbtn', type: 'button', title: 'Grafiği kapat' }, '✕');
     close.addEventListener('click', () => { this.picked = null; this.seriesPanel.el.classList.add('hidden'); this.renderTables(); });
     this.seriesPanel.tools.appendChild(close);
@@ -309,7 +321,8 @@ export class EodPage extends HistoryPage {
     this.seriesPanel.setNote('Bir satıra tıklayınca o serinin geçmişi çizilir: seviye, seçili pencerenin ortalaması ve ±2σ bandı, her günün kendinden önceki pencereye göre '
       + 'z-skoru. Son nokta son kapanış; geçmiş, matrisin okuduğu kapanışlar (ana kaynağın olmadığı gün yedek kaynağın hareketiyle). Yeniden tıklayınca ya da ✕ ile kapanır.');
     this.seriesPanel.el.classList.add('hidden');
-    this.host.appendChild(h('div', { class: 'panels' }, this.seriesPanel.el, this.curve.el, this.mpc.el, this.bonds.el));
+    this.host.appendChild(h('div', { class: 'panels' }, this.seriesPanel.el, this.curve.el,
+      h('div', { class: 'stack', id: 'eod-stack' }, this.mpc.el, this.bonds.el)));
   }
 
   /** Draw a history series ({sid, title}) or a meeting's pricing ({mpc, metric, title}); the same again closes it. */
@@ -423,8 +436,9 @@ export class EodPage extends HistoryPage {
       return scaleOf(vals, 10);
     };
     const so = sides(d.curve.map((r) => r.ois).concat([d.tlref])), sf = sides(d.curve.map((r) => r.off));
-    // (``dg``: the level's decimals - TLREF two, as on the header strip and every other page)
-    const half = (e, scale, dg = 3) => (e
+    // (``dg``: the level's decimals - TRY rates two, as on the header strip and every other page: the desk, 25.11.2026,
+    // and 28.11.2026 for this page, B19 "TRY 2 ondalık")
+    const half = (e, scale, dg = TRY_DIGITS) => (e
       ? [N(e.last, dg, { tip: e.ticker + ' · ' + e.field + (e.day ? ' · ' + isoToTr(e.day) : '')
           + (e.backup ? ' · bu günün kapanışı yedek kaynaktan (' + e.backup + '): onun hareketi ana kaynağın seviyesine eklendi' : ''),
         c: e.backup ? 'mute' : undefined }),
@@ -436,7 +450,7 @@ export class EodPage extends HistoryPage {
     const side = (e, title) => (e && e.sid ? { sid: e.sid, title } : null);
     const offName = (r) => (r.off && r.months >= 12 ? 'XCCY ' : 'Offshore ') + r.tenor;
     if (d.tlref) {
-      rows.push(marked([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so, 2)), pickedSid && d.tlref.sid === pickedSid).concat(half(null)));
+      rows.push(marked([TXT('TLREF', { cls: 'lab' })].concat(half(d.tlref, so)), pickedSid && d.tlref.sid === pickedSid).concat(half(null)));
       keys.push({ ois: side(d.tlref, 'TLREF'), off: null });
     }
     for (const r of d.curve) {
@@ -466,8 +480,9 @@ export class EodPage extends HistoryPage {
       keys.push(m.meeting);
       rows.push(marked([TXT(isoToTr(m.meeting) + (m.front ? ' · ilk' : ''), { cls: 'lab', tip: m.front ? 'İlk toplantı: adım bugünkü TLREF\'e göre ölçülür' : '' }),
         N(s.last, 1), D(s.d1, sc, 1, s.d1_from, d.ref.d1, 1), D(s.w1, sc, 1, s.w1_from, d.ref.w1, 1), D(s.m1, sc, 1, s.m1_from, d.ref.m1, 1),
-        N(isNum(l.last) ? l.last * 100 : null, 3), D(l.d1, sc, 1, isNum(l.d1_from) ? l.d1_from * 100 : null, d.ref.d1),
-        D(l.w1, sc, 1, isNum(l.w1_from) ? l.w1_from * 100 : null, d.ref.w1), D(l.m1, sc, 1, isNum(l.m1_from) ? l.m1_from * 100 : null, d.ref.m1),
+        N(isNum(l.last) ? l.last * 100 : null, TRY_DIGITS), D(l.d1, sc, 1, isNum(l.d1_from) ? l.d1_from * 100 : null, d.ref.d1, TRY_DIGITS),
+        D(l.w1, sc, 1, isNum(l.w1_from) ? l.w1_from * 100 : null, d.ref.w1, TRY_DIGITS),
+        D(l.m1, sc, 1, isNum(l.m1_from) ? l.m1_from * 100 : null, d.ref.m1, TRY_DIGITS),
         N(c.last, 1), D(c.d1, sc, 1, c.d1_from, d.ref.d1, 1)], !!(this.picked && this.picked.mpc === m.meeting)));
     }
     this.keys.mpc = keys;
@@ -494,15 +509,16 @@ export class EodPage extends HistoryPage {
     let any = false;
     const keys = [null];
     for (const b of d.bonds) {
-      const pct = b.unit === 'pct', s = pct ? sc : sp, dg = pct ? 1 : 3;
+      // (a yield a TRY rate: two decimals; a price - a floater's - three, as the bond pages show it)
+      const pct = b.unit === 'pct', s = pct ? sc : sp, dg = pct ? 1 : 3, lv = pct ? TRY_DIGITS : 3;
       if (isNum(b.last)) any = true;
       keys.push(b.sid ? { sid: b.sid, title: (b.name || b.isin) + (b.name ? ' (' + b.isin + ')' : '') + (pct ? ' · getiri' : ' · fiyat') } : null);
       const name = named || !b.name ? '' : ' · ' + b.name;
       rows.push(marked([TXT(b.isin, { cls: 'lab', tip: b.ticker + ' · ' + b.field + name }), named ? TXT(b.name) : null, TXT(isoToTr(b.maturity)),
         TXT(b.type, named || !b.name ? null : { tip: b.name }),
-        N(b.last, 3), D(b.d1, s, dg, b.d1_from, d.ref.d1), D(b.w1, s, dg, b.w1_from, d.ref.w1), D(b.m1, s, dg, b.m1_from, d.ref.m1),
+        N(b.last, lv), D(b.d1, s, dg, b.d1_from, d.ref.d1, lv), D(b.w1, s, dg, b.w1_from, d.ref.w1, lv), D(b.m1, s, dg, b.m1_from, d.ref.m1, lv),
         TXT(pct ? 'getiri · bp' : 'fiyat · puan', { c: 'mute' }), TXT(isoToTr(b.day), { c: 'mute' }),
-        latest && isNum(b.bist) ? N(b.bist * 100, 3) : EMPTY()].filter(Boolean), !!(this.picked && b.sid && this.picked.sid === b.sid)));
+        latest && isNum(b.bist) ? N(b.bist * 100, TRY_DIGITS) : EMPTY()].filter(Boolean), !!(this.picked && b.sid && this.picked.sid === b.sid)));
     }
     this.keys.bonds = keys;
     this.bonds.setData({ sheet: '', rows });

@@ -26,6 +26,20 @@ is handled (the page links there) and says plainly when there is nothing.
 * **Ajanda · takvim** - today's agenda items (the desk's and the user's own), the deadlines not met, today's / the
   next PPK and FOMC meetings (the meeting calendars), the TRY and USD holidays of today and of the next week day.
 
+The desk, 28.11.2026 ("A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"), made it the morning meeting:
+
+* **Kontrol** (A10, A8) - Masa's Kontrol strip's checks that are not "tamam" (MASA!B3:L3, their codes AY3:BH3 - the
+  desk's calculation), each with its rule and the table it checks (:data:`KONTROL`), how many are; and when the user last
+  pasted their DV01 position (``varrisk.paste_stamp``: red when not today).
+* **PPK / FOMC günü** (C5) - on a TCMB or Fed meeting's day and the business day before it: the meeting's implied step
+  now and against the last close (the PPK history), the survey, the scenarios' steps, the user's own position's risk of
+  the decision (DV01 Risk's PPK karar riski: TL/bp, a 25 bp surprise); FOMC's from USD · FOMC (no history there).
+* **Kapanıştan beri** (A11) - the largest moves since the previous close of OIS, offshore, offshore − OIS, the VİOP
+  contracts and the bonds' ASW (Eğri Hareketi's points, ``Watch.moves``), the points that did not move today, the alarms
+  that fired since the previous close; the page's "Referansı şimdi al" takes İzleme's and Eğri Hareketi's at once.
+* **Masa notları** (A11) - the day's notes (``desk.notes:<day>``, shared), typed in place; the last earlier day's one
+  click away.
+
 No Bloomberg request; nothing valued, fitted or recomputed: the store, the quant result, the fair value RET's last
 summary and a few cells of the desk's calculation (one trip to the calculation thread).  A block that cannot be read
 says why; the others stand.
@@ -50,6 +64,70 @@ RETRY = 600.0                        # s: a close record that failed is tried ag
 #: a signal leg's action as the desk says the side
 SIDES = {"Pay": "PAY", "Receive": "RECEIVE", "Buy": "AL", "Sell": "SAT", "Steepener": "STEEPENER",
          "Flattener": "FLATTENER", "Buy protection": "KORUMA AL", "Sell protection": "KORUMA SAT"}
+
+#: Masa's Kontrol strip (MASA!B3:L3), chip by chip: (its column, its state code's column - 0 tamam, 1 uyarı, 2 hata, the
+#: workbook's own AY3:BH3; AX3 the worst of them -, its name, the rule its code follows - read off the code's formula -,
+#: the page and the table it checks, where that is).  Proposal A10 "Kontrol nedenine götürsün" (the desk approved it
+#: 28.11.2026): each chip links to its table, its rule in its tooltip; below 1500 px only those not "tamam" and "N tamam";
+#: Bugün lists only those.
+KONTROL = (
+    ("B", "AX", "Genel", "Kontrollerin en kötüsü (MASA!AX3 = MAX(AY3:BH3)): hepsi tamamsa TAMAM, biri sarıysa UYARI, "
+     "biri kırmızıysa HATA.", None, None, ""),
+    ("C", "AY", "Spot", "Spot kaynağı (VIOP!AA8): Bloomberg (BBG) yeşil, elle spot (MANUEL) sarı, başka bir şey kırmızı.",
+     "viop", "B6", "VİOP › Manuel spot"),
+    ("D", "AZ", "OIS kota", "OIS kotaları (OIS_MAIN!B9:B26): 18 vadenin hepsinde kota varsa yeşil, biri eksikse kırmızı.",
+     "ois", "B3", "OIS · PPK › OUTRIGHT"),
+    ("E", "BA", "Çözücü", "Global çözücünün en büyük |model − kota| farkı (OIS_MAIN!W442:W457) toleransın (AU6) 2 katından "
+     "küçükse yeşil, 5 katından küçükse sarı, üstü kırmızı.", "ois", "B22", "OIS · PPK › İMA PPK kontrolü"),
+    ("F", "BB", "İma eğri − kota", "İma eğrinin kotalardan en büyük farkı (Motor!U325:U342) 3 bp'den küçükse yeşil, 5 bp'den "
+     "küçükse sarı, üstü kırmızı.", "ois", "B22", "OIS · PPK › İMA PPK kontrolü"),
+    ("G", "BC", "Geçmiş (BDH)", "VİOP geçmişinin (BDH, VIOP!K380:K509) son günü bir önceki iş günü ya da sonrasıysa yeşil, son "
+     "3 iş günü içindeyse sarı, daha eskiyse kırmızı.", "settings", "history", "Ayarlar › Tarihçe"),
+    ("H", "BD", "VİOP fiyat", "VİOP kontratlarının bid / ask'ı (VIOP!M99:X100, 12 kontrat): 24'ü de varsa yeşil, en az 12'si "
+     "varsa sarı, daha azsa kırmızı.", "viop", "B14", "VİOP › Matris sürücü satırları"),
+    ("I", "BE", "DİBS fit", "DİBS eğrisine oturan kâğıt sayısı (DİBS RV!AA5:AA54): en az 6 yeşil, 3–5 sarı, daha az kırmızı.",
+     "dibs", "B3", "DİBS RV › göreli değer tablosu"),
+    ("J", "BF", "XCCY DF", "XCCY iskonto faktörleri (Forward!G125:G134): hepsi sıfırdan büyük ve vadeyle azalıyorsa yeşil, "
+     "değilse kırmızı.", "forward", "B28", "Forward › USDTRY Offshore Zero Rate"),
+    ("K", "BG", "Olasılık", "Senaryo olasılıklarının toplamı (OIS_MAIN!Q6) %100 ise yeşil, değilse kırmızı.",
+     "ois", "B2", "OIS · PPK › SENARYOLAR"),
+    ("L", "BH", "TLREF", "TLREF (OIS_MAIN!J2) sıfırdan büyük bir sayıysa yeşil, değilse kırmızı.",
+     "ois", "B1", "OIS · PPK › Parametreler"),
+)
+KONTROL_SHEET, KONTROL_ROW = "MASA", 3
+KONTROL_STATES = {0: "tamam", 1: "uyarı", 2: "hata"}
+
+
+def kontrol_target(page: Optional[str], panel: Optional[str]) -> str:
+    """The address a chip leads to (``#/ois?p=B3``), or ``""``."""
+    return "#/%s?p=%s" % (page, panel) if page and panel else ""
+
+
+def kontrol_read(get: Callable[[str], Any]) -> List[Dict[str, Any]]:
+    """Each chip of the strip as it reads now (``get(addr)``: a cell of MASA): its name, text, state code (``None``: one
+    that cannot be read), rule, target."""
+    out = []
+    for col, code_col, name, rule, page, panel, where in KONTROL:
+        text = get("%s%d" % (col, KONTROL_ROW))
+        code = get("%s%d" % (code_col, KONTROL_ROW))
+        code = int(code) if isinstance(code, float) and code in (0.0, 1.0, 2.0) else None
+        out.append({"col": col, "name": name, "text": text if isinstance(text, str) else "", "code": code,
+                    "state": KONTROL_STATES.get(code, "okunamadı"), "rule": rule, "href": kontrol_target(page, panel),
+                    "where": where})
+    return out
+
+
+#: the meeting day's block (C5): the TCMB meetings' slots on OIS_MAIN (P10: MPC1), their implied step (R, bp), its band
+#: (N), the scenarios' steps (U:W; names P3:P5, probabilities Q3:Q5); the survey's rows on Masa (Q157:Q159 dates, R the
+#: survey's rate, U its step); DV01 Risk's PPK karar riski by meeting (C39:C62 dates, G TL/bp, J a 25 bp surprise);
+#: USD · FOMC's table (B74:B83 dates; K İma O/N %, L the one before, O İma Δ, Q Fark WIRP, R:T the scenarios' steps -
+#: their probabilities R72:T72 -, Z Piyasa − beklenen)
+PPK_FIRST, PPK_LAST = 10, 89
+SURVEY_ROWS = (157, 158, 159)
+RISK_FIRST, RISK_LAST = 39, 62
+FOMC_FIRST, FOMC_LAST = 74, 83
+#: how far back the notes of an earlier day are looked for
+NOTES_BACK = 10
 
 
 def _num(v: Any) -> Optional[float]:
@@ -135,7 +213,7 @@ class Bugun(object):
         now = self.now()
         names = {u["name"]: u["display"] for u in svc.store.users()}
         try:
-            eng: Dict[str, Any] = svc.et.call(self._read)
+            eng: Dict[str, Any] = svc.et.call(self._read, user, now)
         except Exception as exc:  # noqa: BLE001 - the blocks that need it say so
             svc.ops.failure("Bugün · hesap tablosu", exc)
             eng = {"error": "okunamadı: %s" % (str(exc)[:200] or type(exc).__name__)}
@@ -143,11 +221,15 @@ class Bugun(object):
                                "close": self.close_time().strftime("%H:%M")}
         blocks: Tuple[Tuple[str, Callable[[], Dict[str, Any]]], ...] = (
             ("ret", lambda: self._ret(names, now)),
+            ("kontrol", lambda: self._kontrol(user, eng, now)),
             ("trades", lambda: self._trades(user)),
             ("quant", self._quant),
             ("dibs", lambda: self._dibs(eng, now)),
             ("chat", lambda: self._chat(user)),
-            ("agenda", lambda: self._agenda(user, eng, now)))
+            ("agenda", lambda: self._agenda(user, eng, now)),
+            ("meeting", lambda: self._meeting(eng, now)),
+            ("moves", lambda: self._moves(user, eng, now)),
+            ("notes", lambda: self._notes(names, now)))
         for name, fn in blocks:
             try:
                 out[name] = fn()
@@ -156,11 +238,14 @@ class Bugun(object):
                 out[name] = {"error": "okunamadı: %s" % (str(exc)[:200] or type(exc).__name__)}
         return out
 
-    def _read(self) -> Dict[str, Any]:
+    def _read(self, user: Optional[str] = None, now: Optional[_dt.datetime] = None) -> Dict[str, Any]:
         """Calculation thread, once a page: DİBS RV's signals (the desk's calculation), the meeting calendars, the TRY and
-        USD holidays."""
+        USD holidays; Masa's Kontrol strip (the desk's calculation); a meeting of today or of the next business day as
+        the user's calculation prices it; the moves since the close (Eğri Hareketi's points).  A part that cannot be read
+        says why in its place (``{"error": ...}``)."""
         from . import meetings as mt
         svc = self.svc
+        now = now or self.now()
         out: Dict[str, Any] = {"dibs": self._dibs_cells(), "tcmb": [], "fed": [], "holidays": {}}
         for key, cal in (("tcmb", mt.TCMB), ("fed", mt.FED)):
             b = svc.books.get(cal.book)
@@ -171,7 +256,108 @@ class Bugun(object):
                 out["holidays"][ccy] = {x["date"]: x.get("name") or "" for x in svc._holiday_list(ccy)["items"]}
             except Exception:  # noqa: BLE001 - a currency without a list
                 out["holidays"][ccy] = {}
+        for key, fn in (("kontrol", self._kontrol_cells), ("meeting", lambda: self._meeting_cells(user, now)),
+                        ("moves", lambda: self._moves_cells(user))):
+            try:
+                out[key] = fn()
+            except Exception as exc:  # noqa: BLE001 - its block says so
+                svc.ops.failure("Bugün · %s" % key, exc)
+                out[key] = {"error": "okunamadı: %s" % (str(exc)[:200] or type(exc).__name__)}
         return out
+
+    @staticmethod
+    def _cell(calc, book, sheet: str, addr: str) -> Any:
+        from .xl.model import COLS, parse_a1
+        return calc.get(book.model.sheet_index[sheet], *divmod(parse_a1(addr), COLS))
+
+    def _kontrol_cells(self) -> Optional[List[Dict[str, Any]]]:
+        """Calculation thread: Masa's Kontrol strip in the desk's calculation (``None`` without the sheet)."""
+        book = self.svc.books.get("tto")
+        if book is None or KONTROL_SHEET not in book.model.sheet_index:
+            return None
+        calc = book.engine.shared
+        return kontrol_read(lambda addr: self._cell(calc, book, KONTROL_SHEET, addr))
+
+    def _next_business(self, day: _dt.date) -> _dt.date:
+        d = day + _dt.timedelta(days=1)
+        for _ in range(15):
+            if self.business(d):
+                break
+            d += _dt.timedelta(days=1)
+        return d
+
+    def _meeting_cells(self, user: Optional[str], now: _dt.datetime) -> List[Dict[str, Any]]:
+        """Calculation thread: the TCMB and Fed meetings of today or of the next business day (C5: the day before and
+        the day of it), as the user's calculation prices them - the PPK's implied step, its band, the scenarios' steps,
+        the survey, the user's position's risk of the decision; the FOMC's implied step (its share of a step), the
+        difference to WIRP and to the expected step, the scenarios'."""
+        from .xl.values import serial_to_date
+        svc = self.svc
+        today = now.date()
+        when = {today.isoformat(): "today", self._next_business(today).isoformat(): "tomorrow"}
+        out: List[Dict[str, Any]] = []
+
+        def iso(v: Any) -> Optional[str]:
+            return serial_to_date(v).isoformat() if isinstance(v, float) and v > 0 else None
+
+        tto = svc.books.get("tto")
+        if tto is not None and "OIS_MAIN" in tto.model.sheet_index:
+            calc = svc._calc(user, tto) if user else tto.engine.shared
+
+            def get(sheet: str, addr: str) -> Any:
+                return self._cell(calc, tto, sheet, addr) if sheet in tto.model.sheet_index else None
+
+            for r in range(PPK_FIRST, PPK_LAST + 1):
+                day = iso(get("OIS_MAIN", "P%d" % r))
+                if day not in when:
+                    continue
+                item: Dict[str, Any] = {"cal": "ppk", "name": "PPK", "date": day, "when": when[day], "slot": r - PPK_FIRST + 1,
+                                        "implied": _num(get("OIS_MAIN", "R%d" % r)), "band": _num(get("OIS_MAIN", "N%d" % r))}
+                scen = []
+                for k, col in enumerate("XYZ"):
+                    a, b = _num(get("OIS_MAIN", "%s%d" % (col, r - 1))), _num(get("OIS_MAIN", "%s%d" % (col, r)))
+                    scen.append({"name": get("OIS_MAIN", "P%d" % (3 + k)) or "S%d" % (k + 1), "prob": _num(get("OIS_MAIN", "Q%d" % (3 + k))),
+                                 "step": (b - a) * 10000.0 if a is not None and b is not None else None})
+                item["scenarios"] = scen
+                item["survey"] = None
+                for sr in SURVEY_ROWS:
+                    if iso(get("MASA", "Q%d" % sr)) == day:
+                        item["survey"] = {"rate": _num(get("MASA", "R%d" % sr)), "step": _num(get("MASA", "U%d" % sr))}
+                        break
+                item["risk"] = None
+                for rr in range(RISK_FIRST, RISK_LAST + 1):
+                    if iso(get("DV01_RISK", "C%d" % rr)) == day:
+                        item["risk"] = {"per_bp": _num(get("DV01_RISK", "G%d" % rr)), "pnl25": _num(get("DV01_RISK", "J%d" % rr))}
+                        break
+                out.append(item)
+                break
+        sofr = svc.books.get("sofr")
+        if sofr is not None and "SOFR_FOMC" in sofr.model.sheet_index:
+            calc = svc._calc(user, sofr) if user else sofr.engine.shared
+
+            def fget(addr: str) -> Any:
+                return self._cell(calc, sofr, "SOFR_FOMC", addr)
+
+            for r in range(FOMC_FIRST, FOMC_LAST + 1):
+                day = iso(fget("B%d" % r))
+                if day not in when:
+                    continue
+                k_now, k_before = _num(fget("K%d" % r)), _num(fget("L%d" % r))
+                out.append({"cal": "fomc", "name": "FOMC", "date": day, "when": when[day],
+                            "implied": (k_now - k_before) * 100.0 if k_now is not None and k_before is not None else None,
+                            "steps": _num(fget("N%d" % r)), "wirp": _num(fget("Q%d" % r)), "vs_expected": _num(fget("Z%d" % r)),
+                            "scenarios": [{"name": name, "prob": _num(fget("%s72" % col)), "step": _num(fget("%s%d" % (col, r)))}
+                                          for name, col in (("Baz", "R"), ("Şahin", "S"), ("Güvercin", "T"))]})
+                break
+        return out
+
+    def _moves_cells(self, user: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Calculation thread: Eğri Hareketi's points against the previous close (``Watch.moves``)."""
+        watch = getattr(self.svc, "watch", None)
+        if watch is None:
+            return None
+        from .xl import numfmt
+        return watch.moves(user or "", numfmt.get_locale(self.svc.settings.locale))
 
     def _dibs_cells(self) -> Optional[Dict[str, Any]]:
         """Calculation thread: each bond of the trading list (DİBS RV!A5:A54) with its Sinyal and Sinyal FX and their rich
@@ -448,6 +634,104 @@ class Bugun(object):
                            "sender": x.get("sender") or "", "raw": x.get("raw") or "",
                            "q": {k: (x.get("q") or {}).get(k) for k in keep}} for x in miss[:LIST_MAX]],
                 "more": max(0, len(miss) - LIST_MAX)}
+
+    # ------------------------------------------------------------------ the morning meeting (28.11.2026)
+    def _kontrol(self, user: str, eng: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
+        """Masa's checks that are not "tamam" (A10: only those) and when the user last pasted their DV01 position (A8)."""
+        from . import varrisk
+        out: Dict[str, Any] = {"available": True, "dv01": varrisk.paste_stamp(self.svc.store, user, now.date().isoformat())}
+        got = eng.get("kontrol") if not eng.get("error") else {"error": eng["error"]}
+        if isinstance(got, dict) and got.get("error"):
+            out["error_checks"] = got["error"]
+            return out
+        if got is None:
+            out["checks"] = None
+            return out
+        chips = [c for c in got if c["col"] != "B"]
+        out["checks"] = [c for c in chips if c["code"] != 0]
+        out["ok"] = [c["name"] for c in chips if c["code"] == 0]
+        out["overall"] = next((c for c in got if c["col"] == "B"), None)
+        return out
+
+    def _meeting(self, eng: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
+        """A TCMB / Fed meeting today or on the next business day (C5) - the PPK's priced step against the last close of
+        the PPK history (the solver's step of the latest day before today)."""
+        if eng.get("error"):
+            return {"error": eng["error"]}
+        got = eng.get("meeting")
+        if isinstance(got, dict) and got.get("error"):
+            return {"error": got["error"]}
+        items = [dict(x) for x in got or []]
+        today = now.date().isoformat()
+        for x in items:
+            if x["cal"] != "ppk":
+                continue
+            x["prev"] = None
+            start = (now.date() - _dt.timedelta(days=12)).isoformat()
+            rows = [r for r in self.svc.store.mpc_values(start, (now.date() - _dt.timedelta(days=1)).isoformat(), [x["date"]])
+                    if r.get("day", "") < today and _num(r.get("step")) is not None]
+            if rows:
+                last = max(rows, key=lambda r: r["day"])
+                x["prev"] = {"day": last["day"], "step": float(last["step"])}
+                if x.get("implied") is not None:
+                    x["change"] = x["implied"] - float(last["step"])
+        return {"available": True, "items": items}
+
+    def _moves(self, user: str, eng: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
+        """The moves since the previous close (A11) and the alarms that fired since then: the user's own and the desk's."""
+        if eng.get("error"):
+            return {"error": eng["error"]}
+        got = eng.get("moves")
+        if isinstance(got, dict) and got.get("error"):
+            return {"error": got["error"]}
+        out: Dict[str, Any] = dict(got or {}, available=got is not None)
+        since = self.previous_close(now.date())
+        out["since"] = since.strftime("%Y-%m-%d %H:%M")
+        out["alarms"] = self._fired_since(user, since, now)
+        return out
+
+    def _fired_since(self, user: str, since: _dt.datetime, now: _dt.datetime) -> List[Dict[str, Any]]:
+        """The alarms that fired from ``since`` (the previous close) to now: the user's own (``watch.fired:<day>``) and
+        the desk's (``desk.alarmlog:<day>``), the latest first."""
+        svc = self.svc
+        watch, desk = getattr(svc, "watch", None), getattr(svc, "desk_alarms", None)
+        out: List[Dict[str, Any]] = []
+        day = since.date()
+        while day <= now.date():
+            iso = day.isoformat()
+            stamp = since.strftime("%H:%M:%S") if day == since.date() else "00:00:00"
+            for e in (watch.fired(iso) if watch is not None else []):
+                if e.get("user") == user and str(e.get("time") or "") >= stamp:
+                    out.append({"day": iso, "time": str(e.get("time") or "")[:5], "label": e.get("label") or "",
+                                "text": e.get("condition") or "", "value": e.get("value_text") or "", "desk": False})
+            for e in (desk.log(iso) if desk is not None else []):
+                if e.get("kind") == "fired" and str(e.get("at") or "") >= stamp:
+                    out.append({"day": iso, "time": str(e.get("at") or "")[:5], "label": e.get("label") or "",
+                                "text": e.get("condition") or "", "value": e.get("value_text") or "", "desk": True})
+            day += _dt.timedelta(days=1)
+        out.sort(key=lambda x: (x["day"], x["time"]), reverse=True)
+        return out[:LIST_MAX]
+
+    def _notes(self, names: Dict[str, str], now: _dt.datetime) -> Dict[str, Any]:
+        """The desk's notes of the day (A11: typed in place on Bugün) and the last earlier day's."""
+        store = self.svc.store
+
+        def read(day: _dt.date) -> Optional[Dict[str, Any]]:
+            v = store.get("desk.notes:%s" % day.isoformat(), None)
+            if not isinstance(v, dict) or not str(v.get("text") or "").strip():
+                return None
+            by = v.get("by")
+            return {"day": day.isoformat(), "text": str(v.get("text") or ""), "by": names.get(by, by) if by else None,
+                    "at": v.get("at")}
+
+        today = now.date()
+        prev = None
+        for back in range(1, NOTES_BACK + 1):
+            prev = read(today - _dt.timedelta(days=back))
+            if prev is not None:
+                break
+        return {"available": True, "today": read(today) or {"day": today.isoformat(), "text": "", "by": None, "at": None},
+                "prev": prev}
 
     def _agenda(self, user: str, eng: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:
         svc = self.svc

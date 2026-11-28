@@ -1278,6 +1278,49 @@ class Watch(object):
         self.svc.store.put("heat.ref:%s" % self.svc.today_iso(), refs)
         return {"at": refs[user]["at"], "count": len(values)}
 
+    def reference(self, user: str) -> Dict[str, Any]:
+        """"Referansı şimdi al" (the desk, 28.11.2026: A11 - one reference for İzleme and Eğri Hareketi, where there were
+        two buttons and two records): every watched item's level now (:meth:`set_base`) and the heat map's points'
+        (:meth:`heat_ref`), in one go - each page tells its changes since then."""
+        taken = self.set_base(user, None)
+        heat = self.heat_ref(user)
+        return {"taken": taken, "count": heat["count"], "at": heat["at"]}
+
+    #: Bugün's "kapanıştan beri ne oynadı" (the desk, 28.11.2026: A11): the heat map's rows it reads - OIS, offshore and
+    #: their difference by tenor, the VİOP contracts against OIS, the bonds' ASW - and how many of the largest moves it lists
+    MOVE_ROWS = (("curve", "OIS"), ("curve", "Offshore"), ("curve", "Offshore − OIS"), ("viop", "OIS − VİOP"), ("dibs", "ASW"))
+    MOVE_TOP = 8
+
+    def moves(self, user: str, loc, top: int = MOVE_TOP) -> Dict[str, Any]:
+        """The heat map against the previous close (:meth:`heat`), as Bugün says it: the largest moves of
+        :data:`MOVE_ROWS` (bp, the largest first), how many moved, the points that did not move today - at the close's
+        level and never seen moving by the day's readings (a derived difference is not a point of its own) -, the close's
+        day.  Calculation thread."""
+        heat = self.heat(user, "close", loc)
+        moved: List[Dict[str, Any]] = []
+        still: List[str] = []
+        days = set()
+        for p in heat["panels"]:
+            for row in p["rows"]:
+                if (p["id"], row["name"]) not in self.MOVE_ROWS:
+                    continue
+                for c in row["cells"]:
+                    if c is None:
+                        continue
+                    if c.get("base_day"):
+                        days.add(c["base_day"])
+                    chg = c.get("chg")
+                    if chg is None:
+                        continue
+                    if chg != 0.0:
+                        moved.append({"label": c["label"], "row": row["name"], "panel": p["id"], "chg": chg,
+                                      "chg_text": c["chg_text"], "now_text": c["now_text"], "base_text": c["base_text"]})
+                    elif row["name"] != "Offshore − OIS" and not (self.days.get(("", self.key(c["subject"]))) or {}).get("moved"):
+                        still.append(c["label"])
+        moved.sort(key=lambda x: (-abs(x["chg"]), x["label"]))
+        return {"top": moved[:max(0, int(top))], "count": len(moved), "still": still, "closed": heat.get("closed"),
+                "base_day": max(days) if days else None, "time": heat["time"], "ref_at": (self._heat_refs().get(user) or {}).get("at")}
+
     def heat(self, user: str, basis: str, loc) -> Dict[str, Any]:
         """The heat map: every point's change against the previous close, the day's open or the user's
         reference - in bp for rates and spreads."""

@@ -2043,7 +2043,8 @@ table.plain tr.old-input td.l .mk { font-size: 10.5px; border: 1px solid var(--w
 .swaption #swpt-result > #swpt-schedule-panel { flex: 0 1 auto; }
 /* ---- Girdiler (28.11.2026, toplu-girdi C4): a quote's age - a price unchanged for the desk's "quote_old" minutes of
    today's market fades (quoteage.js, tto/marketdata/age.py); its tooltip says "son değişim 10:42 (37 dk)" ----------- */
-table.grid td.qold { color: var(--ink-3); opacity: .6; }/* ---- K3 Fiyatlama (28.11.2026, the desk: "Bir de fiyatlama kisminda forward gelsin istiyorum ..."; "C - 2-3-..."; A1, B7) ---- */
+table.grid td.qold { color: var(--ink-3); opacity: .6; }
+/* ---- K3 Fiyatlama (28.11.2026, the desk: "Bir de fiyatlama kisminda forward gelsin istiyorum ..."; "C - 2-3-..."; A1, B7) ---- */
 /* The forward card (every source at the value date, the ladder, the quote), the column of the DV01 buckets with
    "Bu işlemi hedge'le" and "Pozisyona ekle (deneme)" under them, "İşlem gir ▾" on the result, the quote log. */
 .pricing .pr-main > .pr-left { flex: 0 1 auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; max-width: 660px; }
@@ -2086,3 +2087,49 @@ table.grid td.qold { color: var(--ink-3); opacity: .6; }/* ---- K3 Fiyatlama (28
 .quotelog .ql-st.done { color: var(--pos); }
 .quotelog .ql-st.not_done { color: var(--neg); }
 .quotelog .ql-st.open { color: var(--ink-2); }
+/* ---- K5 Risk · Bugün (28.11.2026, the desk: "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16") ------- */
+/* Masa's Kontrol chips (tto/service.py _kontrol_chips, golink.js): each leads to the table it checks; below 1500 px only
+   those not "tamam" - the overall chip always - and "N tamam" at the end */
+table.grid td.golink { cursor: pointer; }
+table.grid td.golink:hover { text-decoration: underline; }
+table.grid td.kchip-sum { display: none; color: var(--ink-3); font-style: italic; }
+@media (max-width: 1499px) {
+  table.grid td.kchip.k-tamam:not(.kchip-all) { display: none; }
+  table.grid td.kchip-sum { display: table-cell; }
+}
+/* DV01 Risk's pinned Parametreler: when the position was pasted (red when not today: the cell's own colour) */
+table.grid td.dv01-paste { white-space: nowrap; }
+/* Bugün: the checks not "tamam", the meeting's day, the moves since the close, the desk's notes in place, the quant's
+   lines in two short lines (their levels on screen), the sides as Günlük İşlemler colours them; notes two lines */
+.bugun-checks { margin: 2px 0 6px; padding-left: 18px; }
+.bugun-checks li { margin: 2px 0; }
+.bugun-checks li.neg > a { color: var(--neg); font-weight: 650; }
+.bugun-checks li.warn > a { color: var(--warn); font-weight: 650; }
+.bugun-meeting + .bugun-meeting { border-top: 1px solid var(--line-2); margin-top: 6px; padding-top: 6px; }
+.bugun-karar .inp.sm { width: 110px; padding: 2px 6px; }
+.bugun-karar-out { margin-left: 6px; }
+table.plain.bugun td.up { color: rgb(var(--heat-up)); font-weight: 650; }
+table.plain.bugun td.down { color: rgb(var(--heat-down)); font-weight: 650; }
+.bugun-card .bugun-body > textarea#bugun-notes-text { width: 100%; box-sizing: border-box; min-height: 72px; }
+.bugun-notes-prev { white-space: pre-wrap; margin: 6px 0 0; padding: 6px 8px; border-left: 3px solid var(--line-2); color: var(--ink-2); }
+.bugun-qlist { display: flex; flex-direction: column; gap: 2px; }
+.bugun-q { padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.bugun-q:hover { background: var(--accent-soft); }
+.bugun-q.soft { opacity: .65; }
+.bugun-q .q1 { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.bugun-q .q1 .qtrade { flex: 1 1 200px; min-width: 0; }
+.bugun-q .q1 .qmeta { white-space: nowrap; font-size: 11.5px; }
+.bugun-q .q2 { font-variant-numeric: tabular-nums; padding-left: 2px; }
+.bugun-q .qside { font-weight: 700; white-space: nowrap; }
+.bugun-q .qside.buy { color: var(--pos); }
+.bugun-q .qside.sell { color: var(--neg); }
+.bugun-q .qexp.pos { color: var(--pos); }
+.bugun-q .qexp.neg { color: var(--neg); }
+.bugun-body > .bugun-note.clamp { position: relative; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; line-height: 1.45; }
+.bugun-body > .bugun-note.clamp.open { display: block; -webkit-line-clamp: none; overflow: visible; }
+.bugun-body > .bugun-note .note-more { display: none; position: absolute; right: 0; bottom: 0; border: 0; padding: 0 2px 0 12px;
+  font: inherit; line-height: inherit; color: var(--accent-ink); cursor: pointer; background: linear-gradient(90deg, transparent, var(--surface) 12px); }
+.bugun-body > .bugun-note .note-more:hover { text-decoration: underline; }
+.bugun-body > .bugun-note.clamp.long .note-more { display: inline; }
+.bugun-body > .bugun-note.clamp.open .note-more { display: inline; position: static; padding-left: 6px; background: none; }

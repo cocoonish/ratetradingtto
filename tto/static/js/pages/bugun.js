@@ -5,17 +5,27 @@
 // the agenda or the trades change (the live stream's counters) and with "Yenile"; "Açılış sayfası yap" makes it the page
 // the dashboard opens on.
 // The blocks stand in columns, the things to do first (the desk, 27.11.2026: "Hepsini yap" - the layout proposals): RET,
-// the chat's trades not entered and the agenda in the first column, then the trades and the quant's lines, the DİBS
-// bonds last; a block never leaves a hole beside a taller one, and a table's column that is empty in every row goes.
+// the checks, the chat's trades not entered and the agenda in the first column, then the morning meeting and the trades,
+// the quant's lines and the DİBS bonds last; a block never leaves a hole beside a taller one, and a table's column that is
+// empty in every row goes.
+// The morning meeting (the desk, 28.11.2026: "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"): the checks
+// of Masa's Kontrol strip that are not "tamam" and when the DV01 position was pasted (A10, A8), the PPK / FOMC day (C5),
+// what moved since the close with one "Referansı şimdi al" for İzleme and Eğri Hareketi (A11), the desk's notes typed in
+// place (A11); the quant's lines in two short lines each, their levels on screen (B19), the sides coloured as Günlük
+// İşlemler colours them - RECEIVE / AL green, PAY / SAT red (B6); the notes two lines, "devamı" the rest.
 import { api } from '../api.js';
-import { h, clear, toast, errorToast } from '../ui.js';
+import { h, clear, toast, errorToast, foldNote } from '../ui.js';
 import { num, isoToTr } from '../format.js';
 import { landing, setLanding } from '../layout.js';
 import { level } from './broker.js';
+import { setupGoLinks } from '../golink.js';
+
+// (the dashboard's own links in tables - Masa's Kontrol chips - are followed from here: this module is loaded with the app)
+setupGoLinks();
 
 const EVERY = 20000;               // ms: the market's generations read the page again at most this often
 /** The blocks in the order they are read: the things to do first. */
-export const ORDER = ['ret', 'chat', 'agenda', 'trades', 'quant', 'dibs'];
+export const ORDER = ['ret', 'kontrol', 'chat', 'agenda', 'meeting', 'moves', 'notes', 'trades', 'quant', 'dibs'];
 const COL_MIN = 480;               // px: a column is never narrower (fewer columns instead)
 const GAP = 12;
 
@@ -24,10 +34,11 @@ export function columnCount(width) {
   return Math.max(1, Math.min(3, Math.floor((width + GAP) / (COL_MIN + GAP))));
 }
 
-/** The blocks of each column for ``n`` columns: the things to do together in the first, the DİBS bonds in the last. */
+/** The blocks of each column for ``n`` columns: the things to do together in the first, the morning meeting next, the
+ *  quant's lines and the DİBS bonds in the last. */
 export function columnPlan(n) {
-  if (n >= 3) return [['ret', 'chat', 'agenda'], ['trades', 'quant'], ['dibs']];
-  if (n === 2) return [['ret', 'chat', 'agenda'], ['trades', 'quant', 'dibs']];
+  if (n >= 3) return [['ret', 'kontrol', 'chat', 'agenda'], ['meeting', 'moves', 'notes', 'trades'], ['quant', 'dibs']];
+  if (n === 2) return [['ret', 'kontrol', 'chat', 'agenda', 'meeting'], ['moves', 'notes', 'trades', 'quant', 'dibs']];
   return [ORDER.slice()];
 }
 
@@ -41,6 +52,29 @@ export function emptyColumns(rows) {
   const out = [];
   for (let j = 0; j < n; j++) if (body.every((r) => EMPTY_TEXT.has(String(r.cells[j] === undefined ? '' : r.cells[j]).trim()))) out.push(j);
   return out;
+}
+
+/** A trade's side coloured as Günlük İşlemler colours it (the desk, 28.11.2026: B6): RECEIVE / AL (a receive, a buy) green
+ *  ("buy"), PAY / SAT red ("sell"), a spread's or a fly's way (STEEPENER, FLATTENER …) neither. */
+export function sideClass(side) {
+  const s = String(side || '').trim().toUpperCase();
+  if (/^(RECEIVE|REC\b|REC GÖVDE|AL\b|ALIŞ|KORUMA AL)/.test(s)) return 'buy';
+  if (/^(PAY\b|PAY GÖVDE|SAT\b|SATIŞ|KORUMA SAT)/.test(s)) return 'sell';
+  return '';
+}
+
+/** A quant line's levels as one short line (B19): "34,445 → 34,000 · stop 34,700 · R/R 1,59". */
+export function levelsLine(x) {
+  const p = (v) => (isNum(v) ? num(v, x.digits) : '—');
+  return p(x.entry) + ' → ' + p(x.target) + ' · stop ' + p(x.stop) + (isNum(x.rr) ? ' · R/R ' + num(x.rr, 2) : '');
+}
+
+/** A meeting decision typed after it (C5: "Karar" - the step decided, bp): the surprise against the priced step and the
+ *  position's P&L of it (its risk of the decision, TL/bp) - ``null`` when either is not known. */
+export function surprise(decided, implied, perBp) {
+  if (!isNum(decided) || !isNum(implied)) return null;
+  const s = decided - implied;
+  return { bp: s, pnl: isNum(perBp) ? s * perBp : null };
 }
 
 /** Take the empty columns out of a table drawn (``tr`` of ``th`` / ``td``, no spans). */
@@ -68,8 +102,14 @@ function stamp(text, today) {
   return (s.slice(0, 10) === today ? '' : isoToTr(s.slice(0, 10)) + ' ') + s.slice(11, 16);
 }
 const none = (text, id) => h('div', { class: 'bugun-none', id: id || null }, text);
-const note = (text, id) => h('div', { class: 'muted bugun-note', id: id || null }, text);
+/** A block's note: two lines, "devamı" the rest (the desk, 28.11.2026: the notes folded on Bugün). */
+function note(text, id) {
+  const el = h('div', { class: 'muted bugun-note', id: id || null }, text);
+  foldNote(el);
+  return el;
+}
 const td = (text, c, title) => h('td', { class: c || null, title: title || null }, text);
+const KARAR_KEY = 'tto.bugun.karar.';
 
 /** A signal of DİBS RV as the block says it: "PAHALI → UCUZ (+12,4 bp)", or the state alone without a comparison. */
 function sigText(x) {
@@ -155,17 +195,18 @@ export class BugunPage {
     this.host.appendChild(h('div', { class: 'page-tools' }, again, this.stamp, h('span', { class: 'grow' }), this.landingBox));
     this.grid = h('div', { class: 'bugun-grid bugun-cols', id: 'bugun' });
     this.host.appendChild(this.grid);
-    const card = (key, title, link, tip, go) => {
+    const card = (key, title, link, tip, go, extra) => {
       const count = h('span', { class: 'bugun-count hidden', id: 'bugun-' + key + '-count' });
       const btn = h('button', { class: 'btn sm', type: 'button', id: 'bugun-' + key + '-go', title: tip }, link + ' →');
       btn.addEventListener('click', go);
       const body = h('div', { class: 'bugun-body', id: 'bugun-' + key + '-body' });
-      const el = h('section', { class: 'panel bugun-card', id: 'bugun-' + key }, h('header', null, h('h2', null, title), count, btn), body);
+      const el = h('section', { class: 'panel bugun-card', id: 'bugun-' + key }, h('header', null, h('h2', null, title), count, extra || null, btn), body);
       this.cards[key] = { el, body, count };
     };
     const hash = (x) => () => { window.location.hash = '#/' + x; };
     card('ret', 'RET', 'RET penceresi', 'RET faizleri penceresi: yüklenmediyse elle giriş, güncelleme varsa adil değer sekmesinde açılır',
       () => this.openRet());
+    card('kontrol', 'Kontrol · sabah', 'Masa', 'Masa · Genel bakış: Kontrol şeridi (her çip kontrol ettiği tabloya götürür)', hash('masa'));
     card('trades', 'Trades · açık işlemler', 'Trades', 'Trades sayfası: MTM yenile, işlemler, kapanış', hash('trades'));
     card('quant', 'Quant · yeni AL / SAT', 'Sinyaller', 'Quant › Sinyaller: bütün liste, kartlar, kayıt', hash('quant'));
     card('dibs', 'DİBS · sinyali dönen kâğıtlar', 'DİBS RV · Genel', 'DİBS RV · Genel: trading listesinin kâğıtları OIS ASW, FX swap ASW ve sıfır kupon eğrisine göre',
@@ -173,6 +214,15 @@ export class BugunPage {
     card('chat', 'Girilmemiş işlemler', 'Chat ↔ Günlük İşlemler', 'Masanın chat\'teki işlemleri Günlük İşlemler\'in yanında: eşleştir, yok say, gir',
       () => this.ctx.openRecon().catch(errorToast));
     card('agenda', 'Ajanda · takvim', 'Ajanda', 'Ajanda: bugünün işleri, deadline\'lar, tekrarlayan işler', hash('agenda'));
+    card('meeting', 'PPK / FOMC günü', 'DV01 Risk', 'DV01 Risk › PPK karar riski: pozisyonun her toplantının kararına riski', hash('dv01?p=B9'));
+    // one reference for İzleme and Eğri Hareketi (A11): the levels now - each page tells its changes since then
+    const ref = h('button', { class: 'btn sm', type: 'button', id: 'bugun-ref',
+      title: 'İzleme\'deki kalemlerin ve Eğri Hareketi\'nin noktalarının şimdiki seviyesini referans al (sabah toplantısı): iki sayfa da değişimi bundan beri gösterir' },
+    'Referansı şimdi al');
+    ref.addEventListener('click', () => this.takeReference());
+    card('moves', 'Kapanıştan beri', 'Eğri Hareketi', 'Eğri Hareketi: her noktanın önceki kapanışa, açılışa ya da referansa göre değişimi', hash('heat'), ref);
+    card('notes', 'Masa notları · bugün', 'İzleme', 'İzleme · Alarmlar: aynı notlar, alarmlar, izleme listesi', hash('watch'));
+    this.cards.meeting.el.classList.add('hidden');            // (only on a meeting's day and the day before it)
     this.columns = 0;
     this.arrange();
     // the columns follow the page's width (the menu folded, the side drawer opened, the window resized)
@@ -200,24 +250,43 @@ export class BugunPage {
     this.ctx.openRet(t ? { tab: t } : undefined);
   }
 
+  async takeReference() {
+    try {
+      const r = await api.post('/api/watch/reference', {});
+      toast('Referans alındı (' + r.at + '): İzleme\'de ' + r.taken + ' kalem, Eğri Hareketi\'nde ' + r.count + ' nokta', 'ok', 5000);
+      this.reload().catch(() => {});
+    } catch (err) { errorToast(err); }
+  }
+
   paint() {
     const d = this.data;
     if (!d) return;
     this.stamp.textContent = isoToTr(d.today) + ' · ' + d.time + ' itibarıyla';
     this.paintLanding();
-    for (const [key, fn] of [['ret', this.paintRet], ['trades', this.paintTrades], ['quant', this.paintQuant], ['dibs', this.paintDibs],
-      ['chat', this.paintChat], ['agenda', this.paintAgenda]]) {
+    const painters = { ret: this.paintRet, kontrol: this.paintKontrol, trades: this.paintTrades, quant: this.paintQuant,
+      dibs: this.paintDibs, chat: this.paintChat, agenda: this.paintAgenda, meeting: this.paintMeeting, moves: this.paintMoves,
+      notes: this.paintNotes };
+    for (const key of ORDER) {
+      const fn = painters[key];
       const c = this.cards[key];
       const x = d[key] || {};
+      if (!c) continue;
+      if (key === 'notes' && !x.error && x.available !== false) {
+        // (typed in place: the box is kept while it is being typed into - it is never drawn again under the cursor)
+        try { fn.call(this, c, x, d); } catch (err) { errToBody(c, err); }
+        continue;
+      }
+      if (key === 'notes') c.notes = null;                      // (its box is drawn anew once it can be read again)
       clear(c.body);
       c.count.classList.add('hidden');
       c.el.classList.remove('bugun-attn');
+      if (key === 'meeting') c.el.classList.toggle('hidden', !x.error && !(x.items || []).length);   // (a meeting's day only)
       if (x.error) { c.body.appendChild(h('div', { class: 'err' }, 'Okunamadı: ' + x.error.replace(/^okunamadı: /, ''))); continue; }
       if (x.available === false) { c.body.appendChild(none('Bu dashboard\'da yok (çalışma kitabı yüklü değil).')); continue; }
       try {
         fn.call(this, c, x, d);
         for (const t of c.body.querySelectorAll('table.plain.bugun')) dropEmptyColumns(t);      // (e.g. "Sıfır kupon" all "—")
-      } catch (err) { c.body.appendChild(h('div', { class: 'err' }, 'Çizilemedi: ' + err.message)); }
+      } catch (err) { errToBody(c, err); }
     }
   }
 
@@ -264,6 +333,177 @@ export class BugunPage {
       b.appendChild(none('Adil değer yayınlanan RET\'le aynı: güncelleme yok' + (r.checked ? ' (' + r.checked + ' itibarıyla)' : '') + '.', 'bugun-ret-none'));
     }
     this.setCount(c, (r.loaded ? 0 : 1) + (r.updates || []).length, true);
+  }
+
+  /** Masa's checks that are not "tamam" - each leads to the table it checks, its rule in its tooltip (A10) - and when the
+   *  DV01 position was pasted, red when not today (A8). */
+  paintKontrol(c, k, d) {
+    const b = c.body;
+    const p = k.dv01 || {};
+    const pasteTip = p.at ? 'DV01 Risk pozisyonu (VaR sekmesindeki Onshore / TLREF / Offshore, Pozisyon\'daki C) en son ' + p.at + '\'te yazıldı'
+      : 'DV01 Risk pozisyonu yapıştırılmadı: Murex\'in Onshore / TLREF kolonlarını DV01 Risk › VaR sekmesine yapıştırın';
+    b.appendChild(h('div', { class: 'bugun-line ' + (p.today ? 'ok' : 'warn'), id: 'bugun-kontrol-dv01', title: pasteTip },
+      h('b', null, 'DV01 pozisyonu: '), h('a', { href: '#/dv01?p=V3' }, p.at ? p.text + (p.today ? '' : ' · bugün değil') : 'yapıştırılmadı')));
+    let bad = p.today ? 0 : 1;
+    if (k.error_checks) {
+      b.appendChild(h('div', { class: 'err' }, 'Kontrol şeridi okunamadı: ' + k.error_checks));
+    } else if (k.checks) {
+      if (k.checks.length) {
+        const ul = h('ul', { class: 'bugun-checks', id: 'bugun-kontrol-list' });
+        for (const x of k.checks) {
+          const tone = x.code === 1 ? 'warn' : 'neg';
+          ul.appendChild(h('li', { class: tone, title: x.rule + (x.where ? '\nTıklayın → ' + x.where : '') },
+            x.href ? h('a', { href: x.href }, x.text || x.name) : (x.text || x.name), x.where ? h('span', { class: 'muted' }, ' · ' + x.where) : null));
+        }
+        b.appendChild(ul);
+        bad += k.checks.length;
+      }
+      b.appendChild(h('div', { class: 'muted bugun-line', id: 'bugun-kontrol-ok', title: (k.ok || []).join(', ') },
+        k.checks.length ? (k.ok || []).length + ' tamam' : 'Kontrollerin hepsi tamam (' + (k.ok || []).length + ').'));
+    }
+    this.setCount(c, bad, true);
+  }
+
+  /** A PPK / FOMC meeting today or on the next business day (C5): what it is priced at, against the last close, the survey
+   *  and the scenarios, the position's risk of the decision; on the day "Karar": the surprise and its P&L. */
+  paintMeeting(c, m, d) {
+    const items = m.items || [];
+    c.el.classList.toggle('hidden', !items.length);
+    if (!items.length) return;
+    const b = c.body;
+    for (const x of items) {
+      const box = h('div', { class: 'bugun-meeting', 'data-cal': x.cal, id: 'bugun-meeting-' + x.cal });
+      box.appendChild(h('div', { class: 'bugun-line warn' }, h('b', null, x.name + ' · ' + isoToTr(x.date) + (x.when === 'today' ? ' · bugün' : ' · yarın'))));
+      const implied = isNum(x.implied) ? sgn(x.implied, 1) + ' bp' : '—';
+      if (x.cal === 'ppk') {
+        const prev = x.prev ? ' · dünden ' + sgn(x.change, 1) + ' bp (' + isoToTr(x.prev.day) + ' kapanışı ' + sgn(x.prev.step, 1) + ')' : ' · dünle kıyas yok (PPK geçmişi)';
+        box.appendChild(h('div', { class: 'bugun-line' }, 'İma adım: ', h('b', null, implied), (isNum(x.band) ? ' (± ' + num(x.band, 1) + ')' : '') + prev));
+        if (x.survey) box.appendChild(h('div', { class: 'bugun-line' }, 'Anket: %' + num(x.survey.rate, 2) + (isNum(x.survey.step) ? ' (' + sgn(x.survey.step, 0) + ' bp)' : '')));
+      } else {
+        box.appendChild(h('div', { class: 'bugun-line' }, 'İma adım: ', h('b', null, implied), isNum(x.steps) ? ' (' + num(x.steps, 2) + ' adım)' : '',
+          isNum(x.wirp) ? ' · WIRP farkı ' + sgn(x.wirp, 1) + ' bp' : '', isNum(x.vs_expected) ? ' · beklenenden ' + sgn(x.vs_expected, 1) + ' bp' : ''));
+      }
+      const sc = (x.scenarios || []).filter((s) => isNum(s.step));
+      if (sc.length) {
+        box.appendChild(h('div', { class: 'bugun-line muted' }, 'Senaryolar: ' + sc.map((s) => s.name + (isNum(s.prob) ? ' %' + num(s.prob * 100, 0) : '')
+          + ' ' + sgn(s.step, 0)).join(' · ') + ' bp'));
+      }
+      if (x.risk) {
+        box.appendChild(h('div', { class: 'bugun-line' }, 'Pozisyonunuz: karar riski ', h('b', { class: cls(x.risk.per_bp) }, sgn(x.risk.per_bp, 0) + ' TL/bp'),
+          ' · 25 bp sürpriz ', h('b', { class: cls(x.risk.pnl25) }, sgn(x.risk.pnl25, 0) + ' TL')));
+      }
+      if (x.when === 'today') box.appendChild(this.decisionBox(x));
+      b.appendChild(box);
+    }
+    this.setCount(c, items.length, true);
+  }
+
+  /** "Karar" (after the decision): the step decided, typed (kept in this browser for the day) - the surprise against the
+   *  priced step and, for the PPK, the position's P&L of it (its risk of the decision × the surprise: DV01 Risk's
+   *  "Tek toplantı sürprizi"). */
+  decisionBox(x) {
+    const key = KARAR_KEY + x.cal + '.' + x.date;
+    let kept = '';
+    try { kept = localStorage.getItem(key) || ''; } catch (e) { kept = ''; }
+    const inp = h('input', { class: 'inp sm', type: 'text', id: 'bugun-karar-' + x.cal, value: kept, placeholder: 'adım, bp (örn. -150)', size: '12' });
+    const out = h('span', { class: 'bugun-karar-out', id: 'bugun-karar-' + x.cal + '-out' });
+    const show = () => {
+      const v = parseFloat(String(inp.value).replace('−', '-').replace(',', '.'));
+      clear(out);
+      const s = surprise(v, x.implied, x.risk ? x.risk.per_bp : null);
+      if (!s) { out.textContent = inp.value.trim() ? 'okunamadı' : ''; return; }
+      out.appendChild(document.createTextNode(' → sürpriz ' + sgn(s.bp, 1) + ' bp'));
+      if (isNum(s.pnl)) out.appendChild(h('b', { class: cls(s.pnl) }, ' · K/Z ' + sgn(s.pnl, 0) + ' TL'));
+    };
+    inp.addEventListener('input', () => {
+      try { localStorage.setItem(key, inp.value); } catch (e) { /* not kept */ }
+      show();
+    });
+    show();
+    return h('div', { class: 'bugun-line bugun-karar', title: 'Karardan sonra açıklanan adımı yazın: ima adıma göre sürpriz ve pozisyonun bundan K/Z\'si (bu tarayıcıda gün boyu kalır)' },
+      h('b', null, 'Karar: '), inp, out);
+  }
+
+  /** What moved since the previous close (A11): the largest moves, the points that did not move today, the alarms that
+   *  fired since the close. */
+  paintMoves(c, mv, d) {
+    const b = c.body;
+    const since = mv.since ? isoToTr(mv.since.slice(0, 10)) + ' ' + mv.since.slice(11) : '';
+    b.appendChild(note((mv.closed ? 'Hafta sonu, piyasa kapalı: son iş günü ' + isoToTr(mv.closed) + ' kapanışı. ' : '')
+      + 'Önceki kapanışa' + (mv.base_day ? ' (' + isoToTr(mv.base_day) + ')' : '') + ' göre en büyük ' + ((mv.top || []).length || '') + ' hareket: OIS, offshore, '
+      + 'offshore − OIS, VİOP ve DİBS ASW (Eğri Hareketi\'nin noktaları, bp)' + (mv.ref_at ? ' · referansınız ' + mv.ref_at : ' · bugün referans alınmadı') + '.', 'bugun-moves-note'));
+    const top = mv.top || [];
+    if (top.length) {
+      const table = h('table', { class: 'plain bugun', id: 'bugun-moves-table' });
+      table.appendChild(h('tr', null, h('th', { class: 'l' }, 'Nokta'), h('th', null, 'Şimdi'), h('th', null, 'Kapanış'), h('th', null, 'Değişim')));
+      for (const x of top) {
+        table.appendChild(h('tr', null, td(x.label, 'l'), td(x.now_text), td(x.base_text, 'muted'),
+          td(x.chg_text, x.chg > 0 ? 'up' : 'down')));
+      }
+      b.appendChild(table);
+    } else {
+      b.appendChild(none(mv.available === false ? 'Eğri Hareketi okunamadı.' : 'Önceki kapanışa göre hareket eden nokta yok.', 'bugun-moves-none'));
+    }
+    const still = mv.still || [];
+    if (still.length) {
+      b.appendChild(h('div', { class: 'bugun-line muted', id: 'bugun-moves-still', title: still.slice(0, 40).join(', ') + (still.length > 40 ? ' …' : '') },
+        'Bugün kıpırdamayan nokta: ' + still.length + ' (kapanıştaki seviyesinde)'));
+    }
+    const al = mv.alarms || [];
+    b.appendChild(h('div', { class: 'bugun-sub' }, 'Kapanıştan' + (since ? ' (' + since + ')' : '') + ' beri çalan alarmlar'));
+    if (al.length) {
+      b.appendChild(h('ul', { class: 'bugun-items', id: 'bugun-moves-alarms' }, ...al.map((a) => h('li', null,
+        h('span', { class: 'muted' }, (a.day !== d.today ? isoToTr(a.day) + ' ' : '') + a.time), ' ', h('b', null, a.label),
+        a.text ? ' · ' + a.text : '', a.value ? ' · ' + a.value : '', a.desk ? h('span', { class: 'muted' }, ' · Masa') : null))));
+    } else {
+      b.appendChild(none('Kapanıştan beri çalan alarm yok.', 'bugun-moves-noalarm'));
+    }
+    this.setCount(c, al.length, false);
+  }
+
+  /** The desk's notes of the day, typed in place (A11) - the same as İzleme's; the last earlier day's one click away. */
+  paintNotes(c, n, d) {
+    if (!c.notes) {
+      const b = c.body;
+      clear(b);
+      const area = h('textarea', { class: 'inp chatbox', id: 'bugun-notes-text', rows: '4', spellcheck: 'false',
+        placeholder: 'Bugün izlenecek seviyeler, sabah toplantısı, ihale, veri takvimi… (herkes görür)' });
+      const info = h('span', { class: 'muted', id: 'bugun-notes-info' });
+      const save = h('button', { class: 'btn sm primary', type: 'button', id: 'bugun-notes-save', title: 'Kaydet (Ctrl+Enter)' }, 'Kaydet');
+      const prevBtn = h('button', { class: 'btn sm hidden', type: 'button', id: 'bugun-notes-prev' }, 'Dünkü notlar');
+      const prevBox = h('div', { class: 'bugun-notes-prev hidden', id: 'bugun-notes-prevtext' });
+      const st = { area, info, prevBtn, prevBox, dirty: false };
+      area.addEventListener('input', () => { st.dirty = true; });
+      const doSave = async () => {
+        try {
+          const r = await api.post('/api/notes', { text: area.value });
+          st.dirty = false;
+          info.textContent = 'Kaydedildi · ' + r.at;
+          toast('Masa notları kaydedildi', 'ok');
+        } catch (err) { errorToast(err); }
+      };
+      save.addEventListener('click', doSave);
+      area.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSave(); } });
+      prevBtn.addEventListener('click', () => {
+        const open = prevBox.classList.toggle('hidden') === false;
+        prevBtn.classList.toggle('on', open);
+      });
+      b.appendChild(area);
+      b.appendChild(h('div', { class: 'chatrow actions' }, save, info, h('span', { class: 'grow' }), prevBtn));
+      b.appendChild(prevBox);
+      c.notes = st;
+    }
+    const st = c.notes;
+    const today = n.today || {};
+    if (document.activeElement !== st.area && !st.dirty) st.area.value = today.text || '';
+    if (!st.dirty) st.info.textContent = today.at ? 'Son kaydeden: ' + (today.by || '') + ' · ' + today.at : '';
+    const prev = n.prev;
+    st.prevBtn.classList.toggle('hidden', !prev);
+    if (prev) {
+      st.prevBtn.textContent = 'Dünkü notlar (' + isoToTr(prev.day).slice(0, 5) + ')';
+      st.prevBtn.title = isoToTr(prev.day) + (prev.by ? ' · ' + prev.by : '') + (prev.at ? ' · ' + prev.at : '');
+      st.prevBox.textContent = prev.text;
+    }
   }
 
   paintTrades(c, t, d) {
@@ -317,6 +557,7 @@ export class BugunPage {
     this.setCount(c, near.length, true);
   }
 
+  /** The quant's new lines (B19: two short lines each - the trade, then its levels and money - all of it on screen). */
   paintQuant(c, q) {
     const b = c.body;
     if (!q.ready) { b.appendChild(none(q.why || 'Quant sonucu henüz yok.', 'bugun-quant-none')); return; }
@@ -328,23 +569,23 @@ export class BugunPage {
       this.setCount(c, 0);
       return;
     }
-    const table = h('table', { class: 'plain bugun', id: 'bugun-quant-table' });
-    table.appendChild(h('tr', null, h('th', { class: 'l' }, 'Saat'), h('th', { class: 'l' }, 'Yön'), h('th', { class: 'l' }, 'İşlem'),
-      h('th', { class: 'l' }, 'Büyüklük'), h('th', null, 'Giriş / hedef / stop'), h('th', null, 'Ödül / risk'), h('th', null, 'Beklenen')));
+    const list = h('div', { class: 'bugun-qlist', id: 'bugun-quant-table' });
     for (const x of q.lines) {
-      const p = (v) => (isNum(v) ? num(v, x.digits) : '—');
-      const tr = h('tr', { class: 'go' + (x.listed ? '' : ' soft'), 'data-sid': x.sid,
+      const line = h('div', { class: 'bugun-q go' + (x.listed ? '' : ' soft'), 'data-sid': x.sid, role: 'button', tabindex: '0',
         title: (x.model ? x.model + ' · ' : '') + (x.asset || '') + (x.gated ? ' · düşük güven: ' + x.gated : '')
-          + (x.listed ? '' : ' · listeden çıktı (|z| geri döndü); kayıtta açık') + ' · tıklayınca sinyalin sayfası' },
-      td(x.time + (x.new ? ' · YENİ' : ''), 'l muted'), td(x.side, 'l ' + (x.up ? 'buy' : 'sell')), td(x.trade, 'l wrap'),
-      td(x.size || '', 'l muted'),
+          + (x.listed ? '' : ' · listeden çıktı (|z| geri döndü); kayıtta açık') + (x.exp_text ? '\n' + x.exp_text : '') + '\nTıklayınca sinyalin sayfası' },
+      h('div', { class: 'q1' }, h('span', { class: 'qside ' + sideClass(x.side) }, x.side), h('span', { class: 'qtrade' }, x.trade),
+        h('span', { class: 'muted qmeta' }, [x.size, x.time + (x.new ? ' · YENİ' : '')].filter(Boolean).join(' · '))),
       // (in the traded instrument's own level - an FX line's forward, the FRA / PPK line's FRA rate -; a model's gap beside it)
-      td(p(x.entry) + ' / ' + p(x.target) + ' / ' + p(x.stop) + (x.unit ? ' ' + x.unit : '') + (x.note ? ' · ' + x.note : ''), null, x.note || null),
-      td(isNum(x.rr) ? num(x.rr, 2) : '—'), td(isNum(x.exp_try) ? sgn(x.exp_try, 0) + ' TL' : (x.exp_text || '—'), isNum(x.exp_try) ? cls(x.exp_try) : 'muted', x.exp_text || null));
-      tr.addEventListener('click', () => { window.location.hash = '#/' + (x.page || 'quant'); });
-      table.appendChild(tr);
+      h('div', { class: 'q2' }, h('span', { class: 'qlv' }, levelsLine(x)),
+        isNum(x.exp_try) ? h('b', { class: 'qexp ' + cls(x.exp_try) }, ' · ' + sgn(x.exp_try, 0) + ' TL') : null,
+        h('span', { class: 'muted' }, (x.unit ? ' · ' + x.unit : '') + (x.note ? ' · ' + x.note : ''))));
+      const go = () => { window.location.hash = '#/' + (x.page || 'quant'); };
+      line.addEventListener('click', go);
+      line.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+      list.appendChild(line);
     }
-    b.appendChild(table);
+    b.appendChild(list);
     if (q.more) b.appendChild(note('ve ' + q.more + ' satır daha: Sinyaller sayfasında.'));
     this.setCount(c, q.count, true);
   }
@@ -429,4 +670,8 @@ export class BugunPage {
     const open = (a.items || []).filter((it) => !it.done).length + (a.late || []).length;
     this.setCount(c, open, (a.late || []).length > 0);
   }
+}
+
+function errToBody(c, err) {
+  c.body.appendChild(h('div', { class: 'err' }, 'Çizilemedi: ' + err.message));
 }

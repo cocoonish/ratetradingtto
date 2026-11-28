@@ -11,7 +11,7 @@
    "scope": "user",
    "group": "dv01-0",
    "kind": "auto",
-   "label": "PASTE: bucket par DV01 (ON, SN, 1W, 2W, 3W, 1M, 2M, 3M, 6M, 9M, 1Y, 2Y, 3Y, 4Y, 5Y, 6Y, 7Y, 8Y, 9Y, 10Y), PV change for "
+   "label": "Pozisyon: kova par DV01 (TL/bp; ON, SN, 1W … 10Y) – varsayılanı VaR sekmesindeki Onshore + TLREF (X + Y), yazılan / yapıştırılan kazanır"
   },
   {
    "range": "C3",
@@ -81,7 +81,7 @@
    "scope": "user",
    "group": "dv01-8",
    "kind": "auto",
-   "label": "PASTE: 'Onshore' / 'TLREF' bucket DV01 (TL/bp) – VaR'ın OIS tarafı (OIS eğrisinin hareketleriyle)"
+   "label": "PASTE: 'Onshore' / 'TLREF' bucket DV01 (TL/bp) – VaR'ın OIS tarafı (OIS eğrisinin hareketleriyle); toplamları Pozisyon'un (C) varsayılanı"
   },
   {
    "range": "D69",
@@ -267,12 +267,22 @@
    "type": "table",
    "title": "Parametreler  ·  bütün sekmelerdeki tablolar bunları okur (işaret çarpanı, pivot, ufuklar, carry)",
    "range": "B3:Y4",
+   "append": "dv01_paste",
+   "hidden": false
+  },
+  {
+   "id": "S1",
+   "type": "table",
+   "title": "Özet  ·  Pozisyon, VaR, Hedge ve Günlük P&L sekmelerinden",
+   "range": "B147:G148",
+   "fit": true,
+   "note": "Her sekmede: par DV01 ve TLREF yolu (Pozisyon), VaR (VaR sekmesinin güven, ufuk ve penceresiyle), hedge sonrası Σ|risk| (Hedge önericisinin önerisiyle) ve açıklanamayan P&L (Günlük P&L). Yapıştırma saati Parametreler'in sonunda.",
    "hidden": false
   },
   {
    "id": "B3",
    "type": "table",
-   "title": "Kova DV01 tablosu (yapıştırma alanı · pivot / spread ayrıştırma)",
+   "title": "Kova DV01 tablosu (varsayılan: VaR sekmesindeki Onshore + TLREF, yazılan kazanır · pivot / spread ayrıştırma)",
    "range": "B5:O26",
    "hidden": false
   },
@@ -329,8 +339,8 @@
   {
    "id": "V2",
    "type": "table",
-   "title": "VaR özeti · gerçekleşen vol'den (parametrik, korelasyonlu)",
-   "range": "W55:AA59",
+   "title": "VaR özeti · gerçekleşen vol'den (parametrik, korelasyonlu) · hedge sonrası: Pozisyon + Hedge önericisinin önerisi",
+   "range": "W55:AA60",
    "hidden": false
   },
   {
@@ -352,8 +362,24 @@
   {
    "id": "V5",
    "type": "table",
-   "title": "Yardımcı · VaR ara hücreleri (pencerenin satırı, gözlemler, z·√ufuk; kovaların Σd'si)",
-   "range": "AH29:AM53",
+   "title": "Yardımcı · VaR ara hücreleri (pencerenin satırı, gözlemler, z·√ufuk; kitapların sıfır olmayan kovaları; kovaların Σd'si, Pozisyon'un ve hedge sonrasının)",
+   "range": "AH29:AT53",
+   "hidden": true
+  },
+  {
+   "id": "V6",
+   "type": "table",
+   "title": "Kova başına VaR katkısı (toplamı VaR'a eşit) · hedge sonrası kovalar (Pozisyon + Hedge önericisinin önerisi)",
+   "range": "W32:AR53",
+   "cols": ["W", "AL", "AM", "AN", "AO", "AP", "AQ", "AR"],
+   "note": "Katkı = z · √ufuk · dᵢ (Σd)ᵢ / √(dᵀ Σ d): kovanın korelasyonlarla birlikte VaR'a payı; Toplam satırı VaR'ın kendisi (kovaların kendi VaR'larının toplamı değil). Eksi katkı riski azaltan kovadır. Pozisyon = Pozisyon sekmesindeki kova DV01'leri × işaret çarpanı (varsayılanı Onshore + TLREF); önerilen hedge = Hedge sekmesindeki önerici: vadeli OIS bitiş ayının kovasına, FRA iki bacağına (Günlük İşlemler'in FRA'yı iki spot swap olarak tuttuğu gibi), ara ay iki komşu kovaya doğrusal; hedge sonrası VaR OIS eğrisinin hareketleriyle (özette).",
+   "hidden": false
+  },
+  {
+   "id": "V8",
+   "type": "table",
+   "title": "Yardımcı · hedge enstrümanlarının VaR kovalarındaki payı (bir TL/bp DV01 başına; FRA iki bacağıyla)",
+   "range": "ER86:FK102",
    "hidden": true
   },
   {
@@ -370,14 +396,17 @@
    "id": "B14",
    "type": "table",
    "title": "Hedge önerici",
-   "range": "B84:O102",
+   "range": "B84:AE102",
+   "cols": ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"],
+   "action": "hedge-islem",
+   "trade": {"cells": {"J": "ois"}, "first": 88, "last": 102, "strategy": "outright", "tenor_col": "AE"},
    "hidden": false
   },
   {
    "id": "B16",
    "type": "table",
-   "title": "Hedge etkisi",
-   "range": "B104:D108",
+   "title": "Hedge etkisi · VaR satırı VaR sekmesinin güven, ufuk ve penceresiyle",
+   "range": "B104:D109",
    "hidden": false
   },
   {
@@ -447,7 +476,8 @@
   }
  ],
  "pinned": [
-  "B2"
+  "B2",
+  "S1"
  ],
  "sections": [
   {
@@ -468,7 +498,7 @@
     "B11",
     "B13"
    ],
-   "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesinde yapıştırılır; hedge sonrası risk Hedge sekmesindeki enstrüman ayarlarıyla (aktif, başlangıç / bitiş ayı, öncelik, ridge) hesaplanır."
+   "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesindedir - kova DV01'lerinin varsayılanı VaR sekmesine yapıştırılan Onshore + TLREF; hedge sonrası risk Hedge sekmesindeki enstrüman ayarlarıyla (aktif, başlangıç / bitiş ayı, öncelik, ridge) hesaplanır."
   },
   {
    "id": "var",
@@ -476,9 +506,10 @@
    "panels": [
     "V1",
     "V2",
-    "V3"
+    "V3",
+    "V6"
    ],
-   "note": "VaR = z · √ufuk · √(dᵀ Σ d): d kovaların DV01'i (TL/bp; Offshore, Onshore ve TLREF kolonları buraya yapıştırılır), Σ eğrinin günlük hareketlerinin (bp) seçilen penceredeki kovaryansı - gerçekleşen vol ve korelasyon, tarihçenin kapanışlarından (bugünün canlı noktası girmez; yeni Bloomberg isteği yok) -, z güven düzeyinin normal dağılımdaki karşılığı. Offshore offshore eğrisiyle (O/N TRYION, S/N TRYITN, 1W–9M FX swap ima, 1Y–10Y XCCY); Onshore, TLREF ve toplamları OIS eğrisiyle (O/N ve S/N TLREF, 1W–10Y OIS); 3W, 2W ile 1M'nin ortası. Kova satırlarında her kovanın kendi VaR'ı (|DV01| · σ · z · √ufuk); Toplam satırında korelasyonlu VaR - kovaların VaR'larının toplamı değil: o ve aradaki fark (çeşitlendirme) özet tablosunda. VaR bu sekmede yapıştırılan DV01'lerle hesaplanır; Pozisyon sekmesindeki kova DV01 tablosu (pivot, sabit faiz) VaR'a girmez."
+   "note": "VaR = z · √ufuk · √(dᵀ Σ d): d kovaların DV01'i (TL/bp; Offshore, Onshore ve TLREF kolonları buraya yapıştırılır), Σ eğrinin günlük hareketlerinin (bp) seçilen penceredeki kovaryansı - gerçekleşen vol ve korelasyon, tarihçenin kapanışlarından (bugünün canlı noktası girmez; yeni Bloomberg isteği yok) -, z güven düzeyinin normal dağılımdaki karşılığı. Offshore offshore eğrisiyle (O/N TRYION, S/N TRYITN, 1W–9M FX swap ima, 1Y–10Y XCCY); Onshore, TLREF ve toplamları OIS eğrisiyle (O/N ve S/N TLREF, 1W–10Y OIS); 3W, 2W ile 1M'nin ortası. Kova satırlarında her kovanın kendi VaR'ı (|DV01| · σ · z · √ufuk); Toplam satırında korelasyonlu VaR - kovaların VaR'larının toplamı değil: o ve aradaki fark (çeşitlendirme) özet tablosunda. Dört kitabın VaR'ı yalnız bu sekmede yapıştırılan DV01'lerle hesaplanır: Pozisyon sekmesindeki kova DV01'leri (C) varsayılan olarak buradaki Onshore + TLREF'tir (masanın kararı, 28.11.2026: yazılan kazanır), tersi yok - Pozisyon tablosu (pivot, sabit faiz, oraya yazılan) bu dört kitaba girmez. Yalnız 'Hedge sonrası' satırı ve kova katkısı tablosunun hedge sütunları Pozisyon'un kovalarını ve Hedge sekmesindeki önericinin önerisini okur (hedge edilen pozisyon odur). Yapıştırma yoksa kitap 'pozisyon yok' der."
   },
   {
    "id": "hedge",
@@ -487,7 +518,7 @@
     "B14",
     ["B14D", "B16"]
    ],
-   "note": "Hedge edilen pozisyon (kova DV01'leri) Pozisyon sekmesinde yapıştırılır."
+   "note": "Hedge edilen pozisyon (kova DV01'leri) Pozisyon sekmesindedir (varsayılanı VaR sekmesindeki Onshore + TLREF). \"Hedge'i işle\" önerinin her satırını Günlük İşlemler'in OIS yapıştırmasına açar (yön, vade ya da FRA'nın iki tarihi, eğrideki faiz, yuvarlanmış nominal); faize sağ tık: İşlem gir. Hedge etkisi'nin VaR satırı VaR sekmesinin güven, ufuk ve penceresiyle."
   },
   {
    "id": "pnl",
@@ -496,7 +527,7 @@
     "B17",
     "B18"
    ],
-   "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesinde yapıştırılır."
+   "note": "Pozisyon (kova DV01'leri ve sabit faizler) Pozisyon sekmesindedir - kova DV01'lerinin varsayılanı VaR sekmesine yapıştırılan Onshore + TLREF."
   }
  ],
  "twoway": [

@@ -2373,6 +2373,22 @@ async function clipAfter(page, action) {
     check('main page: Genel bakış opens on Kontrol and ORANLAR - the manual spot no table of its own there (the strip\'s "Spot kaynağı ✎" writes it)',
       /^Kontrol/.test(await firstPanel()) && !duzenTryAOver.includes('SPOT') && duzenTryAOver.slice(0, 3).join(' ') === 'B2 B3 B4',
       { first: await firstPanel(), panels: duzenTryAOver });
+    // Masa's Kontrol (K5, the desk 28.11.2026: A10 "Kontrol nedenine götürsün"): each chip leads to the table it checks, its
+    // rule in its tooltip; a click on one opens that table
+    const k5Chips = await page.evaluate(() => [...document.querySelectorAll('#content [data-panel="B2"] td.kchip')].map((td) => ({
+      t: td.textContent, go: [...td.classList].find((c) => c.startsWith('go:')) || '', ok: td.classList.contains('k-tamam'),
+      tip: td.title, shown: getComputedStyle(td).display !== 'none' })));
+    const k5Sum = await page.evaluate(() => { const td = document.querySelector('#content [data-panel="B2"] td.kchip-sum'); return td ? td.textContent : null; });
+    check('Masa · Kontrol: every chip has its rule in its tooltip and (but the overall one) leads to its table; wide, all of them on the strip',
+      k5Chips.length === 11 && k5Chips.slice(1).every((c) => /^go:#\/[a-z-]+\?p=[A-Za-z0-9]+$/.test(c.go) && /Tıklayın →/.test(c.tip))
+      && !k5Chips[0].go && k5Chips.every((c) => c.shown) && /^\d+ tamam$/.test(k5Sum || '') && Number(k5Sum.split(' ')[0]) === k5Chips.slice(1).filter((c) => c.ok).length,
+      { k5Chips, k5Sum });
+    await page.click('#content [data-panel="B2"] td.golink[class*="go:#/ois?p=B3"]');
+    await page.waitForFunction(() => window.tto.state.pageId === 'ois' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 }).catch(() => {});
+    check('... a chip clicked opens the table it checks (OIS kota → OIS · PPK › OUTRIGHT)',
+      await page.evaluate(() => window.tto.state.pageId === 'ois' && /^#\/ois/.test(window.location.hash)), await page.evaluate(() => window.location.hash));
+    await open(page, 'masa');
+    await tab(page, 'over');
     const duzenTryATabs = await page.evaluate(() => [...document.querySelectorAll('.viewtabs button[data-tab]')]
       .map((b) => b.dataset.tab + ':' + b.firstChild.textContent));
     check('Masa\'s tabs: TARİH ARASI FAİZ and FORWARD on one tab (Tarih arası), Makro in Sinyaller',
@@ -3091,23 +3107,29 @@ async function clipAfter(page, action) {
     let curve = await rowsOf('curve');
     check('matrix: TLREF and the OIS tenors with their 1 day / 1 week / 1 month changes',
       JSON.stringify(rowOf(curve, 'TLREF').slice(0, 5)) === JSON.stringify(['TLREF', '35,82', '0,0', '-5,5', '-100,7'])
-      && JSON.stringify(rowOf(curve, '1M').slice(0, 5)) === JSON.stringify(['1M', '36,350', '+5,0', '0,0', '-80,0']), [rowOf(curve, 'TLREF'), rowOf(curve, '1M')]);
-    check('matrix: offshore next to the OIS tenor (XCCY 1Y)', JSON.stringify(rowOf(curve, '1Y').slice(5)) === JSON.stringify(['39,350', '-8,0', '-60,0', '+55,0']), rowOf(curve, '1Y'));
+      && JSON.stringify(rowOf(curve, '1M').slice(0, 5)) === JSON.stringify(['1M', '36,35', '+5,0', '0,0', '-80,0']), [rowOf(curve, 'TLREF'), rowOf(curve, '1M')]);
+    check('matrix: offshore next to the OIS tenor (XCCY 1Y)', JSON.stringify(rowOf(curve, '1Y').slice(5)) === JSON.stringify(['39,35', '-8,0', '-60,0', '+55,0']), rowOf(curve, '1Y'));
     check('matrix says what the changes are measured against', /03\.11\.2026 kapanışı · Δ1G 02\.11 · Δ1H 27\.10 · Δ1A 05\.10/.test(await page.textContent('.page-tools')));
     const tipOf = await page.evaluate(() => {
       const tr = [...document.querySelectorAll('.panel[data-panel="curve"] table.grid tr')].find((r) => r.children[0].textContent.trim() === '1M');
       return { title: tr.children[2].title, heat: tr.children[4].style.backgroundColor };
     });
-    check('a change shows the earlier close on hover and is shaded by its size', /^02\.11\.2026: 36,300$/.test(tipOf.title) && /rgba/.test(tipOf.heat), tipOf);
+    check('a change shows the earlier close on hover and is shaded by its size', /^02\.11\.2026: 36,30$/.test(tipOf.title) && /rgba/.test(tipOf.heat), tipOf);
     const mpcRows = await rowsOf('mpc');
     check('matrix: what is priced for the meetings, the first one marked', mpcRows.length === 10 && mpcRows[2][0] === '10.12.2026 · ilk'
-      && /^-\d+,\d$/.test(mpcRows[2][1]) && /^[+-]?\d+,\d$/.test(mpcRows[2][2]) && /^3\d,\d{3}$/.test(mpcRows[2][5]), mpcRows[2]);
+      && /^-\d+,\d$/.test(mpcRows[2][1]) && /^[+-]?\d+,\d$/.test(mpcRows[2][2]) && /^3\d,\d{2}$/.test(mpcRows[2][5]), mpcRows[2]);
     const bondRows = await rowsOf('dibs');
     // (Bloomberg's name - "TURKIYE GOVERNMENT BOND" on every row - is no column while it tells no more than Tip: duzen-masa)
     check('matrix: the bonds of DİBS RV by maturity with the workbook\'s own yield', bondRows.length === 20 && bondRows[1][0] === 'TRB100227T13'
-      && bondRows[0].slice(0, 4).join('|') === 'ISIN|Vade|Tip|Son' && bondRows[1][1] === '10.02.2027' && /^3\d,\d{3}$/.test(bondRows[1][9])
+      && bondRows[0].slice(0, 4).join('|') === 'ISIN|Vade|Tip|Son' && bondRows[1][1] === '10.02.2027' && /^3\d,\d{2}$/.test(bondRows[1][9])
       && bondRows[1][3] === '', bondRows.slice(0, 2));
     check('matrix says that offline there is no bond history', /DİBS geçmişi yok/.test(await page.textContent('.panel[data-panel="dibs"] .note')));
+    // (K5, the desk 28.11.2026: B19 - DİBS under PPK beside OIS · Offshore, the page on one screen; TRY rates two decimals;
+    // the notes two lines, "devamı" the rest)
+    const k5Eod = await page.evaluate(() => ({ stack: [...document.querySelectorAll('#eod-stack > .panel')].map((p) => p.dataset.panel),
+      clamp: [...document.querySelectorAll('#content .panel[data-panel] > .note.clamp')].length }));
+    check('matrix: DİBS stacked under PPK beside OIS · Offshore (one screen); the notes folded to two lines',
+      k5Eod.stack.join() === 'mpc,dibs' && k5Eod.clamp >= 3, k5Eod);
     await shot(page, '13-eod');
     await page.selectOption('.page-tools select', '2026-10-23');
     await page.waitForFunction(() => /23\.10\.2026 kapanışı/.test(document.querySelector('.page-tools').textContent));
@@ -3119,7 +3141,7 @@ async function clipAfter(page, action) {
     await (await page.locator('.panel[data-panel="curve"] .tools button', { hasText: 'Kopyala' })).click({ force: true });
     await page.waitForTimeout(200);
     const eodCopy = await page.evaluate(() => navigator.clipboard.readText());
-    check('the matrix can be copied to Excel', eodCopy.split('\r\n').length >= 9 && /^1M\t\d\d,\d{3}\t/m.test(eodCopy), eodCopy.slice(0, 160));
+    check('the matrix can be copied to Excel', eodCopy.split('\r\n').length >= 9 && /^1M\t\d\d,\d{2}\t/m.test(eodCopy), eodCopy.slice(0, 160));
 
     await open(page, 'mpc');
     const mp = async () => page.evaluate(() => {
@@ -4215,6 +4237,47 @@ async function clipAfter(page, action) {
       && JSON.stringify(varTab.cols) === JSON.stringify(['W', 'AA', 'X', 'Y', 'Z', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG'])
       && varTab.offHead === 'Offshore' && varTab.sumHead === 'Onshore + TLREF' && varTab.window === '1 yıl' && /99/.test(varTab.conf)
       && varTab.book4 === 'Onshore + OIS' && /^Tarihçe yok/.test(varTab.note), varTab);
+    // DV01 Risk, the desk's decisions of 28.11.2026 (K5): the Pozisyon's buckets default to the paste's Onshore + TLREF (A8:
+    // "Onshore + tlref"), the paste's time at the end of the pinned Parametreler, the one-line summary pinned beside it
+    // (B13), each bucket's VaR contribution and the hedge's buckets (C8), "Hedge'i işle" into the OIS paste (A3)
+    const k5Var = { panels: await panelsOnPage(page), pozYok: (await cellText(page, 'DV01_RISK!AD53') || '').trim(),
+      v6: await page.evaluate(() => { const it = window.tto.state.page.items.get('V6'); return it && it.grid ? it.grid.data.c : null; }) };
+    check('... a VaR book without a paste says "pozisyon yok" (no block of zeros); each bucket\'s contribution and the hedge\'s buckets beside the paste',
+      k5Var.panels.includes('V6') && k5Var.pozYok === 'pozisyon yok'
+      && JSON.stringify(k5Var.v6) === JSON.stringify(['W', 'AL', 'AM', 'AN', 'AO', 'AP', 'AQ', 'AR']), k5Var);
+    await api(page, 'ayşe yilmaz', 'POST', '/api/inputs', { book: 'tto',
+      items: Array.from({ length: 20 }, (_, i) => ({ ref: 'DV01_RISK!X' + (33 + i), value: String(10000 * (i + 1)) })) });
+    await page.waitForFunction(() => /^yapıştırıldı \d\d\.\d\d \d\d:\d\d$/.test(((document.querySelector('#content td.dv01-paste') || {}).textContent || '').trim()),
+      null, { timeout: 30000 }).catch(() => {});
+    const k5Dv01 = await page.evaluate(() => {
+      const td = document.querySelector('#content td.dv01-paste');
+      return { stamp: td ? td.textContent.trim() : null, red: !!(td && td.classList.contains('c-neg')),
+        pinned: [...document.querySelectorAll('#content .panels.pinned [data-panel]')].map((p) => p.dataset.panel) };
+    });
+    await tab(page, 'pos');
+    await waitCell(page, 'DV01_RISK!C6', 't.trim() !== "0"').catch(() => {});
+    const k5C6 = (await cellText(page, 'DV01_RISK!C6') || '').trim();
+    check('... the Pozisyon\'s buckets are the paste\'s Onshore + TLREF by default ("Onshore + tlref"); "yapıştırıldı dd.mm hh:mm" at the end of the '
+      + 'pinned Parametreler (today: not red); the one-line summary pinned beside it',
+      /^yapıştırıldı \d\d\.\d\d \d\d:\d\d$/.test(k5Dv01.stamp || '') && !k5Dv01.red && k5Dv01.pinned.includes('B2') && k5Dv01.pinned.includes('S1')
+      && trNumber(k5C6) === 10000, { k5Dv01, k5C6 });
+    await tab(page, 'hedge');
+    // "Hedge'i işle": the header's button (view.js: an integrator's hunk) - else the module the button calls
+    const k5HedgeBtn = await page.evaluate(async () => {
+      const btn = document.querySelector('#content [data-panel="B14"] button[data-action="hedge-islem"]');
+      if (btn) btn.click();
+      else (await import('/static/js/hedgeislem.js')).bookHedge(window.tto.state.page.ctx);
+      return !!btn;
+    });
+    await page.waitForSelector('#bulk-dialog', { timeout: 20000 });
+    await page.waitForFunction(() => /\d+ satır · \d+ geçerli/.test((document.getElementById('bulk-summary') || {}).textContent || ''), null, { timeout: 30000 }).catch(() => {});
+    const k5Bulk = await page.evaluate(() => ({ kind: ((document.querySelector('#bulk-kind button.on') || {}).textContent || ''),
+      summary: document.getElementById('bulk-summary').textContent, head: document.getElementById('bulk-text').value.split('\n')[0] }));
+    check('... "Hedge\'i işle": the hedge recommender\'s rows into Günlük İşlemler\'s "Excel\'den yapıştır" on OIS, every line valid in its preview (nothing saved)',
+      k5Bulk.kind === 'OIS' && /^Yön\tVade\t/.test(k5Bulk.head) && /^(\d+) satır · \1 geçerli$/.test(k5Bulk.summary), { k5HedgeBtn, k5Bulk });
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.getElementById('bulk-dialog'), null, { timeout: 10000 }).catch(() => {});
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: Array.from({ length: 20 }, (_, i) => 'DV01_RISK!X' + (33 + i)) });
     // OIS · PPK and USD · FOMC, the ways back (the desk, 24.11.2026: items 2, 3 and 13): a meeting window's market rate
     // typed reads the market's own PPK step; an MPC spread typed reads the later window's rate (the earlier's market +
     // the spread); a target FRA reads the end leg it needs, which typed back makes the realized FRA the target; a FOMC
@@ -7890,12 +7953,41 @@ async function clipAfter(page, action) {
     });
     const bgStatus = (await api(page, 'ayşe yilmaz', 'GET', '/api/status')).json;
     const retToday = !!(bgStatus.ret && bgStatus.ret.updated_at && bgStatus.ret.updated_at.slice(0, 10) === bgStatus.server_date);
-    // (the to-dos first, in columns - the desk, 27.11.2026: RET, the chat's trades not entered, the agenda, then the trades,
-    // the quant's lines, the DİBS bonds)
-    check('Bugün: first of the Masa group (the menu of 28.11.2026), Masa under it; six blocks in columns, the things to do first, each with its content or a plain "nothing"',
-      bgSeen.menu.join() === 'bugun,masa' && bgSeen.cards.join() === 'bugun-ret,bugun-chat,bugun-agenda,bugun-trades,bugun-quant,bugun-dibs'
-      && bgSeen.cols.length >= 1 && bgSeen.cols[0].slice(0, 3).join() === 'ret,chat,agenda'
+    // (the to-dos first, in columns - the desk, 27.11.2026: RET, the checks, the chat's trades not entered, the agenda; then the
+    // morning meeting of 28.11.2026 - the PPK / FOMC day, the moves since the close, the desk's notes -, the trades, the quant's
+    // lines, the DİBS bonds)
+    check('Bugün: first of the Masa group (the menu of 28.11.2026), Masa under it; its blocks in columns, the things to do first, each with its content or a plain "nothing"',
+      bgSeen.menu.join() === 'bugun,masa' && bgSeen.cards.join() === 'bugun-ret,bugun-kontrol,bugun-chat,bugun-agenda,bugun-meeting,'
+        + 'bugun-moves,bugun-notes,bugun-trades,bugun-quant,bugun-dibs'
+      && bgSeen.cols.length >= 1 && bgSeen.cols[0].slice(0, 4).join() === 'ret,kontrol,chat,agenda'
       && bgSeen.each.every(Boolean) && bgSeen.agenda && bgSeen.errs === 0, bgSeen);
+    // the morning meeting (K5, the desk 28.11.2026: A10, A8, A11): the checks not "tamam" with their tables, the DV01 paste's
+    // time; the moves since the close and the alarms since then; one reference for İzleme and Eğri Hareketi; the desk's notes
+    // typed in place
+    const k5Bugun = await page.evaluate(() => {
+      const d = window.tto.state.page.data;
+      return { checks: [...document.querySelectorAll('#bugun-kontrol-list li a')].map((a) => a.getAttribute('href')),
+        want: (d.kontrol.checks || []).map((c) => c.href), ok: (document.getElementById('bugun-kontrol-ok') || {}).textContent || '',
+        dv01: (document.getElementById('bugun-kontrol-dv01') || {}).textContent || '',
+        moves: !!(document.getElementById('bugun-moves-table') || document.getElementById('bugun-moves-none')),
+        alarms: !!(document.getElementById('bugun-moves-alarms') || document.getElementById('bugun-moves-noalarm')),
+        notes: !!document.getElementById('bugun-notes-text'), meetingHidden: document.getElementById('bugun-meeting').classList.contains('hidden'),
+        meetings: (d.meeting.items || []).length };
+    });
+    check('... Bugün · Kontrol: only Masa\'s checks not "tamam", each a link to its table; the DV01 paste\'s time; the moves since the close, the alarms '
+      + 'since then; the notes box; the PPK / FOMC block only on a meeting\'s day or the day before',
+      JSON.stringify(k5Bugun.checks) === JSON.stringify(k5Bugun.want) && k5Bugun.checks.every((x) => /^#\/[a-z-]+\?p=/.test(x))
+      && /tamam/.test(k5Bugun.ok) && /^DV01 pozisyonu: /.test(k5Bugun.dv01) && k5Bugun.moves && k5Bugun.alarms && k5Bugun.notes
+      && k5Bugun.meetingHidden === !k5Bugun.meetings, k5Bugun);
+    await page.fill('#bugun-notes-text', 'Sabah: 2Y 35,80 üstü ödeyici');
+    await page.click('#bugun-notes-save');
+    await page.waitForFunction(() => /Kaydedildi/.test(document.getElementById('bugun-notes-info').textContent), null, { timeout: 10000 }).catch(() => {});
+    const k5Notes = (await api(page, 'mehmet', 'GET', '/api/watch')).json.notes.text;
+    await page.click('#bugun-ref');
+    await page.waitForFunction(() => /Referans alındı .*Eğri Hareketi'nde \d+ nokta/.test(document.getElementById('toasts').textContent), null, { timeout: 15000 }).catch(() => {});
+    const k5Ref = (await api(page, 'ayşe yilmaz', 'GET', '/api/heat?basis=ref')).json;
+    check('... the desk\'s notes typed in place on Bugün are İzleme\'s (everyone\'s); "Referansı şimdi al" takes Eğri Hareketi\'s reference with İzleme\'s',
+      k5Notes === 'Sabah: 2Y 35,80 üstü ödeyici' && !!(k5Ref && k5Ref.ref_at), { k5Notes, ref: k5Ref && k5Ref.ref_at });
     check('... the RET block says what the header\'s dot says (loaded today or not)', /^Bugün yüklendi/.test(bgSeen.ret) === retToday,
       { ret: bgSeen.ret, retToday });
     // a quant line of the model's own level (the FRA / PPK line, tto/bugun.py): its entry / target / stop in the FRA's rate, the
@@ -7908,11 +8000,15 @@ async function clipAfter(page, action) {
         family: 'frapath', model: 'FRA / PPK patikası', asset: 'TRY OIS', trade: 'Receive 6x9 FRA (PPK patikasına göre)', side: 'RECEIVE', up: false,
         size: 'DV01 1.000 $', entry: 38.719, target: 38.651, stop: 38.729, digits: 3, unit: '6x9 FRA %', note: 'patika farkı +6,9 / +0,1 / +7,9 bp',
         rr: 6.8, exp_try: 257550, exp_text: '', strength: 'Güçlü', gated: '', new: false, day: '2026-11-24', time: '09:10', page: 'quant-pca', listed: true }] });
-      const cells = [...body.querySelectorAll('#bugun-quant-table tr[data-sid] td')].map((td) => ({ t: td.textContent, title: td.title }));
-      return { levels: (cells[4] || {}).t || '', tip: (cells[4] || {}).title || '', n: cells.length };
+      // (28.11.2026, B19 / B6: two short lines - the trade, then its levels, R/R and money -; the side as Günlük İşlemler colours it)
+      const line = body.querySelector('#bugun-quant-table .bugun-q[data-sid]');
+      const side = line ? line.querySelector('.qside') : null;
+      return { levels: line ? line.querySelector('.q2').textContent : '', side: side ? side.className : '', n: body.querySelectorAll('.bugun-q').length };
     });
-    check('... a quant line of the model\'s own level in Bugün: the FRA\'s rates (three decimals), its instrument, the gap to the path beside them',
-      bgFra.levels === '38,719 / 38,651 / 38,729 6x9 FRA % · patika farkı +6,9 / +0,1 / +7,9 bp' && bgFra.tip === 'patika farkı +6,9 / +0,1 / +7,9 bp', bgFra);
+    check('... a quant line of the model\'s own level in Bugün: the FRA\'s rates (three decimals) in its second line with R/R and the money, its instrument, '
+      + 'the gap to the path beside them; RECEIVE green as in Günlük İşlemler',
+      bgFra.levels === '38,719 → 38,651 · stop 38,729 · R/R 6,80 · +257.550 TL · 6x9 FRA % · patika farkı +6,9 / +0,1 / +7,9 bp'
+      && bgFra.side === 'qside buy' && bgFra.n === 1, bgFra);
     const bgRecon = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json;
     const bgChat = await page.locator('#bugun-chat-table tr[data-line]').count();
     check('... "Girilmemiş işlemler": the "Girilmedi" lines of the chat ↔ Günlük İşlemler list', bgChat === Math.min(bgRecon.missing, 40),
@@ -8284,6 +8380,19 @@ async function clipAfter(page, action) {
     duzenL1Top.less = await duzenL1Page.textContent('#shortcuts-more');
     await duzenL1Page.click('#shortcuts-more');
     duzenL1Top.again = await duzenL1Page.evaluate(() => [...document.querySelectorAll('.shortcuts .chip')].filter((c) => c.offsetParent !== null).length);
+    // Masa's Kontrol below 1500 px (K5, the desk 28.11.2026: A10): only the chips not "tamam" - the overall one always -
+    // and "N tamam" at the end
+    const k5Narrow = await duzenL1Page.evaluate(() => {
+      const shown = (td) => getComputedStyle(td).display !== 'none';
+      const tds = [...document.querySelectorAll('#content [data-panel="B2"] td.kchip')];
+      const sum = document.querySelector('#content [data-panel="B2"] td.kchip-sum');
+      return { okShown: tds.filter((td) => td.classList.contains('k-tamam') && !td.classList.contains('kchip-all') && shown(td)).length,
+        badShown: tds.filter((td) => !td.classList.contains('k-tamam') && shown(td)).length,
+        bad: tds.filter((td) => !td.classList.contains('k-tamam')).length, all: !!tds.length && shown(tds[0]),
+        sum: sum && shown(sum) ? sum.textContent : null };
+    });
+    check('Masa · Kontrol at 1366 px: only the chips not "tamam" (the overall one always) and "N tamam"',
+      k5Narrow.okShown === 0 && k5Narrow.badShown === k5Narrow.bad && k5Narrow.all && /^\d+ tamam$/.test(k5Narrow.sum || ''), k5Narrow);
     await shot(duzenL1Page, '99-duzen-1366');
     await duzenL1Ctx.close();
     check('duzenL1: at 1366 px the top bar is one row (number format, flashing, theme in the user\'s menu), the search an icon until Ctrl+K; '

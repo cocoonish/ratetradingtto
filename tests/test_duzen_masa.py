@@ -109,13 +109,38 @@ def test_the_menu_keeps_the_servers_groups_araclar_last_and_nothing_leaves_it(no
 
 # ------------------------------------------------------------------ Bugün
 def test_bugun_columns_put_the_things_to_do_first(node_run):
+    """The things to do first (RET, the checks, the chat's trades not entered, the agenda), the morning meeting next (the
+    PPK / FOMC day, the moves since the close, the desk's notes - 28.11.2026), the trades, the quant's lines, the bonds."""
     count = node_run(*[["bugun", "columnCount", [w]] for w in (2600, 1678, 1358, 1124, 980, 960, 782, 300)])
     assert count == [3, 3, 2, 2, 2, 1, 1, 1]                                   # (a column never under 480 px)
     order, p1, p2, p3 = node_run(["bugun", "ORDER"], ["bugun", "columnPlan", [1]], ["bugun", "columnPlan", [2]], ["bugun", "columnPlan", [3]])
-    assert order == ["ret", "chat", "agenda", "trades", "quant", "dibs"]
-    assert p3 == [["ret", "chat", "agenda"], ["trades", "quant"], ["dibs"]] and p2 == [["ret", "chat", "agenda"], ["trades", "quant", "dibs"]]
+    assert order == ["ret", "kontrol", "chat", "agenda", "meeting", "moves", "notes", "trades", "quant", "dibs"]
+    assert p3 == [["ret", "kontrol", "chat", "agenda"], ["meeting", "moves", "notes", "trades"], ["quant", "dibs"]]
+    assert p2 == [["ret", "kontrol", "chat", "agenda", "meeting"], ["moves", "notes", "trades", "quant", "dibs"]]
     for plan in (p1, p2, p3):
         assert [k for col in plan for k in col] == order                      # every block once, read in the same order
+
+
+def test_bugun_sides_as_gunluk_islemler_colours_them_and_the_decision(node_run):
+    """B6: a side coloured as Günlük İşlemler colours it - RECEIVE / AL green ("buy"), PAY / SAT red ("sell"), a spread's or
+    a fly's way neither; C5: the decision typed - its surprise against the priced step and the position's P&L of it.  (A
+    quant line's levels on screen, B19: the browser test's Bugün checks.)"""
+    sides = ["RECEIVE", "PAY", "AL", "SAT", "ALIŞ", "SATIŞ", "REC GÖVDE", "PAY GÖVDE", "KORUMA AL", "STEEPENER", "FLATTENER", ""]
+    got = node_run(*[["bugun", "sideClass", [s]] for s in sides])
+    assert got == ["buy", "sell", "buy", "sell", "buy", "sell", "buy", "sell", "buy", "", "", ""]
+    s1, s2, s3 = node_run(["bugun", "surprise", [-150, -140.4, 12000]], ["bugun", "surprise", [-150, -140.4, None]],
+                          ["bugun", "surprise", [None, -140.4, 12000]])
+    assert s1["bp"] == pytest.approx(-9.6) and s1["pnl"] == pytest.approx(-115200.0) and s2["pnl"] is None and s3 is None
+
+
+def test_gun_sonu_reads_try_rates_with_two_decimals(node_run):
+    """B19: the end-of-day matrix's TRY rates (OIS, offshore, TLREF, a meeting's TLREF after it, a bond's yield) with two
+    decimals; DİBS stacked under PPK beside OIS · Offshore, the notes two lines (the page's own code)."""
+    (digits,) = node_run(["history", "TRY_DIGITS"])
+    assert digits == 2
+    src = _source("pages/history.js")
+    assert "h('div', { class: 'stack', id: 'eod-stack' }, this.mpc.el, this.bonds.el)" in src
+    assert src.count("clamp: true") >= 4 and "foldNote(note)" in src
 
 
 def test_bugun_drops_a_column_empty_in_every_row(node_run):

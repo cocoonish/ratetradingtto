@@ -641,7 +641,9 @@ offshore side, ask the desk first.
   spot is T+1, so its tom/next is spot/next; 1W–9M FX swap implied; 1Y–10Y XCCY), Onshore / TLREF / their total with the
   OIS curve's (O/N and S/N TLREF; 1W–10Y OIS). No covariance between the two curves is made or used (the desk asked for
   offshore and OIS separately: "offshore'u, ve ois'e ayri ayri bakacagiz"). 3W, which neither curve quotes, is halfway
-  between 2W and 1M (linear by months, as the buckets split).
+  between 2W and 1M (linear by months, as the buckets split).  The VaR after the hedge (28.11.2026) is the OIS side's too:
+  the Pozisyon tab's buckets (their default the paste's Onshore + TLREF) with the hedge recommender's OIS instruments, on
+  the OIS curve's moves - nothing of it goes to the offshore book.
 
 ## Known differences - read before changing
 

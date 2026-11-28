@@ -2608,6 +2608,86 @@ onshore ve ois olarak ikiye ayiralim, bunlarin toplamina ve ayri ayri da bakacag
 Code: `tto/extras.py` (`VAR_NAME`, `_var_check`, `_tto_dv01_var`, `var_stat_cells`), `tto/varrisk.py`, `tto/xl/functions.py`
 (`NORM.S.INV`), `tto/views/70_dv01.json` (tab `var`: V1–V3, hidden V4 on EK_VAR). Tests: `tests/test_dv01_var.py`.
 
+### DV01 Risk and Bugün: paste once, the morning meeting (28.11.2026)
+
+The desk's request: "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey
+listelemeye calis. Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem
+de dashboardu genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."  Their answer to the three lists:
+**"A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"**; to the question of A8 - should DV01 Risk's
+Pozisyon (`C6:C25`) default to the Onshore column, as the file of 03.11 had it (`C6:C25` = `X33:X52`, bucket for
+bucket), or to Onshore + TLREF: **"Onshore + tlref"**; and "Digerlerini de onayliyorum".  This section is builder K5's part
+(Risk · Bugün): A3, A8, A10, A11, C5, the VaR part of C8, B6 on Bugün, B7 on DV01 Risk, B13, B19.  No new Bloomberg request.
+
+- **Paste once (A8).** Pozisyon's bucket DV01s default to the VaR tab's paste area's Onshore + TLREF (`Z33:Z52` = X + Y,
+  bucket for bucket: ON ↔ O/N … 10Y); a value typed or pasted into C wins, Delete takes it back.  Nothing flows the other
+  way: the VaR's four books read their own paste area only (the VaR tab's note says so).  The paste area opens empty (it
+  opened at zero).
+- **When it was pasted (A8).** The pinned Parametreler ends with "yapıştırıldı 28.11 09:12": the latest `updated_at` of the
+  user's own inputs of the position (`X33:Y52`, `AA33:AA52`, `C6:C25`), **red when not today**, "yapıştırma yok" before any.
+  Bugün's Kontrol block has the same line.
+- **"pozisyon yok" (B7).** A VaR book without a pasted DV01 shows its buckets' VaRs empty and "pozisyon yok" for its total
+  and its summary line - not a block of zeros.
+- **Each bucket's contribution (C8):** z·√h·dᵢ(Σd)ᵢ/√(dᵀΣd) of every bucket of every book, its total the VaR itself (a
+  negative one is a bucket that takes risk away).
+- **The VaR after the hedge (C8).** The Pozisyon tab's buckets (C × the sign multiplier C3 - what the hedge recommender
+  hedges) plus the recommender's suggestion in the same buckets, and the VaR of both on the **OIS curve's** moves (the hedge's
+  instruments are OIS; offshore is never in it): the summary's last line, and a VaR line in "Hedge etkisi" (before / after).
+  An instrument's DV01 goes to its end month's bucket; a forward-start one (the recommender's FRAs) to its two legs, the
+  two spot swaps of one nominal Günlük İşlemler books an FRA as (`blotter.ois_legs`), their annuities single-period as the
+  recommender prices the FRA itself (O): the end leg K·G/(G−F), the start −K·F·DF(F)/DF(G)/(G−F); a month between two
+  buckets split linearly (18M: half 1Y, half 2Y - `blotter.bucket_split`'s rule over the VaR buckets).
+- **"Hedge'i işle" (A3).** The recommender's header button opens Günlük İşlemler's "Excel'den yapıştır" on OIS with a line
+  for every active instrument with a side (PAY / RECEIVE) and a rounded nominal: an outright by its tenor, an FRA as an OIS
+  between its two dates (spot + F, spot + G), at the curve's rate (J), its rounded nominal (N), a note naming it and its
+  DV01.  The dialog's preview and save are its own; nothing is saved before.  Its rates take a right click ("İşlem gir":
+  the `trade` hint, the tenor from a helper column; the side is the user's - the hint takes a side from a column, not a row).
+- **One-line summary (B13)**, pinned beside Parametreler on every tab: par DV01, TLREF yolu, VaR Onshore + OIS and
+  Offshore, hedge sonrası Σ|risk|, açıklanamayan P&L - each the cell of its own tab (the paste's time is Parametreler's).
+- **Masa's Kontrol leads to its reason (A10).** Each chip of the strip (`MASA!B3:L3`) links to the table it checks and says
+  its rule in its tooltip - read off its code's formula (`AY3:BH3`); below 1500 px only the chips not "tamam" (and the
+  overall one) show, "N tamam" at the end; Bugün lists only those.
+- **Bugün = the morning meeting (A11).** The desk's notes of the day typed in place (İzleme's `desk.notes:<day>`, everyone's;
+  the last earlier day with notes one click away); "Kapanıştan beri": the largest 8 moves since the previous close of OIS,
+  offshore, offshore − OIS, the VİOP contracts (OIS − VİOP) and the bonds' ASW (Eğri Hareketi's points), the points that did
+  not move today, the alarms fired since the previous close (the user's own and the desk's); one "Referansı şimdi al" -
+  İzleme's and Eğri Hareketi's reference at once (there were two buttons and two records; the buttons on those pages do the
+  same now).
+- **The PPK / FOMC day (C5).** On a TCMB or Fed meeting's day and the business day before it: the meeting's implied step
+  (OIS · PPK's IMPLIED RATES, with its band) and its change since the last close of the PPK history, the survey (Masa's PPK
+  anket, when it covers the meeting), the scenarios' steps (their names and probabilities), the user's own position's risk
+  of the decision (DV01 Risk's PPK karar riski: TL/bp and a 25 bp surprise); on the day a "Karar" box - the step decided,
+  typed: its surprise against the priced step and the position's P&L of it (DV01 Risk's "Tek toplantı sürprizi" arithmetic).
+  For FOMC USD · FOMC's: the implied step (bp and its share of a step), the difference to WIRP and to the expected step, the
+  scenarios.
+- **Bugün's quant lines (B19, B6).** Two short lines each - the side, the trade, its size and time; then entry → target ·
+  stop · R/R · the expected P&L (TL) - all of it on screen; the side coloured as Günlük İşlemler colours it: RECEIVE / AL
+  green, PAY / SAT red (it was coloured by the signal's direction, the other way round).
+- **Gün Sonu Matrisi on one screen (B19).** DİBS stacked under PPK beside OIS · Offshore (it sat under OIS, ~950 px empty
+  under PPK); TRY rates two decimals (OIS par, offshore, TLREF, a meeting's TLREF after it, a bond's yield and BIST
+  compound yield; a floater's price three).  The notes on Bugün and Gün Sonu two lines, "devamı" the rest.
+
+**Choices made while building it** (ask the desk before changing):
+- "Red when not today": the paste's date against the computer's date; a bucket DV01 typed into C counts as a paste too.
+- Kontrol's "only the red ones": the chips not "tamam" - red (hata) and amber (uyarı) -, the overall chip always.  Geçmiş
+  (BDH) leads to Ayarlar › Tarihçe as the proposal listed (the check itself reads VİOP's BDH history, `VIOP!K380:K509`);
+  İma eğri − kota (Motor, administrators only) to OIS · PPK's İMA PPK kontrolü, as Çözücü.
+- The recommender's FRAs go into the paste as two-date OIS: the OIS paste takes an outright or two dates; Günlük İşlemler's
+  own FRA wants months in multiples of 3 (the recommender has 1x2 and 2x3).
+- The PPK / FOMC block shows only on the meeting's day and the business day before; the "Karar" typed is kept in that
+  browser for the day and is not written into DV01 Risk (D69 / E69 stay the user's own).
+- "Did not move today": at the previous close's level and never seen moving by the day's readings of the watch.
+- Bugün's notes: the last earlier day with notes, up to 10 days back.
+
+Code: `tto/extras.py` (`DV01_DEFAULT_NAME`, `_tto_dv01_default`, `DV01_HOWTO`; in `_tto_dv01_var`: `VAR_CONTRIB`,
+`VAR_HAS_ROW`, `_var_contributions`, `_var_after_hedge`, `_tent`, `_dv01_summary`, `DV01_SUMMARY`), `tto/varrisk.py`
+(`paste_stamp`, `paste_cells`, `hedge_paste`), `tto/store.py` (`input_stamp`), `tto/service.py` (`_dv01_paste_column`,
+`_kontrol_chips`, `dv01_hedge`, `watch_reference`), `tto/server.py` (`/api/dv01/hedge`, `/api/watch/reference`),
+`tto/bugun.py` (`KONTROL`, the blocks `kontrol`, `meeting`, `moves`, `notes`), `tto/watch.py` (`reference`, `moves`),
+`tto/views/70_dv01.json`, `tto/views/10_masa.json` (B2's `"kontrol"`), `tto/static/js/pages/bugun.js`, `watch.js`, `heat.js`,
+`history.js`, `tto/static/js/golink.js`, `tto/static/js/hedgeislem.js`, the "K5 Risk · Bugün" block at the end of
+`app.css`.  Tests: `tests/test_dv01.py`, `tests/test_dv01_var.py`, `tests/test_bugun.py`, `tests/test_duzen_masa.py`,
+`tests/test_views.py`; the browser test's K5 checks.
+
 ### Düzen: sayfalar tek tek (27.11.2026)
 
 > "Panellerin boyutlarindan da bazi sorunlar yasiyorum, bunlari da kontrol edelim. Gorsel olarak da biraz daha

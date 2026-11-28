@@ -366,6 +366,216 @@ def test_todays_agenda_the_late_deadlines_and_the_meetings(svc, monkeypatch):
     assert "TÜFE verisi" in texts2 and "Başkasının kendi işi" in texts2 and "Kendi notum" not in texts2
 
 
+# ---------------------------------------------------------------------------------------------- the morning meeting
+# The desk, 28.11.2026: "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16" - A10 (Kontrol), A8 (the DV01
+# paste's time), C5 (the PPK / FOMC day), A11 (the moves since the close, one reference, the desk's notes in place).
+def _masa(svc, addr):
+    from conftest import cell
+    return cell(svc, "MASA!%s" % addr)
+
+
+def test_the_checks_not_tamam_lead_to_their_tables(svc):
+    """Bugün's Kontrol: Masa's checks whose code (the workbook's AY3:BH3) is not 0, in the strip's order, each with its
+    rule and the table it checks - a page and a panel that exist -; the rest counted "tamam"; the DV01 paste's time."""
+    u = login(svc, "Bugün Kontrol")
+    k = svc.bugun.view(u)["kontrol"]
+    codes = {col: _masa(svc, "%s3" % code) for col, code, *_ in bg.KONTROL}
+    assert [c["col"] for c in k["checks"]] == [col for col, *_ in bg.KONTROL[1:] if codes[col] != 0]
+    assert k["ok"] == [name for col, _, name, *_ in bg.KONTROL[1:] if codes[col] == 0]
+    assert k["overall"]["text"] == _masa(svc, "B3") and k["overall"]["code"] == codes["B"]
+    for c in k["checks"]:
+        assert c["text"] == _masa(svc, "%s3" % c["col"]) and c["state"] in ("uyarı", "hata") and c["rule"] and c["where"]
+    for col, _, name, rule, page, panel, where in bg.KONTROL[1:]:
+        assert bg.kontrol_target(page, panel) == "#/%s?p=%s" % (page, panel)
+        if page == "settings":
+            assert panel == "history"                            # (Ayarlar's jump bar: SETTINGS_JUMPS in history.js)
+        else:
+            assert panel in {p["id"] for p in svc.view_index[page]["panels"] if not p.get("hidden")}, (name, page, panel)
+    assert k["dv01"] == {"at": None, "today": False, "text": "yapıştırma yok"}
+
+
+def test_each_checks_rule_is_its_codes_formula(svc):
+    """The rule a chip's tooltip says is read off its code's formula: the cells it names are the ones the formula reads, so
+    that a workbook that changes a check fails here rather than saying an old rule."""
+    from tto.extras import formula_of
+    import re
+    model = svc.books["tto"].model
+    for col, code, name, rule, *_ in bg.KONTROL[1:]:
+        text = formula_of(model, "MASA", "%s3" % code).replace("$", "").replace("'", "")
+        named = re.findall(r"\(([^()]*![A-Z]+\d+(?::[A-Z]+\d+)?)", rule)
+        assert named, name
+        for ref in named:
+            assert ref.split(",")[-1].strip() in text, (name, ref, text[:120])
+    assert "MAX(AY3:BH3)" in formula_of(model, "MASA", "AX3")
+
+
+def test_masas_kontrol_chips_lead_to_their_tables(svc):
+    """Masa's Kontrol strip: each chip's state as a class (below 1500 px only those not "tamam" show - the overall chip
+    always), its rule and where it leads in its tooltip, a link to that table; a last cell "N tamam"."""
+    page = svc.view(None, "masa")
+    data = next(p for p in page["panels"] if p["id"] == "B2")["data"]
+    assert data["c"] == [col for col, *_ in bg.KONTROL] + ["Tamam"] and data["added"] == 1
+    row = data["rows"][0]
+    states = {0: "tamam", 1: "uyari", 2: "hata"}
+    ok = 0
+    for (col, code, name, rule, page_id, panel, where), c in zip(bg.KONTROL, row):
+        v = _masa(svc, "%s3" % code)
+        classes = c["cls"].split()
+        assert "kchip" in classes and "k-" + states[int(v)] in classes, name
+        assert c["tip"].startswith(rule)
+        if col == "B":
+            assert "kchip-all" in classes and "golink" not in classes
+            continue
+        assert "golink" in classes and "go:#/%s?p=%s" % (page_id, panel) in classes and where in c["tip"]
+        ok += v == 0
+    assert row[-1]["t"] == "%d tamam" % ok and row[-1]["cls"] == "kchip-sum"
+
+
+def _first_meeting(svc, sheet, col, first, book="tto"):
+    from conftest import cell
+    from tto.xl.values import serial_to_date
+    v = cell(svc, "%s!%s%d" % (sheet, col, first), book=book)
+    return serial_to_date(v)
+
+
+def test_a_ppk_day_and_the_day_before(svc, monkeypatch):
+    """On a TCMB meeting's day (and the business day before it) Bugün says what it is priced at - OIS · PPK's implied step
+    and its band, against the last close of the PPK history -, the scenarios' steps, the survey when it covers it, and the
+    user's own position's risk of the decision (DV01 Risk's PPK karar riski); any other day nothing."""
+    from conftest import cell
+    u = login(svc, "Bugün PPK")
+    svc.set_inputs(u, "tto", [{"ref": "DV01_RISK!X%d" % (33 + i), "value": str(50000 * (i + 1))} for i in range(20)])
+    day = _first_meeting(svc, "OIS_MAIN", "P", bg.PPK_FIRST)
+    before = day - dt.timedelta(days=1)
+    while not svc.bugun.business(before):
+        before -= dt.timedelta(days=1)
+    svc.store.mpc_save(before.isoformat(), "t", {"spot": before.isoformat(), "tlref": 35.8, "quotes": 18, "status": "OK"},
+                       [{"meeting": day.isoformat(), "step": -140.0, "level": 0.35, "cum": -140.0, "sigma": None, "front": True}])
+    try:
+        monkeypatch.setattr(svc.bugun, "now", lambda: at(day, "09:00"))
+        m = svc.bugun.view(u)["meeting"]
+        x = next(i for i in m["items"] if i["cal"] == "ppk")
+        assert x["date"] == day.isoformat() and x["when"] == "today" and x["slot"] == 1
+        implied = cell(svc, "OIS_MAIN!R10", u)
+        assert x["implied"] == implied and x["band"] == cell(svc, "OIS_MAIN!N10", u)
+        assert x["prev"] == {"day": before.isoformat(), "step": -140.0} and x["change"] == pytest.approx(implied + 140.0)
+        names = [cell(svc, "OIS_MAIN!P%d" % r, u) for r in (3, 4, 5)]
+        assert [s["name"] for s in x["scenarios"]] == names
+        assert x["scenarios"][0]["step"] == pytest.approx((cell(svc, "OIS_MAIN!X10", u) - cell(svc, "OIS_MAIN!X9", u)) * 10000)
+        risk_row = next(r for r in range(bg.RISK_FIRST, bg.RISK_LAST + 1) if cell(svc, "DV01_RISK!C%d" % r, u) == cell(svc, "OIS_MAIN!P10", u))
+        assert x["risk"] == {"per_bp": cell(svc, "DV01_RISK!G%d" % risk_row, u), "pnl25": cell(svc, "DV01_RISK!J%d" % risk_row, u)}
+        assert x["risk"]["pnl25"] == pytest.approx(25 * x["risk"]["per_bp"]) and x["risk"]["per_bp"] != 0
+        survey = [r for r in bg.SURVEY_ROWS if cell(svc, "MASA!Q%d" % r, u) == cell(svc, "OIS_MAIN!P10", u)]
+        assert (x["survey"] is None) == (not survey)
+        monkeypatch.setattr(svc.bugun, "now", lambda: at(before, "09:00"))
+        x = next(i for i in svc.bugun.view(u)["meeting"]["items"] if i["cal"] == "ppk")
+        assert x["when"] == "tomorrow" and x["prev"] is None            # (no close of the history before that day)
+        later = day + dt.timedelta(days=3)
+        monkeypatch.setattr(svc.bugun, "now", lambda: at(later, "09:00"))
+        assert not [i for i in svc.bugun.view(u)["meeting"]["items"] if i["cal"] == "ppk"]
+    finally:
+        svc.store.mpc_delete([before.isoformat()])
+        svc.reset_inputs(u, "tto")
+
+
+def test_a_fomc_day(svc, monkeypatch):
+    """A Fed meeting's day: USD · FOMC's implied step (bp and its share of a step), the difference to WIRP and to the
+    expected step, the scenarios' steps and probabilities."""
+    from conftest import cell
+    u = login(svc, "Bugün FOMC")
+    day = _first_meeting(svc, "SOFR_FOMC", "B", bg.FOMC_FIRST, "sofr")
+    monkeypatch.setattr(svc.bugun, "now", lambda: at(day, "10:00"))
+    x = next(i for i in svc.bugun.view(u)["meeting"]["items"] if i["cal"] == "fomc")
+    k, l_ = cell(svc, "SOFR_FOMC!K74", book="sofr"), cell(svc, "SOFR_FOMC!L74", book="sofr")
+    assert x["when"] == "today" and x["implied"] == pytest.approx((k - l_) * 100.0)
+    assert x["steps"] == cell(svc, "SOFR_FOMC!N74", book="sofr")
+    assert [(s["name"], s["prob"]) for s in x["scenarios"]] == [("Baz", cell(svc, "SOFR_FOMC!R72", book="sofr")),
+                                                                ("Şahin", cell(svc, "SOFR_FOMC!S72", book="sofr")),
+                                                                ("Güvercin", cell(svc, "SOFR_FOMC!T72", book="sofr"))]
+
+
+def _heat(cells_by_row):
+    """A heat map as Watch.heat answers it, of planted points: {(panel, row): [(label, chg, now_text, subject)]}."""
+    panels = {}
+    for (pid, row), cells in cells_by_row.items():
+        p = panels.setdefault(pid, {"id": pid, "title": pid, "cols": [], "rows": []})
+        p["rows"].append({"name": row, "cells": [None] + [{"subject": subj, "label": label, "chg": chg, "now": 1.0,
+                                                           "now_text": now, "base_text": "b", "base_day": "2026-11-16",
+                                                           "chg_text": "%+.1f bp" % chg if chg is not None else ""}
+                                                          for label, chg, now, subj in cells]})
+    return {"basis": "close", "panels": list(panels.values()), "time": "10:00:00", "closed": None, "ref_at": None}
+
+
+def test_the_moves_since_the_close_and_the_alarms_since_then(svc, monkeypatch):
+    """The largest moves of OIS, offshore, offshore − OIS, the VİOP contracts and the bonds' ASW against the previous close
+    (the largest first, the others left out), the points still at the close's level that did not move today, the alarms
+    fired since the previous close (the user's own and the desk's)."""
+    u = login(svc, "Bugün Hareket")
+    w = svc.watch
+    s_still, s_moved_today = {"kind": "ois", "tenor": "2Y"}, {"kind": "ois", "tenor": "3Y"}
+    planted = _heat({("curve", "OIS"): [("OIS 1Y", 5.0, "35,55", {"kind": "ois", "tenor": "1Y"}), ("OIS 2Y", 0.0, "35,85", s_still),
+                                        ("OIS 3Y", 0.0, "35,66", s_moved_today), ("OIS 5Y", None, "34,71", {"kind": "ois", "tenor": "5Y"})],
+                     ("curve", "Offshore"): [("Offshore 1Y", -12.0, "38,98", {"kind": "off", "tenor": "12M"})],
+                     ("curve", "Offshore − OIS"): [("Offshore − OIS 1Y", 0.0, "343", {"kind": "expr", "text": "x"})],
+                     ("viop", "OIS − VİOP"): [("VİOP A1Z6 OIS − VİOP", 3.0, "-212", {"kind": "viop", "ticker": "A1Z6", "metric": "ois"})],
+                     ("viop", "ima TRY"): [("VİOP A1Z6 ima TRY", 40.0, "33,75", {"kind": "viop", "ticker": "A1Z6", "metric": "try_mid"})],
+                     ("dibs", "ASW"): [("12.09.29 ASW", -7.5, "120", {"kind": "bond", "isin": "X", "metric": "asw"})],
+                     ("dibs", "getiri"): [("12.09.29 getiri", 25.0, "35,97", {"kind": "bond", "isin": "X", "metric": "yield"})]})
+    monkeypatch.setattr(w, "heat", lambda user, basis, loc: planted)
+    monkeypatch.setitem(w.days, ("", w.key(s_moved_today)), {"moved": "09:41:02"})
+    day = dt.date(2026, 11, 17)                                            # a Tuesday: the close before it is Monday's 17:30
+    monkeypatch.setattr(svc.bugun, "now", lambda: at(day, "10:00"))
+    svc.store.put("watch.fired:2026-11-16", [
+        {"user": u, "time": "17:20:00", "label": "erken", "condition": "≥ 1"},
+        {"user": u, "time": "18:05:00", "label": "OIS 2Y", "condition": "≥ 35,80%", "value_text": "35,85%"},
+        {"user": "başkası", "time": "18:10:00", "label": "başkasının", "condition": "≥ 1"}])
+    svc.store.put("watch.fired:2026-11-17", [{"user": u, "time": "09:10:00", "label": "USDTRY", "condition": "≥ 50", "value_text": "50,01"}])
+    svc.store.put("desk.alarmlog:2026-11-17", [{"kind": "fired", "at": "09:30:00", "label": "Masa TLREF", "condition": "≤ 35%",
+                                                "value_text": "34,9%"}, {"kind": "set", "at": "08:00:00", "label": "kuruldu"}])
+    try:
+        mv = svc.bugun.view(u)["moves"]
+        assert [x["label"] for x in mv["top"]] == ["Offshore 1Y", "12.09.29 ASW", "OIS 1Y", "VİOP A1Z6 OIS − VİOP"]
+        assert mv["count"] == 4 and mv["still"] == ["OIS 2Y"] and mv["since"] == "2026-11-16 17:30" and mv["base_day"] == "2026-11-16"
+        assert [(a["day"], a["time"], a["label"], a["desk"]) for a in mv["alarms"]] == [
+            ("2026-11-17", "09:30", "Masa TLREF", True), ("2026-11-17", "09:10", "USDTRY", False), ("2026-11-16", "18:05", "OIS 2Y", False)]
+        assert w.moves(u, None, top=2)["top"][1]["label"] == "12.09.29 ASW"
+    finally:
+        for key in ("watch.fired:2026-11-16", "watch.fired:2026-11-17", "desk.alarmlog:2026-11-17"):
+            svc.store.put(key, [])
+
+
+def test_the_desk_notes_typed_in_place_and_the_days_before(svc, monkeypatch):
+    """Bugün's Masa notları are İzleme's (``desk.notes:<day>``, shared): today's as saved, the last earlier day with notes
+    one click away (an empty day skipped)."""
+    u, v = login(svc, "Bugün Not"), login(svc, "Bugün Not Okur")
+    today = dt.date.today()
+    monkeypatch.setattr(svc.bugun, "now", lambda: dt.datetime.combine(today, dt.time(9, 0)))
+    svc.store.put("desk.notes:%s" % (today - dt.timedelta(days=1)).isoformat(), {"text": "  ", "by": u, "at": "18:00:00"})
+    svc.store.put("desk.notes:%s" % (today - dt.timedelta(days=3)).isoformat(), {"text": "1Y 35,50 üstü alıcı yok", "by": u, "at": "08:31:00"})
+    try:
+        svc.notes_set(u, "Bugün: TÜFE 10:00")
+        n = svc.bugun.view(v)["notes"]
+        assert n["today"]["text"] == "Bugün: TÜFE 10:00" and n["today"]["by"] == "Bugün Not"
+        assert n["prev"] == {"day": (today - dt.timedelta(days=3)).isoformat(), "text": "1Y 35,50 üstü alıcı yok", "by": "Bugün Not",
+                             "at": "08:31:00"}
+        assert svc.watch_view(v)["notes"]["text"] == "Bugün: TÜFE 10:00"          # (the same notes as İzleme's)
+    finally:
+        for back in (0, 1, 3):
+            svc.store.put("desk.notes:%s" % (today - dt.timedelta(days=back)).isoformat(), {})
+
+
+def test_one_reference_for_the_watch_list_and_the_heat_map(svc):
+    """"Referansı şimdi al" takes İzleme's reference of every item and Egri Hareketi's of every point at once (one button
+    on the two pages and on Bugün)."""
+    u = login(svc, "Bugün Referans")
+    svc.watch_add(u, "tto", "", "", "", {"kind": "ois", "tenor": "1Y"})
+    res = svc.watch_reference(u)
+    assert res["taken"] == 1 and res["count"] > 0 and len(res["at"]) == 8
+    item = svc.watch.items(u)[0]
+    assert type(item["base"]) is float and item["base_at"].endswith(res["at"])
+    assert svc.watch._heat_refs()[u]["at"] == res["at"] and svc.heat_view(u, "ref")["ref_at"] == res["at"]
+
+
 def test_a_block_that_fails_says_so_and_the_others_stand(svc, monkeypatch):
     u = login(svc, "Bugün Hata")
 
@@ -382,6 +592,15 @@ def test_a_block_that_fails_says_so_and_the_others_stand(svc, monkeypatch):
 def test_over_http(svc):
     with TestClient(create_app(svc)) as client:
         assert client.get("/api/bugun", headers=ANON).status_code == 401
-        res = client.get("/api/bugun", headers=auth(svc, "Bugün HTTP"))
+        head = auth(svc, "Bugün HTTP")
+        res = client.get("/api/bugun", headers=head)
         assert res.status_code == 200
-        assert set(res.json()) >= {"today", "time", "close", "ret", "trades", "quant", "dibs", "chat", "agenda"}
+        assert set(res.json()) >= {"today", "time", "close", "ret", "trades", "quant", "dibs", "chat", "agenda", "kontrol",
+                                   "meeting", "moves", "notes"}
+        # (28.11.2026) one reference for İzleme and Eğri Hareketi; DV01 Risk's "Hedge'i işle"
+        ref = client.post("/api/watch/reference", json={}, headers=head)
+        assert ref.status_code == 200 and set(ref.json()) == {"taken", "count", "at"}
+        assert client.post("/api/watch/reference", json={}, headers=ANON).status_code == 401
+        hedge = client.get("/api/dv01/hedge", headers=head)
+        assert hedge.status_code == 200 and hedge.json()["kind"] == "ois" and "said" in hedge.json()
+        assert client.get("/api/dv01/hedge", headers=ANON).status_code == 401
