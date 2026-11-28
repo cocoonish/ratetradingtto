@@ -1663,7 +1663,9 @@ async function clipAfter(page, action) {
     check('"RET bid–ask": 30–42 % in steps of 1 % and the bid–ask boxes',
       mc[2].y.length === 13 && mc[2].y[0] === '30%' && mc[2].y[12] === '42%' && mc[2].boxes === 8, { y: mc[2].y, boxes: mc[2].boxes });
     check('"RET bandı": one legend key for the band, drawn as two washes', mc[3].keys.length === 4 && mc[3].keys[0] === 'RET bid–ask bandı' && mc[3].areas === 2, mc[3].keys);
-    check('"3M FRA eğrisi": every fourth label, as in Excel', JSON.stringify(mc[4].x) === JSON.stringify(['Spot', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y']), mc[4].x);
+    // (by its title: Faiz · PPK shows the offshore FRA chart before it since 28.11.2026)
+    const fra3m = mc.find((c) => /TRY OIS 3M/.test(c.title)) || {};
+    check('"3M FRA eğrisi": every fourth label, as in Excel', JSON.stringify(fra3m.x) === JSON.stringify(['Spot', '1Y', '2Y', '3Y', '4Y', '5Y', '6Y', '7Y', '8Y', '9Y']), fra3m.x);
     check('chart height follows the shape of the chart in Excel', mc[2].height > mc[0].height + 80 && mc[0].height >= 230 && mc[2].height <= 400, mc.map((c) => c.height));
     await shot(page, '07-charts-masa');
 
@@ -2696,6 +2698,10 @@ async function clipAfter(page, action) {
     await open(page, 'forward');
     await tab(page, 'calc');
     const carryIsin = await page.evaluate(() => !!window.tto.findCell('Forward!V56'));
+    // (an ISIN first: Bloomberg's yield, dirty price, coupon and B/E yield are asked only with one since 28.11.2026 - the
+    // recording's values here -; blank without it, and the repo with them)
+    await typeInto(page, 'Forward!V56', 'TRT150328T24');
+    await waitCell(page, 'Forward!V60', 't.trim() !== ""');
     await typeInto(page, 'Forward!V57', '91,713');
     await typeInto(page, 'Forward!V58', '05.11.2026');
     await typeInto(page, 'Forward!V61', '36');
@@ -2709,8 +2715,8 @@ async function clipAfter(page, action) {
     check('Forward → Hesaplayıcılar: Tahvil carry\'s ISIN row is in its table; its own B/E typed as "Fwd temiz fiyat (elle)" reads the repo it '
       + 'was priced with ("İma repo")', carryIsin && Math.abs(trNumber(carryRepo) - 36) < 0.01 && /%$/.test(carryRepo),
       { carryIsin, carryBE, carryRepo });
-    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!V57', 'Forward!V58', 'Forward!V61', 'Forward!V62',
-      'Forward!V71'] });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['Forward!V56', 'Forward!V57', 'Forward!V58', 'Forward!V61',
+      'Forward!V62', 'Forward!V71'] });
     await waitCell(page, 'Forward!V71', 't.trim() === ""');
     // Hesaplayıcılar → Implied Move: the block's own move, upper bound and pips typed back read its vol (its tab: FX · vol)
     await open(page, 'calc');
@@ -4352,7 +4358,8 @@ async function clipAfter(page, action) {
     });
     const duzenTryAK = duzenTryAFomc.shown.indexOf('K');
     check('USD · FOMC → FOMC: the table first, Girdiler beside its chart; "Pencere OIS (elle)" right after İma O/N %, the day counts and ln DFs hidden',
-      duzenTryAFomc.panels.join(' ') === 'fomc inp fomc-chart' && duzenTryAFomc.shown.slice(duzenTryAK, duzenTryAK + 6).join(' ') === 'K AA AB AC AD AE'
+      // (B11, 28.11.2026: the scenario view a table of its own beside the chart, Girdiler under them)
+      duzenTryAFomc.panels.join(' ') === 'fomc fomc-sc fomc-chart inp' && duzenTryAFomc.shown.slice(duzenTryAK, duzenTryAK + 6).join(' ') === 'K AA AB AC AD AE'
       && !['F', 'G', 'I', 'J'].some((c) => duzenTryAFomc.shown.includes(c)) && duzenTryAFomc.shown.includes('H'), duzenTryAFomc);
     const fomcWinMkt = (await cellText(page, 'SOFR_FOMC!AA74')).trim();
     await typeInto(page, 'SOFR_FOMC!AB74', fomcWinMkt);
@@ -6369,7 +6376,7 @@ async function clipAfter(page, action) {
     check('... the contract selector switches the levels panel to the contract chosen and is remembered',
       firstTitle.startsWith('Emir seviyeleri · Kas26 · alış ' + duzenQuantTr3(vrows[0].ask) + ' / satış ' + duzenQuantTr3(vrows[0].bid))
       && secondTitle.startsWith('Emir seviyeleri · Ara26 · alış ' + duzenQuantTr3(vrows[1].ask) + ' / satış ' + duzenQuantTr3(vrows[1].bid))
-      && duzenQuant2(vrows[1].ask) === 34.09 && duzenQuant2(vrows[1].bid) === 33.98
+      && duzenQuant2(vrows[1].ask) === 34.1 && duzenQuant2(vrows[1].bid) === 33.99          // (the strip's spot: 34,09 / 33,98 before)
       && keptContract === 'A1Z6 Curncy' && await page.locator('#quant-viop-contract button.on[data-v="A1Z6 Curncy"]').count() === 1,
     { firstTitle, secondTitle, keptContract });
     // Düzen: the seven secondary panels folded (a jump link each), the contract selector in the header of the levels it chooses
@@ -8273,7 +8280,9 @@ async function clipAfter(page, action) {
       k8Vol.table < k8Vol.panel - 300 && /σ \d+ gün/.test(k8Vol.title) && !k8Vol.heads.includes('Gün'), k8Vol);
     // B5 / B4: one spread rule, one name on VİOP and the Forward page
     await open(k8, 'viop');
-    const k8Viop = { cap: (await cellText(k8, 'VIOP!L18')).trim(), bp: (await cellText(k8, 'VIOP!M18')).trim(), icap: (await cellText(k8, 'VIOP!K84')).trim() };
+    await tab(k8, 'main');
+    const k8Viop = { cap: ((await cellText(k8, 'VIOP!L18')) || '').trim(), bp: ((await cellText(k8, 'VIOP!M18')) || '').trim(),
+      icap: await k8.evaluate(() => ((document.querySelector('#content .panel[data-panel="B13"] h2') || {}).textContent || '').trim()) };
     check('k8: VİOP\'s spread reads "VİOP mid − OIS (bp)", whole bp; its offshore table is "Offshore"',
       k8Viop.cap === 'VİOP mid − OIS (bp)' && /^-?\d[\d.]*$/.test(k8Viop.bp) && k8Viop.icap === 'Offshore', k8Viop);
     // B7: the Forward page's empty calculators without errors
