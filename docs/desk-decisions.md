@@ -2970,3 +2970,79 @@ of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an
 `duzenTryA…` checks (Masa's manual spot one click away, "Yardımcı tablolar"; the dialog's cells read on the VİOP page), its
 formula-in-an-input flow on the forward summary's dates (`EK_FWD!B5`, `C5`, `B6`: the date-to-date block left the Forward
 fiyatlama tab) and its Fiyatlama / Swaption checks (two decimals).
+
+### Toplu iş: tahvil sayfaları (28.11.2026)
+
+The desk's request (28.11.2026): "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek
+20 sey listelemeye calis. Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa
+sayfa, hem de dashboardu genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner." - and on the pages: "Bir
+de genel sayfalari da daha duzenli yapabiliriz, ornegin kagit kismi cok duzensiz ve her sey her yerde gibi. Bunlari da
+dusun. Yeni onerilerle de gel sonra toplu yapalim".
+
+To the lists: "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"; to the reorganization (R), the forward
+card and the year-less dates: "Digerlerini de onayliyorum".
+
+The bond side of it (builder K6; the menu itself - DİBS Piyasa / DİBS Fiyatlama / DİBS RV - is the shell's):
+
+- **One home for the bond table (R).** DİBS Trading's summary is the bond table: DİBS RV · Genel's table (37 columns, ~25
+  the same as the summary's 32) is gone, its own columns - the clean price in use, the simple yield, each fitted ASW
+  curve's ASW at the bond's years, the zero-coupon curve's model yield / cheap-rich / fair price, the OIS hedge ratio -
+  moved into the summary; Genel shows the fit, the charts, the settings and a link ("Kâğıt tablosu: Trading listesi ·
+  özet →"); Tüm Kâğıtlar keeps the list management. One column order on the bond tables - Kâğıt · Valör · Fiyat bid / ask ·
+  Getiri (basit / bileşik) · ON · ASW OIS · ASW FX · Adil · Ucuz / pahalı · Sinyal · Süre · DV01 · Carry -, the summary's
+  groups by measure with the curves side by side (OIS / FX; the zero-coupon curve a group of its own, its yield BIST's
+  simple). Read three ways under "Sütunlar": **Trading / RV / Risk** (and Tümü).
+- **The same bond column everywhere (R).** The short name ("12.09.29"), its ISIN in the tip, frozen, first - DİBS Trading's
+  summary and value dates, Tüm Kâğıtlar, DİBS RV, DİBS ASW, Kâğıt Fiyatlama; a click on it opens the bond's card (as ▸).
+  The value date "T1 · 04.11" (TRY business days after today; the Bloomberg source ISL0 / ISL1 in the tip) on the summary
+  and in Kâğıt Fiyatlama's kind headings. UCUZ green, PAHALI red (B6: Bugün's and Günlük İşlemler' buy / sell); bp whole
+  (the dashboard's own bond columns; B5's rule).
+- **B16.** DİBS RV: right after Valör the compound yield, its O/N, ASW / DM, cheap / rich, the signal; Ad, Bilinen kupon,
+  Son işlem tarihi, Fiyat durumu last; Ayarlar in two panels. Tüm Kâğıtlar: Tür, Kalan gün, Kaynak (and the ISIN, now in the
+  name's tip) hidden by default.
+- **B17.** DİBS ASW's OIS and FX "ASW — kalan vade" charts side by side, its folded history a full-width bar; Genel's empty
+  switch / pair one line; Hazine İhalesi's blocks folded to their ISIN row while it is empty, the inputs first (the realized
+  nominal beside the bids).
+- **C10, the quote ticket at any value date.** The bond card's Kâğıt Fiyatlama block (`/api/kagit-fiyat?ticket=1`) and
+  Manuel Tahvil (its sheet's own block): value date, nominal, centre, spread → bid / ask yields (compound, simple), clean and
+  dirty prices, the amount, DV01, the OIS hedge nominal; Kopyala; İşlem gir.
+- **C12.** Tüm Kâğıtlar: every fixed coupon bond, bill and zero coupon bond with Kâğıt Fiyatlama's market yield, its price
+  (the curve's where there is no market) and the market's gap to the curve - 12 of 26 fixed coupon rows had no yield.
+- **C13.** Kâğıt Fiyatlama's levels as alarm names, `[12.09.29 adil]` / `[12.09.29 AL]` / `[12.09.29 SAT]`, and in each ▸
+  (and the card) "Piyasa AL / SAT'a gelince alarm" - two alarms on the screen yield against AL and SAT.
+- **A14 (bonds).** The desk's quote, not Bloomberg's: Kâğıt Fiyatlama's "Kotasyon kopyala (masanın)" (its Kotan: fair ± half
+  the bucket's width) and each bond's own; Manuel Tahvil's ticket (Kota mesajı); DİBS RV's Kota mesajı a "masanın kotası" set
+  (the row's yield ± half the width typed). Copies are logged as quotes given where the quote log is there.
+- **B2 / B7 on the bond pages.** Notes two lines ("devamı") on Genel, Kâğıt Fiyatlama and Kâğıt Fiyat Yükleme; "hesaplanıyor"
+  until the first answer (Kâğıt Fiyatlama's table, Genel, Fiyat Yükleme's file and labels, Tüm Kâğıtlar' new columns).
+
+**Choices made while building it** (ask the desk before changing):
+- DİBS Trading's summary opens on the **Trading** preset for a user who never chose its columns (★, Kâğıt, vade, kalan,
+  valör, bid / ask, son işlem, ne zaman, basit / bileşik getiri, ON, ASW OIS / FX, ucuz / pahalı OIS, sinyal OIS / FX, DV01,
+  1.000$ nominal, C+R, the broker board, ▸); the adil / eğri / sıfır kupon columns are RV's, one click away. A user who had
+  chosen the summary's columns keeps the choice (the new columns show).
+- The ticket's **spread is the full bid–ask width** (bp), its default the bond's bucket's quote width (Kâğıt Fiyatlama's,
+  the administrators'); bid = centre + spread / 2 (the desk buys at the higher yield). The default centre: the market's
+  yield, else Kâğıt Fiyatlama's price; the value date's default T1.
+- The ticket's **DV01** is one bp of the BIST simple yield (DİBS RV's and Manuel Tahvil's DV01); its **OIS hedge** a TRY
+  OIS to the bond's maturity on the workbook's Bootstrap, quarterly from maturity, the short period first - the nominal
+  with the bond's DV01 (not rounded; Manuel Tahvil's shows the OIS page's rounding and the exact one).
+- Manuel Tahvil's ticket is at **the page's valör** (Girdiler B3: bugün, ON, TN or a date) - the sheet's period table is
+  at that date; the card's ticket prices any value date.
+- Kâğıt Fiyatlama's levels for the alarms and Tüm Kâğıtlar are **the desk's** (everybody's calculation, no one's typed
+  inputs), at most a minute old; the alarm reads the user's own screen yield (DİBS RV!T).
+- DİBS RV's desk quote is a Kota mesajı set (`"yield": true` in quote.js): the yield the row shows (compound or simple) ±
+  half the width typed in the dialog - one width for the rows chosen.
+- Not done here (the shell's or other builders' files): a click on a bond on Bugün and Gün Sonu Matrisi (their pages); the
+  DİBS Piyasa / Fiyatlama / RV menu.
+
+Code: `tto/service.py` (`_trading_keys`, `_trading_columns`, `_trading_table`, `_valor_cell`, `_signal_colour`,
+`_bond_label_cell`, `column_presets`, `TRADING_PRESETS`, `_hidden_defaults`, `UNI_KF` / `_universe_kf_cells`, `_bond_rows`'
+`unless`), `tto/dibsgenel.py` (`zero_for`; no table), `tto/kagitfiyat.py` (`snapshot`, `make_snapshot`, `level`, `ticket`,
+`ois_annuity`, `dv01_of`, `compound_of`, `ticket_text`; `valor` on the page's rows), `tto/bonds.py` (`valor_label`,
+`value_day`, `business_days_after`), `tto/watch.py` (`KF_METRICS`), `tto/extras.py` (`_man_ticket`), the bond view JSONs,
+`pages/dibsgenel.js`, `pages/kagitfiyat.js`, `pages/fiyatyukleme.js`, `kagitblock.js` (`ticketBox`, `alarmButton`,
+`copyDeskQuote`, `logQuote`), `bonds.js`, `columns.js` (presets), `quote.js` (`"yield"`), the "Tahvil toplu (K6)" block at
+the end of `app.css`. Tests: `tests/test_toplu_tahvil.py`; `test_dibsgenel.py`, `test_duzen_tahvil.py`, `test_kagit_on.py`,
+`test_columns.py`, `test_tradehint.py`, `test_bonds.py`, `test_service.py` (the ISIN now the bond tables' second column); the
+browser test's "toplu tahvil" checks.
