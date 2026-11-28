@@ -13,7 +13,7 @@ from tto import blotter as bl
 from tto.inputs import parse_date
 from tto.server import create_app
 from tto.service import ServiceError
-from tto.xl.values import date_to_serial
+from tto.xl.values import date_to_serial, serial_to_date
 
 VALUE = "15.12.2026"
 VALUE_SERIAL = float(date_to_serial(dt.date(2026, 12, 15)))
@@ -354,6 +354,96 @@ def test_the_days_file_has_the_pair_the_points_and_signed_dv01(book_of_trades):
     assert rows["1Y"] == pytest.approx(-t["ois"]["legs"][0]["dv01"])
     costs = int(cells["Forward · pozisyon ve maliyet"][1:]) + 1
     assert lst["I%d" % costs] == "Parite" and [lst["I%d" % r] for r in range(costs + 1, costs + 5)] == ["USDTRY", "EURTRY", "EURUSD", "GBPTRY"]
+
+
+# ---------------------------------------------------------------------------------------------- meeting spreads
+def short(serial):
+    return serial_to_date(serial).strftime("%d.%m.%y")
+
+
+def test_a_meeting_spread_is_two_meeting_swaps_back_to_back(desk):
+    """OIS · PPK's MPC SPREAD as a trade (the desk, 28.11.2026, A1): the earlier period start→mid and the later one
+    mid→end, later − earlier in bp; "PAY K+1 / REC K" pays the later and receives the earlier; each leg the same DV01 (the
+    sheet's "Nominal MPCk / MPCk+1"); its market the table's Piyasa, its cost as a spread's."""
+    svc, u = desk
+    m = svc.ois_market(u)["mpc"]
+    d = [x["date"] for x in m["dates"]]
+    q = svc.quote_ois(u, {"strategy": "mpcspread", "side": "PAY K+1 / REC K", "start": d[0], "mid": d[1], "end": d[2], "level": "-25"})
+    early, late = q["legs"]
+    assert (early["role"], early["dir"], late["role"], late["dir"]) == ("early", "S", "late", "B")
+    assert early["mpc"] == {"start": d[0], "end": d[1], "days": d[1] - d[0]} and late["mpc"] == {"start": d[1], "end": d[2], "days": d[2] - d[1]}
+    assert early["rate"] == pytest.approx(cell(svc, "OIS_MAIN!D84", u), rel=1e-12)                # the earlier period at its market
+    assert late["rate"] == pytest.approx(early["rate"] - 0.0025, rel=1e-12)                       # + the level
+    assert q["info"]["market"] == pytest.approx((cell(svc, "OIS_MAIN!D85", u) - cell(svc, "OIS_MAIN!D84", u)) * 1e4, rel=1e-9)
+    assert q["info"]["market"] == pytest.approx(cell(svc, "OIS_MAIN!B103", u), abs=0.006)           # MPC SPREAD's Piyasa (bp)
+    assert q["info"]["cost_bp"] == pytest.approx(-25 - q["info"]["market"])                         # paying it above mid: +
+    assert early["dv01"] == pytest.approx(late["dv01"], rel=1e-3) and early["dv01"] == pytest.approx(cell(svc, "OIS_MAIN!F2", u), rel=1e-2)
+    assert [early["nominal"], late["nominal"]] == [cell(svc, "OIS_MAIN!E103", u), cell(svc, "OIS_MAIN!F103", u)]
+    assert q["dv01"]["net"] == pytest.approx(late["dv01"] - early["dv01"])
+    assert q["info"]["cost_usd"] == pytest.approx(q["info"]["cost_bp"] * late["dv01"])
+    assert q["label"] == "PAY k+1 / REC k MPC 11.12.26–22.01.27–%s @ -25,00 bp" % short(d[2])
+    rec = svc.quote_ois(u, {"strategy": "mpcspread", "side": "REC K+1 / PAY K", "start": d[0], "mid": d[1], "end": d[2], "level": "-25",
+                            "early_rate": "35,70", "dv01": "5000"})
+    assert [lg["dir"] for lg in rec["legs"]] == ["B", "S"] and rec["legs"][0]["rate"] == pytest.approx(0.357)
+    assert rec["legs"][1]["rate"] == pytest.approx(0.3545) and rec["info"]["cost_bp"] == pytest.approx(-q["info"]["cost_bp"])
+    assert rec["legs"][1]["dv01"] == pytest.approx(5000, rel=1e-3)
+    assert bl.cost_vs_mid("mpcspread", "REC K+1 / PAY K", -25.0, q["info"]["market"]) == pytest.approx(rec["info"]["cost_bp"])
+    for bad in ({"mid": d[0]}, {"end": d[1]}, {"mid": None}, {"side": "PAY"}, {"side": "STEEPENER"}):
+        with pytest.raises(ServiceError):
+            svc.quote_ois(u, dict({"strategy": "mpcspread", "side": "PAY K+1 / REC K", "start": d[0], "mid": d[1], "end": d[2],
+                                   "level": "-25"}, **bad))
+
+
+def test_a_meeting_spread_kept_edited_and_copied(desk):
+    """Saved: one package of two meeting legs - in the sheet's lists each as a meeting swap is, in the cost table by its
+    periods; edited: the level struck again on its own curve, other days priced today; "Benzerini gir" / "Ters işlem"
+    its three days; a template keeps the meetings by their place."""
+    from tto import entry as en
+    svc, u = desk
+    m = svc.ois_market(u)["mpc"]
+    d = [x["date"] for x in m["dates"]]
+    saved = svc.add_ois(u, {"strategy": "mpcspread", "side": "PAY K+1 / REC K", "start": d[1], "mid": d[2], "end": d[3], "level": "-40",
+                            "cpt": "ABC"})
+    data = svc.blotter(u)
+    legs = sorted((t for t in data["trades"] if t["id"] in saved["ids"]), key=lambda t: t["id"])
+    assert [(lg["role"], lg["strategy"], lg["side"], lg["cpt"]) for lg in legs] == [
+        ("early", "mpcspread", "PAY K+1 / REC K", "ABC"), ("late", "mpcspread", "PAY K+1 / REC K", "ABC")]
+    assert legs[0]["package"] == legs[1]["package"] is not None and legs[0]["tenor"] == "MPC %s–%s" % (short(d[1]), short(d[2]))
+    keys = [c["key"] for c in data["cost"]["ois"]]
+    assert "MPC %s–%s" % (short(d[1]), short(d[2])) in keys and "MPC %s–%s" % (short(d[2]), short(d[3])) in keys
+    entry = next(e for e in bl.trade_entries(data["trades"]) if e["id"] == saved["ids"][0])
+    assert entry["sig"][:2] == ("ois", "mpcspread") and entry["level"] == -40.0
+    # the copies: the same three days, the side turned for Ters işlem
+    copy = legs[0]["copy"]
+    assert copy["benzer"]["spec"]["start"] == d[1] and copy["benzer"]["spec"]["mid"] == d[2] and copy["benzer"]["spec"]["end"] == d[3]
+    assert copy["ters"]["spec"]["side"] == "REC K+1 / PAY K" and copy["ters"]["spec"]["sizeMode"] == "dv01"
+    # an earlier period that has run off leaves no spread
+    cal = {"today": svc.today_iso(), "ois_spot": d[2] + 1, "holidays": [], "fx_spot": lambda p: None}
+    assert "ilk dönemi bitti" in bl.copy_specs(legs, cal)["ters"]["why"]
+    # edited: the level alone - struck on its own curve; another day - priced today
+    res = svc.edit_trade(u, saved["ids"][0], {"kind": "ois", "strategy": "mpcspread", "side": "PAY K+1 / REC K", "start": d[1], "mid": d[2],
+                                             "end": d[3], "level": "-35", "cpt": "ABC", "keep_size": True})
+    assert res["priced"] == "trade" and res["edited"]
+    kept = sorted(svc.store.trade_legs(saved["ids"][0]), key=lambda t: t["id"])
+    assert kept[1]["rate"] - kept[0]["rate"] == pytest.approx(-0.0035) and kept[0]["rate"] == pytest.approx(legs[0]["rate"])
+    moved = svc.edit_preview(u, saved["ids"][0], {"kind": "ois", "strategy": "mpcspread", "side": "PAY K+1 / REC K", "start": d[1],
+                                                  "mid": d[2], "end": d[4], "level": "-35"})
+    assert moved["priced"] == "today" and moved["why"] == ["tarihler"]
+    # a template: the strategy, its side and its three meetings by place
+    assert en.clean_spec("ois", {"strategy": "mpcspread", "side": "REC K+1 / PAY K", "mpc": [1, 2, 3]}) == {
+        "kind": "ois", "strategy": "mpcspread", "side": "REC K+1 / PAY K", "mpc": [1, 2, 3]}
+    for bad in ([1, 1, 2], [2, 1, 3], [1, 2]):
+        with pytest.raises(en.EntryError):
+            en.clean_spec("ois", {"strategy": "mpcspread", "mpc": bad})
+    svc.delete_trade(u, saved["ids"][0])
+
+
+def test_the_decision_day_of_every_meeting(desk):
+    """The form's meetings say the decision's own day (Ctrl+K's "dec mpc": the period from the December decision)."""
+    svc, u = desk
+    m = svc.ois_market(u)["mpc"]
+    assert [x["decision"] for x in m["dates"][:2]] == [cell(svc, "OIS_MAIN!P10", u), cell(svc, "OIS_MAIN!P11", u)]
+    assert all(x["decision"] < x["date"] for x in m["dates"] if x["decision"] is not None)
 
 
 def test_over_http(desk):

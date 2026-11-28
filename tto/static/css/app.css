@@ -2163,3 +2163,7 @@ table.grid td.qtrade { white-space: normal; min-width: 150px; max-width: 340px; 
 table.grid td.act.buy button { color: var(--pos); font-weight: 650; }
 table.grid td.act.sell button { color: var(--neg); font-weight: 650; }
 table.grid td input.qmine { width: 76px; height: 22px; padding: 1px 4px; font: inherit; }
+/* ---- İşlem girişi (K4, 28.11.2026, the desk's A5): the checks before "İşlemi kaydet" - what deserves a second look, one
+   line each, in the warning's colour ------------------------------------------------------------------------------------ */
+#blotter-check .checklist { margin: 0 0 10px 18px; padding: 0; }
+#blotter-check .checklist li { margin: 4px 0; color: var(--neg); line-height: 1.4; }

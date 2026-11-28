@@ -87,6 +87,21 @@ async function typeInto(page, ref, text) {
   await page.keyboard.press('Enter');
 }
 
+/** "İşlemi kaydet" of a new trade on Günlük İşlemler: the checks before it (the desk, 28.11.2026, A5: an OIS level far
+ *  from mid, a size ~10× the usual …) may ask once - "Yine de kaydet" is clicked then.  The check's answer says whether
+ *  the dialog comes (no blind wait: the form re-quotes soon after a save, and the checks after it read its tiles). */
+async function saveTrade(page) {
+  const checked = page.waitForResponse((r) => /\/api\/blotter\/check(\?|$)/.test(r.url()) && r.request().method() === 'POST', { timeout: 30000 })
+    .catch(() => null);
+  await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+  const res = await checked;
+  const said = res ? await res.json().catch(() => null) : null;
+  if (said && Array.isArray(said.warnings) && said.warnings.length) {
+    await page.waitForSelector('#blotter-check-go', { timeout: 20000 });
+    await page.click('#blotter-check-go');
+  }
+}
+
 async function waitCell(page, ref, pred, timeout = 20000) {
   await page.waitForFunction(([r, p]) => {
     const td = window.tto.findCell(r);
@@ -657,7 +672,7 @@ async function clipAfter(page, action) {
     const dvTile = await page.evaluate(() => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="dv01-tl"] .v'); return q ? q.textContent : null; });
     check('the forward being typed shows its DV01 (the sheet\'s "Forward DV01" block)', dvTile !== null && dvTile[0] === '+'
       && Math.abs(trNumber(dvTile.slice(1)) - qm.json.dv01.tl) < 1, [dvTile, qm.json.dv01]);
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 2);
     check('saved forward appears in the list', true);
 
@@ -668,7 +683,7 @@ async function clipAfter(page, action) {
     await page.waitForFunction(() => /130\.250\.000,00/.test(document.querySelector('.quote .q.big .v')?.textContent || ''));
     check('manual forward rate: 2.500.000 × 52,10 = 130.250.000,00 TL', true);
     await page.click('.seg button[data-v="S"]');
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === 3);
 
     // OIS spread
@@ -682,7 +697,7 @@ async function clipAfter(page, action) {
     check('OIS spread quote shows a cost in bp', /bp/.test(oisTiles[0]), oisTiles);
     const legRows = await page.locator('.entry .pad:not(.hidden) .quotebox table.grid tr').count();
     check('spread expands into two legs', legRows === 3, legRows);
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction(() => document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr').length === 3);
     check('OIS legs are booked', true);
     const netTile = await page.evaluate(() => (document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="dv01-net"] .v') || {}).textContent || null);
@@ -820,7 +835,7 @@ async function clipAfter(page, action) {
         && !!document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"]'), label, { timeout: 15000 });
       const t = await page.evaluate(() => { const q = document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"]'); return [q.querySelector('.v').textContent, q.className]; });
       const rows = await page.locator('.lists .panel:nth-child(2) table.grid tr').count();
-      await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+      await saveTrade(page);
       await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr').length === n + 1, rows, { timeout: 15000 });
       const row = await page.evaluate((l) => {
         const trs = [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')];
@@ -870,7 +885,7 @@ async function clipAfter(page, action) {
         note: document.querySelector('#blotter-copy-note').textContent, editing: !!p.editing, tab: p.tab, strategy: o.strategy, side: o.side, level: o.level.value,
         size: o.size.value, sizeMode: o.sizeMode, tenors: ['tenor', 'short', 'long'].filter((k) => o.f[k]).map((k) => o.f[k].value), cpt: o.cpt.value, note2: o.note.value }; });
       const saveForm = async (n) => {
-        await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+        await saveTrade(page);
         await page.waitForFunction((x) => window.tto.state.page.data.trades.length === x, n, { timeout: 15000 });
       };
       const before = await listedNow();
@@ -1289,7 +1304,7 @@ async function clipAfter(page, action) {
     await page.click('#chat-trade-open');
     await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ois && window.tto.state.page.ois.level.value === '35,20'
       && window.tto.state.page.ois.f.tenor && window.tto.state.page.ois.f.tenor.value === '18M', null, { timeout: 20000 });
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction(() => !document.querySelector('#nav-chat-missing'), null, { timeout: 20000 });
     const reconAfter = (await api(page, 'ayşe yilmaz', 'GET', '/api/broker/recon')).json.items.find((x) => x.raw === '18m ois paid 35.20') || {};
     check('... "⇢ Gir" in the list fills Günlük İşlemler; saved, the line is entered and the badge goes', ['linked', 'auto'].includes(reconAfter.state), reconAfter);
@@ -1363,7 +1378,7 @@ async function clipAfter(page, action) {
     await page.fill('.form input[placeholder="örn. 17.400"]', '22.500');
     await fxForwardIs(eurQ.json.spot + 2.25);
     check('swap points: forward = spot + points / 10.000', (await fxTile('fwd-points')).trim() === '22.500', [await fxTile('fwd-points'), await fxTile('fwd-forward')]);
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === n + 1, fxBefore, { timeout: 15000 });
     // a currency the workbook has no curve for: typed by hand
     await page.click('#fwd-pair button[data-v="OTHER"]');
@@ -1376,7 +1391,7 @@ async function clipAfter(page, action) {
       .filter((b) => !b.classList.contains('hidden') && ['RET_BID', 'RET_MID', 'RET_ASK', 'TRY', 'FWD', 'SP'].includes(b.dataset.v)).map((b) => b.dataset.v).join(','));
     check('another currency: a pair typed, spot and points by hand', (await fxTile('fwd-total')).trim() === '130.000.000,00' && gbpBases === 'FWD,SP'
       && /Tutar \(GBP\)/.test(await page.textContent('.entry .pad:not(.hidden)')), [await fxTile('fwd-total'), gbpBases]);
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === n + 2, fxBefore, { timeout: 15000 });
     const fxList = await fxRows();
     const fxCol = (name) => fxList[0].indexOf(name);
@@ -1400,7 +1415,7 @@ async function clipAfter(page, action) {
     await page.waitForFunction(() => document.querySelectorAll('.entry .pad:not(.hidden) .quotebox table.grid tr').length === 2);
     const mpcLeg = await page.evaluate(() => [...document.querySelectorAll('.entry .pad:not(.hidden) .quotebox table.grid tr')][1].textContent);
     const oisBefore = await page.locator('.lists .panel:nth-child(2) table.grid tr').count();
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr').length === n + 1, oisBefore, { timeout: 15000 });
     const oisList = await page.evaluate(() => [...document.querySelectorAll('.lists .panel:nth-child(2) table.grid tr')].map((tr) => [...tr.children].map((td) => td.textContent)));
     const dvCol = oisList[0].indexOf('DV01 ($)'), sideCol = oisList[0].indexOf('Yön');
@@ -1431,7 +1446,7 @@ async function clipAfter(page, action) {
       && /typed/.test((await typedSide()).split('|')[1]) && /calc/.test((await typedSide()).split('|')[0])
       && tryTotal && /typed/.test(tryTotal[0]) && tryTotal[1] === '520.000.000,00', [tryQ, await typedSide(), tryTotal]);
     const fxCount = (await fxRows()).length;
-    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await saveTrade(page);
     await page.waitForFunction((n) => document.querySelectorAll('.lists .panel:nth-child(1) table.grid tr').length === Math.max(n, 1) + 1, fxCount, { timeout: 15000 });
     const tryList = await fxRows();
     const tryRow = tryList[tryList.length - 1];
@@ -8305,6 +8320,129 @@ async function clipAfter(page, action) {
     await page.keyboard.press('Escape');
     check('Ctrl+K: a command it cannot read says what it expected; Enter runs nothing', /"1x" vade olarak okunamadı/.test(cmdErr)
       && errKept.text === 'işlem gir usdtry 1x 10mn' && !errKept.modal && errKept.page === pageWas, { cmdErr, errKept, pageWas });
+
+    // ------------------------------------------------------------------ işlem girişi (the desk, 28.11.2026: A1, A4, A5, A14)
+    console.log('işlem girişi');
+    // Ctrl+K "işlem gir ois 2y rec 10k": the suggestion names the book; Günlük İşlemler's OIS form filled - nothing saved
+    const islemBefore = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    await page.waitForTimeout(300);           // (an Escape in the find box closes its list 120 ms after the box loses focus)
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('işlem gir ois 2y rec 10k');
+    await page.waitForSelector('.findlist .hit.cmd');
+    const islemFirst = await page.textContent('.findlist .hit >> nth=0');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ready
+      && window.tto.state.page.tab === 'ois' && window.tto.state.page.ois.size.value === '10k', null, { timeout: 60000 });
+    const islemOis = await page.evaluate(() => { const o = window.tto.state.page.ois; return { strategy: o.strategy, side: o.side,
+      tenor: o.f.tenor && o.f.tenor.value, size: o.size.value, mode: o.sizeMode,
+      cptList: !!document.querySelector('.entry .pad:not(.hidden) input[list="blotter-cpt-list"]'),
+      names: document.querySelectorAll('#blotter-cpt-list option').length }; });
+    check('Ctrl+K "işlem gir ois 2y rec 10k": the suggestion names the book; the OIS form filled (outright 2Y RECEIVE, DV01 10k); the counterparty a list - not saved',
+      /Günlük İşlemler: TRY OIS · 2Y · RECEIVE · DV01 10k/.test(islemFirst) && islemOis.strategy === 'outright' && islemOis.side === 'RECEIVE'
+      && islemOis.tenor === '2Y' && islemOis.size === '10k' && islemOis.mode === 'dv01' && islemOis.cptList && islemOis.names >= 1
+      && (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length === islemBefore, { islemFirst, islemOis });
+    // "İşlemi kaydet" ~50 bp off mid: asked once (the desk's checks) - "Vazgeç" keeps nothing, "Yine de kaydet" keeps it
+    const mid2y = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter/ois-market')).json.tenors.find((r) => r.tenor === '2Y').par;
+    await page.fill('.entry .pad:not(.hidden) input[placeholder="örn. 37,25"]', ((mid2y + 0.005) * 100).toFixed(2).replace('.', ','));
+    await page.waitForFunction(() => !!document.querySelector('.entry .pad:not(.hidden) .quotebox [data-k="vs-mid-bp"]'), null, { timeout: 20000 });
+    await page.click('.entry .pad:not(.hidden) .row.actions .btn.primary');
+    await page.waitForSelector('#blotter-check', { timeout: 30000 });
+    const islemAsked = await page.evaluate(() => [...document.querySelectorAll('#blotter-check-list li')].map((li) => li.dataset.k + ':' + li.textContent));
+    await page.click('#blotter-check-back');
+    await page.waitForTimeout(300);
+    const islemNone = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    await saveTrade(page);
+    await page.waitForFunction((n) => window.tto.state.page.data.trades.length === n + 1, islemBefore, { timeout: 20000 });
+    check('"İşlemi kaydet" ~50 bp off mid: asked once ("Seviye mid\'den … bp uzak"); "Vazgeç" keeps nothing, "Yine de kaydet" keeps it',
+      islemAsked.length === 1 && /^far:Seviye mid'den (49|50|51),\d bp uzak/.test(islemAsked[0]) && islemNone === islemBefore, { islemAsked, islemNone });
+    const islemKept = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.pop();
+    await api(page, 'ayşe yilmaz', 'DELETE', '/api/blotter/trade/' + islemKept.id);
+    // a forward filled from a quote of the quote log ("Bu fiyattan işlem gir": the spec's quote_log) and saved: the quote is
+    // told "done" with the trade (POST /api/quote-log/<id> - answered here by the browser, the log is Fiyatlama's)
+    let islemTold = null;
+    const islemRoute = '**/api/quote-log/4242*';
+    await page.route(islemRoute, async (route) => {
+      islemTold = route.request().postDataJSON();
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ quote: { id: 4242, status: 'done' } }) });
+    });
+    const islemIds = new Set((await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.map((t) => t.id));
+    await page.evaluate(() => {
+      sessionStorage.setItem('tto.trade.prefill', JSON.stringify({ kind: 'fwd', pair: 'USDTRY', dir: 'B', date: '3M', basis: 'RET_MID',
+        amount: '1m', quote_log: 4242, said: 'İşlem kotadan dolduruldu (kota #4242)' }));
+      window.tto.state.page.takePrefill();
+    });
+    await page.waitForFunction(() => window.tto.state.page.tab === 'fwd'
+      && /\d/.test((document.querySelector('.entry .pad:not(.hidden) .quote .q.big .v') || {}).textContent || ''), null, { timeout: 20000 });
+    await saveTrade(page);
+    let islemFromQuote = null;
+    for (let k = 0; k < 100 && !(islemFromQuote && islemTold); k++) {
+      if (!islemFromQuote) islemFromQuote = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.find((t) => !islemIds.has(t.id)) || null;
+      if (!(islemFromQuote && islemTold)) await page.waitForTimeout(200);
+    }
+    check('a forward filled from a quote of the quote log and saved: the quote is told "done" with the trade ({status, trade_id})',
+      !!islemTold && islemTold.status === 'done' && !!islemFromQuote && String(islemTold.trade_id) === String(islemFromQuote.id),
+      { islemTold, trade: islemFromQuote && islemFromQuote.id });
+    await page.unroute(islemRoute);
+    if (islemFromQuote) await api(page, 'ayşe yilmaz', 'DELETE', '/api/blotter/trade/' + islemFromQuote.id);
+    // Ctrl+K "işlem gir dec mpc pay": the meeting swap from the December decision
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('işlem gir dec mpc pay');
+    await page.waitForSelector('.findlist .hit.cmd');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.tto.state.page && window.tto.state.page.ois && window.tto.state.page.ois.strategy === 'mpc'
+      && document.getElementById('ois-mpc-start'), null, { timeout: 30000 });
+    const mpcDays = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter/ois-market')).json.mpc.dates;
+    const decK = mpcDays.findIndex((d) => typeof d.decision === 'number' && new Date(Date.UTC(1899, 11, 30) + d.decision * 864e5).getUTCMonth() === 11);
+    const islemMpc = await page.evaluate(() => [document.getElementById('ois-mpc-start').value, document.getElementById('ois-mpc-end').value,
+      window.tto.state.page.ois.side]);
+    check('Ctrl+K "işlem gir dec mpc pay": the MPC form on the period from the December decision, PAY',
+      decK >= 0 && islemMpc[0] === String(mpcDays[decK].date) && islemMpc[1] === String(mpcDays[decK + 1].date) && islemMpc[2] === 'PAY',
+      { islemMpc, decK });
+    // EN İYİ SPREAD: a price right-clicked fills the OIS form as a spread (A1)
+    await open(page, 'ois');
+    await tab(page, 'best');
+    const spreadName = (await cellText(page, 'OIS_MAIN!B30')).trim();
+    await (await cellHandle(page, 'OIS_MAIN!C30')).click({ button: 'right' });
+    await page.click('.menu button:text-is("İşlem gir")');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ois
+      && window.tto.state.page.ois.strategy === 'spread' && window.tto.state.page.ois.level.value !== '', null, { timeout: 30000 });
+    const spreadFill = await page.evaluate(() => { const o = window.tto.state.page.ois; return [o.f.short.value, o.f.long.value, o.side]; });
+    check('EN İYİ SPREAD: a price right-clicked fills the OIS form as a spread - its tenors, no side (a mid)',
+      JSON.stringify(spreadFill) === JSON.stringify(spreadName.split('/').map((x) => x.trim()).concat([null])), { spreadFill, spreadName });
+    // MPC OIS: Kota mesajı (each period's mid ± a width) and Kotasyon kopyala (A14)
+    await open(page, 'ois');
+    await tab(page, 'mpcis');
+    const mpcButtons = await page.evaluate(() => { const p = document.querySelector('.panel[data-panel="B13"]');
+      return p ? [!!p.querySelector('button[data-action="quote"]'), !!p.querySelector('button[data-action="kotasyon"]')] : null; });
+    await page.click('.panel[data-panel="B13"] button[data-action="quote"]');
+    await page.waitForSelector('#quote-dialog');
+    await page.fill('#quote-width', '20');
+    await page.waitForTimeout(200);
+    const mpcMessage = await page.inputValue('#quote-text');
+    await page.keyboard.press('Escape');
+    check('MPC OIS: "Kota mesajı" and "Kotasyon kopyala"; the message each period\'s mid ± half the width',
+      JSON.stringify(mpcButtons) === '[true,true]' && /^TRY OIS MPC · piyasa/.test(mpcMessage) && /MPC1→2[^\n]*\d+,\d\d \/ \d+,\d\d/.test(mpcMessage),
+      { mpcButtons, mpcMessage: mpcMessage.slice(0, 160) });
+    // FORWARD KOTASYON: no width is said; a width typed spreads the general row ∓ ½ around the desk's spread (A14) - from the
+    // general row's defaults (the bid spread typed above, −300, put back: both spreads the desk's MASA!I60)
+    await open(page, 'masa');
+    await tab(page, 'fwd');
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!D4', 'EK_FWD!E4', 'EK_FWD!I4'] });
+    const deskSpread = Number((await api(page, 'ayşe yilmaz', 'GET', '/api/cell?book=tto&ref=' + encodeURIComponent('MASA!I60'))).json.cell.v);
+    await waitCell(page, 'EK_FWD!D4', "t.trim() === '" + Math.round(deskSpread) + "'").catch(() => null);
+    await page.waitForFunction(() => /^⚠/.test(((window.tto.findCell('EK_FWD!J4') || {}).textContent || '').trim()), null, { timeout: 20000 })
+      .catch(() => null);
+    const warnBefore = ((await cellText(page, 'EK_FWD!J4')) || '').trim();
+    await typeInto(page, 'EK_FWD!I4', '20');
+    await waitCell(page, 'EK_FWD!I4', "t.trim() === '20'");
+    await waitCell(page, 'EK_FWD!E4', "t.trim() === '" + Math.round(deskSpread + 10) + "'").catch(() => null);
+    await page.waitForFunction(() => { const td = window.tto.findCell('EK_FWD!J4'); return td && td.textContent.trim() === ''; }, null, { timeout: 20000 })
+      .catch(() => null);
+    const widthRow = [((await cellText(page, 'EK_FWD!D4')) || '').trim(), ((await cellText(page, 'EK_FWD!E4')) || '').trim()];
+    check('FORWARD KOTASYON: "⚠ … ask ≤ bid" with no width; Genişlik 20 puts the spreads 10 bp either side of the desk\'s, the warning gone',
+      /^⚠ \d+ vadede ask ≤ bid/.test(warnBefore) && widthRow[0] === String(Math.round(deskSpread - 10))
+      && widthRow[1] === String(Math.round(deskSpread + 10)), { warnBefore, widthRow, deskSpread });
+    await api(page, 'ayşe yilmaz', 'POST', '/api/reset', { book: 'tto', refs: ['EK_FWD!I4'] });
 
     // ------------------------------------------------------------------ the data folder (the badge's window): its disk, the lock
     console.log('data folder');

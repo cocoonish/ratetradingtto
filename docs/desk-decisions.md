@@ -3385,3 +3385,66 @@ S155, OIS_MAIN!B84:D99 and BJ), `tto/quant.py` (`view`'s user, `book_view`, the 
 `quantviews.js`, `quanttrend.js`, `quantread.js`, `tto/static/js/pageboxes.js` (`openCard`), `app.css` (the block "Quant
 toplu" at its end). Tests: `tests/test_toplu_quant.py`, `tests/test_quantdibssw.py`; the browser test's "toplu 28.11 ·
 quant" checks and the adapted Carry + momentum, Eğri and list checks.
+
+### Toplu iş: işlem girişi (28.11.2026)
+
+The desk's request (28.11.2026):
+
+> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
+> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
+> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
+
+and its answer to the three lists: **"A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"**, then
+**"Digerlerini de onayliyorum"**. This part (builder K4, branch `toplu-islem`) is A1's OIS lists, A4, A5 and A14's OIS /
+forward tables - the proposals with their evidence in the session notes (`oneriler-28-11.md`):
+
+- **A1 · Fiyatladığın yerden işlem gir (OIS listeleri).** A price of OIS · PPK's EN İYİ 15 SPREAD / FLY / FRA, TÜM
+  SPREADLER / FLY'LAR / FORWARD-FRA, MPC SPREAD and Masa's SİNYALLER · OIS en iyi 5, right-clicked → "İşlem gir": the
+  entry form filled with the row's instrument as the list names it and the price as the level. Günlük İşlemler gained a
+  strategy for MPC SPREAD: **MPC spread**, two meeting swaps back to back.
+- **A4 · Ctrl+K.** `işlem gir` for OIS (outright, spread, fly, FRA, MPC, MPC spread) and DİBS into Günlük İşlemler, each
+  suggestion naming the book; `fiyatla …` opens Fiyatlama filled through its address.
+- **A5 · "İşlemi kaydet"ten önce kontrol** (the desk's list: "RET bugün yüklenmemiş, veri BAYAT, OIS seviyesi mid'den N
+  bp uzak, tutar alışılmışın ~10 katı → tek tık onay; Karşı taraf listeden").
+- **A14 · Kota mesajı her tabloda, sıfır genişlik yok** (its OIS / forward part): Kota mesajı and Kotasyon kopyala on MPC
+  OIS, EN İYİ 15 FRA and Masa's TARİH ARASI FAİZ; FORWARD KOTASYON's ask ≤ bid warning and a two-way "Genişlik (bp)".
+
+**Choices made while building them** (said in README; ask the desk before changing):
+- **A mid on a list is a mid: no side.** The lists' price is the market (Piyasa) - the form opens with the side unchosen
+  (as MPC OIS's market always did); the lists' YÖN is the model's view, the trade's side is the trader's.
+- **MPC spread** (`blotter.ois_legs`, strategy `mpcspread`): start → mid and mid → end, later − earlier in bp; the sides in
+  OIS_MAIN's own words, "PAY k+1 / REC k" (pays the later period, "buys" the spread) and "REC k+1 / PAY k"; both legs the
+  same DV01 (the sheet's "Nominal MPCk / MPCk+1" - equal to it on the recorded day); the earlier leg at its market rate
+  (or typed), the later one that + the level. A spread whose earlier period has run off has no "Ters işlem" (only the
+  later period is left: a meeting swap).
+- **Ctrl+K's words:** a size under a million is a DV01 ($/bp), from a million a nominal (TL) - "dv01" / "nom" say it;
+  "3m" is a tenor (a size is "3mn"); a FRA is "9x12" (start × end) or the lists' "1y1y" (start and length), two tenors
+  written together with a spread's side ("1y2y steepener") a spread; "dec mpc" is the period from the next December
+  decision (as the broker chat reads it: MPC1 → MPC2 on the recorded day); a bond's "mar28" / "15.03.28" is the bond the
+  broker chat would read (the month's fixed coupon bond, of several the benchmark). `fiyatla`'s address carries
+  `/api/pricing`'s own fields - asset, pair, start, end, side, size_kind, size, price, price_kind -; a swap without a start
+  starts at spot and a price not said is empty (what the page kept from before does not stay under a new instrument).
+- **The checks** (`blotter.pre_save_warnings`): the thresholds are the desk's - **10 bp** from mid, **10×** the usual - one
+  for everybody, anyone changes them ("Kayıt kontrolleri"); the usual size is the median of the same kind over the **last
+  60 days before today** (an OIS package's largest leg DV01, a forward's amount by pair, a bond's nominal), judged from 5
+  trades on; the level check is the OIS's (every strategy, either side of mid - a level that far in the trader's favour
+  is as likely a slip) and a bond's price in yield by its modified duration, not a forward's (its price comes from RET by
+  default; RET is checked instead); the RET's day and the feed only when live (replay is the recorded day); a counterparty
+  written inside another or with the same letters ("Garanti BBVA" / "Garanti") is asked about, a case difference is not
+  (Excel's CPT × VADE reads it as one); a check that cannot be made never stops a trade; an edit ("Değişikliği kaydet") and
+  a paste are not checked.
+- **The width is centred** (as Kota mesajı's): the general spreads at the desk's spread (`MASA!I60`) ∓ ½ width; a bid
+  typed keeps the width above it; the ask typed replaces the width. Nothing typed: the numbers as before, width 0, the
+  dates without a width red and counted. EURTRY follows USDTRY's general spreads (their width with them) and has a width
+  of its own around their middle. Kotasyon kopyala on the OIS rate tables copies the mid (one-sided, as the table
+  shows it); the width is Kota mesajı's.
+
+Code: `tto/tradehint.py` (`ois_name`, `OIS_SIDES`, `"auto"`, `"tenor_cols"`), `tto/views/20_ois.json` and `10_masa.json`
+(the hints, the quote specs, the groups `ekfwd-width` / `ekfwd-eur-width`), `tto/blotter.py` (`mpcspread`, `bond_isin`,
+`check_settings`, `usual_sizes`, `similar_name`, `pre_save_warnings`), `tto/service.py` (`blotter_check`, `blotter_checks`,
+`_past_trades`, `_counterparties`; `_ois_market`'s decision days; `_bond_payload`), `tto/server.py` (`/api/blotter/check`,
+`/api/blotter/checks`), `tto/entry.py` (the template's MPC spread), `tto/extras.py` (`_fwd_width_cells`, `FWD_WIDTH*`,
+`_look_if`), `tto/static/js/commands.js`, `tto/static/js/pages/blotter.js` (the MPC spread form, `checkBeforeSave`,
+`openChecks`, the counterparty list, `mpc_month`, a bond's short name said back), `blotterentry.js`, `app.css` (its K4
+block). Tests: `tests/test_tradehint.py`, `test_blotter_fx_mpc.py`, `test_blotter_checks.py`, `test_commands.py`,
+`test_quotes.py`, `test_fwd_twoway.py`, `test_extras.py` (the matrices' inputs); the browser test's "işlem girişi" checks.

@@ -403,6 +403,28 @@
     {"name": "+ spread (360)", "range": "M5:M104", "store": "AT5:AT104", "kind": "pct",
      "label": "'+ spread (360)' typed in TOPLU TARİH ARASI FAİZ: the chosen curve's ACT/360 rate + the row's spread (two-way: the row's spread follows)"}
    ]
+  },
+  {
+   "id": "ekfwd-width",
+   "sheet": "EK_FWD",
+   "label": "FORWARD KOTASYON · USDTRY · genişlik",
+   "note": "İki yönlü: 'Tümü' satırında Genişlik (bp) ya da genel ask spread'i - hangisini yazarsanız o kalır. Yazılan genişlik genel spread'leri masanın spread'inin iki yanına yarımşar açar (bid = spread − genişlik/2, ask = bid + genişlik); yazılan ask spread'i genişliği verir (✎ yazılan; silince ikisi de varsayılana döner). Ask'i bid'inden yüksek olmayan vade kırmızı.",
+   "members": [
+    {"name": "Spread ask", "range": "E4"},
+    {"name": "Genişlik (bp)", "range": "I4", "store": "AN4", "kind": "number",
+     "label": "FORWARD KOTASYON · USDTRY · Genişlik (bp) typed in the 'Tümü' row (two-way: the general bid spread = MASA!I60 − width/2, the ask = bid + width; the ask spread typed gives the width)"}
+   ]
+  },
+  {
+   "id": "ekfwd-eur-width",
+   "sheet": "EK_FWD",
+   "label": "FORWARD KOTASYON · EURTRY · genişlik",
+   "note": "İki yönlü: 'Tümü' satırında Genişlik (bp) ya da genel ask spread'i - hangisini yazarsanız o kalır. Yazılan genişlik genel spread'leri USDTRY matrisininkilerin ortasının iki yanına yarımşar açar; yazılan ask spread'i genişliği verir (✎ yazılan; silince ikisi de varsayılana döner). Ask'i bid'inden yüksek olmayan vade kırmızı.",
+   "members": [
+    {"name": "Spread ask", "range": "E103"},
+    {"name": "Genişlik (bp)", "range": "I103", "store": "AN103", "kind": "number",
+     "label": "FORWARD KOTASYON · EURTRY · Genişlik (bp) typed in the 'Tümü' row (two-way: the general bid spread = the middle of the USDTRY matrix's − width/2, the ask = bid + width; the ask spread typed gives the width)"}
+   ]
   }
  ],
  "panels": [
@@ -484,7 +506,15 @@
    "title": "TARİH ARASI FAİZ  ·  OIS: MPC ima / senaryolar / bootstrap ve spread'li  (sarı hücreler girdi)",
    "range": "B59:N70",
    "hidden": false,
-   "freeze": 1
+   "freeze": 1,
+   "quote": {"prefix": "TRY OIS dönem faizi", "label": "B", "first": 62, "last": 68, "date": "E60",
+             "sets": [{"id": "spr", "name": "Dönem + spread (360)", "mid": "F", "scale": 100, "digits": 2},
+                      {"id": "d360", "name": "Dönem ACT/360", "mid": "D", "scale": 100, "digits": 2},
+                      {"id": "d365", "name": "Dönem ACT/365", "mid": "C", "scale": 100, "digits": 2},
+                      {"id": "on", "name": "Dönem O/N (360)", "mid": "E", "scale": 100, "digits": 2}]},
+   "client_quote": {"pair": "TRY OIS", "title": "tarih arası faiz", "rows": "62:68", "label": "B", "head": "Eğri",
+                    "head_en": "Curve", "start": "C60", "end": "E60", "days": "G60",
+                    "try": {"src": "F", "label": "Dönem + spread % (360)", "label_en": "Period + spread % (360)"}}
   },
   {
    "id": "TAFS",
@@ -687,7 +717,9 @@
    "title": "SİNYALLER  ·  OIS en iyi 5  (OIS_MAIN sıralaması)",
    "ranked": true,
    "range": "B131:N147",
-   "hidden": false
+   "hidden": false,
+   "trade": {"strategy": "auto", "first": 134, "last": 145, "tenor_col": "B", "tenor_cols": {"J": "I"},
+             "cells": {"C": "ois", "J": "ois"}}
   },
   {
    "id": "B19D",

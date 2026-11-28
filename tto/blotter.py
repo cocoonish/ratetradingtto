@@ -38,6 +38,9 @@ FWD_BASES = ("RET_BID", "RET_MID", "RET_ASK", "TRY", "FWD", "SP")
 #: its own rate - in the sheet, in the cost table by tenor and in OIS · PPK's FRA lists.  The trade keeps its own tenor.
 BUCKET_MONTHS = (1, 2, 3, 6, 9, 12, 18, 24, 36, 48, 60, 72, 84, 96, 108, 120)
 MPC_ROWS = (84, 99)        # OIS_MAIN 'MPC OIS': A period, B start, C end, D market (bootstrap)
+#: a meeting spread's sides (OIS_MAIN's MPC SPREAD, its YÖN): pay the later period and receive the earlier one - "buying"
+#: the spread, later − earlier in bp - or the other way round (written upper case, as every side is kept)
+MPC_SPREAD_SIDES = ("PAY K+1 / REC K", "REC K+1 / PAY K")
 
 
 class TradeError(ValueError):
@@ -653,13 +656,20 @@ def mpc_label(start: float, end: float) -> str:
     return "MPC %s–%s" % (serial_to_date(start).strftime("%d.%m.%y"), serial_to_date(end).strftime("%d.%m.%y"))
 
 
+def mpc_spread_label(start: float, mid: float, end: float) -> str:
+    """How a meeting spread is named in the lists: its three days (the two periods start→mid and mid→end)."""
+    return "MPC %s" % "–".join(serial_to_date(d).strftime("%d.%m.%y") for d in (start, mid, end))
+
+
 def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Expand an OIS trade (outright / spread / fly / FRA) into the outright legs booked in the blotter.
 
     Conventions (same as OIS_MAIN): RECEIVE = receive fixed; spread = long − short in bp, FLATTENER =
     receive the long leg / pay the short leg; fly = 2·body − wings in bp, "REC GÖVDE" = receive the body;
     FRA start→end is traded as the two spot swaps with one nominal sized on the forward annuity; "mpc" is one
-    swap between two dates (meeting to meeting, or spot to a meeting), paid once at its end.
+    swap between two dates (meeting to meeting, or spot to a meeting), paid once at its end; "mpcspread" two of them
+    back to back - start→mid and mid→end, OIS_MAIN's MPC SPREAD (the desk, 28.11.2026, A1) -, later − earlier in bp,
+    "PAY K+1 / REC K" = pay the later period, receive the earlier, each leg the same DV01 (its "Nominal MPCk / MPCk+1").
     Size is given per leg as DV01 in USD (fly wings carry half) or as TL nominal.
     """
     strategy = str(payload.get("strategy", "outright")).lower()
@@ -847,6 +857,25 @@ def ois_legs(mkt: OisMarket, payload: Dict[str, Any]) -> Dict[str, Any]:
         label = "%s %s @ %s%%" % (side, name, fmt(level * 100.0, 4))
         info = {"market": span["market"], "implied": span["implied"],
                 "cost_bp": ((span["market"] - level) if side == "RECEIVE" else (level - span["market"])) * 10000.0}
+    elif strategy == "mpcspread":
+        if side not in MPC_SPREAD_SIDES:
+            raise TradeError("yön %s ya da %s olmalı" % MPC_SPREAD_SIDES)
+        d1, d2, d3 = payload.get("start"), payload.get("mid"), payload.get("end")
+        if any(type(d) is not float for d in (d1, d2, d3)):
+            raise TradeError("üç tarih gerekli: ilk dönemin başı, iki dönemin arası ve ikinci dönemin sonu")
+        if not d1 < d2 < d3:
+            raise TradeError("tarihler sırayla olmalı: başlangıç < orta < bitiş")
+        early, late = mkt.between(d1, d2), mkt.between(d2, d3)
+        r1 = payload.get("early_rate")
+        r1 = r1 if type(r1) is float else early["market"]
+        pay_late = side == MPC_SPREAD_SIDES[0]
+        leg(mpc_label(d1, d2), pay_late, r1, 1.0, "early", annuity=early["annuity"])
+        legs[-1]["mpc"] = {"start": d1, "end": d2, "days": early["days"]}
+        leg(mpc_label(d2, d3), not pay_late, r1 + level / 10000.0, 1.0, "late", annuity=late["annuity"])
+        legs[-1]["mpc"] = {"start": d2, "end": d3, "days": late["days"]}
+        label = "%s %s @ %s bp" % (side.replace("K", "k"), mpc_spread_label(d1, d2, d3), fmt(level, 2))
+        mkt_level = (late["market"] - early["market"]) * 10000.0
+        info = {"market": mkt_level, "cost_bp": (level - mkt_level) if pay_late else (mkt_level - level)}
     else:
         raise TradeError("bilinmeyen strateji: %r" % strategy)
     # cost versus market mid in money terms: the bp given away on the leg that carries the price
@@ -870,6 +899,26 @@ BOND_SHEET = "DİBS RV"
 BOND_ROWS_RV = (5, 54)
 _BOND_COLUMNS = {"isin": "ISIN", "name": "Ad", "maturity": "Vade", "clean": "Kullanılan temiz", "mod_dur": "Mod. süre",
                  "dv01_mn": "DV01 TL / 1mn", "yield": "BIST bileşik getiri", "rv": "Pahalı/ucuz (bp"}
+
+
+_ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}\d$")
+
+
+def bond_isin(text: Any) -> str:
+    """An instrument typed into the bond form: an ISIN as it is (upper case); a bond as the desk names it - "mar28",
+    "Eyl29", "15.03.28", "15/3/2028" (Ctrl+K's "işlem gir dibs mar28 50m al", the desk 28.11.2026) - its ISIN, read as
+    the broker chat reads a bond (``brokerchat``: the fixed coupon bond of the month, of the day; of several the
+    benchmark); anything else as it was typed."""
+    s = " ".join(str(text or "").split())
+    if _ISIN.match(s.upper().replace(" ", "")):
+        return s.upper().replace(" ", "")
+    from . import brokerchat as bc                    # (the chat's reading of a bond: one implementation)
+    low = [re.sub(r"^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$", r"\1/\2/\3", w) for w in s.lower().split()]
+    refs = bc._bond_refs(low)
+    if len(refs) != 1 or len(refs[0][0]) != len(low):
+        return s
+    hit = bc._bond_lookup(refs[0][1], low)
+    return hit["isin"] if hit and hit.get("isin") else s
 
 
 def bond_info(book, calc, instrument: str) -> Optional[Dict[str, Any]]:
@@ -1077,6 +1126,9 @@ def trade_entries(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             sig = ("ois", "fra", _months_of(role["start"].get("tenor")) if "start" in role else 0, _months_of(role["end"].get("tenor")))
         elif strategy == "mpc" and first.get("mpc"):
             sig = ("ois", "mpc", serial_to_date(first["mpc"]["start"]).isoformat(), serial_to_date(first["mpc"]["end"]).isoformat())
+        elif strategy == "mpcspread" and (role.get("early") or {}).get("mpc") and (role.get("late") or {}).get("mpc"):
+            sig = ("ois", "mpcspread") + tuple(serial_to_date(d).isoformat() for d in (
+                role["early"]["mpc"]["start"], role["early"]["mpc"]["end"], role["late"]["mpc"]["end"]))
         if level is not None and strategy in ("outright", "fra", "mpc"):
             level *= 100.0                                   # per cent, as the chat says it
         out.append({"id": first["id"], "ids": [lg["id"] for lg in legs], "kind": "ois", "sig": sig, "level": level,
@@ -1120,9 +1172,9 @@ def cost_vs_mid(strategy: str, side: Any, level: Any, mid: Any) -> Optional[floa
     spread and a fly).  ``None`` without a mid."""
     if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in (mid, level)):
         return None
-    receives = str(side or "").upper().replace("GOVDE", "GÖVDE") in ("RECEIVE", "FLATTENER", "REC GÖVDE")
+    receives = str(side or "").upper().replace("GOVDE", "GÖVDE") in ("RECEIVE", "FLATTENER", "REC GÖVDE", MPC_SPREAD_SIDES[1])
     gap = float(mid - level) if receives else float(level - mid)
-    return gap if strategy in ("spread", "fly") else gap * 10000.0
+    return gap if strategy in BP_STRATEGIES else gap * 10000.0
 
 
 def risk_dv01(strategy: str, legs: Sequence[Dict[str, Any]]) -> float:
@@ -1136,7 +1188,10 @@ def risk_dv01(strategy: str, legs: Sequence[Dict[str, Any]]) -> float:
 
 
 #: the legs of an OIS strategy in :func:`ois_legs`'s order (a FRA's: :func:`legs_in_order`)
-LEG_ROLES = {"outright": ("outright",), "spread": ("short", "long"), "fly": ("wing1", "body", "wing2"), "mpc": ("mpc",)}
+LEG_ROLES = {"outright": ("outright",), "spread": ("short", "long"), "fly": ("wing1", "body", "wing2"), "mpc": ("mpc",),
+             "mpcspread": ("early", "late")}
+#: the strategies whose level is in bp (a difference of rates); the others' a rate
+BP_STRATEGIES = ("spread", "fly", "mpcspread")
 
 
 def leg_weight(strategy: str, role: Any) -> float:
@@ -1166,6 +1221,9 @@ def ois_instrument(strategy: str, legs: Sequence[Dict[str, Any]]) -> Tuple[Any, 
     if strategy == "mpc":
         m = legs[0].get("mpc") or {}
         return (m.get("start"), m.get("end"))
+    if strategy == "mpcspread":
+        a, b = ((by_role.get(r) or {}).get("mpc") or {} for r in ("early", "late"))
+        return (a.get("start"), a.get("end"), b.get("end"))
     return tuple((by_role.get(r) or {}).get("tenor") for r in LEG_ROLES.get(strategy, ()))
 
 
@@ -1181,6 +1239,8 @@ def typed_instrument(strategy: str, payload: Dict[str, Any]) -> Tuple[Any, ...]:
         return tuple(out)
     if strategy == "mpc":
         return (payload.get("start"), payload.get("end"))
+    if strategy == "mpcspread":
+        return (payload.get("start"), payload.get("mid"), payload.get("end"))
     keys = {"outright": ("tenor",), "spread": ("short", "long"), "fly": ("wing1", "body", "wing2")}.get(strategy, ())
     return tuple(str(payload.get(k) or "").upper().strip() for k in keys)
 
@@ -1191,8 +1251,9 @@ def restrike(strategy: str, legs: Sequence[Dict[str, Any]], level: float, rates:
     annuity / USDTRY of then in its DV01 per nominal.  The size: a ``nominal`` (TL; a fly's wings half of it) is exact, a
     ``dv01`` ($/bp) is sized by OIS_MAIN's rule on that curve (a FRA on its forward annuity), neither keeps the legs'
     nominals - and a leg whose nominal stays keeps its DV01.  ``rates``: a leg's own rate by role ("short", "wing1",
-    "wing2", "start"), else the one it has.  Returns the legs (in :func:`legs_in_order`) with their new ``rate``,
-    ``nominal`` and ``dv01``; :class:`TradeError` when a leg does not say its curve (no nominal)."""
+    "wing2", "start", a meeting spread's "early"), else the one it has.  Returns the legs (in :func:`legs_in_order`)
+    with their new ``rate``, ``nominal`` and ``dv01``; :class:`TradeError` when a leg does not say its curve (no
+    nominal)."""
     legs = legs_in_order(strategy, legs)
     try:
         per = [float(lg["dv01"]) / float(lg["nominal"]) for lg in legs]       # annuity · 0,0001 / USDTRY, at the trade
@@ -1216,9 +1277,9 @@ def restrike(strategy: str, legs: Sequence[Dict[str, Any]], level: float, rates:
         v = rates.get(role)
         return v if type(v) is float else lg["rate"]
 
-    if strategy == "spread":
-        short = own("short", legs[0])
-        new = [short, short + level / 10000.0]
+    if strategy in ("spread", "mpcspread"):
+        first = own("short" if strategy == "spread" else "early", legs[0])
+        new = [first, first + level / 10000.0]
     elif strategy == "fly":
         w1, w2 = own("wing1", legs[0]), own("wing2", legs[2])
         new = [w1, (level / 10000.0 + w1 + w2) / 2.0, w2]
@@ -1255,7 +1316,8 @@ def forward_restruck(t: Dict[str, Any], direction: str, typed: Tuple[str, float]
 #: repeats and unwinds"
 COPY_MODES = ("benzer", "ters")
 _OIS_FLIP = {"PAY": "RECEIVE", "RECEIVE": "PAY", "STEEPENER": "FLATTENER", "FLATTENER": "STEEPENER",
-             "REC GÖVDE": "PAY GÖVDE", "PAY GÖVDE": "REC GÖVDE"}
+             "REC GÖVDE": "PAY GÖVDE", "PAY GÖVDE": "REC GÖVDE", MPC_SPREAD_SIDES[0]: MPC_SPREAD_SIDES[1],
+             MPC_SPREAD_SIDES[1]: MPC_SPREAD_SIDES[0]}
 
 
 def _serial(iso: str) -> float:
@@ -1384,10 +1446,11 @@ def _ois_size(strategy: str, role: Dict[str, Dict[str, Any]], t: Dict[str, Any])
     """An OIS trade's size as the form takes it (``editSpec``'s rule): a spread / fly by the nominal of its leg of weight
     one when every leg has that nominal (a fly's wings half), else by the DV01 it was typed with (none: the sheet's); any
     other strategy by its nominal - exact."""
-    if strategy in ("spread", "fly"):
-        one = role["long"] if strategy == "spread" else role["body"]
-        others = [role["short"]] if strategy == "spread" else [role["wing1"], role["wing2"]]
-        w = 1.0 if strategy == "spread" else 0.5
+    if strategy in BP_STRATEGIES:
+        one = {"spread": role.get("long"), "fly": role.get("body"), "mpcspread": role.get("late")}[strategy]
+        others = {"spread": [role.get("short")], "fly": [role.get("wing1"), role.get("wing2")],
+                  "mpcspread": [role.get("early")]}[strategy]
+        w = 0.5 if strategy == "fly" else 1.0
         by_nominal = t.get("size_mode") == "nominal" if t.get("size_mode") else \
             all(abs(x["nominal"] - w * one["nominal"]) < 0.5 for x in others)
         if by_nominal:
@@ -1425,6 +1488,18 @@ def _copy_ois(legs: Sequence[Dict[str, Any]], mode: str, past: bool, cal: Dict[s
         spec.update(start=max(s, spot), end=e)
         how = "Aynı toplantı tarihleri" if s >= spot else "Başlangıcı geçti: bugünkü spot'tan (%s) aynı bitişe (%s)" % (
             date_tenor(spot), date_tenor(e))
+        return {"spec": spec, "how": how + (", ters yön" if ters else "")}
+    if st == "mpcspread":
+        a, b = (role.get("early") or {}).get("mpc") or {}, (role.get("late") or {}).get("mpc") or {}
+        s, m, e = a.get("start"), a.get("end"), b.get("end")
+        if any(type(x) is not float for x in (s, m, e)):
+            return {"why": "işlemin tarihleri yok"}
+        if m <= spot:
+            # the earlier period has run off: no spread is left - the later period alone is a meeting swap
+            return {"why": "ilk dönemi bitti (%s): yalnız ikinci dönem kaldı - MPC olarak girin" % date_tenor(m)}
+        spec.update(start=max(s, spot), mid=m, end=e)
+        how = "Aynı toplantı tarihleri" if s >= spot else "İlk dönemin başı geçti: bugünkü spot'tan (%s), aynı ara ve bitiş" % (
+            date_tenor(spot))
         return {"spec": spec, "how": how + (", ters yön" if ters else "")}
     if st == "fra":
         start, end = role.get("start"), role.get("end")
@@ -1466,6 +1541,160 @@ def _copy_ois(legs: Sequence[Dict[str, Any]], mode: str, past: bool, cal: Dict[s
     spec["tenors"] = [date_tenor(e) for e in ends]
     return {"spec": spec, "how": "Başlangıcı geçti: bugünkü spot'tan (%s) işlemin vadesine kırık vade (%s), ters yön"
             % (date_tenor(spot), " / ".join(spec["tenors"]))}
+
+
+# ---------------------------------------------------------------------------------------------- checks before saving
+#: the checks before "İşlemi kaydet" (the desk, 28.11.2026, A5: "RET bugün yüklenmemiş, veri BAYAT, OIS seviyesi mid'den N bp
+#: uzak, tutar alışılmışın ~10 katı → tek tık onay"): desk-wide thresholds anyone may change (kv ``blotter.checks``) - an
+#: OIS level (a bond's yield) ``far_bp`` from mid, a size ``size_x`` times the usual one: the median of the same kind of
+#: trade over the CHECK_DAYS days before today, from CHECK_SAMPLE trades of it on
+CHECK_DEFAULTS = {"far_bp": 10.0, "size_x": 10.0}
+CHECK_LIMITS = {"far_bp": (0.5, 1000.0), "size_x": (1.5, 1000.0)}
+CHECK_DAYS, CHECK_SAMPLE = 60, 5
+#: the feed states the prices are not live in (ops.feed_state): BAYAT, the helper silent, no connection
+STALE_FEED = ("stale", "silent", "down")
+
+
+def check_settings(raw: Any) -> Dict[str, float]:
+    """The thresholds as kept: each a number within its limits (:data:`CHECK_LIMITS`), else its default."""
+    out = dict(CHECK_DEFAULTS)
+    for k, (lo, hi) in CHECK_LIMITS.items():
+        v = raw.get(k) if isinstance(raw, dict) else None
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi:
+            out[k] = float(v)
+    return out
+
+
+def _median(xs: List[float]) -> float:
+    xs = sorted(xs)
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+def usual_sizes(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """How big the desk's trades usually are (``trades``: the days before today): an OIS package's risk - the largest
+    |DV01| ($) of its legs -, a forward's amount in its pair's first currency (per pair), a bond's nominal; each the
+    median and how many trades it is made of: ``{"ois": [median, n], "fwd": {pair: [median, n]}, "bond": [median, n]}``
+    (a kind without a trade left out)."""
+    ois: Dict[str, float] = {}
+    fwd: Dict[str, List[float]] = {}
+    bond: List[float] = []
+    for t in trades:
+        k = t.get("kind")
+        if k == "ois" and type(t.get("dv01")) is float:
+            key = t.get("package") or "#%s" % t.get("id")
+            ois[key] = max(ois.get(key, 0.0), abs(t["dv01"]))
+        elif k == "fwd" and type(t.get("amount")) is float:
+            fwd.setdefault(str(t.get("pair") or "USDTRY").upper(), []).append(abs(t["amount"]))
+        elif k == "bond" and type(t.get("amount")) is float:
+            bond.append(abs(t["amount"]))
+    out: Dict[str, Any] = {"fwd": {p: [_median(xs), len(xs)] for p, xs in fwd.items()}}
+    if ois:
+        out["ois"] = [_median(list(ois.values())), len(ois)]
+    if bond:
+        out["bond"] = [_median(bond), len(bond)]
+    return out
+
+
+def _fold_name(text: Any) -> str:
+    from .entry import fold
+    return fold(text).replace(" ", "")
+
+
+def similar_name(name: Any, known: Sequence[str]) -> Optional[str]:
+    """A counterparty typed that is not one of the names used before (``known``, the most used first) but reads like
+    one - the same letters without their marks, spaces or punctuation ("Is Bankasi" / "İş Bankası"), or one written
+    inside the other ("Garanti BBVA" / "Garanti") -: that name.  ``None``: one of them (in any case: Excel's CPT × VADE
+    reads it as the same), or a new one."""
+    typed = " ".join(str(name or "").split())
+    f = _fold_name(typed)
+    if not f or any(typed.casefold() == str(k).casefold() for k in known):
+        return None
+    for original in known:
+        k = _fold_name(original)
+        if k and (k == f or (len(k) >= 3 and len(f) >= 3 and (k in f or f in k))):
+            return original
+    return None
+
+
+def _num_tr(x: float, digits: int) -> str:
+    s = "{:,.{}f}".format(x, digits)
+    return s.replace(",", "\0").replace(".", ",").replace("\0", ".")
+
+
+def pre_save_warnings(kind: str, q: Optional[Dict[str, Any]], typed: Dict[str, Any], facts: Dict[str, Any],
+                      settings: Dict[str, float]) -> List[Dict[str, str]]:
+    """What deserves a second look before a new trade is kept - each ``{"code", "text"}`` (Turkish), none: nothing to ask.
+
+    ``kind``: fwd / ois / bond; ``q``: the trade priced as the form prices it (``None``: it does not price - the save
+    says why); ``typed``: what the form sends, read (``basis``, a bond's ``price``, ``cpt``); ``facts``: ``live`` (the
+    dashboard on Bloomberg: the RET's day and the feed are only checked then - replay is a recording), ``today`` (ISO),
+    ``ret`` (who loaded the RET curve last and when: ``updated_at``, ``updated_by``; ``None``: never), ``feed``
+    (ops.feed_state), ``usual`` (:func:`usual_sizes`), ``names`` (the counterparties known); ``settings``:
+    :func:`check_settings`.
+
+    * **ret**: a forward priced on the RET curve (RET bid / mid / ask) while the RET was not loaded today;
+    * **stale**: the market data not live (BAYAT, the helper silent, no connection);
+    * **far**: an OIS level ``far_bp`` or more from its mid (either side: a level in the trader's favour that far is as
+      likely a slip); a bond's price that far from DİBS RV's clean price in yield (by its modified duration);
+    * **size**: ``size_x`` times the usual size of its kind or more (an OIS's risk DV01, a forward's amount in its pair, a
+      bond's nominal);
+    * **cpt**: a counterparty spelled like another one used before (CPT × VADE would list them apart)."""
+    out: List[Dict[str, str]] = []
+    live = bool(facts.get("live"))
+    if kind == "fwd" and str(typed.get("basis") or "").upper().startswith("RET") and live:
+        ret = facts.get("ret") or None
+        at = str((ret or {}).get("updated_at") or "")
+        if not at:
+            out.append({"code": "ret", "text": "RET hiç yüklenmedi: forward dosyadaki RET'le fiyatlanıyor"})
+        elif at[:10] != facts.get("today"):
+            when = _dt.datetime.fromisoformat(at.replace(" ", "T")[:19])
+            out.append({"code": "ret", "text": "RET bugün yüklenmedi (son: %s%s): forward eski RET'le fiyatlanıyor"
+                        % (when.strftime("%d.%m.%Y %H:%M"), " · " + ret["updated_by"] if ret.get("updated_by") else "")})
+    feed = facts.get("feed") or {}
+    if live and feed.get("state") in STALE_FEED:
+        out.append({"code": "stale", "text": "Piyasa verisi BAYAT%s: mid ve fiyatlar eski olabilir" % (
+            " (%s itibarıyla)" % feed["as_of"] if feed.get("as_of") else "")})
+    far, times = settings["far_bp"], settings["size_x"]
+    usual = facts.get("usual") or {}
+    if q:
+        if kind == "ois":
+            info = q.get("info") or {}
+            cost, mid, level = info.get("cost_bp"), info.get("market"), q.get("level")
+            bp = q.get("strategy") in BP_STRATEGIES
+            if type(cost) is float and abs(cost) >= far and type(mid) is float and type(level) is float:
+                said = (lambda v: _num_tr(v, 2) + " bp") if bp else (lambda v: "%" + _num_tr(v * 100.0, 2))
+                out.append({"code": "far", "text": "Seviye mid'den %s bp uzak: seviye %s, mid %s (sınır %s bp)"
+                            % (_num_tr(abs(cost), 1), said(level), said(mid), _num_tr(far, 0))})
+            risk = max((abs(lg["dv01"]) for lg in q.get("legs") or () if type(lg.get("dv01")) is float), default=None)
+            base = usual.get("ois")
+            if risk is not None and base and base[1] >= CHECK_SAMPLE and base[0] > 0 and risk >= times * base[0]:
+                out.append({"code": "size", "text": "Büyüklük alışılmışın %s katı: DV01 %s $ (son %d günün ortancası %s $, %d işlem)"
+                            % (_num_tr(risk / base[0], 0), _num_tr(risk, 0), CHECK_DAYS, _num_tr(base[0], 0), base[1])})
+        elif kind == "fwd":
+            amount, pair = q.get("amount"), str(q.get("pair") or "USDTRY").upper()
+            base = (usual.get("fwd") or {}).get(pair)
+            if type(amount) is float and base and base[1] >= CHECK_SAMPLE and base[0] > 0 and abs(amount) >= times * base[0]:
+                out.append({"code": "size", "text": "Tutar alışılmışın %s katı: %s %s (son %d günün %s ortancası %s, %d işlem)"
+                            % (_num_tr(abs(amount) / base[0], 0), _num_tr(abs(amount), 0), pair[:3], CHECK_DAYS, pair,
+                               _num_tr(base[0], 0), base[1])})
+        elif kind == "bond":
+            info = q.get("info") or {}
+            price, clean, dur = typed.get("price"), info.get("clean"), info.get("mod_dur")
+            if all(type(x) is float and x > 0 for x in (price, clean, dur)):
+                gap = abs(price - clean) / clean / dur * 1e4
+                if gap >= far:
+                    out.append({"code": "far", "text": "Fiyat DİBS RV'nin temiz fiyatından ~%s bp (getiri) uzak: %s, tabloda %s"
+                                % (_num_tr(gap, 0), _num_tr(price, 3), _num_tr(clean, 3))})
+            amount, base = q.get("amount"), usual.get("bond")
+            if type(amount) is float and base and base[1] >= CHECK_SAMPLE and base[0] > 0 and abs(amount) >= times * base[0]:
+                out.append({"code": "size", "text": "Nominal alışılmışın %s katı: %s (son %d günün ortancası %s, %d işlem)"
+                            % (_num_tr(abs(amount) / base[0], 0), _num_tr(abs(amount), 0), CHECK_DAYS, _num_tr(base[0], 0), base[1])})
+    like = similar_name(typed.get("cpt"), facts.get("names") or ())
+    if like:
+        out.append({"code": "cpt", "text": "Karşı taraf \"%s\" daha önce \"%s\" diye yazıldı: CPT × VADE ikisini ayrı satırda sayar"
+                    % (" ".join(str(typed.get("cpt")).split()), like)})
+    return out
 
 
 def overnight_equivalent(rate: Any, days: Any) -> Optional[float]:

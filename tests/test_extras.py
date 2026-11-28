@@ -340,9 +340,9 @@ def test_matrix_panels_are_on_the_forward_page_with_their_inputs(svc):
     assert head[:11] == ["Vade", "Valör", "Gün", "Spread bid", "Spread ask", "Spot bid", "Spot ask", "Puan bid", "Puan ask",
                          "Fwd bid", "Fwd ask"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    # curve, spread source, general, dates, per date - and the two-way TRY %, puan and fwd (test_fwd_twoway.py), the ON
-    # karşılık of 26.11.2026 (test_fwd_on.py)
-    assert len(inputs) == 1 + 1 + 2 + 10 + 20 + 60 + 20 and all(i == "u" for i, _ in inputs)
+    # curve, spread source, general (and its width of 28.11.2026), dates, per date - and the two-way TRY %, puan and fwd
+    # (test_fwd_twoway.py), the ON karşılık of 26.11.2026 (test_fwd_on.py)
+    assert len(inputs) == 1 + 1 + 2 + 1 + 10 + 20 + 60 + 20 and all(i == "u" for i, _ in inputs)
     assert inputs[0][1] == list(extras.FWD_CURVES)                                       # the curve is a drop-down
     assert "EKF3" not in panels and "EKF3" in {p["id"] for p in svc.view(None, "forward", True)["panels"]}
 
@@ -610,8 +610,9 @@ def test_the_eurtry_matrix_is_on_the_forward_page_below_the_usdtry_one(svc):
                                                   "Puan ask", "Fwd bid", "Fwd ask", "OIS %", "TRY bid %", "TRY ask %", "ON bid %",
                                                   "ON ask %", "EUR %"]
     inputs = [(c.get("i"), c.get("o")) for row in rows for c in row if c.get("i")]
-    # curve, spread source, spreads and spot, dates, per date - and the two-way TRY %, puan and fwd, the ON karşılık
-    assert len(inputs) == 1 + 1 + 4 + 10 + 20 + 60 + 20 and all(i == "u" for i, _ in inputs)
+    # curve, spread source, spreads and spot (and the width), dates, per date - and the two-way TRY %, puan and fwd, the ON
+    # karşılık
+    assert len(inputs) == 1 + 1 + 4 + 1 + 10 + 20 + 60 + 20 and all(i == "u" for i, _ in inputs)
     assert inputs[0][1] == list(extras.FWD_CURVES)
     assert len([c for row in panels["EKF6"]["data"]["rows"] for c in row if c.get("i")]) == 20
     # each way back by a rate, right after its way back by points: 20 inputs (TRY bid / ask % of the 10 dates)

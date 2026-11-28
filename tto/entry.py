@@ -44,9 +44,9 @@ BASES = {"ret bid": "RET_BID", "ret mid": "RET_MID", "ret ask": "RET_ASK", "try"
          "sp": "SP", "swap puani": "SP", "puan": "SP", "swap points": "SP", "points": "SP"}
 BASIS_LABEL = {"RET_BID": "RET bid", "RET_MID": "RET mid", "RET_ASK": "RET ask", "TRY": "TRY faizi", "FWD": "Forward kur",
                "SP": "Swap puanı"}
-STRATEGIES = ("outright", "spread", "fly", "fra", "mpc")
+STRATEGIES = ("outright", "spread", "fly", "fra", "mpc", "mpcspread")
 OIS_SIDES = {"outright": ("PAY", "RECEIVE"), "fra": ("PAY", "RECEIVE"), "mpc": ("PAY", "RECEIVE"),
-             "spread": ("STEEPENER", "FLATTENER"), "fly": ("REC GÖVDE", "PAY GÖVDE")}
+             "spread": ("STEEPENER", "FLATTENER"), "fly": ("REC GÖVDE", "PAY GÖVDE"), "mpcspread": bl.MPC_SPREAD_SIDES}
 OIS_LEGS = {"outright": 1, "spread": 2, "fly": 3}
 
 
@@ -84,7 +84,8 @@ def clean_spec(kind: str, spec: Any) -> Dict[str, Any]:
     ``quote_amount`` (as typed: "10m"; the latter in the pair's second currency), ``date`` (a date or a tenor: "3M"),
     ``basis``, ``value`` (the rate / outright / points of that basis), ``spot``; of an OIS ``strategy``, ``side``,
     ``tenors`` (outright 1, spread 2, fly 3), ``months`` (FRA: start, end), ``mpc`` (start, end as places in the list
-    of meetings - 0 the spot, k the k-th meeting: the template follows the meetings as they pass), ``level``, ``size``
+    of meetings - 0 the spot, k the k-th meeting: the template follows the meetings as they pass; a meeting spread's
+    start, mid and end), ``level``, ``size``
     with ``sizeMode`` (dv01 / nominal); of a bond ``dir``, ``instrument``, ``amount``, ``price``; of each ``cpt`` and
     ``note``.  Anything else is left out; a template with nothing in it is refused."""
     if kind not in TEMPLATE_KINDS:
@@ -146,6 +147,11 @@ def clean_spec(kind: str, spec: Any) -> Dict[str, Any]:
             if k1 < 0 or k2 <= k1:
                 raise EntryError("MPC: bitiş başlangıçtan sonraki bir toplantı olmalı")
             out["mpc"] = [k1, k2]
+        if spec.get("mpc") is not None and strategy == "mpcspread":
+            k1, k2, k3 = _int_list(spec["mpc"], 3, "MPC toplantıları")
+            if k1 < 0 or not k1 < k2 < k3:
+                raise EntryError("MPC spread: toplantılar sırayla olmalı (başlangıç < orta < bitiş)")
+            out["mpc"] = [k1, k2, k3]
         if "size" in out:
             mode = spec.get("sizeMode") or "dv01"
             if mode not in ("dv01", "nominal"):

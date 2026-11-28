@@ -310,7 +310,8 @@ The desk's list of points each curve is built from, one list for OIS and one for
 - `blotter.split_weights` splits by days between the two nodes around a date:
   - FX forwards (kind `fwd`) on the Forward sheet's own buckets (`Günlük İşlemler!O6:O19`: the RET tenors' days,
     `Forward!U33:U47` without TN);
-  - a meeting-dated OIS swap, first turned into two spot swaps, on the summary's tenors (`blotter.mpc_summary_rows`).
+  - a meeting-dated OIS swap, first turned into two spot swaps, on the summary's tenors (`blotter.mpc_summary_rows`) - a
+    meeting spread's (28.11.2026, strategy `mpcspread`) two legs each so, as two meeting swaps.
 - Trades' DV01 table (`tradevalue.RISK_TENORS`, `tradebook.dv01_table`) uses both rules:
   - a spot swap entered as a tenor goes through `bucket_split`;
   - a dated, started or forward-starting swap, and a bond, goes through `split_weights` at its date, by days, against
@@ -328,6 +329,10 @@ The desk's list of points each curve is built from, one list for OIS and one for
   ACT/360 simple rate too (spread = TRY − OIS of the chosen curve); a puan or fwd typed gives the TRY rate the outright
   implies on the matrix's own spot, USD / EUR rate and days (`extras.fwd_rate`, the exact inverse of
   `extras.fwd_outright`) - no curve is read for it.
+- **The general row's width** (28.11.2026, `extras._fwd_width_cells`): a "Genişlik (bp)" w typed puts the general bid /
+  ask spreads at the desk's spread ∓ w/2 (USDTRY: `MASA!I60`; EURTRY: the middle of the USDTRY general spreads) - the
+  same OIS curve under both sides, only the spreads move. A value date whose TRY ask % is not above its bid % is flagged
+  (a conditional look and a count, nothing written).
 - **EK_TARIH's Kote % is read in the basis the table shows** (ACT/360, ACT/365 or O/N (360)); its difference to a curve is
   in that basis too. Only with ACT/360 is it the row's spread (desk decision 24.11.2026).
 - **Two-way** (24.11.2026, [desk-decisions.md](desk-decisions.md#tarih-arası-ve-ois-tabloları-iki-yönlü-24112026)): a

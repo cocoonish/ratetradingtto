@@ -13,15 +13,22 @@ const BASIS_LABEL = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask'
 // what is typed next to the pricing choice: [label, placeholder]
 const MANUAL = { TRY: ['TRY faizi (%)', 'örn. 36,50'], FWD: ['Forward kur', 'örn. 52,1000'], SP: ['Swap puanı (×10.000)', 'örn. 17.400'] };
 const PAIRS = [['USDTRY', 'USDTRY'], ['EURTRY', 'EURTRY'], ['OTHER', 'Diğer']];
-const STRATEGIES = [['outright', 'Outright'], ['spread', 'Spread'], ['fly', 'Fly'], ['fra', 'FRA'], ['mpc', 'MPC']];
+const STRATEGIES = [['outright', 'Outright'], ['spread', 'Spread'], ['fly', 'Fly'], ['fra', 'FRA'], ['mpc', 'MPC'], ['mpcspread', 'MPC spread']];
 const SIDES = {
   outright: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   fra: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   mpc: [['PAY', 'PAY'], ['RECEIVE', 'RECEIVE']],
   spread: [['STEEPENER', 'STEEPENER'], ['FLATTENER', 'FLATTENER']],
   fly: [['REC GÖVDE', 'REC GÖVDE'], ['PAY GÖVDE', 'PAY GÖVDE']],
+  // a meeting spread (OIS · PPK's MPC SPREAD, the desk's 28.11.2026 list): the later period paid, the earlier received - or
+  // the other way round; kept upper case as every side (blotter.MPC_SPREAD_SIDES), said as OIS_MAIN says it
+  mpcspread: [['PAY K+1 / REC K', 'PAY k+1 / REC k'], ['REC K+1 / PAY K', 'REC k+1 / PAY k']],
 };
-const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat 1', body: 'Gövde', wing2: 'Kanat 2', start: 'Başlangıç', end: 'Bitiş', mpc: 'MPC' };
+// the strategies whose level is in bp (a difference of rates): the others' a rate in %
+const BP_STRATEGIES = ['spread', 'fly', 'mpcspread'];
+const isBp = (st) => BP_STRATEGIES.includes(st);
+const ROLE = { outright: 'Outright', short: 'Kısa', long: 'Uzun', wing1: 'Kanat 1', body: 'Gövde', wing2: 'Kanat 2', start: 'Başlangıç', end: 'Bitiş', mpc: 'MPC',
+  early: 'İlk dönem', late: 'İkinci dönem' };
 // a quote's "İşlem gir" (``takePrefill``) empties what the quote does not give - its own date, price and note, and the
 // amount (never a quote's: its box empty, a forward's typed in the pair's first currency); ``fillForm`` itself leaves
 // alone what a spec leaves out (a template keeps any subset of the form)
@@ -30,7 +37,7 @@ const PREFILL_CLEARS = { fwd: { pair: 'USDTRY', basis: 'SP', date: '', value: ''
 // an OIS trade against mid, as the desk reads it ("Mid'e göre"): the stored cost (+ worse than mid) with its sign turned
 const VS_MID_HINT = '+ = mid\'den iyi (lehine), − = mid\'den kötü (aleyhine)';
 // the boxes of a leg's own rate and the select of that leg's tenor: a rate an edit fills in belongs to its tenor
-const LEG_RATES = [['short_rate', 'short'], ['wing1_rate', 'wing1'], ['wing2_rate', 'wing2'], ['start_rate', 'start_months']];
+const LEG_RATES = [['short_rate', 'short'], ['wing1_rate', 'wing1'], ['wing2_rate', 'wing2'], ['start_rate', 'start_months'], ['early_rate', 'start']];
 // how "Değişikliği kaydet" prices an edit (the server's ``priced``), in the line over the form's quote; 'today' names
 // what changed ("Valör değişti: …")
 const EDIT_PRICED = {
@@ -78,6 +85,12 @@ function monthsOf(tenor) {
   const m = /^(\d+)([MY])$/.exec(String(tenor || ''));
   return m ? Number(m[1]) * (m[2] === 'Y' ? 12 : 1) : null;
 }
+
+/** The month (1–12) of a day kept as an Excel serial. */
+function serialMonth(serial) {
+  return new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000).getUTCMonth() + 1;
+}
+const MONTHS_TR = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
 
 /** A leg that ends on a date of its own - a broken date, named by its day ("04.11.2027"; the server's ``date_tenor``). */
 function isDateText(v) {
@@ -147,19 +160,22 @@ function editSpec(legs) {
   const role = {};
   for (const lg of legs) role[lg.role] = lg;
   const st = t.strategy || 'outright';
-  const bp = st === 'spread' || st === 'fly';
+  const bp = isBp(st);
   const spec = { kind: 'ois', strategy: st, side: { 'REC GOVDE': 'REC GÖVDE', 'PAY GOVDE': 'PAY GÖVDE' }[t.side] || t.side || null,
     level: typeof t.level === 'number' ? (bp ? raw(t.level) : exactRate(t.level)) : '', cpt: t.cpt || '', note: t.note || '' };
   let size = null;
   if (bp) {
-    const one = st === 'spread' ? role.long : role.body;              // the leg of weight 1
-    const others = st === 'spread' ? [role.short] : [role.wing1, role.wing2];
+    const one = { spread: role.long, fly: role.body, mpcspread: role.late }[st];          // the leg of weight 1
+    const others = { spread: [role.short], fly: [role.wing1, role.wing2], mpcspread: [role.early] }[st];
     if (!one || others.some((x) => !x)) return null;
-    spec.tenors = st === 'spread' ? [role.short.tenor, role.long.tenor] : [role.wing1.tenor, role.body.tenor, role.wing2.tenor];
+    if (st === 'mpcspread') {
+      if (!role.early.mpc || !role.late.mpc) return null;
+      Object.assign(spec, { start: role.early.mpc.start, mid: role.early.mpc.end, end: role.late.mpc.end, early_rate: exactRate(role.early.rate) });
+    } else spec.tenors = st === 'spread' ? [role.short.tenor, role.long.tenor] : [role.wing1.tenor, role.body.tenor, role.wing2.tenor];
     if (st === 'spread') spec.short_rate = exactRate(role.short.rate);
-    else Object.assign(spec, { wing1_rate: exactRate(role.wing1.rate), wing2_rate: exactRate(role.wing2.rate) });
+    else if (st === 'fly') Object.assign(spec, { wing1_rate: exactRate(role.wing1.rate), wing2_rate: exactRate(role.wing2.rate) });
     // sized by a nominal: every leg that nominal (a wing half of it); by DV01: as typed (a trade of before: its leg's DV01)
-    const w = st === 'spread' ? 1 : 0.5;
+    const w = st === 'fly' ? 0.5 : 1;
     const byNominal = t.size_mode ? t.size_mode === 'nominal' : others.every((x) => Math.abs(x.nominal - w * one.nominal) < 0.5);
     spec.sizeMode = byNominal ? 'nominal' : 'dv01';
     size = byNominal ? one.nominal : (t.size_mode ? t.size_typed : Math.round(one.dv01));
@@ -293,20 +309,82 @@ export class BlotterPage {
   async load() {
     clear(this.host);
     this.host.appendChild(h('div', { class: 'loading' }, 'Yükleniyor…'));
-    const [data, users, market] = await Promise.all([
+    const [data, users, market, checks] = await Promise.all([
       api.get('/api/blotter', this.query()),
       api.get('/api/users'),
       api.get('/api/blotter/ois-market').catch(() => null),
+      api.get('/api/blotter/checks').catch(() => null),
     ]);
     if (this.dead) return;
     for (const u of users.users) this.users[u.name] = u.display;
     this.market = market;
+    this.checks = checks;
     this.data = data;
     this.date = data.date;
     this.to = data.ranged ? data.to : null;
     this.build();
     this.fill();
     if (this.data.can_enter) this.takePrefill();         // a trade filled from a quote, if one was sent here
+  }
+
+  // ------------------------------------------------------------------ the checks before "İşlemi kaydet"
+  /**
+   * The checks before a new trade is kept (the desk, 28.11.2026, A5): the server says what deserves a second look - a
+   * RET-priced forward while the RET was not loaded today, the data BAYAT, an OIS level N bp from mid (a bond's price that
+   * far from DİBS RV's), a size ~10× the usual one, a counterparty spelled like another - and one click confirms them
+   * ("Yine de kaydet").  true: save.  A check that cannot be made never stops a trade (its save says what is wrong).
+   */
+  async checkBeforeSave(kind, pl) {
+    let res = null;
+    try { res = await api.post('/api/blotter/check', Object.assign({ kind }, pl)); } catch (err) { return true; }
+    const warnings = (res && res.warnings) || [];
+    if (!warnings.length || this.dead) return !this.dead;
+    return new Promise((resolve) => {
+      let done = false;
+      const m = modal({ title: 'Kaydetmeden önce', width: 520, onClose: () => { if (!done) resolve(false); } });
+      m.box.id = 'blotter-check';
+      m.body.appendChild(h('ul', { class: 'checklist', id: 'blotter-check-list' },
+        ...warnings.map((w) => h('li', { 'data-k': w.code }, w.text))));
+      m.body.appendChild(h('div', { class: 'muted' }, 'Masanın kontrolleri (Kayıt kontrolleri: sınırlar herkes için aynı). '
+        + 'Hiçbir şey kaydedilmedi.'));
+      m.foot.appendChild(h('button', { class: 'btn', type: 'button', id: 'blotter-check-back', onclick: () => m.close() }, 'Vazgeç'));
+      const go = h('button', { class: 'btn primary', type: 'button', id: 'blotter-check-go',
+        onclick: () => { done = true; m.close(); resolve(true); } }, 'Yine de kaydet');
+      m.foot.appendChild(go);
+      go.focus();
+    });
+  }
+
+  /** "Kayıt kontrolleri": the checks' thresholds - how many bp from mid, how many times the usual size - for the desk. */
+  openChecks() {
+    const s = (this.checks && this.checks.settings) || { far_bp: 10, size_x: 10 };
+    const m = modal({ title: 'Kayıt kontrolleri', width: 460 });
+    m.box.id = 'blotter-checks';
+    const far = h('input', { class: 'inp num', type: 'text', id: 'blotter-checks-far', value: num(s.far_bp, 1, false) });
+    const times = h('input', { class: 'inp num', type: 'text', id: 'blotter-checks-size', value: num(s.size_x, 1, false) });
+    const set = this.checks && this.checks.set;
+    m.body.appendChild(h('div', { class: 'muted', style: { marginBottom: '8px' } }, '"İşlemi kaydet"ten önce sorulur: RET bugün '
+      + 'yüklenmediyse (RET\'ten fiyatlanan forward), veri BAYAT\'sa, OIS seviyesi (tahvilde getirisi) mid\'den aşağıdaki kadar '
+      + 'uzaksa, tutar son 60 günün ortancasının aşağıdaki katıysa, karşı taraf daha önce başka yazıldıysa. Sınırlar masanın, '
+      + 'herkes için aynı.' + (set ? ' Son değiştiren: ' + (this.users[set.by] || set.by) + ' · ' + timeOf(set.at) : '')));
+    m.body.appendChild(h('div', { class: 'row' }, field('Mid\'e uzaklık (bp)', far, '170px'), field('Alışılmışın katı', times, '170px')));
+    const save = h('button', { class: 'btn primary', type: 'button', id: 'blotter-checks-save' }, 'Kaydet');
+    save.addEventListener('click', async () => {
+      try {
+        this.checks = await api.post('/api/blotter/checks', { far_bp: far.value, size_x: times.value });
+        toast('Kayıt kontrolleri: ' + num(this.checks.settings.far_bp, 1) + ' bp · ' + num(this.checks.settings.size_x, 1) + ' kat', 'ok');
+        m.close();
+      } catch (err) { errorToast(err); }
+    });
+    m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
+    m.foot.appendChild(save);
+    far.focus();
+  }
+
+  /** The names the counterparty boxes offer (used before, Broker Chat's houses): the page's one list. */
+  cptList() {
+    const names = (this.checks && this.checks.counterparties) || [];
+    return h('datalist', { id: 'blotter-cpt-list' }, ...names.map((n) => h('option', { value: n })));
   }
 
   async refresh() {
@@ -420,6 +498,10 @@ export class BlotterPage {
       title: 'Excel\'den kopyalanan işlem satırlarını yapıştırın: her satır formdaki gibi denetlenir, önizlemeden sonra geçerliler tek seferde kaydedilir' },
     'Excel\'den yapıştır');
     bulkBtn.addEventListener('click', () => openBulk(this));
+    // the checks before "İşlemi kaydet" (A5): their thresholds, the desk's
+    const checksBtn = h('button', { class: 'btn sm', type: 'button', id: 'blotter-checks-open',
+      title: '"İşlemi kaydet"ten önceki kontroller: mid\'e uzaklık ve alışılmış büyüklük sınırları (masanın, herkes için aynı)' }, 'Kayıt kontrolleri');
+    checksBtn.addEventListener('click', () => this.openChecks());
     this.tplBar = h('div', { class: 'tplbar', id: 'blotter-templates' });
     this.tplKey = null;
     this.entryTitle = h('h2', { id: 'blotter-entry-title' }, 'Yeni işlem');
@@ -428,7 +510,8 @@ export class BlotterPage {
     // "Benzerini gir" / "Ters işlem": which trade the form was filled from (``markCopied``), until it is saved
     this.copyNote = h('div', { class: 'editnote hidden', id: 'blotter-copy-note' });
     this.copied = null;
-    this.entry.appendChild(h('header', null, this.entryTitle, bulkBtn));
+    this.entry.appendChild(h('header', null, this.entryTitle, checksBtn, bulkBtn));
+    this.entry.appendChild(this.cptList());
     this.entry.appendChild(this.editNote);
     this.entry.appendChild(this.copyNote);
     this.entry.appendChild(this.tplBar);
@@ -486,9 +569,9 @@ export class BlotterPage {
    * ``fillForm``, the form's one way in. ``spec``:
    *   {kind: 'fwd', pair: 'USDTRY' | 'EURTRY', dir: 'B' | 'S' | null, date: '15.12.2026' | '3M', basis: 'SP' | 'FWD' | 'TRY'
    *    | 'RET_BID' | 'RET_MID' | 'RET_ASK', value: the points / outright / TRY rate as text (none for RET), note, cpt}
-   *   {kind: 'ois', strategy: 'outright' | 'spread' | 'fly' | 'fra' | 'mpc', side: 'PAY' | 'RECEIVE' | … | null,
-   *    tenors: ['1Y', …] (outright / spread / fly), months: [start, end] (FRA), start, end (MPC: serials of the form's days),
-   *    level: as text, note, cpt}
+   *   {kind: 'ois', strategy: 'outright' | 'spread' | 'fly' | 'fra' | 'mpc' | 'mpcspread', side: 'PAY' | 'RECEIVE' | … | null,
+   *    tenors: ['1Y', …] (outright / spread / fly), months: [start, end] (FRA), start, end (MPC: serials of the form's days;
+   *    a meeting spread's start, mid, end), level: as text, note, cpt}
    *   {kind: 'bond', dir: 'B' | 'S' | null, instrument: ISIN, price: as text, note}
    * The fields a quote does not give are emptied (``PREFILL_CLEARS``).  A side of null is left to the user: no side is
    * chosen and the trade is not saved until one is.  The amount is never filled - its box empty, a forward's in the pair's
@@ -508,6 +591,8 @@ export class BlotterPage {
     this.markCopied(null);
     const done = this.fillForm(Object.assign({ dir: null }, PREFILL_CLEARS[spec.kind], spec));
     if (!done) return false;
+    // a quote of the quote log ("Bu fiyattan işlem gir": its id, ``quote_log``): the forward saved from it is written on it
+    if (spec.kind === 'fwd' && spec.quote_log) this.fromQuote = spec.quote_log;
     toast(said + (done.warn ? ' (' + done.warn + ')' : ''), done.warn ? 'warn' : 'ok', done.warn ? 7000 : 4000);
     return true;
   }
@@ -521,14 +606,17 @@ export class BlotterPage {
    *                '15.12.2026', '3M'), basis ('RET_BID' … 'SP'), value (the rate / outright / points of that basis), spot,
    *                cpt, note
    *   kind 'ois':  strategy, side, tenors ([tenor] | [short, long] | [wing1, body, wing2]), months ([start, end] of a FRA),
-   *                start / end (a meeting swap's two days, as serials) or mpc ([k1, k2]: places in the list of meetings -
-   *                0 the spot, k the k-th meeting), level, size with sizeMode ('dv01' | 'nominal'), a leg's own rate (%,
-   *                ``LEG_RATES``: short_rate, wing1_rate, wing2_rate, start_rate - a trade being edited), cpt, note
+   *                start / end (a meeting swap's two days, as serials; a meeting spread's start / mid / end) or mpc
+   *                ([k1, k2] - a meeting spread's [k1, k2, k3] -: places in the list of meetings - 0 the spot, k the k-th
+   *                meeting) or mpc_month (1–12: the period from the next meeting decided in that month, Ctrl+K's "dec
+   *                mpc"), level, size with sizeMode ('dv01' | 'nominal'), a leg's own rate (%, ``LEG_RATES``: short_rate,
+   *                wing1_rate, wing2_rate, start_rate, early_rate - a trade being edited), cpt, note
    *   kind 'bond': dir, instrument, amount, price, note
    * Returns null when the spec is no trade of the form, else ``{ warn }``: what could not be filled, in words ('' when all was).
    */
   fillForm(spec) {
     if (!spec || !this.showTab || !['fwd', 'ois', 'bond'].includes(spec.kind)) return null;
+    this.fromQuote = null;                 // (the form holds another trade now: only takePrefill links it to a quote again)
     const has = (k) => Object.prototype.hasOwnProperty.call(spec, k);
     const text = (k, el) => { if (has(k)) el.value = spec[k] === null || spec[k] === undefined ? '' : String(spec[k]); };
     const missing = [];                    // what the form has no option for (a tenor it does not list)
@@ -602,17 +690,27 @@ export class BlotterPage {
           else missing.push(String(m));
         });
       }
-      if (o.strategy === 'mpc' && (has('start') || has('end') || has('mpc'))) {
-        // a meeting swap: its two days among the form's (OIS spot, the meetings' effective days) - a template's by their
-        // place in the list (the next meeting stays the next one as meetings pass)
+      if ((o.strategy === 'mpc' || o.strategy === 'mpcspread') && (has('start') || has('end') || has('mpc') || has('mpc_month'))) {
+        // a meeting swap: its two days among the form's (OIS spot, the meetings' effective days) - a meeting spread its
+        // three -, a template's by their place in the list (the next meeting stays the next one as meetings pass), a Ctrl+K
+        // command's by the month of the meeting it starts at ("dec mpc": the next December decision's period)
         const m = (this.market && this.market.mpc) || { dates: [] };
         const day = (k) => (k === 0 ? m.spot : (m.dates[k - 1] || {}).date);
-        const days = has('mpc') && Array.isArray(spec.mpc) ? { start: day(spec.mpc[0]), end: day(spec.mpc[1]) } : { start: spec.start, end: spec.end };
-        for (const k of ['start', 'end']) {
+        const keys = o.strategy === 'mpc' ? ['start', 'end'] : ['start', 'mid', 'end'];
+        let places = has('mpc') && Array.isArray(spec.mpc) ? spec.mpc : null;
+        if (!places && has('mpc_month')) {
+          const k = m.dates.findIndex((d) => typeof d.decision === 'number' && serialMonth(d.decision) === Number(spec.mpc_month));
+          if (k < 0) missing.push(MONTHS_TR[Number(spec.mpc_month) - 1] + ' toplantısı listede yok');
+          else places = keys.map((_, i) => k + 1 + i);
+        }
+        const days = {};
+        keys.forEach((key, i) => { days[key] = places ? day(places[i]) : spec[key]; });
+        for (const k of keys) {
+          if (days[k] === undefined || days[k] === null) { if (places) missing.push('MPC' + places[keys.indexOf(k)]); continue; }
           const sel = o.f[k];
           const v = String(days[k]);
           if (sel && [...sel.options].some((x) => x.value === v)) sel.value = v;
-          else missing.push(serialDate(days[k]) || (has('mpc') ? 'MPC' + spec.mpc[k === 'start' ? 0 : 1] : v));
+          else missing.push(serialDate(days[k]) || (places ? 'MPC' + places[keys.indexOf(k)] : v));
         }
       }
       if (has('size')) {
@@ -667,11 +765,11 @@ export class BlotterPage {
       const legs = { outright: ['tenor'], spread: ['short', 'long'], fly: ['wing1', 'body', 'wing2'] }[o.strategy];
       if (legs) out.tenors = legs.map((k) => o.f[k].value);
       if (o.strategy === 'fra') out.months = [o.f.start_months.value, o.f.end_months.value].map((v) => (isDateText(v) ? v : Number(v)));
-      if (o.strategy === 'mpc') {
+      if (o.strategy === 'mpc' || o.strategy === 'mpcspread') {
         const m = (this.market && this.market.mpc) || { dates: [] };
         const place = (v) => (Number(v) === m.spot ? 0 : 1 + m.dates.findIndex((d) => d.date === Number(v)));
-        const k = [place(o.f.start.value), place(o.f.end.value)];
-        if (k[1] > k[0]) out.mpc = k;
+        const k = (o.strategy === 'mpc' ? ['start', 'end'] : ['start', 'mid', 'end']).map((x) => place(o.f[x].value));
+        if (k.every((x, i) => i === 0 || x > k[i - 1])) out.mpc = k;
       }
       put('level', o.level.value);
       if (o.size.value.trim()) { put('size', portable(o.size.value)); out.sizeMode = o.sizeMode; }
@@ -852,6 +950,7 @@ export class BlotterPage {
     m.box.id = 'blotter-fields';
     const cpt = input('opsiyonel');
     cpt.id = 'blotter-fields-cpt';
+    cpt.setAttribute('list', 'blotter-cpt-list');
     cpt.value = t.cpt || '';
     const note = input('opsiyonel');
     note.id = 'blotter-fields-note';
@@ -936,6 +1035,7 @@ export class BlotterPage {
     });
     f.manualField.classList.add('hidden');
     f.cpt = input('opsiyonel');
+    f.cpt.setAttribute('list', 'blotter-cpt-list');       // (names used before, Broker Chat's houses: one spelling)
     f.note = input('opsiyonel');
     f.quote = h('div', { class: 'quotebox' });
     f.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
@@ -1136,7 +1236,14 @@ export class BlotterPage {
     if (this.editing && this.editing.kind === 'fwd') { await this.saveEdit('fwd', pl, f.save); return; }
     f.save.disabled = true;
     try {
+      if (!(await this.checkBeforeSave('fwd', pl))) return;      // (the checks before "İşlemi kaydet": one click confirms)
       const rec = await api.post('/api/blotter/forward', pl);
+      if (this.fromQuote) {                 // (the quote it came from: done, with this trade - the save never waits for it)
+        const id = this.fromQuote;
+        this.fromQuote = null;
+        api.post('/api/quote-log/' + encodeURIComponent(id), { status: 'done', trade_id: rec.id })
+          .then(() => { if (this.qlog) this.qlog.refresh(); }).catch(() => { /* (the log is told best-effort) */ });
+      }
       toast(rec.pair + ' ' + (rec.dir === 'B' ? 'alış ' : 'satış ') + num(rec.amount, 0) + ' ' + rec.pair.slice(0, 3) + ' · ' + serialDate(rec.value_date) + ' · '
         + num(rec.forward, 4) + ' → ' + num(rec.tl, 2) + ' ' + rec.pair.slice(3) + (rec.typed === 'quote' ? ' (yazılan)' : '') + ' kaydedildi', 'ok', 4200);
       for (const el of [f.amount, f.quoteAmount]) { el.value = ''; el.title = ''; }
@@ -1198,6 +1305,7 @@ export class BlotterPage {
     this.setSizeMode(o.sizeMode);
     o.adv = h('div', { class: 'row adv' });
     o.cpt = input('opsiyonel');
+    o.cpt.setAttribute('list', 'blotter-cpt-list');
     o.note = input('opsiyonel');
     o.quote = h('div', { class: 'quotebox' });
     o.save = h('button', { class: 'btn primary', type: 'button' }, 'İşlemi kaydet');
@@ -1236,7 +1344,7 @@ export class BlotterPage {
     if (!sides.some((x) => x[0] === o.side)) o.side = sides[0][0];
     clear(o.sideHost);
     o.sideSeg = seg(sides, o.side, (v) => { o.side = v; this.quoteOis(); },
-      { PAY: 'sell', RECEIVE: 'buy', 'PAY GÖVDE': 'sell', 'REC GÖVDE': 'buy' });
+      { PAY: 'sell', RECEIVE: 'buy', 'PAY GÖVDE': 'sell', 'REC GÖVDE': 'buy', 'PAY K+1 / REC K': 'sell', 'REC K+1 / PAY K': 'buy' });
     o.sideHost.appendChild(o.sideSeg);
     clear(o.legsHost);
     clear(o.adv);
@@ -1273,6 +1381,18 @@ export class BlotterPage {
       o.f.end.id = 'ois-mpc-end';
       o.legsHost.appendChild(field('Başlangıç', o.f.start, '170px'));
       o.legsHost.appendChild(field('Bitiş', o.f.end, '170px'));
+    } else if (st === 'mpcspread') {
+      // two meeting swaps back to back (OIS · PPK's MPC SPREAD): start → orta and orta → bitiş, later − earlier in bp
+      o.f.start = this.mpcSelect(true, 0);
+      o.f.mid = this.mpcSelect(false, 1);
+      o.f.end = this.mpcSelect(false, 2);
+      o.f.start.id = 'ois-mpcs-start';
+      o.f.mid.id = 'ois-mpcs-mid';
+      o.f.end.id = 'ois-mpcs-end';
+      o.legsHost.appendChild(field('İlk dönem başı', o.f.start, '170px'));
+      o.legsHost.appendChild(field('Ara (ikinci dönem başı)', o.f.mid, '190px'));
+      o.legsHost.appendChild(field('İkinci dönem sonu', o.f.end, '170px'));
+      o.f.early_rate = rate('İlk dönem oranı (%)');
     } else {
       o.f.start_months = this.monthSelect(0, 117, 3);
       o.f.end_months = this.monthSelect(3, 120, 6);
@@ -1288,7 +1408,7 @@ export class BlotterPage {
         if (ed && ed.rates[k] !== undefined && o.f[k].value === ed.rates[k]) o.f[k].value = '';
       });
     }
-    const bp = st === 'spread' || st === 'fly';
+    const bp = isBp(st);
     o.levelField.firstChild.textContent = bp ? 'Seviye (bp)' : 'Oran (%)';
     o.level.placeholder = bp ? 'örn. -125' : 'örn. 37,25';
     o.level.value = '';
@@ -1301,7 +1421,7 @@ export class BlotterPage {
       const el = o.f[k];
       const v = el.value.trim();
       if (k === 'start_months' || k === 'end_months') pl[k] = isDateText(v) ? v : Number(v);     // (a FRA's broken date: its day)
-      else if (k === 'start' || k === 'end') pl[k] = Number(v);
+      else if (k === 'start' || k === 'mid' || k === 'end') pl[k] = Number(v);
       else if (v) pl[k] = v;
     }
     const size = parseAmount(o.size.value);
@@ -1315,7 +1435,7 @@ export class BlotterPage {
 
   levelText(v, st) {
     if (typeof v !== 'number') return '—';
-    return (st === 'spread' || st === 'fly') ? num(v, 2) + ' bp' : pct(v, 4);
+    return isBp(st) ? num(v, 2) + ' bp' : pct(v, 4);
   }
 
   /** An FRA's second view (the quote's ``market_ppk``): the mid on the PPK step curve beside the market hint. */
@@ -1357,7 +1477,7 @@ export class BlotterPage {
       const { q, edit } = await this.quoteOf('ois', '/api/blotter/quote/ois', pl);
       if (ticket !== o.ticket || this.dead) return;
       const st = q.strategy;
-      const bp = st === 'spread' || st === 'fly';
+      const bp = isBp(st);
       // an edit that keeps the instrument counts against the mid at the trade, not today's
       const midLabel = edit && edit.priced !== 'today' ? 'Mid (işlem anı)' : 'Piyasa mid';
       clear(o.marketHint);
@@ -1421,6 +1541,7 @@ export class BlotterPage {
     if (this.editing && this.editing.kind === 'ois') { await this.saveEdit('ois', pl, o.save); return; }
     o.save.disabled = true;
     try {
+      if (!(await this.checkBeforeSave('ois', pl))) return;
       const q = await api.post('/api/blotter/ois', pl);
       toast(q.label + ' kaydedildi (' + q.legs.length + ' bacak)', 'ok', 4200);
       o.level.value = '';
@@ -1472,6 +1593,12 @@ export class BlotterPage {
       const { q, edit } = await this.quoteOf('bond', '/api/blotter/quote/bond', this.bondPayload());
       if (ticket !== b.ticket || this.dead) return;
       clear(b.quote);
+      // a bond named as the desk says it ("mar28", "15.03.28" - Ctrl+K's "işlem gir dibs mar28 …"): its ISIN in the box, said
+      // (not while the box is being typed into)
+      if (q.typed && q.instrument && document.activeElement !== b.inst) {
+        b.inst.value = q.instrument;
+        b.quote.appendChild(h('div', { class: 'muted', 'data-k': 'bond-typed' }, q.typed + ' → ' + q.instrument));
+      }
       if (!q.known) {
         b.quote.appendChild(h('div', { class: 'muted' }, 'Bu enstrüman DİBS RV tablosunda yok: işlem kaydedilir, DV01 hesaplanamaz.'));
         this.pricingLine(b.quote, edit);
@@ -1520,6 +1647,7 @@ export class BlotterPage {
     if (this.editing && this.editing.kind === 'bond') { await this.saveEdit('bond', pl, b.save); return; }
     b.save.disabled = true;
     try {
+      if (!(await this.checkBeforeSave('bond', pl))) return;
       await api.post('/api/blotter/bond', pl);
       toast('Tahvil işlemi kaydedildi', 'ok');
       b.amount.value = '';

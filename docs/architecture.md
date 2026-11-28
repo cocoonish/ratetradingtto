@@ -338,7 +338,7 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
 | Sheet | Book | What |
 |---|---|---|
 | EK_TATIL | tto, borsa | USD (Fed) / EUR (TARGET2) holiday lists beside the TRY copy; joint FX calendars |
-| EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders); the value-date tables and the free forward list two-way (typed values in `N:U` / `Z:AB` of their rows). The ON karşılık beside each TRY rate (26.11.2026; `extras.on_rate`): the matrices' ON bid / ask `AV:AW` (typed: `AX:AY`), the value-date tables' ON bid / mid / ask `V:X` (typed: `Y:Z`), the free list's minor ON `N` (typed: `AC`) - the pages show them next to the TRY % (`"cols"`) |
+| EK_FWD | tto | forward quotes from OIS + spread, value-date rates, EURTRY (three builders); the value-date tables and the free forward list two-way (typed values in `N:U` / `Z:AB` of their rows). The matrices' general row (28.11.2026, `_fwd_width_cells`): "Genişlik (bp)" `I4` / `I103` two-way with the general ask spread (its store `AN4` / `AN103`, the group declared on Masa's page), the count of value dates quoting ask ≤ bid in `J`, conditional looks over the rows. The ON karşılık beside each TRY rate (26.11.2026; `extras.on_rate`): the matrices' ON bid / ask `AV:AW` (typed: `AX:AY`), the value-date tables' ON bid / mid / ask `V:X` (typed: `Y:Z`), the free list's minor ON `N` (typed: `AC`) - the pages show them next to the TRY % (`"cols"`) |
 | EK_XAU | tto | gold forwards, VİOP gold calculator (two-way: typed values in `B67:E72`, a contract each column - on a roll a typed price or forward follows its contract, `rowkeys.RowKeys.roll`) |
 | EK_VIOP | tto | VİOP contract history for charts |
 | EK_KAYNAK | tto | pricing-source order for OIS / offshore / XCCY (see [market-data.md](market-data.md#pricing-sources)) |
@@ -424,6 +424,7 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `migrated.*` | one-time migrations |
 | `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state (`layout.<user>`'s `favs_own`: the favourites are the user's own) |
 | `layout.desk` | `layout` (the desk's default favourites: `{favs, by, at}`, set by an administrator; 28.11.2026) |
+| `blotter.checks` | the service (Günlük İşlemler's checks before "İşlemi kaydet": the desk-wide thresholds `far_bp`, `size_x`, who set them and when) |
 | `cols.<user>`, `colorder.<user>` | the columns a user hides, their order (`Service.columns`) |
 | `decimals.<user>` | `decimals` (a user's own decimals: `{"books": {book: {sheet: {"A1": n}}}, "copies": {copy id: {...}}}`; read once at the start, by place - rows that move leave it where it is) |
 | `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
@@ -679,7 +680,26 @@ Günlük İşlemler's entry is filled from other pages; nothing below saves a tr
   `tto/views/__init__.py`). `client` sends the price cells with the table (`data.trade`); a right click posts
   `/api/trade/prefill` → `prefill` reads the clicked row's own cells on the engine thread → the browser's
   `ctx.openTrade(spec)` fills the form. A table of two pairs names each price's own pair in `"pairs"` (`pair_at`:
-  TOPLU FORWARD's USDTRY and EURTRY columns side by side).
+  TOPLU FORWARD's USDTRY and EURTRY columns side by side). An OIS price is any of the form's strategies (28.11.2026):
+  the instrument named in the row's cell as OIS · PPK's lists name it (`ois_name`: "2Y", "1M / 18M", "2M/3M/6M",
+  "18M6M", "MPC1 / MPC2"; a meeting spread's three days read from the MPC OIS table by the k it names), the strategy
+  the hint's or, `"auto"`, the name's (Masa's signals), a price's own name column in `"tenor_cols"`.
+- **Ctrl+K "işlem gir …"** (`commands.js`, read alone under Node; `commandrun.js` runs it): a forward, an OIS (outright,
+  spread, fly, FRA, MPC by its month - `mpc_month`, resolved by the form against `/api/blotter/ois-market`'s decision
+  days -, MPC spread) or a bond (`instrument` as typed: an ISIN or "mar28" / "15.03.28", turned into its ISIN by the
+  server, `blotter.bond_isin` - the broker chat's reading); the same `ctx.openTrade(spec)`. **"fiyatla …"** opens
+  `#/fiyatlama?<fields>` with `/api/pricing`'s fields (asset, pair, start, end, side, size_kind, size, price,
+  price_kind) for the Fiyatlama page to send as typed.
+- **The checks before "İşlemi kaydet"** (28.11.2026, A5): a new trade's save first posts `/api/blotter/check`
+  (`Service.blotter_check`: the trade priced as the form prices it, the RET's day - `ret_meta` -, the feed -
+  `ops.feed` -, the usual sizes and the counterparties of the days before today - `_past_trades`, once a day -, the
+  thresholds of kv `blotter.checks`) → `blotter.pre_save_warnings`; a warning opens the page's one-click confirm
+  (`blotter.js` `checkBeforeSave`). `/api/blotter/checks` (GET / POST) gives and sets the thresholds and the
+  counterparty list (`_counterparties`: the names of the last year, the most used first, then Broker Chat's houses) the
+  form's `<datalist>` offers. Nothing there writes a trade; an edit and a paste are not checked.
+- **A forward from a quote of the quote log** ("Bu fiyattan işlem gir": the spec's `quote_log`, the quote's id):
+  `takePrefill` keeps the id (`fromQuote`; any later `fillForm` - a template, a copy, an edit - drops it) and `saveFwd`,
+  once the trade is kept, posts `/api/quote-log/<id>` {status: "done", trade_id} - best-effort, the save never waits for it.
 - **DV01 Risk's hedge** ("Hedge'i işle"; [desk-decisions.md](desk-decisions.md#dv01-risk-and-bugün-paste-once-the-morning-meeting-28112026)):
   the recommender's header button (`"action": "hedge-islem"`; `hedgeislem.js` `bookHedge`) → `GET /api/dv01/hedge`
   (`Service.dv01_hedge`: the user's `DV01_RISK!B88:O102` read on the engine thread → `varrisk.hedge_paste`: an OIS paste, an

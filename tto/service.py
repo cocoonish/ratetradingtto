@@ -4549,28 +4549,31 @@ class Service(object):
         p["_lang"] = lang
         strategy = str(p.get("strategy", "outright")).lower()
         today = self._typed_today()
-        for k in ("start", "end"):
+        after = None                                    # (the latest of the dates before it: start, then the mid)
+        for k in ("start", "mid", "end"):
             v = p.get(k)
             if isinstance(v, str):
-                # a day without its year: the next one - an end from its start on ("26/12", the desk 28.11.2026)
-                start = p.get("start") if k == "end" and type(p.get("start")) is float else None
-                p[k] = parse_date(v, today, after=start)
+                # a day without its year: the next one - a mid or an end from the date before it on ("26/12", the desk
+                # 28.11.2026)
+                p[k] = parse_date(v, today, after=after)
                 if p[k] is None and v.strip():
                     raise ServiceError("tarih anlaşılamadı: %r" % v)
             elif isinstance(v, bool) or not isinstance(v, (int, float)):
                 p[k] = None
             else:
                 p[k] = float(v)
+            if type(p[k]) is float:
+                after = p[k] if after is None else max(after, p[k])
         for k, at in (("start_months", "start_date"), ("end_months", "end_date")):
             # a FRA between dates of its own ("Ters işlem" of a day gone by's FRA): an end typed as a date, dd.mm.yyyy
             day = bl.tenor_date_of(p.get(k)) if isinstance(p.get(k), str) else None
             if day is not None:
                 p[k], p[at] = None, day
-        for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate",
+        for k in ("level", "dv01", "nominal", "short_rate", "wing1_rate", "wing2_rate", "start_rate", "early_rate",
                   "start_months", "end_months"):
             v = p.get(k)
             if isinstance(v, str):
-                rate_like = k in ("short_rate", "wing1_rate", "wing2_rate", "start_rate") or \
+                rate_like = k in ("short_rate", "wing1_rate", "wing2_rate", "start_rate", "early_rate") or \
                     (k == "level" and strategy in ("outright", "fra", "mpc"))
                 n = parse_amount(v, lang) if k in ("dv01", "nominal") else parse_number(v, lang, prefer_decimal=True)
                 if n is not None and rate_like and not ("%" in v) and abs(n) >= 1.0:
@@ -4617,11 +4620,13 @@ class Service(object):
             except bl.TradeError:
                 rows.append({"tenor": t, "par": mkt.par(t), "annuity": None})
         out = {"tenors": rows, "gen": self.gen}
-        # the dates a meeting-dated swap can run between: OIS spot and the day after every coming decision
+        # the dates a meeting-dated swap can run between: OIS spot and the day after every coming decision - with the
+        # decision's own day (Ctrl+K's "dec mpc": the period from the December decision)
         mpc = mkt.mpc_dates()
         text = lambda d: serial_to_date(d).strftime("%d.%m.%Y")      # noqa: E731
+        decided = {eff: dec for dec, eff in mkt.mpc_table()["meetings"]}
         out["mpc"] = {"spot": mpc["spot"], "spot_text": text(mpc["spot"]) if mpc["spot"] else None,
-                      "dates": [{"k": k + 1, "date": d, "text": text(d),
+                      "dates": [{"k": k + 1, "date": d, "text": text(d), "decision": decided.get(d),
                                  "market": mpc["market"][k] if k < len(mpc["market"]) else None}
                                 for k, d in enumerate(mpc["dates"])]}
         try:
@@ -4676,7 +4681,8 @@ class Service(object):
 
     def _bond_payload(self, payload: Dict[str, Any], lang: Optional[str]) -> Tuple[str, Optional[float], Optional[float]]:
         lang = lang or self.settings.locale
-        inst = str(payload.get("instrument") or "").strip()[:60]
+        # an ISIN, or a bond as the desk names it ("mar28", "15.03.28": its ISIN - Ctrl+K's "işlem gir dibs mar28 50m al")
+        inst = bl.bond_isin(str(payload.get("instrument") or "").strip()[:60])
         amount = payload.get("amount")
         amount = parse_amount(amount, lang) if isinstance(amount, str) else (float(amount) if isinstance(amount, (int, float)) else None)
         price = payload.get("price")
@@ -4708,7 +4714,11 @@ class Service(object):
         inst, amount, _ = self._bond_payload(payload, lang)
         if not inst:
             raise ServiceError("enstrüman gerekli")
-        return self.et.call(self._bond_risk, user, inst, amount)
+        out = self.et.call(self._bond_risk, user, inst, amount)
+        typed = " ".join(str(payload.get("instrument") or "").split())
+        if typed and typed.upper() != inst:
+            out["typed"] = typed                       # (a bond named as the desk says it: the ISIN it is, said back)
+        return out
 
     def add_bond(self, user: str, payload: Dict[str, Any], lang: Optional[str] = None) -> Dict[str, Any]:
         user = self.require_user(user)
@@ -4738,6 +4748,113 @@ class Service(object):
         rec.update({"dv01_tl": risk["dv01_tl"], "dv01": risk["dv01"],
                     "name": (risk["info"] or {}).get("name") if risk["known"] else None})
         return rec
+
+    # ------------------------------------------------------------------ the checks before "İşlemi kaydet" (A5)
+    #: the desk-wide thresholds of the checks (blotter.CHECK_DEFAULTS), who set them last
+    CHECKS_KEY = "blotter.checks"
+    #: how far back the names used before reach (the counterparty list of the entry form)
+    CPT_DAYS = 365
+
+    def blotter_checks(self, user: Optional[str], payload: Optional[Dict[str, Any]] = None,
+                       lang: Optional[str] = None) -> Dict[str, Any]:
+        """The checks before "İşlemi kaydet" (the desk, 28.11.2026, A5): their thresholds - an OIS level ``far_bp`` from
+        mid, a size ``size_x`` times the usual - for the whole desk, anyone may change them (``payload``: ``{far_bp?,
+        size_x?}``, as typed; within :data:`blotter.CHECK_LIMITS`), and the counterparties the entry form offers in its
+        list: the names used before (the last :data:`CPT_DAYS` days, the most used first) and Broker Chat's houses."""
+        user = self.require_user(user)
+        kept = self.store.get(self.CHECKS_KEY, {})
+        settings = bl.check_settings(kept)
+        if payload is not None:
+            new = dict(settings)
+            for k, (lo, hi) in bl.CHECK_LIMITS.items():
+                v = payload.get(k)
+                if v is None or (isinstance(v, str) and not v.strip()):
+                    continue
+                x = parse_number(v, lang or self.settings.locale, prefer_decimal=True) if isinstance(v, str) else \
+                    (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None)
+                if x is None or not lo <= x <= hi:
+                    raise ServiceError("%s %s ile %s arasında bir sayı olmalı: %r" % (
+                        {"far_bp": "mid'e uzaklık (bp)", "size_x": "alışılmışın katı"}[k], ("%g" % lo).replace(".", ","),
+                        ("%g" % hi).replace(".", ","), v))
+                new[k] = x
+            self.store.put(self.CHECKS_KEY, dict(new, by=user, at=now_iso()))
+            settings = new
+        out = {"settings": settings, "counterparties": self._counterparties()}
+        if isinstance(kept, dict) and kept.get("by"):
+            out["set"] = {"by": kept["by"], "at": kept.get("at")}
+        return out
+
+    def _past_trades(self) -> Dict[str, Any]:
+        """The days before today as the checks read them, once a day: the usual sizes (the last bl.CHECK_DAYS days) and
+        the counterparties of the last :data:`CPT_DAYS` days with how often each was used.  (A past day's trade changed
+        today is read again tomorrow.)"""
+        today = self.today_iso()
+        kept = self.__dict__.get("_past_trades_kept")
+        if kept and kept["day"] == today:
+            return kept
+        day = _dt.date.fromisoformat(today)
+        trades = self.store.trades((day - _dt.timedelta(days=self.CPT_DAYS)).isoformat(),
+                                   (day - _dt.timedelta(days=1)).isoformat())
+        since = (day - _dt.timedelta(days=bl.CHECK_DAYS)).isoformat()
+        names: Dict[str, int] = {}
+        for t in trades:
+            name = " ".join(str(t.get("cpt") or "").split())
+            if name:
+                names[name] = names.get(name, 0) + 1
+        kept = {"day": today, "usual": bl.usual_sizes([t for t in trades if t["trade_date"] >= since]), "names": names,
+                "houses": self.store.broker_sources()}
+        self._past_trades_kept = kept
+        return kept
+
+    def _counterparties(self) -> List[str]:
+        """The names the counterparty list offers: those used before and today, the most used first, then Broker Chat's
+        houses (the source of its lines, the people list's) not among them."""
+        past = self._past_trades()
+        names = dict(past["names"])
+        for t in self.store.trades(self.today_iso()):
+            name = " ".join(str(t.get("cpt") or "").split())
+            if name:
+                names[name] = names.get(name, 0) + 1
+        out = sorted(names, key=lambda n: (-names[n], n.casefold()))
+        seen = {n.casefold() for n in out}
+        houses = list(past["houses"]) + [p.get("source") or "" for p in self._people().values()]
+        for h in houses:
+            h = " ".join(str(h or "").split())
+            if h and h.casefold() not in seen:
+                seen.add(h.casefold())
+                out.append(h)
+        return out
+
+    def blotter_check(self, user: Optional[str], payload: Any, lang: Optional[str] = None) -> Dict[str, Any]:
+        """What deserves a second look before a new trade is kept (:func:`blotter.pre_save_warnings`): the trade priced
+        as the form prices it (a payload of ``/api/blotter/forward``, ``/ois``, ``/bond`` with ``kind``), the RET's day,
+        the feed, the usual sizes, the names used before.  ``{"warnings": [{code, text}], "settings"}``; nothing is kept.
+        A trade that does not price has no warning of its own: its save says why."""
+        user = self.require_user(user)
+        payload = dict(payload) if isinstance(payload, dict) else {}
+        kind = str(payload.pop("kind", "") or "")
+        if kind not in ("fwd", "ois", "bond"):
+            raise ServiceError("bilinmeyen ürün: %r" % kind)
+        typed: Dict[str, Any] = {"basis": payload.get("basis"), "cpt": payload.get("cpt")}
+        try:
+            if kind == "fwd":
+                q = self.quote_forward(user, payload, lang)
+            elif kind == "ois":
+                q = self.quote_ois(user, payload, lang)
+            else:
+                q = self.quote_bond(user, payload, lang)
+                typed["price"] = self._bond_payload(payload, lang)[2]
+        except ServiceError:
+            q = None
+        try:
+            feed = self.ops.feed(self.provider.status())
+        except Exception:  # noqa: BLE001
+            feed = {}
+        past = self._past_trades()
+        facts = {"live": self.mode == "live", "today": self.today_iso(), "ret": self.ret_meta(), "feed": feed,
+                 "usual": past["usual"], "names": self._counterparties()}
+        settings = bl.check_settings(self.store.get(self.CHECKS_KEY, {}))
+        return {"warnings": bl.pre_save_warnings(kind, q, typed, facts, settings), "settings": settings}
 
     # ------------------------------------------------------------------ the entry form's templates ("Şablonlar")
     #: templates a user may keep, and the desk
@@ -10037,7 +10154,8 @@ class Service(object):
 
     #: the names of the products and the OIS strategies, in what an edit says
     _KIND_NAMES = {"fwd": "FX Forward", "ois": "OIS", "bond": "Tahvil"}
-    _STRATEGY_NAMES = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "mpc": "MPC"}
+    _STRATEGY_NAMES = {"outright": "Outright", "spread": "Spread", "fly": "Fly", "fra": "FRA", "mpc": "MPC",
+                       "mpcspread": "MPC spread"}
 
     def _edit_trade(self, user, trade_id, payload, lang=None, dry=False) -> Dict[str, Any]:
         try:
@@ -10170,7 +10288,7 @@ class Service(object):
         if side(p.get("side")) != side(first.get("side")):
             why.append("yön")
         if bl.typed_instrument(strategy, p) != bl.ois_instrument(strategy, legs):
-            why.append({"fra": "FRA ayları", "mpc": "tarihler"}.get(strategy, "vade"))
+            why.append({"fra": "FRA ayları", "mpc": "tarihler", "mpcspread": "tarihler"}.get(strategy, "vade"))
         if why:
             priced_today()
             q, recs, _ = self._ois_records(user, payload, lang)
@@ -10183,7 +10301,7 @@ class Service(object):
             return {"priced": "today", "why": why, "recs": recs, "quote": q}
         own = {"cpt": str(p.get("cpt") or "").strip()[:40], "note": str(p.get("note") or "").strip()[:200]}
         level = p.get("level")
-        rates = {k: p[k + "_rate"] for k in ("short", "wing1", "wing2", "start") if type(p.get(k + "_rate")) is float}
+        rates = {k: p[k + "_rate"] for k in ("short", "wing1", "wing2", "start", "early") if type(p.get(k + "_rate")) is float}
         by_role = {lg.get("role"): lg for lg in legs}
         size = self._ois_sized(p)
         # the size the form gives back untouched (``keep_size``: a spread / fly sized by DV01 cannot say its legs' nominals)
