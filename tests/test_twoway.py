@@ -367,12 +367,14 @@ def test_the_page_marks_the_typed_value_and_says_what_the_table_does(svc):
     put(svc, u, {"C4": "3"})
     _, m = marks(svc, u)
     assert m["C4"]["an"] == "y, z" and m["C4"]["m"] == 1 and m["G4"]["ao"] == "x · C4"
+    # (Girdilerim's own fields since 28.11.2026 - when typed, the pages it shows on: A6 / A7 - aside)
+    core = lambda xs: [{k: v for k, v in x.items() if k not in ("at", "pages", "market", "old", "hand")} for x in xs]  # noqa: E731
     mine = [x for x in svc.my_inputs(u)["inputs"] if x["ref"].startswith(SHEET)]
-    assert mine == [{"book": "tto", "ref": SHEET + "!C4", "value": 3.0, "label": "x"}]
+    assert core(mine) == [{"book": "tto", "ref": SHEET + "!C4", "value": 3.0, "label": "x"}] and mine[0]["at"]
     put(svc, u, {"F3": "33"})
     mine = [x for x in svc.my_inputs(u)["inputs"] if x["ref"].startswith(SHEET + "!F")]
-    assert mine == [{"book": "tto", "ref": SHEET + "!F3", "store": SHEET + "!L3", "value": 33.0,
-                     "label": "TEST · y (iki yönlü: yazılan değer)"}]
+    assert core(mine) == [{"book": "tto", "ref": SHEET + "!F3", "store": SHEET + "!L3", "value": 33.0,
+                           "label": "TEST · y (iki yönlü: yazılan değer)"}]
     _, helper = marks(svc, u, "T3")                                                 # the stores, in the helper table
     assert helper["L3"]["i"] == "u" and helper["L3"]["m"] == 1 and "an" not in helper["L3"]
 

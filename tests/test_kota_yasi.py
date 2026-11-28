@@ -301,20 +301,25 @@ def test_a_live_dashboard(tmp_path):
             calc = book.engine.shared
             for si, rc in sorted(rn.quotes.cells()):
                 sh = book.model.sheets[si]
-                if sh.name != "OIS_MAIN" or rc not in sh.fml:
+                if rc not in sh.fml:
                     continue
                 r, c = divmod(rc, COLS)
                 cell = rn.cell(calc, si, r, c, loc)
                 if cell.get("qa"):
-                    out.append((si, rc, cell))
+                    # the times its quotes had as the cell was made (a quote first asked later has a later time)
+                    keys = rn.quotes.keys(calc, si, r, c)
+                    out.append((sh.name, rc, cell, {k: prov.times[k] for k in keys if k in prov.times}))
             return out
 
         found = svc.et.call(market_cells)
-        assert found, "no market cell on OIS_MAIN"
-        si, rc, cell = found[0]
-        keys = svc.et.call(lambda: rn.quotes.keys(book.engine.shared, si, *divmod(rc, COLS)))
-        shown = [k for k in keys if k in prov.times and prov.snapshot[k] == cell["v"]]
-        assert shown and cell["qa"] == int(max(prov.times[k] for k in shown))
+        assert found, "no market cell"
+        direct = 0
+        for name, rc, cell, times in found:
+            shown = [k for k in times if prov.snapshot[k] == cell["v"]]
+            # the time of the quote the cell shows - else (a value worked out of its quotes) the latest of them
+            assert times and cell["qa"] == int(max(times[k] for k in (shown or times))), (name, divmod(rc, COLS), cell, times)
+            direct += bool(shown)
+        assert direct, "no market cell shows a quote as it is"       # (OIS_MAIN's spot reads the strip since 28.11.2026)
         # the page as the browser gets it carries them too
         auth(svc, "Kota Yaşı")
         assert re.search(r'"qa": \d{10}', json.dumps(svc.view("Kota Yaşı", "ois")))

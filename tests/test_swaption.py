@@ -339,7 +339,8 @@ def test_nothing_is_stored_and_the_page_is_in_try_faiz_after_fiyatlama(svc):
         svc.swaption(u, q)
     assert counts() == before
     pages = svc.nav()
-    assert [p["id"] for p in pages if p["group"] == "TRY Faiz"][:3] == ["ois", "fiyatlama", "swaption"]
+    # a tab of Fiyatlama, right after it (the menu of 28.11.2026: tto/navmenu.py)
+    assert [p["id"] for p in pages if p.get("menu") == "faiz.fiyatlama"][:2] == ["fiyatlama", "swaption"]
     page = next(p for p in pages if p["id"] == "swaption")
     assert (page["title"], page["group"], page["custom"], page["book"]) == ("Swaption", "TRY Faiz", True, "tto")
 

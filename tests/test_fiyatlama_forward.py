@@ -163,7 +163,9 @@ def test_viop_when_a_contract_expires_near_the_value_date(svc):
     card = fx(svc, u, end="29.01.2027")["card"]
     v = src(card, "viop")
     assert v["available"] and v["contract"]["name"] == "A1F7" and v["gap"] == 0
-    assert v["try"]["bid"] == cell(svc, "VIOP!O13", u) and v["try"]["ask"] == cell(svc, "VIOP!O25", u)
+    # (the sheet's rates, through the card's % and back: equal to the last bits but one)
+    assert v["try"]["bid"] == pytest.approx(cell(svc, "VIOP!O13", u), rel=1e-12)
+    assert v["try"]["ask"] == pytest.approx(cell(svc, "VIOP!O25", u), rel=1e-12)
     assert v["contract"]["px_bid"] == cell(svc, "VIOP!O16", u) and v["contract"]["expiry"] == cell(svc, "VIOP!O9", u)
     w = card["spot"]
     assert v["fwd"]["bid"] == pr.fwd_outright(w["bid"], v["try"]["bid"] * 100, card["ccy_rate"] * 100, card["days"])
