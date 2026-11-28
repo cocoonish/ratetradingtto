@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..xl.values import XlArray
 from .base import REQUESTING
-from .bloomberg import BUDGET, NA_NA, P_ONCE, POLL_EVERY, QUEUE_SIZE, RT_FIELDS, BloombergProvider, bar_span
+from .bloomberg import BUDGET, NA_NA, P_ONCE, POLL_EVERY, PRICE_FIELDS, QUEUE_SIZE, RT_FIELDS, BloombergProvider, bar_span
 
 log = logging.getLogger("tto.bloomberg")
 
@@ -451,6 +451,20 @@ class IsolatedBloombergProvider(BloombergProvider):
                 v = self._values.get(key)
                 if t > since and v is not None and v != REQUESTING:
                     out.append((key, v, t))
+        return out
+
+    def quote_times(self, keys=None) -> Dict[Tuple, Tuple[float, float]]:
+        """As :meth:`BloombergProvider.quote_times`, from what the helper sent: when each price quote's value last
+        changed here (``_got``: a value that differs, or the answer kept from earlier today) and its value."""
+        out: Dict[Tuple, Tuple[float, float]] = {}
+        with self._lock:
+            for key in (keys if keys is not None else list(self._wanted)):
+                w = self._wanted.get(key)
+                if w is None or w[1] not in PRICE_FIELDS:
+                    continue
+                t, v = self._got.get(key, 0.0), self._values.get(key)
+                if t and type(v) is float:
+                    out[key] = (t, v)
         return out
 
     def carry_hits(self, hits: int) -> None:

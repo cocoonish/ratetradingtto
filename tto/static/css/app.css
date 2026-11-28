@@ -1969,3 +1969,6 @@ a.golink { text-decoration: none; white-space: nowrap; }
 .swaption .swpt-col > #swpt-range-panel { flex: 0 0 auto; align-self: flex-start; }
 .swaption .swpt-col > #swpt-realized-panel { flex: 0 0 auto; }
 .swaption #swpt-result > #swpt-schedule-panel { flex: 0 1 auto; }
+/* ---- Girdiler (28.11.2026, toplu-girdi C4): a quote's age - a price unchanged for the desk's "quote_old" minutes of
+   today's market fades (quoteage.js, tto/marketdata/age.py); its tooltip says "son değişim 10:42 (37 dk)" ----------- */
+table.grid td.qold { color: var(--ink-3); opacity: .6; }

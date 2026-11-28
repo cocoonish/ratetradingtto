@@ -435,6 +435,11 @@ class Service(object):
         if not self.books:
             raise ServiceError("model dosyaları bulunamadı: %s" % s.models_dir, 500)
         self.renderers = {bid: Renderer(b) for bid, b in self.books.items()}
+        if self.mode == "live":
+            # a quote's age (marketdata/age.py): when the price a market cell shows last changed - its "qa" on the page
+            from .marketdata.age import CellQuotes
+            for bid, rn in self.renderers.items():
+                rn.quotes = CellQuotes(self.books[bid], provider)
         self.views = [v for v in load_views() if v["book"] in self.books]
         self.view_index = {v["id"]: v for v in self.views}
         self._shortcut_cache: Dict[str, List[Dict[str, Any]]] = {}
