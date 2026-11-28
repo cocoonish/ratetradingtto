@@ -109,10 +109,11 @@ def test_a_merged_caption_keeps_its_span_when_an_empty_column_is_trimmed():
 
 # ---------------------------------------------------------------------------------------------- frozen panes
 def test_frozen_columns_are_reported_for_the_tables_that_contain_them(service):
-    # (DİBS RV's bond table names its own since the layout work: ISIN and Kaynak, A:B - Excel's A:C had "Ad" too, the
-    # same name on every row; the workbook's frozen panes are read for the tables that name none)
+    # (DİBS RV's bond table names its own since the layout work; since 28.11.2026 every bond table starts with the same
+    # frozen bond column - its short name, the card a click away - then the ISIN: "Kâğıt", A; the workbook's frozen panes
+    # are read for the tables that name none)
     assert panel(service, "dibs", "B3")["data"]["fz"] == 2
-    assert panel(service, "dibs", "B3")["data"]["c"][:3] == ["A", "B", "C"]
+    assert panel(service, "dibs", "B3")["data"]["c"][:3] == ["Kâğıt", "A", "B"]
     # (a table that names a "freeze" of its own - the desk's layout review, 27.11.2026 - is that option's: not looked at here)
     own = {(v["id"], p["id"]) for v in service.views for p in v["panels"] if p.get("freeze")}
     crv = panel(service, "usd", "crv")["data"]

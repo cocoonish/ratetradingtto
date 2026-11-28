@@ -126,7 +126,8 @@ def test_the_service_checks_a_trade_as_the_form_prices_it(svc):
     w = svc.blotter_check(u, {"kind": "fwd", "value_date": "3M", "basis": "RET_MID", "amount": "60m", "dir": "B", "cpt": "Garanti BBVA"})["warnings"]
     assert codes(w) == ["size", "cpt"] and "12 katı" in w[0]["text"] and "Garanti" in w[1]["text"]
     w = svc.blotter_check(u, dict(pay, level=near.replace(".", ","), dv01="25k"))["warnings"]
-    assert codes(w) == ["size"] and "DV01 25.000 $" in w[0]["text"]
+    # (25k typed: the priced trade's own DV01, its nominal rounded to the desk's lot - 25.000 or a dollar off)
+    assert codes(w) == ["size"] and "DV01 25.00" in w[0]["text"] and "katı" in w[0]["text"]
     assert svc.blotter_check(u, dict(pay, level=near.replace(".", ","), dv01="15k"))["warnings"] == []
     # a trade that does not price: nothing of its own (the save says why); a kind that is none: refused
     assert svc.blotter_check(u, {"kind": "ois", "strategy": "outright", "side": "PAY", "tenor": "7M", "level": "35"})["warnings"] == []
