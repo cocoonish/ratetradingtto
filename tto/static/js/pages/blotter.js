@@ -7,6 +7,7 @@ import { toolsOf } from '../columns.js';
 import { num, pct, raw, serialDate, isoToTr, timeOf, parseNumber, settings, pairOf, parseAmount } from '../format.js';
 import { PositionPanel } from '../retposition.js';
 import { renderTemplates, openBulk } from './blotterentry.js';
+import { mountQuoteLog } from '../quotelog.js';
 
 const FWD_BASES = [['RET_BID', 'RET bid'], ['RET_MID', 'RET mid'], ['RET_ASK', 'RET ask'], ['TRY', 'TRY faizi'], ['FWD', 'Forward kur'], ['SP', 'Swap puanı']];
 const BASIS_LABEL = { RET_BID: 'RET bid', RET_MID: 'RET mid', RET_ASK: 'RET ask', TRY: 'TRY faizi', FWD: 'Forward kur', SP: 'Swap puanı' };
@@ -398,6 +399,10 @@ export class BlotterPage {
     }
     this.data = data;
     this.fill();
+    if (this.qlog && !this.qlog.el.closest('.collapsed') && Date.now() - (this.qlogAt || 0) > 15000) {
+      this.qlogAt = Date.now();                          // (as Fiyatlama's Kotasyon defteri: at most every 15 s)
+      this.qlog.refresh();
+    }
     if (this.data.can_enter) {
       if (this.tab === 'fwd') this.quoteFwd(); else if (this.tab === 'ois') this.quoteOis();
     }
@@ -405,6 +410,7 @@ export class BlotterPage {
 
   destroy() {
     this.dead = true;
+    if (this.qlog) this.qlog.destroy();
     this.quoteFwd.cancel();
     this.quoteOis.cancel();
     this.quoteBond.cancel();
@@ -537,6 +543,16 @@ export class BlotterPage {
     // the desk's net TRY position and its cost per RET tenor, today and the last days (retposition.js)
     this.position = new PositionPanel(this.ctx);
     lists.appendChild(this.position.el);
+    // "Verilen kotalar" (C2, K3's quotelog.js: the quotes given - done / not done -, the hit ratio by client and product):
+    // folded until this user opens it, as the sheet's summary tables (sheetFold)
+    const qlTitle = h('h2', null, 'Verilen kotalar');
+    const qlHead = h('header', null, qlTitle);
+    const qlBody = h('div', { class: 'body' });
+    const qlPanel = h('section', { class: 'panel wide', id: 'blotter-quotelog' }, qlHead, qlBody);
+    sheetFold(qlPanel, qlHead, qlTitle, 'quotelog');
+    this.qlog = mountQuoteLog(qlBody, this.ctx, { id: 'bl-ql', days: 1 });
+    this.qlogAt = Date.now();
+    lists.appendChild(qlPanel);
     this.host.appendChild(h('div', { class: 'blotter' }, h('div', { class: 'left' }, this.entry, this.readonlyNote),
       h('div', { class: 'right' }, this.riskBar, lists)));
     this.sheetTitle = h('div', { class: 'section-title' }, 'Excel sayfasının kendi özet tabloları (Günlük İşlemler)');

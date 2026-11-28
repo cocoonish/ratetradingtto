@@ -132,9 +132,12 @@ saves nothing.  The amount and the counterparty are the user's to type.
   ``"MASA!E60"`` on another sheet), ``"date_col": "B"`` (each row's date) or ``"tenor_col": "V"`` (each row's tenor,
   dated from the pair's spot).  A table of two pairs side by side names a price cell's own pair in ``"pairs"``, keyed
   as ``"cells"`` (``{"P": "EURTRY", "T": "EURTRY"}``: TOPLU FORWARD's EURTRY columns; every other price is the table's
-  ``"pair"``) - each key a forward price of ``"cells"``.  An OIS level: ``"strategy"`` ``"outright"`` with
-  ``"tenor_col"``, or ``"mpc"`` with ``"start_col"`` / ``"end_col"`` (a meeting swap's two days).  A bond:
-  ``"isin_col"``.
+  ``"pair"``) - each key a forward price of ``"cells"``.  An OIS level: ``"strategy"`` ``"mpc"`` with ``"start_col"`` /
+  ``"end_col"`` (a meeting swap's two days), or one named in a column of the row, ``"tenor_col"`` - ``"outright"``
+  ("2Y"), ``"spread"`` ("1M / 18M"), ``"fly"`` ("2M/3M/6M"), ``"fra"`` ("18M6M", "Spot3M": start and length),
+  ``"mpcspread"`` ("MPC1 / MPC2": MPC OIS's periods k and k + 1) or ``"auto"`` (the name says which: Masa's signals); a
+  price whose name stands in another column: ``"tenor_cols"``, keyed as ``"cells"`` (:func:`tto.tradehint.ois_name`).
+  A bond: ``"isin_col"``.
 * ``"label"`` / ``"alt"`` / ``"alt_when"`` / ``"bid"`` / ``"ask"`` (a forward table): the "İşlem gir" button in the table's
   header as well - a row and a side picked in a dialog, its swap points filled.
 
