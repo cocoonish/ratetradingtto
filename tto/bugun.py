@@ -67,8 +67,9 @@ SIDES = {"Pay": "PAY", "Receive": "RECEIVE", "Buy": "AL", "Sell": "SAT", "Steepe
 
 #: Masa's Kontrol strip (MASA!B3:L3), chip by chip: (its column, its state code's column - 0 tamam, 1 uyarı, 2 hata, the
 #: workbook's own AY3:BH3; AX3 the worst of them -, its name, the rule its code follows - read off the code's formula -,
-#: the page and the table it checks, where that is).  The desk, 28.11.2026 (A10): "Kontrol nedenine götürsün" - each chip
-#: links to its table, its rule in its tooltip; below 1500 px only those not "tamam" and "N tamam"; Bugün lists only those.
+#: the page and the table it checks, where that is).  Proposal A10 "Kontrol nedenine götürsün" (the desk approved it
+#: 28.11.2026): each chip links to its table, its rule in its tooltip; below 1500 px only those not "tamam" and "N tamam";
+#: Bugün lists only those.
 KONTROL = (
     ("B", "AX", "Genel", "Kontrollerin en kötüsü (MASA!AX3 = MAX(AY3:BH3)): hepsi tamamsa TAMAM, biri sarıysa UYARI, "
      "biri kırmızıysa HATA.", None, None, ""),

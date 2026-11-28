@@ -293,7 +293,7 @@ export class EodPage extends HistoryPage {
     this.banner = h('div', { class: 'banner hidden' });
     this.host.appendChild(this.banner);
     // the three tables at their own width: OIS · Offshore beside PPK with DİBS under it - the page on one screen (the desk,
-    // 27.11.2026 and 28.11.2026: B19, "Gün Sonu'nda DİBS PPK'nın altına"); their notes two lines, "devamı" the rest
+    // 27.11.2026; proposal B19 "Gün Sonu'nda DİBS PPK'nın altına", approved 28.11.2026); their notes two lines, "devamı" the rest
     this.curve = gridPanel('TRY OIS · Offshore — seviye ve değişim', { fit: true, clamp: true, id: 'curve', onCell: (i, j) => this.pickCurve(i, j) });
     this.mpc = gridPanel('PPK fiyatlaması — toplantı bazında', { fit: true, clamp: true, id: 'mpc', onCell: (i, j) => this.pickMpc(i, j) });
     this.bonds = gridPanel('DİBS — getiri ve değişim', { fit: true, clamp: true, id: 'dibs', onCell: (i) => this.pickBond(i) });

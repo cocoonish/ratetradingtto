@@ -65,7 +65,7 @@ def paste_cells() -> List[str]:
     return out
 
 
-#: "Hedge'i işle" (the desk, 28.11.2026: A3, "DV01 Risk'in hedge önerisini tek tıkla işle"): the hedge recommender's rows
+#: "Hedge'i işle" (proposal A3 "DV01 Risk'in hedge önerisini tek tıkla işle", approved by the desk 28.11.2026): the rows
 #: as Günlük İşlemler's "Excel'den yapıştır" reads OIS (entry.read_paste: these headers name its fields)
 HEDGE_HEAD = ("Yön", "Vade", "Başlangıç (MPC)", "Bitiş (MPC)", "Oran (%)", "Nominal (TL)", "Not")
 HEDGE_NOTE = "DV01 Risk hedge önerisi"

@@ -1,5 +1,5 @@
-// A cell of the dashboard's own that leads to a table: Masa's Kontrol chips (the desk, 28.11.2026: "Kontrol nedenine
-// götürsün" - tto/service.py ``_kontrol_chips``).  The server gives such a cell the classes "golink" and
+// A cell of the dashboard's own that leads to a table: Masa's Kontrol chips (proposal A10 "Kontrol nedenine götürsün",
+// approved by the desk 28.11.2026 - tto/service.py ``_kontrol_chips``).  The server gives such a cell the classes "golink" and
 // "go:#/<page>?p=<panel>"; a click on it opens that page with the table in view, the same address a page's KISAYOLLAR use.
 
 /** The address a cell leads to ("#/ois?p=B3"), or "" - read off its "go:" class. */
