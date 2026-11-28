@@ -2817,14 +2817,17 @@ async function clipAfter(page, action) {
     check('hovering the XY chart names the nearest bond and its spread', atip.head.length > 0 && atip.rows.length >= 1 && atip.rows.some((r) => /\d/.test(r)), atip);
     await page.mouse.move(5, 5);
     // the same chart on the FX swap curve: a marker per bond (as many as the server's chart has), labelled as the OIS
-    // chart, its own fitted curve dashed, the same tooltip and "Tablo"; and the FX swap implied curve beside OIS
+    // chart, its own fitted curve dashed, the same tooltip and "Tablo"; and the FX swap implied curve beside OIS (the two
+    // charts side by side since 28.11.2026, B17: neither the page's whole width)
     const aswView = (await api(page, 'ayşe yilmaz', 'GET', '/api/view/asw')).json;
     const fxSeries = aswView.panels.find((p) => p.id === 'chartfx').data.series;
     const fxc = asw.find((c) => c.id === 'chartfx');
     check('ASW page: the chart once more on the FX swap curve - every bond at its years with its FX ASW, labelled, the FX curve dashed',
       fxc && fxc.title === 'FX swap ima eğrisine göre ASW — kalan vade' && fxc.markers === fxSeries[0].x.length && fxc.markers === asw[0].markers
-      && JSON.stringify(fxc.labels) === JSON.stringify(asw[0].labels) && fxc.titles.includes('ASW FX ima (bp)') && fxc.wide && fxc.table
-      && fxSeries[1].dash === 1, { fxc, points: fxSeries[0].x.length });
+      // (each chart half the page's width: a label that would cover another is left out - which ones, each chart's own)
+      && fxc.labels.length >= 10 && fxc.labels.every((t) => /^[A-ZŞÇÖÜİa-zşçöüığ]{3}\d\d/.test(t))
+      && fxc.titles.includes('ASW FX ima (bp)') && !fxc.wide && fxc.table
+      && fxSeries[1].dash === 1, { fxc, ois: { markers: asw[0].markers, labels: asw[0].labels, wide: asw[0].wide }, points: fxSeries[0].x.length });
     const fxSvg = page.locator('.panel[data-panel="chartfx"] svg.chart');
     await fxSvg.scrollIntoViewIfNeeded();
     const fb = await fxSvg.boundingBox();
@@ -4796,11 +4799,14 @@ async function clipAfter(page, action) {
       const fixed = g.data.rows.filter((r) => /^TRT/.test((r[1] || {}).t || '') && (r[g.data.c.indexOf('C')] || {}).t === 'Sabit');
       return { off: [row('TRT240227T17')[at('Getiri % (piyasa)')], row('TRT240227T17')[at('Eğri fiyatı · getiri %')]].map((c) => (c || {}).t),
         on: (row('TRT150328T24')[at('Getiri % (piyasa)')] || {}).t, fixed: fixed.length, priced: fixed.filter((r) => /%$/.test((r[at('Eğri fiyatı · getiri %')] || {}).t || '')).length,
+        // (a bond Kâğıt Fiyatlama cannot price - its coupon unknown - says why)
+        why: fixed.filter((r) => ((r[at('Eğri fiyatı · getiri %')] || {}).t || '') === '–' && ((r[at('Eğri fiyatı · getiri %')] || {}).tip || '')).length,
         hidden: ['A', 'C', 'F', 'R'].map((k) => g.columns.hid.has(g.data.c.indexOf(k))) };
     });
-    check('toplu tahvil · Tüm Kâğıtlar: every fixed coupon bond with a yield - the market\'s, else the curve\'s price (a bond off the trading list too); '
-      + 'ISIN, Tür, Kalan gün, Kaynak hidden by default (one click under Sütunlar)',
-      uniKf.off[0] === '' && /^\d+,\d\d%$/.test(uniKf.off[1]) && /^\d+,\d\d%$/.test(uniKf.on) && uniKf.fixed >= 26 && uniKf.priced === uniKf.fixed
+    check('toplu tahvil · Tüm Kâğıtlar: every fixed coupon bond with a yield - the market\'s, else the curve\'s price (a bond off the trading list too), '
+      + 'or why not; ISIN, Tür, Kalan gün, Kaynak hidden by default (one click under Sütunlar)',
+      uniKf.off[0] === '' && /^\d+,\d\d%$/.test(uniKf.off[1]) && /^\d+,\d\d%$/.test(uniKf.on) && uniKf.fixed >= 26 && uniKf.priced >= uniKf.fixed - 1
+      && uniKf.priced + uniKf.why === uniKf.fixed
       && uniKf.hidden.every(Boolean), uniKf);
     await page.click('.panel[data-panel="U1"] table.grid td.bondlink[title^="TRT150328T24"]');
     await page.waitForSelector('.modal.bondcard', { timeout: 20000 });
@@ -5378,6 +5384,8 @@ async function clipAfter(page, action) {
       return g.tds.every((line) => !line[k] || line[k].hidden);
     }, [sel, j]);
     const hiddenOf = async (user, table) => ((await api(page, user, 'GET', '/api/columns')).json.tables || {})[table];
+    // (a column by its key: the page's order puts the bond's short name first - 28.11.2026 -, Ad near the end)
+    const colAt = (sel, key) => page.evaluate(([s, k]) => document.querySelector(s + ' table.grid').__grid.data.c.indexOf(k), [sel, key]);
     await open(page, 'dibs');
     await tab(page, '*');
     // (DİBS RV's own FX swap columns, BF:BJ on the offshore ICAP curve, are hidden until a user shows them: the desk reads
@@ -5391,30 +5399,32 @@ async function clipAfter(page, action) {
     await page.click('.menu >> text=Sütunu gizle: Kaynak (boş = genel)');
     await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 8 sütun', rv);
     check('DİBS RV: a right click on a caption hides its column, the header says so',
-      await colHidden(rv, 1) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 8 sütun');
+      await colHidden(rv, await colAt(rv, 'B')) && await page.textContent(rv + ' .colschip') === 'Gizlediğiniz 8 sütun');
     check('... kept with this user\'s account (by the table and the sheet\'s column), nobody else\'s view changes',
       JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["Q","BE","BF","BG","BH","BI","BJ","B"]' && (await hiddenOf('mehmet', 'v/dibs/B3')) === undefined);
     await (await cellHandle(page, 'DİBS RV!A4')).click();
     await (await cellHandle(page, 'DİBS RV!D6')).click({ modifiers: ['Shift'] });
     const visibleCopy = (await page.evaluate(() => window.tto.selectionText(false))).split('\r\n');
-    check('... a copy takes what is on screen', visibleCopy[0] === 'ISIN\tAd\tTip (S/T/F/E/B)' && visibleCopy.every((l) => l.split('\t').length === 3), visibleCopy);
+    // (A4 to D6 as the page shows them: ISIN, Kaynak - hidden -, Tip; Ad stands near the end since 28.11.2026)
+    check('... a copy takes what is on screen', visibleCopy[0] === 'ISIN\tTip (S/T/F/E/B)' && visibleCopy.every((l) => l.split('\t').length === 2), visibleCopy);
     await (await cellHandle(page, 'DİBS RV!A6')).click();
     await page.keyboard.press('ArrowRight');
-    check('... the arrow keys step over it', await page.evaluate(() => document.querySelector('#content td.cur').__j) === 2);
+    check('... the arrow keys step over it', await page.evaluate(() => document.querySelector('#content td.cur').__j) === await colAt(rv, 'D'));
     await page.reload();
     await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     await page.waitForSelector(rv + ' table.grid');
-    check('... and stays hidden when the page is opened again', await colHidden(rv, 1));
+    check('... and stays hidden when the page is opened again', await colHidden(rv, await colAt(rv, 'B')));
     await page.click(rv + ' .colschip');
     await page.locator('.menu label.mcheck').filter({ has: page.locator('.t', { hasText: /^Ad$/ }) }).locator('input').click();
     await page.waitForFunction((s) => document.querySelector(s + ' .colschip').textContent === 'Gizlediğiniz 9 sütun', rv);
     check('"Sütunlar": every column with a tick - untick one and it goes (the list stays open)',
-      await colHidden(rv, 2) && await page.locator('.menu label.mcheck').count() >= 60
+      await colHidden(rv, await colAt(rv, 'C')) && await page.locator('.menu label.mcheck').count() >= 60
       && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '["Q","BE","BF","BG","BH","BI","BJ","B","C"]');
     await page.click('.menu >> text=Tümünü göster');
     await page.waitForFunction((s) => document.querySelector(s + ' .colschip').classList.contains('hidden'), rv);
     check('... "Tümünü göster" brings every column back - the FX swap ones too, and that is kept (the default does not return)',
-      !(await colHidden(rv, 1)) && !(await colHidden(rv, 2)) && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '[]');
+      !(await colHidden(rv, await colAt(rv, 'B'))) && !(await colHidden(rv, await colAt(rv, 'C')))
+      && JSON.stringify(await hiddenOf('ayşe yilmaz', 'v/dibs/B3')) === '[]');
     // a table of the dashboard's own: a column by its caption, across pages
     await open(page, 'eod');
     const eodCurve = '.panel[data-panel="curve"]';
@@ -6616,6 +6626,7 @@ async function clipAfter(page, action) {
     await open(page, 'dibs');
     await tab(page, '*');
     const rvSel = '#content .panel[data-panel="B3"]';
+    // (the page's order starts with the bond's short name, then the ISIN - 28.11.2026: Kâğıt, A, B, D)
     const rvCols = () => page.evaluate((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 4).join(','), rvSel);
     await page.hover(rvSel);
     await page.click(rvSel + ' .tools .colsbtn');
@@ -6623,27 +6634,27 @@ async function clipAfter(page, action) {
     await page.click('#colorder-list .co >> nth=0 >> button[data-act="down"]');
     await page.click('#colorder-list .co >> nth=1 >> button[data-act="down"]');
     await page.click('#colorder-save');
-    await page.waitForFunction((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 3).join(',') === 'B,C,A', rvSel, { timeout: 10000 });
+    await page.waitForFunction((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 3).join(',') === 'A,B,Kâğıt', rvSel, { timeout: 10000 });
     await page.reload();
     await page.waitForFunction(() => window.tto && window.tto.state.pageId === 'dibs' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     await page.waitForSelector(rvSel + ' table.grid');
     const colOrder = ((await api(page, 'ayşe yilmaz', 'GET', '/api/columns')).json.order || {})['v/dibs/B3'] || [];
     check('a column order of one\'s own ("Sütun sırası…"): kept after a reload, with the account; a cell keeps its reference',
-      await rvCols() === 'B,C,A,D' && colOrder.slice(0, 3).join(',') === 'B,C,A'
-      && await page.evaluate(() => { const td = window.tto.findCell('DİBS RV!A6'); return !!td && td.__j === 2; }), { cols: await rvCols(), colOrder });
+      await rvCols() === 'A,B,Kâğıt,D' && colOrder.slice(0, 3).join(',') === 'A,B,Kâğıt'
+      && await page.evaluate(() => { const td = window.tto.findCell('DİBS RV!B6'); return !!td && td.__j === 1; }), { cols: await rvCols(), colOrder });
     // the same table on the launchpad (a part of it): the user's order over its columns
     await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { launchpads: (await layoutOf('ayşe yilmaz')).launchpads.map((lp) => Object.assign({}, lp,
       { items: lp.items.concat([{ view: 'dibs', panel: 'B3', w: 12, h: 360, cols: ['A', 'C', 'D', 'E'] }]) })) });
     await open(page, 'launchpad');
     await page.waitForSelector('#lp-grid .lp-item[data-key="dibs/B3"] table.grid', { timeout: 30000 });
     const boxCols = await page.evaluate(() => document.querySelector('#lp-grid .lp-item[data-key="dibs/B3"] table.grid').__grid.data.c.join(','));
-    check('... and on the launchpad (its part A C D E as C A D E), a fixed height scrolling inside', boxCols === 'C,A,D,E'
+    check('... and on the launchpad (its part A C D E as A D E C: the order chosen, C - Ad - near the end of the page order), a fixed height scrolling inside', boxCols === 'A,D,E,C'
       && await page.evaluate(() => document.querySelector('#lp-grid .lp-item[data-key="dibs/B3"] .body').getBoundingClientRect().height <= 362), boxCols);
     await open(page, 'dibs');
     await page.hover(rvSel);
     await page.click(rvSel + ' .tools .colsbtn');
     await page.click('.menu >> text=Excel sırasına dön');
-    await page.waitForFunction((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 3).join(',') === 'A,B,C', rvSel, { timeout: 10000 });
+    await page.waitForFunction((s) => document.querySelector(s + ' table.grid').__grid.data.c.slice(0, 3).join(',') === 'Kâğıt,A,B', rvSel, { timeout: 10000 });
     // a favourite page in the top bar
     await open(page, 'forward');
     await page.click('#btn-fav');

@@ -1528,7 +1528,8 @@ aktarmada bu sütunlar yoktur (sayfanın hücresi değiller).
   (aşağıda: *Getirinin ON karşılığı*), ASW / DM'i, sinyali (UCUZ yeşil, PAHALI kırmızı) ve DV01'i, **her kâğıdın getirisi**
   (28.11.2026: trading listesinde olmayanlar dahil - Kâğıt Fiyatlama'nın hesabı: **Getiri % (piyasa)** bugünkü piyasa
   fiyatından, **Eğri fiyatı · getiri % / temiz** fiyatı olmayana eğriden - italik; üzerine gelince nasıl -, **Piyasa − eğri
-  (bp)**; ilk hesap gelene kadar "hesaplanıyor", dakikada bir yenilenir), sağda bugünün Broker Chat tahtası, ▸ kart ve ✕.
+  (bp)**; kuponu listede bilinmeyen kâğıtta "–" ve nedeni; ilk hesap gelene kadar "hesaplanıyor", dakikada bir yenilenir), sağda
+  bugünün Broker Chat tahtası, ▸ kart ve ✕.
   **Kâğıt** sütunu ilk ve sabittir (kısa ad, ISIN'i üzerinde, tıklayınca kâğıt kartı); ISIN, Tür, Kalan gün ve Kaynak
   varsayılan olarak gizlidir (Sütunlar'dan tek tıkla gelir). Kâğıtların fiyat / RV tablosu DİBS Trading'dedir (tek ev). Liste **masanındır** (herkes görür, herkes değiştirir): başta
   katalogdaki 77 kâğıt; **"+ ISIN ekle"** ile kâğıt eklenir - türü, vadesi, kuponu ve adı Bloomberg'den

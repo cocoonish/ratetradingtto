@@ -3009,7 +3009,8 @@ The bond side of it (builder K6; the menu itself - DİBS Piyasa / DİBS Fiyatlam
   Manuel Tahvil (its sheet's own block): value date, nominal, centre, spread → bid / ask yields (compound, simple), clean and
   dirty prices, the amount, DV01, the OIS hedge nominal; Kopyala; İşlem gir.
 - **C12.** Tüm Kâğıtlar: every fixed coupon bond, bill and zero coupon bond with Kâğıt Fiyatlama's market yield, its price
-  (the curve's where there is no market) and the market's gap to the curve - 12 of 26 fixed coupon rows had no yield.
+  (the curve's where there is no market) and the market's gap to the curve - 12 of 26 fixed coupon rows had no yield; one
+  whose coupon the desk's list does not know (TRT210329T17) says so ("–", the reason in the tip).
 - **C13.** Kâğıt Fiyatlama's levels as alarm names, `[12.09.29 adil]` / `[12.09.29 AL]` / `[12.09.29 SAT]`, and in each ▸
   (and the card) "Piyasa AL / SAT'a gelince alarm" - two alarms on the screen yield against AL and SAT.
 - **A14 (bonds).** The desk's quote, not Bloomberg's: Kâğıt Fiyatlama's "Kotasyon kopyala (masanın)" (its Kotan: fair ± half

@@ -477,9 +477,12 @@ def test_tum_kagitlar_has_a_yield_for_every_bond(svc, seeded):
     y = rows[OFF][at:at + 4]
     assert y[0]["t"] == "" and y[1]["v"] == pytest.approx(by[OFF]["price"]["yield"] / 100.0, abs=1e-12) and y[1]["cls"] == "kf-curve"
     assert y[2]["v"] == pytest.approx(by[OFF]["price"]["clean"], abs=1e-12) and by[OFF]["price"]["label"] in y[1]["tip"]
-    # every fixed coupon bond has a yield now (12 of 26 had none: C12's evidence)
-    fixed = [row for isin, row in rows.items() if isin and isin.startswith("TRT") and (bd.by_isin(isin) or {}).get("kind") == "fixed"]
-    assert fixed and all(row[at + 1]["t"] for row in fixed)
+    # every fixed coupon bond has a yield now (12 of 26 had none: C12's evidence) - or says why not: TRT210329T17, its coupon
+    # unknown to the desk's list, cannot be priced on the curve
+    fixed = {isin: row for isin, row in rows.items() if isin and isin.startswith("TRT") and (bd.by_isin(isin) or {}).get("kind") == "fixed"}
+    priced = {isin for isin, row in fixed.items() if row[at + 1]["t"].endswith("%")}
+    assert len(fixed) == 26 and set(fixed) - priced == {"TRT210329T17"}
+    assert fixed["TRT210329T17"][at + 1]["t"] == "–" and "kuponu bilinmiyor" in fixed["TRT210329T17"][at + 1]["tip"]
     assert all(not row[at]["t"] for isin, row in rows.items() if (bd.by_isin(isin or "") or {}).get("kind") in ("float", "frn", "cpi"))
 
 
