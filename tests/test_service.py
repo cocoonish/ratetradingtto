@@ -481,7 +481,11 @@ def test_a_value_typed_over_a_formula_is_mine_marked_and_undone_by_blanking(tmp_
         for other in (w, None):
             c = _cell_of(svc.view(other, "forward", True), "B15", "E33")
             assert "i" not in c and "m" not in c and c["fx"] == 1 and c["v"] == base
-        assert svc.my_inputs(u)["inputs"] == [{"book": "tto", "ref": ref, "value": 55.0, "label": ""}]
+        got = svc.my_inputs(u)["inputs"]
+        assert [{k: x[k] for k in ("book", "ref", "value", "label")} for x in got] == \
+            [{"book": "tto", "ref": ref, "value": 55.0, "label": ""}]
+        # (28.11.2026, A6 / A7: typed over the formula - "Elle değer" -, when, and the page it shows on)
+        assert got[0]["hand"] is True and {"view": "forward", "panel": "B15"} in got[0]["pages"] and got[0]["at"][:2] == "20"
         # a constant typed over as well (a label here), and put back by blanking it
         assert cell(svc, "Forward!C2") == "Tarih"
         svc.set_inputs(u, "tto", [{"ref": "Forward!C2", "value": "Valör"}], True)
