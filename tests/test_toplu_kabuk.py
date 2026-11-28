@@ -226,8 +226,8 @@ def test_viop_kontratlar_show_the_rows_they_share_once(svc):
     label = lambda d: [row[0].get("t", "") for row in d["rows"]]                                     # noqa: E731
     assert label(p["B5"]["data"])[1:6] == ["1st Date", "2nd Dat", "VKGS", "Spot", "USD"]
     assert p["B7"]["data"]["r"] == [19, 25, 26, 27, 28, 29] and label(p["B7"]["data"])[1:] == ["TRY", "SP", "Günlük SP", "VIOP Price", "ON karşılık"]
-    assert p["B12"]["data"]["r"] == [71, 77, 78, 79, 80, 81, 82] and label(p["B12"]["data"])[-1] == "OIS vs VIOP"
-    assert p["B13"]["data"]["r"] == [84, 90, 91, 92, 93, 94, 95] and label(p["B13"]["data"])[-1] == "ICAP vs VIOP"
+    assert p["B12"]["data"]["r"] == [71, 77, 78, 79, 80, 81, 82] and label(p["B12"]["data"])[-1] == "VİOP son − OIS (bp)"
+    assert p["B13"]["data"]["r"] == [84, 90, 91, 92, 93, 94, 95] and label(p["B13"]["data"])[-1] == "VİOP son − Offshore (bp)"
     for pid, first in (("B7", 19), ("B12", 71), ("B13", 84)):
         d = p[pid]["data"]
         assert d["ar"] == list(range(first, first + len(d["ar"]))) and len(d["ar"]) in (11, 12)

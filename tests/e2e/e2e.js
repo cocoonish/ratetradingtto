@@ -3384,7 +3384,7 @@ async function clipAfter(page, action) {
     const cpAdded = (await cpRows('off')).find((r) => /e2e aracı kotası/.test(r.cells.join(' ')));
     const cpApi = (await api(page, 'ayşe yilmaz', 'GET', '/api/curve-points')).json;
     check('... an administrator adds a 2Y3M XCCY typed at 42,10 % with its note: in the table (who added it), the offshore list differs, the curve is built on it',
-      cpAdded && cpAdded.cells[0] === '2Y3M' && /^42,1000%/.test(cpAdded.cells[4]) && /Ayşe Yılmaz/.test(cpAdded.cells[6])
+      cpAdded && cpAdded.cells[0] === '2Y3M' && /^42,10%/.test(cpAdded.cells[4]) && /Ayşe Yılmaz/.test(cpAdded.cells[6])
       && cpApi.custom.off === true && cpApi.custom.ois === false && /Liste varsayılandan farklı/.test(await page.textContent('#cp-status'))
       && (await curveV('EK_INTERP!N6')) === 1, { cpAdded, custom: cpApi.custom });
     await shot(page, '15b-settings-curve-points');
@@ -8814,7 +8814,7 @@ async function clipAfter(page, action) {
           .filter(Boolean)])));
       check('kabuk · B15: VİOP Kontratlar - 1st / 2nd Date, VKGS, Spot, USD once (VIOP BID); VIOP ASK, OIS and ICAP only their own rows ("rows", the twin of "cols")',
         kabukViop.B5.slice(0, 5).join() === '1st Date,2nd Dat,VKGS,Spot,USD' && kabukViop.B7.join() === 'TRY,SP,Günlük SP,VIOP Price,ON karşılık'
-        && kabukViop.B12[0] === 'TRY' && kabukViop.B12.slice(-1)[0] === 'OIS vs VIOP' && !kabukViop.B13.includes('VKGS'), kabukViop);
+        && kabukViop.B12[0] === 'TRY' && kabukViop.B12.slice(-1)[0] === 'VİOP son − OIS (bp)' && !kabukViop.B13.includes('VKGS'), kabukViop);
       // A6: a value typed over a formula, said in the top bar; its list, "Formüle dön"
       await open(page, 'forward');
       await tab(page, 'fwd');
