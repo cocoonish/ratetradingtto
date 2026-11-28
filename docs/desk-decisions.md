@@ -2970,3 +2970,129 @@ of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an
 `duzenTryA…` checks (Masa's manual spot one click away, "Yardımcı tablolar"; the dialog's cells read on the VİOP page), its
 formula-in-an-input flow on the forward summary's dates (`EK_FWD!B5`, `C5`, `B6`: the date-to-date block left the Forward
 fiyatlama tab) and its Fiyatlama / Swaption checks (two decimals).
+
+### Toplu iş: 20 + 20 + 20 öneri, yeniden düzenleme (28.11.2026)
+
+The desk's request, the morning of 28.11.2026:
+
+> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
+> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
+> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
+
+Their answer to the three lists (A: desk workflow, B: layout, C: new features):
+
+> "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"
+
+and, beside them:
+
+> "Bir de fiyatlama kisminda forward gelsin istiyorum. Oraya yazdigimda forward fiyatlamak icin de isimi kolaylastiracak
+> bir sey olmali. Vadeleri rahat gorup, rette veya diger curvelerde ne oldugunu vs rahat gorebilecegim bir sey olmali.
+> Fiyatladiktan sonra bunu done diye gunluk islemlere alabilmeliyim veya done olmadiysa da hit ratiosunu takip
+> edebilmeliyim."
+
+> "Bir de tarih girdilerinde yil girmeden de algilayabilmeli. 26/12 yazdigimda otomatik 2026, 1/2 yazdigimda otomatik 2027
+> getirecek ornegin su anda"
+
+> "Bir de genel sayfalari da daha duzenli yapabiliriz, ornegin kagit kismi cok duzensiz ve her sey her yerde gibi.
+> Bunlari da dusun. Yeni onerilerle de gel sonra toplu yapalim"
+
+To the two questions asked before the work: A8 (DV01 Risk Pozisyon's default) **"Onshore + tlref"**; B4 (which USDTRY
+spot) **"Bbg veya manuel spot"** - every page uses the top strip's spot; and **"Digerlerini de onayliyorum"**: the
+reorganization of the pages (R), the forward card in Fiyatlama (F) and the year-less dates (T).
+
+Approved: A1, A3, A4, A5, A6, A7, A8, A10, A11, A14; B1-B20; C2, C3, C4, C5, C8, C10, C12, C13, C16; R, F, T. Eight
+builders, one installer.
+
+#### Kabuk (K1): the menu, the shell's rows and notes, the personal badge, the values of an earlier day
+
+**The menu (R; B8).** Forty-odd entries are 23: the pages of one subject one entry, its pages the tabs of a strip over
+the page - the mechanism quant's entries and DİBS RV used already (the nav's `menu` / `menu_title` / `tab`):
+
+| Group | Entries (their tabs) |
+|---|---|
+| Masa | Bugün · Masa · İşlemler (Günlük İşlemler · Trades · Broker Chat) · Piyasa hareketi (Eğri Hareketi (gün içi) · Gün Sonu Matrisi · İzleme · Alarmlar) · Masa iletişim (Sosyal · Ajanda) |
+| TRY Faiz | OIS · PPK (+ PPK geçmişi) · Fiyatlama (Fiyatlama · Swaption · Nakit akışı) · Forward · VİOP · Borsa Swap · Carry & Roll (+ Realized vol · Spread geçmişi) · DV01 Risk |
+| Tahvil | DİBS Piyasa (Trading · Evren · Eurobond) · DİBS Fiyatlama (Adil fiyat · AL/SAT · Tek kâğıt · Sabah fiyat dosyası · İhale) · DİBS RV (Genel · RV hesap tablosu · ASW hesap tablosu) |
+| FX · USD | Spot / FX (Spot / FX · FX Vol) · USD · FOMC |
+| Quant | Sinyaller (… · VİOP: Quant · VİOP, grupsuz before, is Sinyaller's last tab) · Faiz analizleri · FX analizleri |
+| Araçlar | last, folded until opened: Hesaplayıcılar · Motor · Ayarlar (and the administrators' pages) |
+
+- **No page id or address changed**: favourites, launchpads, the side drawer, alarms, Ctrl+K, shortcuts and bookmarks
+  find every page; an address opens its entry on its tab (`#/mpc` → OIS · PPK, "PPK geçmişi"). A page keeps its own
+  title (the top bar, Ctrl+K); the one pair that shared a title is told apart: quant's VİOP page is "Quant · VİOP".
+- **Unique names (B8):** no entry is "VİOP" twice; quant's "Faiz" and "FX" are "Faiz analizleri" and "FX analizleri"
+  (the groups "TRY Faiz" and "FX · USD" are the menu's only "Faiz" / "FX").
+- **One line of hint** for every entry and tab (its tooltip): "İşlemler — Günlük İşlemler (masanın blotter'ı), Trades
+  (izlenen işlemler, pozisyona girmez), Broker Chat" …
+- **The desk's default favourites (B8):** an administrator makes their own favourites the desk's (the user menu →
+  *Masanın varsayılan favorileri…*); everybody who never chose favourites of their own sees them; a star added or taken
+  out makes a user's list their own; a user who had favourites keeps them. Kept desk-wide (kv `layout.desk`).
+- **1080 px:** every group is on screen without scrolling the menu (23 entries).
+- The counts of the menu follow their pages into their entry: Sosyal's and Ajanda's on *Masa iletişim* (each its own),
+  Broker Chat's trades not entered on *İşlemler*. A user who had taken a page out of their menu: an entry whose every page
+  they had taken out stays out.
+
+**Choices made while building it** (ask the desk before changing): the entry ids (`masa.islemler`, `faiz.ois`,
+`tahvil.fiyatlama` …; DİBS RV keeps `tahvil.dibsrv`, quant its three); the tab titles as R wrote them ("Eğri Hareketi (gün
+içi)", "PPK geçmişi", "Nakit akışı", "Realized vol", "Tek kâğıt" …); the hints' wording; Araçlar folded by default (the
+user's own choice wins, per browser).
+
+**The menu below 1500 px (B10).** At a laptop's 1366 px the menu's 214 px were what 20 of the 71 sideways-scrolling
+panels overflowed by (≤ 162 px: Kontrol 132, EN İYİ FRA 119, FORWARD 86 / 78, BAZ GEÇMİŞİ 140, Eurobond 160 …). Below
+1500 px the menu is a 52 px strip that opens **over** the page - labels, groups, counts - while the mouse rests on it (or
+the keyboard is in it) and folds when it leaves; the page keeps its width (measured on the replay copy: the content from
+x = 52 at 1366 px, the menu 214 px wide over it). ⇤ pins it open or makes it a strip at either width, each width's choice
+kept in the browser. The heat maps' tiles are lower below 1500 px. FX Vol İzleme's pair column frozen: K8's page (the
+integrator's note).
+
+**Notes (B2).** A long note inside a table (the 70-character run-over text, *Düzen: sayfalar tek tek*) wrapped in the
+table's whole width - in a table wider than its panel it was cut at the panel's edge (Kotasyon, TOPLU FORWARD, FSS,
+ÇAPRAZ, DİBS Trading's Valörler: 746 px). Now each such note wraps in the width on screen right of where it starts (at
+least 200 px) and stays at the left of the panel while the table scrolls sideways (sticky) - FORWARD KOTASYON at 1366 px:
+the two notes under the matrix 1 268 px wide inside a 1 284 px panel, the curves' legend that starts mid-table 523 px.
+A tab's note is one line ("devamı" the rest).
+
+**The tools in the tab bar (B3).** *Tablo ara · Yardımcı tablolar · Elle değer · Girdilerimi sıfırla · ?* stood on a row
+of their own above the tabs (43 px); on a page in tabs they are at the tab bar's empty right end, sticky with it (when
+the tabs and the tools do not fit on one line, the tools go above the tabs). A page without tabs keeps its row.
+
+**"Hesaplanıyor" (B7, the shell's part).** A page, a launchpad's or the drawer's box waiting for its first answer says
+"Hesaplanıyor…" with a small turning mark (`ui.js` `waiting()`); the pages' own panels (Fiyatlama, Kâğıt Fiyatlama …)
+use the same mark - each page's builder.
+
+**The title never cut (B9).** The page's title does not shrink; "Hesap" is short - the first job's count, how many more,
+the time left ("Quant 14/26 +2 · ~3 dk"), every job in its tooltip and a click away.
+
+**VİOP Kontratlar (B15): the `rows` view option.** The twin of `cols`: a table shows only the rows it names, by the
+sheet's row number, in their order; every cell keeps its row (an input is typed into its own cell). VIOP ASK, OIS and
+ICAP repeated VIOP BID's 1st / 2nd Date, VKGS, Spot and USD (20 rows ≈ 480 px; one formula a row in all four - the
+OIS copy's spot date is the same day written as text); they show their own rows under the contracts' dates now, the
+shared ones once in VIOP BID (the tab's note says so). The gold tables' merged name column (XAUTRY BID / ASK, XAUUSD:
+the panel's title again) is left out with `cols`.
+
+**The personal badge (A6).** The top bar says what makes the user's numbers differ from the desk's: **Normalleşme açık**
+(their TLREF normalization on - on PPK basamak the curve badge says it already) and **N elle değer** (values typed over a
+workbook formula, on every page). A click lists them: where the normalization is switched; each value's page, cell,
+value and time - *Git*, *Formüle dön*, *Hepsini formüle döndür*.
+
+**The values of an earlier day (A7).** "Girdilerim" (Senaryolarım) gives each value's day and time, *Yalnız bugünden
+eskiler* filters, a market level of an earlier day is marked and *Eski piyasa girdilerimi temizle* takes those back. A
+page says its own: **"N girdi dünden · temizle"** in its tools (which, when, who typed the desk's own). Market levels only,
+never settings (`tto/myinputs.py`): the manual spot (the desk's, shared) and Forward's F2:G2, the forward quotes' spreads
+and typed rates (EK_FWD), MPC OIS (elle), the elle spread, the PPK steps typed (EK_PPK), WIRP (manuel), Pencere OIS
+(elle), USD's Manuel kota, Kote %, the pasted DV01 (Pozisyon, VaR) - each a number (a text or a date there is a setting);
+a value typed as a formula reads its cells live and is never old. "Today" is the dashboard computer's date.
+
+Nothing here changes a value, a curve, Bootstrap, an input's cell or a Bloomberg request.
+
+Code: `tto/navmenu.py` (the menu), `tto/quant.py` (`MENU`: VİOP into Sinyaller, the entries' names), `tto/service.py`
+(`nav` / `_nav_pages`, `layout` / `set_layout` / `_desk_favs`, `my_inputs` / `_mark_market` / `_page_index`, `_header` /
+`_norm_on` / `_hand_count` / `_with_hand`, `_pick_rows`, `_panel`'s `rows`, `_pick_part`'s `ar`), `tto/layout.py`
+(`favs_own`, `DESK_KEY`, `desk_favs`), `tto/myinputs.py` (`MARKET`, `PageIndex`), `tto/store.py` (`input_times`),
+`tto/views/__init__.py` (`rows`, `_check_rows`), `tto/views/40_viop.json` (the Kontratlar tables' `rows`, the gold tables'
+`cols`, the tab's note); the browser: `menu.js`, `main.js` (the strip below 1500 px, the badge, the desk's favourites),
+`mine.js`, `hesap.js`, `layout.js`, `desk.js` (the counts on their entry), `ui.js` (`waiting`), `grid.js`
+(`_noteWidth`), `pages/view.js` (the tab line, the tab's note, the stale chip), `scenarios.js`, `boxes.js`, `pagebox.js`,
+`index.html`, `app.css`. Tests: `tests/test_toplu_kabuk.py`; the menu's assertions of `test_bugun`, `test_desk`,
+`test_dibsgenel`, `test_fiyatyukleme`, `test_fx`, `test_kagitfiyat`, `test_pageboxes`, `test_pricing`, `test_quant`,
+`test_service`, `test_duzen_masa`; the browser test's "kabuk ·" checks.
