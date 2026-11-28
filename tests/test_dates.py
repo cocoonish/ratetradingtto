@@ -15,6 +15,7 @@ import pytest
 
 from conftest import cell
 from tto.config import Settings
+from tto.marketdata.base import bdp_key
 from tto.marketdata.bloomberg import NA_NA, NO_BFX, NO_RT
 from tto.marketdata.replay import ReplayProvider
 from tto.service import Service
@@ -79,6 +80,12 @@ def on_day(service, data_dir, day):
         elif k[0] == "BDP" and k[2] == "DAYS_TO_MTY" and type(v) is float:
             v -= (day - RECORDED).days
         snapshot[k] = v
+    # (the strip's USDTRY bid / ask - every page's spot since 28.11.2026 - stand inside the manual spot's IF in the workbook:
+    # the recording's snapshot, plain calls only, has them not; a connected Bloomberg answers them)
+    book = service.books["tto"]
+    for field, ref in (("BID", "VIOP!L99"), ("ASK", "VIOP!L100")):
+        si, rc = book.cell(ref)
+        snapshot.setdefault(bdp_key("USDTRY Curncy", field), book.model.sheets[si].cached[rc])
     today = float(date_to_serial(day))
     clock = Clock(today + 0.5)
     clock.today = lambda: today

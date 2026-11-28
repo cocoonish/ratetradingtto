@@ -136,11 +136,19 @@ def test_bad_forward_requests_are_explained(svc, payload, message):
 
 
 def test_default_value_date_reproduces_excels_saved_forwards(service):
-    """With the workbook's own inputs the engine gives Excel's saved outrights digit for digit."""
-    for ref in ("D30", "E30", "F30", "D31", "E31", "F31", "D32", "E32", "F32", "D33", "E33", "F33", "D39", "E39", "F39"):
-        info = service.cell_info(None, "tto", "Forward!" + ref)
-        assert isinstance(info["excel_cached"], float)
-        assert info["cell"]["v"] == pytest.approx(info["excel_cached"], rel=1e-13), ref
+    """With the workbook's own inputs the engine gives Excel's saved outrights digit for digit - at Excel's spot: every
+    page reads the strip's USDTRY since 28.11.2026, so this user types the one Excel saved (Bloomberg's TRY Curncy MID) as
+    their own Forward!F2.  The VİOP row's rate is implied at VİOP's spot rows, the strip's: it moves with that spot."""
+    u = service.login("Excel'in spotu")["user"]
+    spot = service.cell_info(None, "tto", "Forward!F2")["excel_cached"]
+    assert isinstance(spot, float) and service.set_inputs(u, "tto", [{"ref": "Forward!F2", "value": spot}])["errors"] == []
+    try:
+        for ref in ("D30", "E30", "F30", "D31", "E31", "F31", "D32", "E32", "F32", "D33", "E33", "F33", "D39", "E39", "F39"):
+            info = service.cell_info(u, "tto", "Forward!" + ref)
+            assert isinstance(info["excel_cached"], float)
+            assert info["cell"]["v"] == pytest.approx(info["excel_cached"], rel=1e-4 if ref[1:] == "32" else 1e-13), ref
+    finally:
+        service.reset_inputs(u, "tto", ["Forward!F2"])
 
 
 def test_forward_formula_text_is_the_workbooks(service):

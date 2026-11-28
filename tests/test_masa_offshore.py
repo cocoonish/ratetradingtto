@@ -111,7 +111,7 @@ def test_on_equivalents_after_2y_read_the_same_discount_factors(svc):
             xdf, xdays = cell(svc, "Forward!G%s" % zero[1:]), cell(svc, OFF_DAYS[tenor])
             assert on == cell(svc, "Forward!E%d" % k) == pytest.approx(360 * ((1 / xdf) ** (1 / xdays) - 1), rel=1e-12)
             assert 1 + masa(svc, "F", r) * xdays / 360 == pytest.approx((1 + on / 360) ** xdays, rel=1e-12)
-            assert v == pytest.approx((q - on) * 10000, rel=1e-12)
+            assert v == pytest.approx((on - q) * 10000, rel=1e-12)          # ("Offshore − OIS (bp)" since 28.11.2026)
         else:
             assert on == "" and v == ""
 
@@ -127,7 +127,7 @@ def test_the_desks_case_every_xccy_tenor_priced(svc):
         assert num(f) and f == cell(svc, "Forward!" + zero, user) == pytest.approx((1 / xdf - 1) * 360 / xdays, rel=1e-14)
         assert masa(svc, "L", r, user) == pytest.approx((f - g) * 10000, rel=1e-12)
         assert on == cell(svc, "Forward!E%d" % ON_ROW[tenor], user) == pytest.approx(360 * ((1 / xdf) ** (1 / xdays) - 1), rel=1e-12)
-        assert masa(svc, "V", r, user) == pytest.approx((masa(svc, "Q", r, user) - on) * 10000, rel=1e-12)
+        assert masa(svc, "V", r, user) == pytest.approx((on - masa(svc, "Q", r, user)) * 10000, rel=1e-12)   # (Offshore − OIS)
         assert g == masa(svc, "G", r) and masa(svc, "Q", r, user) == masa(svc, "Q", r)     # (OIS: nothing to do with it)
         if tenor in ("3Y", "5Y"):
             assert f == masa(svc, "F", r)                            # (the nodes before 6Y are as they were)

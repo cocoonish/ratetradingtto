@@ -304,7 +304,8 @@ def _model(with_var: bool) -> Model:
     builders = ex._BUILDERS["tto"]
     try:
         if not with_var:
-            ex._BUILDERS["tto"] = tuple(b for b in builders if b[0] != ex.VAR_NAME)
+            # (Carry & Roll's "Yıllık vol" default reads the VaR's covariances, EK_VAR: it goes with it - 28.11.2026)
+            ex._BUILDERS["tto"] = tuple(b for b in builders if b[0] not in (ex.VAR_NAME, ex.CARRY_VOL_NAME))
         assert ex.apply("tto", model) == []
     finally:
         ex._BUILDERS["tto"] = builders
@@ -320,12 +321,13 @@ def test_nothing_else_changes_in_the_workbook():
     for rng in ("W29:AM29", "W32:AK53", "W55:AA59"):
         r1, c1, r2, c2 = (int(x) for x in _rng(rng))
         own |= {(r, c) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)}
+    vol_own = {parse_a1("N%d" % r) for r in range(ex.CARRY_VOL[0], ex.CARRY_VOL[1] + 1)}       # (Carry & Roll's vol default)
     for sh in old.sheets:
         ns = new.sheet(sh.name)
         keys = set(sh.fml) | set(ns.fml) | set(sh.consts) | set(ns.consts)
         for rc in keys:
             r, c = divmod(rc, COLS)
-            if sh.name == "DV01_RISK" and (r, c) in own:
+            if sh.name == "DV01_RISK" and (r, c) in own or sh.name == "C & R" and rc in vol_own:
                 continue
             assert (sh.fml.get(rc) is None) == (ns.fml.get(rc) is None), (sh.name, rc)
             if rc in sh.fml:

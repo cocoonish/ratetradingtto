@@ -38,7 +38,9 @@ MINE = (ex.NORM_NAME, ex.NORM_USED_NAME, ex.NORM_PPK_NAME)
 NEW_OIS = ({a for a, _, _ in ex.NORM_ROWS} | {a for _, _, a in ex.NORM_ROWS}
            | {ex.NORM_ON, ex.NORM_DAYS, ex.NORM_REF, ex.NORM_GAP} | set(ex.OIS_SPOT_CELLS)
            # (each scenario's own date: SENARYOLAR' column U and its days N3:N5 - 27.11.2026)
-           | {ex.NORM_SC_HEAD} | set(ex.NORM_SC_DATES) | set(ex.NORM_SC_DAYS))
+           | {ex.NORM_SC_HEAD} | set(ex.NORM_SC_DATES) | set(ex.NORM_SC_DAYS)
+           # (the pinned Parametreler's title, which says the switch's state - 28.11.2026)
+           | {ex.PARAM_TITLE})
 NEW_MOTOR = {"%s%d" % (ex.NORM_E_COL, r) for r in range(ex.NORM_E_ROWS[0] - 1, ex.NORM_E_ROWS[1] + 1)}
 
 
@@ -202,9 +204,9 @@ def test_on_without_a_gap_every_number_is_the_one_before(books):
                                                             and 8 <= int("".join(ch for ch in d.split("!")[1] if ch.isdigit())) <= 15)}
     steps = {d for d in diff if d.startswith("EK_PPK!")}
     diff = [d for d in diff if d not in walk and d not in steps]
-    # (and each scenario's date, at its default the date in use, with its days)
+    # (and each scenario's date, at its default the date in use, with its days; the pinned Parametreler's title says "Açık")
     assert sorted(diff) == sorted(["OIS_MAIN!" + a for a in ("L2", "L4", "L5", "L6", "M2", "M3")
-                                   + ex.NORM_SC_DATES + ex.NORM_SC_DAYS]), diff
+                                   + ex.NORM_SC_DATES + ex.NORM_SC_DAYS + (ex.PARAM_TITLE,)]), diff
     assert [at(new, "OIS_MAIN!" + a, on) for a in ex.NORM_SC_DAYS] == [20.0] * 3
 
 

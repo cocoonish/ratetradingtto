@@ -9027,17 +9027,27 @@ PARAM_TITLE_NAME = "OIS · PPK Parametreler özeti"
 PARAM_TITLE = "A1"
 
 
+#: the TLREF normalization's switch (its own addition, NORM_NAME): caption and cell - the title says it only where it is
+PARAM_NORM = ("K2", "Normalleşme", "$L$2")
+
+
 def _param_title_check(model: Model) -> None:
     _need_sheets(model, "OIS_MAIN")
     _need_empty(model, "OIS_MAIN", "A1:N1")
-    _need_captions(model, (("OIS_MAIN", "E2", "DV01/bacak $"), ("OIS_MAIN", "K2", "Normalleşme"), ("OIS_MAIN", "A3", "Senaryo tabanı"),
+    _need_captions(model, (("OIS_MAIN", "E2", "DV01/bacak $"), ("OIS_MAIN", "A3", "Senaryo tabanı"),
                            ("OIS_MAIN", "A4", "Ufuk A ay"), ("OIS_MAIN", "C4", "Ufuk B ay")))
 
 
 def _tto_param_title(model: Model) -> None:
+    head, text, switch = PARAM_NORM
+    try:
+        _need_captions(model, (("OIS_MAIN", head, text),))
+        norm = '  ·  Normalleşme "&%s&"' % switch
+    except ValueError:                                          # (the workbook without the normalization: no switch)
+        norm = ""
     SheetBuilder(model, "OIS_MAIN").set(
-        PARAM_TITLE, '="Parametreler  ·  Normalleşme "&$L$2&"  ·  DV01/bacak "&TEXT($F$2,"#,##0")&" $  ·  Senaryo tabanı "'
-                     '&$B$3&"  ·  Ufuk "&$B$4&"/"&$D$4&" ay"', bold=True)
+        PARAM_TITLE, '="Parametreler%s  ·  DV01/bacak "&TEXT($F$2,"#,##0")&" $  ·  Senaryo tabanı "&$B$3&"  ·  Ufuk "&$B$4'
+                     '&"/"&$D$4&" ay"' % norm, bold=True)
 
 
 # ---------------------------------------------------------------------------------------------- USD · FOMC: two tables
