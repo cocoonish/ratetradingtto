@@ -77,7 +77,7 @@ import re
 import statistics
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import quantcurve as qc
 from . import rvfair
@@ -207,6 +207,8 @@ RECORD_TEXT = "masanın geçmişi 10.11.2025–16.11.2026, 16 kâğıt, örnek d
 #: (C12: "Tüm Kâğıtlar'da her kâğıda getiri") and what the alarms read of the fair and the good levels (C13: "Kâğıt Fiyatlama
 #: seviyeleri alarm olsun") - kept this long (seconds) before a newer one is made, at the next look
 SNAP_EVERY = 60.0
+#: how long the pages' warm-up round waits for the first one (``first_snapshot``), seconds: it starts anyway after that
+SNAP_FIRST_WAIT = 90.0
 #: the quote ticket (C10, 28.11.2026: "Her valörde tahvil kotasyon fişi"): its centres - the market's yield, Kâğıt Fiyatlama's
 #: price (its answer: the market's, else the curve's), the fair (the trading list), a yield typed - and their names
 CENTERS = (("piyasa", "Piyasa"), ("fiyat", "Kâğıt Fiyatlama fiyatı"), ("adil", "Adil"), ("yazilan", "Yazılan getiri"))
@@ -981,6 +983,8 @@ class KagitFiyat(object):
         self._snap_lock = threading.Lock()
         self._snap: Optional[Dict[str, Any]] = None                        # the desk's levels now (``snapshot``)
         self._snap_busy = False                                            # a newer one being made (in a thread)
+        self._snap_first = threading.Event()                               # the first one made (the pages told) or failed
+        self._snap_missed = False                                          # a page was drawn before the first one
 
     # ------------------------------------------------------------------ the widths (administrators)
     def widths(self) -> Dict[str, Any]:
@@ -2136,8 +2140,8 @@ class KagitFiyat(object):
         as the main table prices it (``curves``: Tüm Kâğıtlar' yields of every bond - C12) and the trading list's fair and
         good levels (``levels``: the alarms' "[12.09.29 adil / AL / SAT]" - C13), everybody's calculation (no one's inputs).
         Cheap - the calculation thread asks for it: the last one made; one older than ``SNAP_EVERY`` (or of another day, or
-        none) is made again in a thread of its own, and the pages are told when it is there (a new generation).  ``wait``:
-        made here when there is none yet (the tests; a request that must have it)."""
+        none) is made again in a thread of its own - the first tells the pages (a new generation) when one was drawn without
+        it (``missed``).  ``wait``: made here when there is none yet (the tests; a request that must have it)."""
         svc = self.svc
         today = svc.history.today().isoformat()             # (the calculation's day: the recorded file's in replay)
         with self._snap_lock:
@@ -2149,6 +2153,7 @@ class KagitFiyat(object):
         if snap is None and wait:
             snap = self._keep_snapshot(self.make_snapshot())
             svc.bump()                                        # (a page drawn without it is drawn again)
+            self._snap_first.set()
         if start:
             threading.Thread(target=self._snap_thread, name="tto-kagitfiyat-seviye", daemon=True).start()
         return snap or {}
@@ -2162,8 +2167,8 @@ class KagitFiyat(object):
         try:
             before = self._snap
             self._keep_snapshot(self.make_snapshot(background=True))
-            if before is None:
-                # (the first: Tüm Kâğıtlar said "hesaplanıyor" - drawn again; a newer one shows with the page's next answer,
+            if before is None and self._snap_missed:
+                # (the first, and a page said "hesaplanıyor" - drawn again; a newer one shows with the page's next answer,
                 # the market's next tick live)
                 self.svc.bump()
         except Exception:  # noqa: BLE001 - kept as it was: the next look tries again
@@ -2171,6 +2176,31 @@ class KagitFiyat(object):
         finally:
             with self._snap_lock:
                 self._snap_busy = False
+            self._snap_first.set()                   # (after the new generation: what waits for it comes after that)
+
+    def missed(self) -> None:
+        """A page was drawn without the first snapshot ("hesaplanıyor"): its arrival draws the pages again."""
+        self._snap_missed = True
+
+    def first_snapshot(self, then: Callable[[], None]) -> bool:
+        """``then()`` once the first snapshot is there (made now, in a thread of its own; at most ``SNAP_FIRST_WAIT``
+        seconds) - the start's warm-up round of the pages: the pages it makes ahead show Tüm Kâğıtlar' yields at once, and
+        the first snapshot's new generation comes before them, not after (it would make them all again).  False: there is
+        one already - ``then`` is the caller's to run."""
+        if self._snap is not None:
+            return False
+
+        def run() -> None:
+            try:
+                self.snapshot()                      # (made by the one thread that makes it, this or a page's)
+                self._snap_first.wait(SNAP_FIRST_WAIT)
+            except Exception:  # noqa: BLE001 - the round starts anyway
+                pass
+            if not self.svc._stop.is_set():
+                then()
+
+        threading.Thread(target=run, name="tto-kagitfiyat-ilk", daemon=True).start()
+        return True
 
     def make_snapshot(self, background: bool = False) -> Dict[str, Any]:
         """Kâğıt Fiyatlama of everybody's calculation now (``snapshot``'s): ``{"at", "day", "curves": {isin: the main table's

@@ -117,6 +117,7 @@ def test_an_addition_that_no_longer_fits_its_workbook_is_left_out():
                                                    "Tüm Kâğıtlar canlı kota", "DİBS RV FRN", "DİBS RV ASW / DM'den fiyat",
                                                    "DİBS RV switch seviyesinden fiyat", "Manuel Tahvil ISIN", "TRY iş günü terimi",
                                                    "DİBS RV iki yönlü", "DİBS RV switch iki yönlü", "Manuel Tahvil iki yönlü",
+                                                   extras.MAN_TICKET_NAME,          # (Manuel Tahvil's quote ticket: 28.11.2026)
                                                    "Tüm Kâğıtlar ON karşılık", "EK_CARRY",
                                                    "Motor gün sayıları", "DV01 pozisyonu sıfır", "VİOP matris DV01'leri",
                                                    "VİOP ON karşılık", extras.LOOK_NAME, "EK_IHALE",

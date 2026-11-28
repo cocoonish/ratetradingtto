@@ -2996,7 +2996,9 @@ The bond side of it (builder K6; the menu itself - DİBS Piyasa / DİBS Fiyatlam
   summary and value dates, Tüm Kâğıtlar, DİBS RV, DİBS ASW, Kâğıt Fiyatlama; a click on it opens the bond's card (as ▸).
   The value date "T1 · 04.11" (TRY business days after today; the Bloomberg source ISL0 / ISL1 in the tip) on the summary
   and in Kâğıt Fiyatlama's kind headings. UCUZ green, PAHALI red (B6: Bugün's and Günlük İşlemler' buy / sell); bp whole
-  (the dashboard's own bond columns; B5's rule).
+  on the summary and Tüm Kâğıtlar' new columns (B5's rule); the calculation sheets (DİBS RV, DİBS ASW) keep the
+  workbook's formats, a column the dashboard adds there that of the sheet's own beside it (DİBS ASW's ASW FX ima: one
+  decimal, as its ASW and its history's offshore ASWs).
 - **B16.** DİBS RV: right after Valör the compound yield, its O/N, ASW / DM, cheap / rich, the signal; Ad, Bilinen kupon,
   Son işlem tarihi, Fiyat durumu last; Ayarlar in two panels. Tüm Kâğıtlar: Tür, Kalan gün, Kaynak (and the ISIN, now in the
   name's tip) hidden by default.

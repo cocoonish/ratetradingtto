@@ -481,6 +481,49 @@ def test_tum_kagitlar_has_a_yield_for_every_bond(svc, seeded):
     assert all(not row[at]["t"] for isin, row in rows.items() if (bd.by_isin(isin or "") or {}).get("kind") in ("float", "frn", "cpi"))
 
 
+def test_the_first_snapshot_comes_before_the_pages_made_ahead(svc):
+    """The start's warm-up round of the pages waits for Kâğıt Fiyatlama's first snapshot (``first_snapshot``): the pages
+    it makes show Tüm Kâğıtlar' yields at once and its arrival makes none of them again - no new generation unless a page
+    was drawn before it ("hesaplanıyor"), which is then drawn again."""
+    import threading
+    import time
+    s = svc
+    kfa = s.kagitfiyat
+    kept = (kfa._snap, kfa._snap_first, kfa._snap_missed)
+    try:
+        with kfa._snap_lock:
+            kfa._snap, kfa._snap_busy = None, False
+        kfa._snap_first, kfa._snap_missed = threading.Event(), False
+        gen, went = s.gen, []
+        assert kfa.first_snapshot(lambda: went.append((kfa._snap is not None, s.gen))) is True
+        t0 = time.time()
+        while not went and time.time() - t0 < 120:
+            time.sleep(0.05)
+        assert went == [(True, gen)]                                  # there before the round, no new generation
+        assert kfa.first_snapshot(lambda: None) is False              # (one already: the round goes at once)
+        # a page drawn before the first one says "hesaplanıyor" - and is drawn again when it comes (a new generation)
+        with kfa._snap_lock:
+            kfa._snap, kfa._snap_busy = None, False
+        kfa._snap_first, kfa._snap_missed = threading.Event(), False
+        u = s.login("Toplu Tahvil İlk")["user"]
+        with kfa._snap_lock:
+            kfa._snap_busy = True                                     # (none being made yet: the page waits)
+        s.bump()                                                      # (the page drawn now, not the one kept from before)
+        data = page_panel(s, u, "kagitlar", "U1")["data"]
+        at = data["c"].index(s.UNI_KF[0][0])
+        assert any(row[at].get("t") == "hesaplanıyor" for row in data["rows"] if len(row) > at) and kfa._snap_missed
+        with kfa._snap_lock:
+            kfa._snap_busy = False
+        gen = s.gen
+        kfa.snapshot()                                                # (made in its own thread)
+        assert kfa._snap_first.wait(120) and kfa._snap is not None and s.gen > gen
+    finally:
+        with kfa._snap_lock:
+            kfa._snap, kfa._snap_busy = kept[0] or kfa._snap, False
+        kfa._snap_first, kfa._snap_missed = kept[1], kept[2]
+        kfa._snap_first.set()
+
+
 def test_kagit_fiyatlama_levels_are_alarm_names(svc, seeded):
     """C13: "[15.03.28 adil]", "[15.03.28 AL]", "[15.03.28 SAT]" - the desk's Kâğıt Fiyatlama now (its snapshot, never made
     on the calculation thread) - for any alarm; the card's / the details' button sets two: the screen yield at AL (cheap: buy)

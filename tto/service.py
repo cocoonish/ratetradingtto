@@ -784,7 +784,14 @@ class Service(object):
             if self._warming:
                 return False
             self._warming = True
-        self.et.submit_at(EngineThread.BACKGROUND, self._warm_step, 0)
+
+        def go() -> None:
+            self.et.submit_at(EngineThread.BACKGROUND, self._warm_step, 0)
+        # (the first round after the start waits for Kâğıt Fiyatlama's first snapshot - Tüm Kâğıtlar' yields: the pages it
+        # makes show them, and none is made again for it)
+        kf = getattr(self, "kagitfiyat", None)
+        if kf is None or not kf.first_snapshot(go):
+            go()
         return True
 
     def _warm_step(self, i: int) -> None:
@@ -5419,6 +5426,8 @@ class Service(object):
         # snapshot, made again in a thread of its own when it is old: never on this thread)
         kf = getattr(self, "kagitfiyat", None)
         snap = kf.snapshot() if kf is not None else {}
+        if kf is not None and not snap:
+            kf.missed()                                  # ("hesaplanıyor": drawn again when it is there)
         extra = len(self._BOARD_HEADS) + 2 + len(self.UNI_KF)
         width = len(cols) + extra
         blank = [{"t": "", "k": ""} for _ in range(extra)]
@@ -6586,8 +6595,7 @@ class Service(object):
         def bp(v: Any, signed: bool = False) -> Dict[str, Any]:
             if type(v) is not float:
                 return {"t": "", "k": ""}
-            # (bp whole, as every spread of the bond pages: the desk's one rule of 28.11.2026; the value keeps its digits)
-            cell = {"t": (("+" if signed and round(v) > 0 else "") + numfmt.format_value(v, "0", loc)), "v": v, "k": "n"}
+            cell = {"t": (("+" if signed and v > 0 else "") + numfmt.format_value(v, "0.0", loc)), "v": v, "k": "n"}
             if signed:
                 cell["c"] = "pos" if v > 0 else ("neg" if v < 0 else None)
                 if cell["c"] is None:
@@ -10141,6 +10149,8 @@ def _panel_answer(r: Dict[str, Any], res: Dict[str, Any]) -> Dict[str, Any]:
 _DATE_TEXT = re.compile(r"^(\d{1,2}[./]\d{1,2}[./]\d{2,4}|\d{4}-\d{1,2}-\d{1,2})(\s+\d{1,2}:\d{2}(:\d{2})?)?$")
 #: what follows it in a row's name is a detail that changes while the row stays what it is
 _DETAIL = " · "
+#: an ISIN: a bond's row a launchpad box kept by it before the bond tables showed its short name first (:func:`_pick_part`)
+_ISIN_TEXT = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}\d$")
 
 
 def _row_text(row: List[Dict[str, Any]]) -> Optional[str]:
@@ -10252,8 +10262,9 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
     """Part of a table - a launchpad item's own choice - as a new table (the page's kept one is not changed).
 
     ``rows``: each a row's key (:func:`_row_keys`: its name, or its number in the sheet) - or, as an earlier version
-    kept it, its whole first text (a name whose detail after " · " changed since is still found by its stable part);
-    the caption rows at the top always stay.  ``cols``: column letters.  Both keep the table's own order.  A merged cell
+    kept it, its whole first text (a name whose detail after " · " changed since is still found by its stable part; a
+    bond's ISIN, or "ISIN", the bond tables' first text before their short names came first, finds the one row that has
+    it); the caption rows at the top always stay.  ``cols``: column letters.  Both keep the table's own order.  A merged cell
     keeps the part of it that is still there; when its first cell went, what it shows moves to the first one left (read
     only then: typing there would write another cell).  Nothing of either left: the whole table, marked
     ``part_missing``.  A part says which rows / columns the whole table has (``ar`` / ``ac``): the browser tells a
@@ -10285,6 +10296,13 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
                 hit = [i for i in range(len(src)) if i not in heads and i not in grp and (keys[i] == x or texts[i] == x)]
                 if not hit and _DETAIL in x:
                     hit = [i for i in range(len(src)) if keys[i] == _stem(x)]
+                    hit = hit if len(hit) == 1 else []
+                if not hit and (x == "ISIN" or _ISIN_TEXT.match(x)):
+                    # a row kept by what was its first text before the bond tables showed the bond's short name first
+                    # (28.11.2026) - a bond's by its ISIN, the caption row by "ISIN": the one row that has it
+                    hit = [i for i in range(len(src)) if i not in heads and i not in grp and any(
+                        isinstance(c, dict) and not c.get("sk") and c.get("k") == "s" and " ".join(str(c.get("t") or "").split()) == x
+                        for c in src[i])]
                     hit = hit if len(hit) == 1 else []
                 body.update(hit)
         if body:

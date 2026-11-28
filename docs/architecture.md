@@ -670,8 +670,10 @@ Günlük İşlemler's entry is filled from other pages; nothing below saves a tr
   - `KagitFiyat.snapshot()` - the desk's Kâğıt Fiyatlama without its page (28.11.2026): everybody's calculation's main
     table (`curves`) and the trading list's fair / AL / SAT (`levels`), kept `SNAP_EVERY` (60 s); never made on the
     calculation thread - a look at an old one (Tüm Kâğıtlar' rows, `Service._universe_kf_cells`; an alarm's name,
-    `watch.KF_METRICS` → `KagitFiyat.level`) starts a thread that makes it (`make_snapshot`: its `_read` at BACKGROUND)
-    and bumps the generation when it changed; Tüm Kâğıtlar says "hesaplanıyor" until the first.
+    `watch.KF_METRICS` → `KagitFiyat.level`) starts a thread that makes it (`make_snapshot`: its `_read` at BACKGROUND);
+    Tüm Kâğıtlar says "hesaplanıyor" until the first. The start's warm-up round of the pages (`Service.warm`) waits for
+    the first (`first_snapshot`, at most `SNAP_FIRST_WAIT` = 90 s) so that the pages it makes ahead have it; its arrival
+    bumps the generation only when a page was drawn without it (`missed`) - else it would make every page again.
 - **Threads.** `_read` (engine thread, short): DİBS RV's rows, the yields now (`quantcurve.read_engine`), each row's
   price ↔ yield inputs (P, CU, CW, DR, the cash flows), Bloomberg's bid / ask, the Broker Chat board, the TRY OIS
   Bootstrap, and each row's fair values on the two ASW curves (`rvfair.fair` + `Service._fair_cells`, as DİBS Trading).
