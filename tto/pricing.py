@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, S
 
 from . import extras as ex
 from . import ppkcurve as pk
-from .blotter import _round_half_away
+from .blotter import OIS_TENORS, _round_half_away
 from .history import add_months
 from .inputs import _fold, parse_amount, parse_date, parse_number
 from .xl.values import date_to_serial, serial_to_date, to_num
@@ -681,7 +681,7 @@ DEFAULTS: Dict[str, Dict[str, str]] = {
     XCCY: {"start": "", "end": "2Y3M", "side": "RECEIVE", "size_kind": "dv01", "size": "1000", "price": "",
            "price_kind": "rate", "bulk": ""},
     FX: {"start": "", "end": "18M", "side": "AL", "size_kind": "amount", "size": "10m", "price": "", "price_kind": "outright",
-         "pair": "USDTRY", "bulk": ""},
+         "pair": "USDTRY", "bulk": "", "source": "ois", "client": ""},
 }
 TEXT_KEYS = ("start", "end", "size", "price")
 
@@ -726,6 +726,11 @@ def _merge(into: Dict[str, Any], fields: Dict[str, Any], asset: str) -> None:
     if asset == FX:
         if str(fields.get("pair") or "").upper() in PAIRS:
             into["pair"] = str(fields["pair"]).upper()
+        # the forward card's picked source and the client the quote is for (28.11.2026)
+        if str(fields.get("source") or "") in SOURCES:
+            into["source"] = str(fields["source"])
+        if fields.get("client") is not None:
+            into["client"] = " ".join(str(fields["client"]).split())[:40]
 
 
 def bulk_text(raw: Any) -> str:
@@ -753,14 +758,14 @@ def _rate(text: str) -> Optional[float]:
 
 
 # ================================================================================================== pricing
-def instrument(asset: str, f: Dict[str, Any], mk: Market) -> Deal:
-    """The page's instrument from what was typed (``f``: the asset's inputs) - :class:`PricingError` for what does not
-    read."""
+def whens(asset: str, f: Dict[str, Any]) -> Tuple[Tuple[str, float], Tuple[str, float]]:
+    """The start and the maturity typed (``f``: the asset's inputs; an FX forward's start is its spot) -
+    :class:`PricingError` for what does not read."""
     if asset == FX:
         end_when = parse_when(f["end"])
         if end_when is None:
             raise PricingError("valör okunamadı: %r (1Y, 18M, 2Y3M ya da gg.aa.yyyy)" % f["end"])
-        return fx_deal(f["pair"], end_when, mk)
+        return ("spot", 0.0), end_when
     start_text, end_text = f["start"], f["end"]
     both = split_pair(start_text) if asset == FRA else None
     if both is not None:
@@ -770,6 +775,15 @@ def instrument(asset: str, f: Dict[str, Any], mk: Market) -> Deal:
         raise PricingError("başlangıç okunamadı: %r (Spot, 1Y, 12, 18M ya da gg.aa.yyyy)" % start_text)
     if end_when is None:
         raise PricingError("vade okunamadı: %r (1Y, 18M, 2Y3M, 15 ya da gg.aa.yyyy)" % end_text)
+    return start_when, end_when
+
+
+def instrument(asset: str, f: Dict[str, Any], mk: Market) -> Deal:
+    """The page's instrument from what was typed (``f``: the asset's inputs) - :class:`PricingError` for what does not
+    read."""
+    start_when, end_when = whens(asset, f)
+    if asset == FX:
+        return fx_deal(f["pair"], end_when, mk)
     return swap_deal(asset, start_when, end_when, mk)
 
 
@@ -948,6 +962,12 @@ def price(inputs: Dict[str, Any], curves: Curves, method: str) -> Dict[str, Any]
     out["notes"] = notes(deal, curves)
     out["texts"] = {"conventions": CONVENTIONS[asset], "dv01": DV01_TEXT, "npv": NPV_TEXT,
                     "short": SHORT_TEXT if family == ON else "", "price": PRICE_TEXT[FX if asset == FX else OIS]}
+    # İşlem gir (A1): the instrument as Günlük İşlemler's / Trades' form takes it - at the price typed (or solved), else
+    # at the user's curve's mid
+    start_when, end_when = whens(asset, f)
+    lvl, lfrom = (level, "fiyat") if level is not None else (mids[method], "mid")
+    out["trade"] = trade_specs(asset, deal.pair, f["side"], start_when, end_when, deal.start, deal.end, lvl, lfrom,
+                               f["size_kind"], typed, size, deal.label)
     return out
 
 
@@ -1118,7 +1138,7 @@ def _bulk_row(asset: str, f: Dict[str, Any], kind: str, line: str, mk: Market, b
     deal = fx_deal(f["pair"], end_when, mk) if asset == FX else swap_deal(asset, start_when, end_when, mk)
     mids = {m: (mid(deal, base[m]) if base[m] is not None else None) for m in METHODS}
     typed_price = read_price(kind, price_text, deal)
-    _, size, _ = sized(deal, f, mk, unit_dv01(deal, base[method]), usdtry)
+    typed, size, _ = sized(deal, f, mk, unit_dv01(deal, base[method]), usdtry)
     level, implied = leveled(deal, kind, typed_price, side, size, base, method, usdtry)
     row: Dict[str, Any] = {
         "line": line, "label": deal.label, "start": deal.start, "end": deal.end, "days": deal.end - deal.start,
@@ -1131,4 +1151,460 @@ def _bulk_row(asset: str, f: Dict[str, Any], kind: str, line: str, mk: Market, b
         row["points"] = {m: ((mids[m] - deal.fx_rate) * 10000.0 if mids[m] is not None else None) for m in METHODS}
     else:
         row["annuity"] = {m: (annuity(deal, base[m]) if base[m] is not None else None) for m in METHODS}
+    # İşleme al (A1): the line as a trade to enter - at its price (or the rate solved), else at the user's curve's mid
+    lvl, lfrom = (level, "fiyat") if level is not None else (mids[method], "mid")
+    row["trade"] = trade_specs(asset, deal.pair, f["side"], start_when, end_when, deal.start, deal.end, lvl, lfrom,
+                               f["size_kind"], typed, size, deal.label)
     return row
+
+
+# ================================================================================================== İşlem gir
+#: why an instrument cannot be entered as a trade where (the desk's forms: Günlük İşlemler takes FX forwards and TRY OIS
+#: - outright, FRA, forward start -, Trades TRY OIS; neither an XCCY, Trades no FX forward)
+NO_TRADE = {XCCY: "XCCY'yi Günlük İşlemler de Trades de almıyor", "trades_fx": "Trades'te FX forward ürünü yok (Günlük İşlemler'e girin)"}
+
+
+def trade_specs(asset: str, pair: str, side: str, start_when: Tuple[str, float], end_when: Tuple[str, float],
+                start: float, end: float, level: Optional[float], level_from: str, size_kind: str,
+                typed_size: Optional[float], size: Optional[float], label: str) -> Dict[str, Any]:
+    """A1 (28.11.2026, "Fiyatladığın yerden işlem gir"): the instrument priced as Günlük İşlemler's form takes it
+    (``blotter``: ``BlotterPage.fillForm``'s spec) and as Trades' "Yeni işlem" form (``trades``) - ``None`` where the form
+    has no such product (``why``).  Numbers stay numbers (the browser writes them in the user's format): ``level`` a
+    rate as a decimal (an FX forward's outright), the size a DV01 in $ or a nominal (an FX forward's amount).  A spot
+    TRY OIS goes as an outright of its tenor (a tenor the form does not list: its maturity date, a broken date); a forward
+    start or an FRA as an FRA of months (a date where it is no whole month)."""
+    out: Dict[str, Any] = {"blotter": None, "trades": None, "why": {}, "level": level, "level_from": level_from,
+                           "note": "Fiyatlama · %s" % label}
+    day = lambda s: serial_to_date(s).strftime("%d.%m.%Y")          # noqa: E731
+    if asset == XCCY:
+        out["why"] = {"blotter": NO_TRADE[XCCY], "trades": NO_TRADE[XCCY]}
+        return out
+    if asset == FX:
+        out["blotter"] = {"kind": "fwd", "pair": pair, "dir": "B" if side == "AL" else "S", "date": day(end), "basis": "FWD",
+                          "value": level, "amount": size}
+        out["why"] = {"trades": NO_TRADE["trades_fx"]}
+        return out
+    sized_by = "dv01" if size_kind == "dv01" else "nominal"
+    amount = typed_size if sized_by == "dv01" else size
+    blot: Dict[str, Any] = {"kind": "ois", "side": side, "level": level, "size": amount, "sizeMode": sized_by}
+    trad: Dict[str, Any] = {"product": "ois", "side": "pay" if side == "PAY" else "receive", "price": level}
+    trad["dv01" if sized_by == "dv01" else "notional"] = amount
+    if start_when[0] == "spot" and asset == OIS:
+        tenor = when_label(end_when) if end_when[0] in ("m", "w") else ""
+        tenor = tenor if tenor in OIS_TENORS else day(end)
+        blot.update(strategy="outright", tenors=[tenor])
+        trad.update(structure="outright", end_date=tenor)
+    else:
+        part = lambda w, s: int(w[1]) if w[0] == "m" else (0 if w[0] == "spot" else day(s))     # noqa: E731
+        blot.update(strategy="fra", months=[part(start_when, start), part(end_when, end)])
+        trad["structure"] = "fra"
+        if start_when[0] == "m" and end_when[0] == "m":
+            trad["fra"] = "%dx%d" % (int(start_when[1]), int(end_when[1]))
+        else:
+            trad.update(value_date=day(start), end_date=day(end))
+    out["blotter"], out["trades"] = blot, trad
+    return out
+
+
+# ================================================================================================== the forward card
+# The desk, 28.11.2026: "Bir de fiyatlama kisminda forward gelsin istiyorum. Oraya yazdigimda forward fiyatlamak icin de
+# isimi kolaylastiracak bir sey olmali. Vadeleri rahat gorup, rette veya diger curvelerde ne oldugunu vs rahat
+# gorebilecegim bir sey olmali. Fiyatladiktan sonra bunu done diye gunluk islemlere alabilmeliyim veya done olmadiysa da
+# hit ratiosunu takip edebilmeliyim."
+#
+# An FX forward's value date seen on every source the desk prices a forward with - each by its own rule, none taking
+# another's number: RET (RET's bid / ask by its own rule - linear in days between its tenors, as the Forward sheet reads
+# it for a value date), OIS + spread (FORWARD KOTASYON's rule: the chosen OIS curve's ACT/360 simple rate spot -> value
+# date + the general spread, or the market's in "Piyasa spread"), the offshore market (the FX swap implied bid / ask the
+# Forward sheet reads for the date, and Fiyatlama's own offshore curve's mid) and VİOP (a contract expiring near the
+# value date: its implied TRY rate).  Each gives a TRY rate (simple ACT/360, from the pair's spot), an outright and swap
+# points, bid and ask, and its difference to the source picked.  The workbook's numbers come from the service (EK_FWD's
+# own row evaluated at the date, :class:`FwdPoint`); here only arithmetic - the matrices' own (``extras.fwd_outright``).
+
+SOURCES = ("ret", "ois", "off", "viop")
+SOURCE_TEXT = {"ret": "RET", "ois": "OIS + spread", "off": "Offshore piyasa", "viop": "VİOP"}
+DEFAULT_SOURCE = "ois"
+#: a VİOP contract stands for the value date when it expires at most this many calendar days away from it
+VIOP_NEAR = 7
+#: the ladder's standard tenors, from the pair's spot on its calendar (the desk: 1W … 1Y; 18M and 2Y past 1Y)
+LADDER = (("1W", "w", 1), ("2W", "w", 2), ("1M", "m", 1), ("2M", "m", 2), ("3M", "m", 3), ("6M", "m", 6), ("9M", "m", 9),
+          ("1Y", "m", 12), ("18M", "m", 18), ("2Y", "m", 24))
+#: what each source is, said under the card
+SOURCE_NOTE = {
+    "ret": "RET bid / ask, RET'in kuralıyla: valöre günlere göre RET vadeleri arasında doğrusal (Forward!U33:X47; ilk vadeden "
+           "önce ve son vadeden sonra düz) - FORWARD KOTASYON'un \"RET bid / ask %\"ı. Forward = spot · (1 + TRY · g/360) / "
+           "(1 + USD · g/360), bid spot bid ile, ask spot ask ile.",
+    "ois": "FORWARD KOTASYON'un kuralı: seçili OIS eğrisinin spot → valör ACT/360 basit faizi + spread (\"Tümü\" satırının "
+           "spread'i; \"Piyasa spread\"de offshore ima − OIS). Valör matrisin bir satırının valörüyse o satır (yazdıklarınız "
+           "dahil) aynen.",
+    "off": "Offshore piyasa: bid / ask Forward sayfasının FX swap ima (ICAP) TRY faizi, valöre günlere göre doğrusal (son "
+           "düğümden bir ay sonrasına kadar); mid Fiyatlama'nın offshore eğrisi (sizin eğri ayarınız) - OIS değil.",
+    "viop": "VİOP: valöre en çok %d gün uzak vadeli kontratın ima TRY faizi (VİOP sayfası, kontratın günleriyle) - valörde "
+            "aynı faizle forward. Kontrat yoksa satır boş." % VIOP_NEAR,
+}
+
+
+class FwdGeneral(NamedTuple):
+    """FORWARD KOTASYON's general row for the pair (EK_FWD "Tümü"): the curve, the spread mode, the general spreads (bp)
+    and the spot bid / ask."""
+    curve: str
+    mode: str
+    spread_bid: Optional[float]
+    spread_ask: Optional[float]
+    spot_bid: Optional[float]
+    spot_ask: Optional[float]
+
+
+class FwdPoint(NamedTuple):
+    """FORWARD KOTASYON's row evaluated at a date (EK_FWD): days from the pair's spot (C), the chosen OIS curve's rate
+    (L, %), the USD / EUR rate (O, %), RET bid / ask (R / S, %), the market's spread bid / ask (V / W, bp: offshore implied
+    − OIS) - and ``own``: the user's own matrix row at that date, as they see it (their typed values included), or None."""
+    date: float
+    days: Optional[float]
+    ois: Optional[float]
+    ccy: Optional[float]
+    ret_bid: Optional[float]
+    ret_ask: Optional[float]
+    mkt_bid: Optional[float]
+    mkt_ask: Optional[float]
+    own: Optional[Dict[str, Any]]
+
+
+def _f(x: Any) -> Optional[float]:
+    return float(x) if type(x) in (int, float) and x == x and abs(x) != float("inf") else None
+
+
+def fwd_outright(spot: float, rate_pct: float, ccy_pct: float, days: float) -> float:
+    """``extras.fwd_outright`` as the matrices compute it (rates in %): spot·(1 + TRY/100·g/360)/(1 + major/100·g/360)."""
+    return spot * (1 + rate_pct / 100 * days / 360) / (1 + ccy_pct / 100 * days / 360)
+
+
+def _side(rate_pct: Optional[float], spot: Optional[float], ccy: Optional[float],
+          days: Optional[float]) -> Optional[Tuple[float, float, float]]:
+    """(TRY rate decimal, outright, points) of one side - ``None`` without what it needs."""
+    if rate_pct is None or spot is None or ccy is None or days is None or not days > 0:
+        return None
+    fwd = fwd_outright(spot, rate_pct, ccy, days)
+    return rate_pct / 100.0, fwd, (fwd - spot) * 10000
+
+
+def _quoted(bid: Optional[Tuple[float, float, float]], ask: Optional[Tuple[float, float, float]],
+            mid: Optional[Tuple[float, float, float]] = None) -> Dict[str, Any]:
+    """A source's numbers: {try, fwd, pts} each {bid, ask, mid} - the mid the two sides' middle unless given."""
+    out: Dict[str, Any] = {}
+    for k, name in enumerate(("try", "fwd", "pts")):
+        b = bid[k] if bid else None
+        a = ask[k] if ask else None
+        m = mid[k] if mid else ((b + a) / 2.0 if b is not None and a is not None else None)
+        out[name] = {"bid": b, "ask": a, "mid": m}
+    return out
+
+
+def ladder_dates(pair_spot: float, valor: float, holidays: FrozenSet[float],
+                 meetings: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The ladder's rows: the standard tenors (:data:`LADDER`, from the pair's spot on its calendar) up to the first one
+    at or past the value date - at least to 1Y -, the PPK meetings between the spot and the last of them (``meetings``:
+    ``{name, date, step}``, their decision days) and the value date; one row a date (labels joined), in date order."""
+    rows: Dict[float, Dict[str, Any]] = {}
+
+    def add(day: float, kind: str, label: str, **extra: Any) -> None:
+        r = rows.setdefault(day, {"date": day, "kinds": [], "labels": []})
+        r["kinds"].append(kind)
+        r["labels"].append(label)
+        r.update(extra)
+
+    dated = [(label, resolve((kind, float(n)), pair_spot, holidays)) for label, kind, n in LADDER]
+    year = next(d for label, d in dated if label == "1Y")
+    last = max(year, next((d for _, d in dated if d >= valor), dated[-1][1]))
+    for label, d in dated:
+        if d <= last:
+            add(d, "tenor", label)
+    for m in meetings:
+        d = _f(m.get("date"))
+        if d is not None and pair_spot < d <= last:
+            add(d, "mpc", "PPK %s" % serial_to_date(d).strftime("%d.%m"), mpc=m.get("name"), step=_f(m.get("step")))
+    add(valor, "valor", "Valör")
+    out = [rows[d] for d in sorted(rows)]
+    for r in out:
+        r["label"] = " · ".join(r["labels"])
+    return out
+
+
+def _viop_near(contracts: Sequence[Dict[str, Any]], day: float) -> Optional[Dict[str, Any]]:
+    """The VİOP contract expiring nearest to ``day``, when it is at most :data:`VIOP_NEAR` days away."""
+    best = None
+    for c in contracts:
+        e = _f(c.get("expiry"))
+        if e is None or _f(c.get("try_bid")) is None or _f(c.get("try_ask")) is None:
+            continue
+        gap = abs(e - day)
+        if gap <= VIOP_NEAR and (best is None or gap < best[0]):
+            best = (gap, c)
+    return best[1] if best else None
+
+
+def sources_at(pt: FwdPoint, gen: FwdGeneral, contracts: Sequence[Dict[str, Any]],
+               off_mid: Optional[Tuple[float, float]], spot_mid: Optional[float]) -> Dict[str, Dict[str, Any]]:
+    """Every source's quote at one date (:class:`FwdPoint`): ``{source: {available, try, fwd, pts, why?, ...}}`` - rates
+    decimals, outrights, points (× 10 000).  ``off_mid``: Fiyatlama's offshore curve at the date, (outright, TRY simple
+    ACT/360 rate); ``spot_mid``: the spot it was priced on."""
+    sb, sa, g, u = gen.spot_bid, gen.spot_ask, pt.days, pt.ccy
+    out: Dict[str, Dict[str, Any]] = {}
+
+    def gone(why: str) -> Dict[str, Any]:
+        return {"available": False, "why": why}
+
+    # RET: its bid / ask at the date (RET's rule: linear in days between its tenors), each side on its own spot
+    if pt.ret_bid is None or pt.ret_ask is None:
+        out["ret"] = gone("RET bu valörde yok")
+    else:
+        out["ret"] = dict(_quoted(_side(pt.ret_bid, sb, u, g), _side(pt.ret_ask, sa, u, g)), available=True)
+    # OIS + spread: FORWARD KOTASYON's rule - the user's own row at the date as it is, else the general rule
+    own = pt.own
+    if own is not None:
+        q: Dict[str, Dict[str, Optional[float]]] = {"try": {}, "fwd": {}, "pts": {}}
+        for side in ("bid", "ask"):
+            r = _f(own.get("try_" + side))
+            q["try"][side] = r / 100.0 if r is not None else None
+            q["fwd"][side] = _f(own.get("fwd_" + side))
+            q["pts"][side] = _f(own.get("pts_" + side))
+        for k in ("try", "fwd", "pts"):
+            b, a = q[k]["bid"], q[k]["ask"]
+            q[k]["mid"] = (b + a) / 2.0 if b is not None and a is not None else None
+        out["ois"] = dict(q, available=q["fwd"]["bid"] is not None or q["fwd"]["ask"] is not None,
+                          row=own.get("label"), spread={"bid": _f(own.get("sp_bid")), "ask": _f(own.get("sp_ask"))})
+    elif pt.ois is None:
+        out["ois"] = gone("OIS eğrisi bu valörde yok")
+    else:
+        market = gen.mode == "Piyasa spread"
+        sp: Dict[str, Optional[float]] = {}
+        for side, mine, mkt in (("bid", gen.spread_bid, pt.mkt_bid), ("ask", gen.spread_ask, pt.mkt_ask)):
+            sp[side] = mkt if market and mkt is not None else mine
+        rates = {s: pt.ois + (sp[s] if sp[s] is not None else 0.0) / 100 for s in ("bid", "ask")}
+        out["ois"] = dict(_quoted(_side(rates["bid"], sb, u, g), _side(rates["ask"], sa, u, g)), available=True,
+                          spread=sp, ois=pt.ois / 100.0)
+    # the offshore market: the Forward sheet's FX swap implied bid / ask at the date (EK_FWD's V / W are offshore − OIS:
+    # OIS + them is the implied rate itself), the mid Fiyatlama's offshore curve
+    bid = _side(pt.ois + pt.mkt_bid / 100, sb, u, g) if pt.ois is not None and pt.mkt_bid is not None else None
+    ask = _side(pt.ois + pt.mkt_ask / 100, sa, u, g) if pt.ois is not None and pt.mkt_ask is not None else None
+    mid = None
+    if off_mid is not None and spot_mid:
+        mid = (off_mid[1], off_mid[0], (off_mid[0] - spot_mid) * 10000)
+    if bid is None and ask is None and mid is None:
+        out["off"] = gone("offshore eğri bu valörde yok")
+    else:
+        out["off"] = dict(_quoted(bid, ask, mid), available=True, implied=bid is not None and ask is not None)
+    # VİOP: a contract expiring near the date - its implied TRY rate, at the date
+    c = _viop_near(contracts, pt.date)
+    if c is None:
+        out["viop"] = gone("valöre %d günden yakın VİOP kontratı yok" % VIOP_NEAR)
+    else:
+        out["viop"] = dict(_quoted(_side(c["try_bid"] * 100, sb, u, g), _side(c["try_ask"] * 100, sa, u, g)), available=True,
+                           contract={k: c.get(k) for k in ("name", "expiry", "days", "px_bid", "px_ask", "pts_bid",
+                                                           "pts_ask", "try_bid", "try_ask")},
+                           gap=_f(c.get("expiry")) - pt.date)
+    return out
+
+
+def off_mid(deal: Deal, day: float, curve: Any, mk: Market) -> Optional[Tuple[float, float]]:
+    """Fiyatlama's offshore forward of ``deal``'s pair to ``day`` on ``curve`` (:func:`forward`'s formula, the USD /
+    EUR rate at the day's days): ``(outright, TRY simple ACT/360 rate spot -> day)`` - ``None`` without the curve."""
+    if curve is None or not deal.fx_rate:
+        return None
+    g = day - deal.start
+    r = ccy_rate(g, mk.ccy_rates["USD" if deal.pair == "USDTRY" else "EUR"])
+    if r is None or not g > 0:
+        return None
+    sp = deal.spot
+    growth = curve.df(deal.start - sp) / curve.df(day - sp)
+    return deal.fx_rate * growth / (1.0 + r * g / 360.0), (growth - 1.0) * 360.0 / g
+
+
+def differences(got: Dict[str, Dict[str, Any]], picked: str) -> None:
+    """Each source's difference to the picked one, in place (``diff``: points and bp of the TRY rate, bid / ask / mid -
+    a side the two do not both have is ``None``)."""
+    p = got.get(picked) or {}
+    for q in got.values():
+        if not q.get("available") or not p.get("available"):
+            continue
+        d: Dict[str, Dict[str, Optional[float]]] = {"pts": {}, "bp": {}}
+        for side in ("bid", "ask", "mid"):
+            a, b = q["pts"].get(side), p["pts"].get(side)
+            d["pts"][side] = a - b if a is not None and b is not None else None
+            a, b = q["try"].get(side), p["try"].get(side)
+            d["bp"][side] = (a - b) * 10000 if a is not None and b is not None else None
+        q["diff"] = d
+
+
+def forward_card(deal: Deal, gen: FwdGeneral, points: Dict[float, FwdPoint], contracts: Sequence[Dict[str, Any]],
+                 off_mids: Dict[float, Optional[Tuple[float, float]]], ladder: List[Dict[str, Any]], picked: str,
+                 side: str, amount: Optional[float]) -> Dict[str, Any]:
+    """The forward card of an FX forward (:func:`fx_deal`): the sources at the value date (``sources``: one row each,
+    in :data:`SOURCES` order, with the difference to the picked one), the ladder (each row's sources) and the deal the
+    picked source gives - the side the desk deals: AL (buys the currency) at the bid, SAT at the ask."""
+    spot_mid = deal.fx_rate
+    pt = points[deal.end]
+    got = sources_at(pt, gen, contracts, off_mids.get(deal.end), spot_mid)
+    use = picked if picked in SOURCES and got.get(picked, {}).get("available") else DEFAULT_SOURCE
+    if not got.get(use, {}).get("available"):
+        use = next((s for s in SOURCES if got[s].get("available")), use)
+    differences(got, use)
+    rows = [dict(got[s], id=s, name=SOURCE_TEXT[s], note=SOURCE_NOTE[s]) for s in SOURCES]
+    lad = []
+    for r in ladder:
+        p = points.get(r["date"])
+        if p is None:
+            continue
+        at = sources_at(p, gen, contracts, off_mids.get(r["date"]), spot_mid)
+        lad.append(dict(r, days=p.days, by={s: ({"try": at[s]["try"], "pts": at[s]["pts"]} if at[s].get("available") else None)
+                                            for s in SOURCES},
+                        viop=(at["viop"].get("contract") or {}).get("name") if at["viop"].get("available") else None))
+    q = got.get(use) or {}
+    k = "bid" if side == "AL" else "ask"
+    level = (q.get("fwd") or {}).get(k) if q.get("available") else None
+    return {"pair": deal.pair, "valor": deal.end, "spot_date": deal.start, "days": pt.days,
+            "ccy_rate": (pt.ccy / 100.0) if pt.ccy is not None else None, "ccy": "USD" if deal.pair == "USDTRY" else "EUR",
+            "spot": {"bid": gen.spot_bid, "ask": gen.spot_ask, "mid": spot_mid}, "curve": gen.curve, "mode": gen.mode,
+            "picked": use, "asked": picked, "sources": rows, "ladder": lad,
+            "deal": {"side": side, "dir": "B" if side == "AL" else "S", "level_side": k, "level": level,
+                     "spot": gen.spot_bid if k == "bid" else gen.spot_ask, "amount": amount},
+            "near_days": VIOP_NEAR}
+
+
+def _fmt(x: Optional[float], digits: int, lang: str, group: bool = True) -> str:
+    from .xl import numfmt
+    if x is None:
+        return "–"
+    return numfmt.format_fixed(x, digits, group, numfmt.LOCALES["en" if lang == "en" else "tr"])
+
+
+def card_quote_text(card: Dict[str, Any], label: str, lang: str, today: float) -> str:
+    """The forward card's quote to send a client - the picked source's bid / ask, as a table's "Kotasyon kopyala"
+    writes a quote (tto/quotes.py: a heading, then a label · value line each, lined up)."""
+    from . import quotes as qt
+    en = lang == "en"
+    q = next(s for s in card["sources"] if s["id"] == card["picked"])
+
+    def two(d: Dict[str, Optional[float]], n: int, group: bool = True, scale: float = 1.0) -> str:
+        b, a = d.get("bid"), d.get("ask")
+        return (_fmt(b * scale if b is not None else None, n, lang, group) + " / "
+                + _fmt(a * scale if a is not None else None, n, lang, group))
+
+    source = SOURCE_TEXT[card["picked"]]
+    if card["picked"] == "ois":
+        source += " (%s)" % card["curve"]
+    elif card["picked"] == "viop" and q.get("contract"):
+        source += " (%s)" % q["contract"].get("name")
+    lines = [("Source" if en else "Kaynak", source),
+             ("Value date" if en else "Başlangıç", qt.day_text(serial_to_date(card["spot_date"]), lang)),
+             ("Maturity" if en else "Vade tarihi", "%s (%d %s)" % (qt.day_text(serial_to_date(card["valor"]), lang),
+                                                                  int(card["days"] or 0), "days" if en else "gün")),
+             ("Spot", two(card["spot"], 4)),
+             ("Swap points" if en else "Swap puanı", two(q["pts"], 0)),
+             ("Outright", two(q["fwd"], 4)),
+             ("TRY rate %" if en else "TRY faizi %", two(q["try"], 2, False, 100.0))]
+    if card.get("ccy_rate") is not None:
+        lines.append((("%s rate %%" if en else "%s faizi %%") % card["ccy"], _fmt(card["ccy_rate"] * 100, 2, lang, False)))
+    amount = card["deal"].get("amount")
+    if amount:
+        lines.append(("Amount" if en else "Tutar", _fmt(amount, 0, lang) + " " + card["ccy"]))
+    w = max(len(a) for a, _ in lines)
+    head = " · ".join([card["pair"] + " forward " + label, qt.day_text(serial_to_date(today), lang), "bid / ask"])
+    return "\n".join([head] + [(a.ljust(w + 2) + b).rstrip() for a, b in lines])
+
+
+# ================================================================================================== hedge this deal
+HEDGE_TEXT = ("Bu işlemin hedge'i: DV01'lü her OIS kovası için o vadede karşı TRY OIS - nominal = |kova DV01| · USDTRY / "
+              "(annuity · 0,0001), OIS_MAIN'in kuralıyla lota yuvarlı; oranı kovanın kotası (hedge'in işlem göreceği faiz). "
+              "Kalan = kovanın DV01'i + hedge'in DV01'i (yuvarlamadan kalan). Eğrinizle.")
+HEDGE_OFF_TEXT = ("Offshore eğrideki işlem (XCCY, FX forward): OIS ile hedge önerilmez - offshore ≠ OIS. Kovaların offshore kotası "
+                  "yukarıda (FX swap / XCCY).")
+
+
+def hedges(result: Dict[str, Any], curves: "Curves") -> Dict[str, Any]:
+    """C3, "Bu işlemi hedge'le" (the desk's "C - 2-3-…", 28.11.2026): for a TRY OIS / FRA priced (:func:`price`'s
+    answer), per bucket with a DV01 on the user's curve the opposite TRY OIS at the bucket's tenor - its side, its
+    nominal by OIS_MAIN's rule (|DV01| · USDTRY / (annuity · 1 bp), rounded to the lot half away from zero), its rate the
+    bucket's quote - and what is left of the bucket after it.  An offshore instrument gets none (offshore ≠ OIS)."""
+    mk = curves.mk
+    if result.get("family") != ON:
+        return {"rows": [], "text": HEDGE_OFF_TEXT, "family": result.get("family")}
+    method = result["methods"][0]
+    base = curves.curve(ON, method)
+    usdtry = mk.usdtry
+    rows = []
+    left = 0.0
+    for b in result["buckets"]["rows"]:
+        dv = b["dv01"].get(method)
+        if not b.get("pillar") or dv is None or abs(dv) < 0.005:
+            continue
+        when = parse_when(b["name"])
+        row: Dict[str, Any] = {"bucket": b["name"], "quote": b.get("quote"), "dv01": dv}
+        if when is None or when[0] not in ("m", "w") or base is None or not usdtry:
+            row["error"] = "kovanın vadesi okunamadı"
+            rows.append(row)
+            continue
+        h = swap_deal(OIS, ("spot", 0.0), when, mk)
+        unit = annuity(h, base) * BP                         # TL per bp of 1 TL nominal
+        nominal = round_half_away(abs(dv) * usdtry / unit / mk.lot) * mk.lot
+        side = "RECEIVE" if dv > 0 else "PAY"                # (a bucket that gains when rates rise: received against)
+        hedge_dv = (1 if side == "PAY" else -1) * nominal * unit / usdtry
+        row.update(tenor=when_label(when), side=side, nominal=nominal, annuity=unit / BP, hedge_dv01=hedge_dv,
+                   left=dv + hedge_dv)
+        left += dv + hedge_dv
+        rows.append(row)
+    return {"rows": rows, "left": left, "lot": mk.lot, "method": method, "text": HEDGE_TEXT, "family": ON, "usdtry": usdtry}
+
+
+# ================================================================================================== Pozisyona ekle (deneme)
+#: DV01 Risk's sheet: the position's 20 buckets (B names, C DV01 TL/bp - the paste, G days to the bucket's end) and the
+#: sign multiplier C3; the VaR paste (X onshore, Y TLREF, AA offshore) on rows 33 … 52 - bucket k is row 6 + k / 33 + k
+DV01_SHEET = "DV01_RISK"
+DV01_FIRST, DV01_LAST, VAR_FIRST = 6, 25, 33
+DV01_SIGN = (3, 3)
+DV01_TOTAL = (26, 3)
+DV01_COL = {"name": 2, "dv01": 3, "days": 7, "onshore": 24, "tlref": 25, "offshore": 27}
+#: the VaR summary (W56:Y59: name, DV01 total, VaR) and its status line (AI29); the PPK decision risk (rows 38 … 62:
+#: B name, C date, F the period's risk, G the decision risk TL/bp, J the 25 bp surprise's P&L)
+VAR_ROWS, VAR_STATUS = (56, 59), (29, 35)
+PPK_ROWS = (38, 62)
+TRIAL_TEXT = ("Pozisyona ekle (deneme): DV01 Risk'in kovaları + bu işlem; hiçbir şey kaydedilmez. İşlemin kova DV01'i (eğrinizle; "
+              "TL/bp = $ · USDTRY) DV01 Risk'in kovalarına eklenir - aynı adlı kovaya, yoksa günlere göre iki komşusu arasında "
+              "doğrusal: TRY OIS / FRA TLREF kolonuna (VaR) ve pozisyona (Pozisyon sekmesi; formül varsayılanı Onshore + TLREF "
+              "ise onu izler), XCCY / FX forward yalnız Offshore kolonuna (asla OIS'e: PPK karar riski değişmez). İşaret "
+              "çarpanı (C3) uygulanır; sayılar sayfanın kendi formülleriyle.")
+
+
+def bucket_name(name: str) -> str:
+    """A pillar's name as DV01 Risk names its bucket ("TRYI 1M" -> "1M", "XCCY 2Y" -> "2Y", "1Y" -> "1Y")."""
+    return name.split(" ")[-1].strip().upper()
+
+
+def to_buckets(pillars: Sequence[Tuple[str, float, float]], buckets: Sequence[Tuple[str, Optional[float]]]) -> List[float]:
+    """Each pillar's DV01 ``(name, days, dv01)`` onto DV01 Risk's buckets ``(name, days)``: a bucket of its own name
+    takes it whole; else it is split between the two buckets around its days, linearly in days (the desk's linear split,
+    as Günlük İşlemler splits a date); before the first / past the last bucket: that one."""
+    out = [0.0] * len(buckets)
+    names = {str(n).upper(): k for k, (n, _) in enumerate(buckets)}
+    dated = sorted((d, k) for k, (_, d) in enumerate(buckets) if d is not None)
+    for name, day, dv in pillars:
+        if not dv:
+            continue
+        k = names.get(bucket_name(name))
+        if k is not None:
+            out[k] += dv
+            continue
+        if not dated:
+            continue
+        if day <= dated[0][0]:
+            out[dated[0][1]] += dv
+            continue
+        if day >= dated[-1][0]:
+            out[dated[-1][1]] += dv
+            continue
+        i = bisect.bisect_right([d for d, _ in dated], day) - 1
+        (d0, k0), (d1, k1) = dated[i], dated[i + 1]
+        w = (day - d0) / (d1 - d0) if d1 > d0 else 0.0
+        out[k0] += dv * (1 - w)
+        out[k1] += dv * w
+    return out

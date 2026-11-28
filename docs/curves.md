@@ -368,6 +368,29 @@ the market quote the bucket's +1 bp moves, the rate its hedge trades at (`Curves
   for a line. Each instrument stays on its own curve - TRY OIS and FRA lines on OIS, XCCY and FX forward lines on
   offshore - and a line's DV01 is its size's (annuity rule), not the buckets'.
 
+**The forward card** (28.11.2026, [desk-decisions.md](desk-decisions.md#fiyatlama-forward-kartı-kotasyon-defteri-hedge-ve-deneme-işlem-gir-28112026);
+`pricing.forward_card`, `Service._forward_card`): an FX forward's value date on each source the desk prices a forward with,
+each by its own rule - the card puts them side by side and takes no curve's number for another's (no new meeting point):
+
+| Source | What it reads | Curve |
+|---|---|---|
+| RET | RET bid / ask at the date, linear in days between RET's tenors (`Forward!U33:X47`; FORWARD KOTASYON's `R` / `S`) | RET's own rates - none |
+| OIS + spread | FORWARD KOTASYON's rule (`EK_FWD`, meeting point H): the chosen OIS curve's ACT/360 simple rate spot → date (`L`, MASA's DFs: MPC ima by default) + the general spread (`D4` / `E4`; "Piyasa spread": the date's offshore − OIS, `V` / `W`). A date that is a matrix row's: that row as the user sees it. Any other date: the matrix's own formulas with a row's valör set to it, in a layer of the engine over the user's calculation (`engine.layer`; nothing of the user's changes) - a row the user typed nothing into gives its TRY % / fwd / puan as the matrix computes them; with every row typed into, the date's OIS rate, days, USD rate and market spread come from a row and the general rule is applied to them (the same numbers) | TRY OIS (+ the spread H already has) |
+| Offshore market | bid / ask: the Forward sheet's FX swap implied (ICAP) rate at the date (`fwd_offshore`, linear in days, a month past its last node; = `L + V/100`); mid: Fiyatlama's offshore curve (the user's setting) | Offshore only |
+| VİOP | a USDTRY contract expiring within 7 days of the date: its implied TRY rate (`VIOP!M13:X13` / `M25:X25`, simple ACT/360 over VKGS from `VIOP!K3`) applied at the date's days | VİOP's own prices - neither curve |
+
+Every source's forward is the matrices' formula (`extras.fwd_outright`: spot · (1 + TRY · g/360) / (1 + USD · g/360), the
+bid on the spot bid, the ask on the spot ask; g from the pair's spot), its TRY rate simple ACT/360. The ladder (tenors, PPK
+meetings, the value date) is the same sources at each of its dates.
+
+**"Bu işlemi hedge'le"** (C3): a TRY OIS / FRA's OIS buckets against spot TRY OIS of the bucket's tenor (OIS_MAIN's sizing
+rule, the bucket's OIS quote). An offshore instrument gets none: offshore ≠ OIS.
+
+**"Pozisyona ekle (deneme)"** (C3, `Service._pricing_trial`): DV01 Risk's buckets + the instrument's bucket DV01s (TL/bp,
+on the user's curve) - a TRY OIS / FRA into the TLREF column (VaR on the OIS curve's moves) and the position, an XCCY / FX
+forward into the Offshore column only (VaR on the offshore curve's moves; the PPK decision risk, which reads the OIS
+position, unchanged). Not a meeting point: as DV01 Risk → VaR, each curve's DV01 is weighed with its own moves.
+
 ## Trades (`tto/tradevalue.py`, `tto/tradebook.py`)
 
 **TRY OIS:**

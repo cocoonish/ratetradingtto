@@ -6,9 +6,27 @@
 // upfront in bp, and the rate that prices to it is solved on the user's curve.  "Toplu fiyatlama" prices a list of lines
 // the same way, off the same curves.  What is typed is the user's own - kept with the account, per asset (switching back
 // finds it); the numbers follow the market: every refresh asks again.
+//
+// 28.11.2026 (the desk: "Bir de fiyatlama kisminda forward gelsin istiyorum ... done diye gunluk islemlere alabilmeliyim
+// veya done olmadiysa da hit ratiosunu takip edebilmeliyim"; and "C - 2-3-…", A1):
+// - an FX forward gets the forward card: every source at the value date (RET, OIS + spread by FORWARD KOTASYON's rule,
+//   the offshore market, VİOP when a contract is near) - TRY rate, outright, points, the difference to the source picked -,
+//   the ladder (the standard tenors and the PPK meetings around the value date), "Kotasyon kopyala", "Done → Günlük
+//   İşlemler" (its form filled) and "Done değil" - each logged in the quote log (tto/quotelog.py), whose hit ratio is on
+//   the page ("Kotasyon defteri");
+// - a TRY OIS / FRA gets "Bu işlemi hedge'le" under its buckets (each bucket's opposite TRY OIS, one "Hepsine işlem gir")
+//   and "Pozisyona ekle (deneme)": DV01 Risk's buckets + this trade, before and after - nothing saved;
+// - "İşlem gir ▾" on the result (Günlük İşlemler / Trades) and "İşleme al" on every Toplu line;
+// - the page opens with fields from its address (``#/fiyatlama?asset=ois&end=2Y3M&side=PAY&size=1000&size_kind=dv01`` -
+//   the names of the inputs: asset, pair, start, end, side, size, size_kind, price, price_kind, source, client);
+// - "hesaplanıyor…" until the first answer, and what is missing said where the numbers would be.
 import { api } from '../api.js';
-import { h, clear, errorToast } from '../ui.js';
+import { h, clear, errorToast, toast, menu, copyText, foldNote } from '../ui.js';
 import { num, pct, serialDate } from '../format.js';
+import { quoteLang } from '../kotasyon.js';
+import { mountQuoteLog, setQuoteStatus, tradeOfQuote } from '../quotelog.js';
+import { waitFor } from '../commandrun.js';
+import { openBulk } from './blotterentry.js';
 
 const ASSETS = [
   ['ois', 'TRY OIS', 'Sabit ↔ TLREF, spot ya da ileri başlangıçlı; 3 aya kadar tek ödeme, sonra çeyreklik (ACT/365)'],
@@ -33,6 +51,8 @@ const BULK_PLACEHOLDER = {
   rate: '1Y\n2Y3M\n12x15\n04.05.2027 04.05.2028\n2Y 38,50',
   fx: '1M\n18M\n04.05.2028\n1Y 62,50',
 };
+// the page's inputs an address may carry (#/fiyatlama?asset=ois&end=2Y3M …): the names the server keeps them under
+const PARAMS = ['asset', 'pair', 'start', 'end', 'side', 'size', 'size_kind', 'price', 'price_kind', 'source', 'client'];
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const signed = (v, d) => (isNum(v) ? (v > 0 && Number(v.toFixed(d)) !== 0 ? '+' : '') + num(Number(v.toFixed(d)) === 0 ? 0 : v, d) : '–');
 const tone = (v, d) => (isNum(v) && Number(v.toFixed(d)) !== 0 ? (v > 0 ? 'pos' : 'neg') : '');
@@ -40,6 +60,7 @@ const tone = (v, d) => (isNum(v) && Number(v.toFixed(d)) !== 0 ? (v > 0 ? 'pos' 
 // for the pricing tables' TRY rates, here since 27.11.2026 ("Hepsini yap"); an FX forward's outright keeps four, a USD / EUR
 // rate its own.  How it reads only: every number is priced on the full value.
 const TRY_DIGITS = 2;
+const WAIT = 'hesaplanıyor…';
 
 function seg(id, items, onPick) {
   const box = h('div', { class: 'seg', id, role: 'group' });
@@ -68,13 +89,96 @@ function field(label, control, id) {
   return h('div', { class: 'field', id: id || null }, h('label', null, label), control);
 }
 
+/** A panel's note folded to two lines ("devamı"; ui.js foldNote - the page owner's part of B2): {el, set(text)}. */
+function foldable(id) {
+  const text = h('span', { class: 'note-text' });
+  const el = h('div', { class: 'note', id: id || null }, text);
+  const fold = foldNote(el);
+  return { el, set: (t) => { text.textContent = t || ''; el.classList.toggle('hidden', !t); fold.check(); } };
+}
+
+function waiting(text, id) {
+  return h('div', { class: 'muted pad pr-wait', id: id || null }, text || WAIT);
+}
+
+/** The fields an address asks for (``#/fiyatlama?asset=ois&end=2Y3M``) - null when it asks for none. */
+export function hashFields(hash) {
+  const raw = String(hash || '');
+  const cut = raw.indexOf('?');
+  if (cut < 0) return null;
+  const q = new URLSearchParams(raw.slice(cut + 1));
+  const out = {};
+  for (const k of PARAMS) {
+    if (!q.has(k)) continue;
+    const v = q.get(k);
+    out[k] = k === 'asset' ? v.toLowerCase() : (k === 'side' || k === 'pair' ? v.toUpperCase() : v);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// ---------------------------------------------------------------------------------------------- İşlem gir (A1)
+/** A rate (a decimal) as the forms take it: per cent, four decimals, in the user's number format. */
+const rateText = (v) => (isNum(v) ? num(v * 100, 4, false) : '');
+/** The server's trade spec (tto/pricing.py ``trade_specs``) as Günlük İşlemler's form takes it (``ctx.openTrade``). */
+function blotterSpec(spec, note) {
+  if (!spec) return null;
+  const out = Object.assign({}, spec, { note: note || spec.note || '' });
+  if (spec.kind === 'fwd') {
+    out.value = isNum(spec.value) ? num(spec.value, 4, false) : '';
+    if (isNum(spec.amount)) out.amount = num(spec.amount, 0, false); else delete out.amount;
+  } else {
+    out.level = rateText(spec.level);
+    if (isNum(spec.size)) out.size = num(spec.size, Number.isInteger(spec.size) ? 0 : 2, false); else delete out.size;
+  }
+  return out;
+}
+
+/** Trades' "Yeni işlem" form filled as the user would type it (tto/static/js/commandrun.js's fillTradesForm, with the
+ * structure, the start, the FRA and the rate too): nothing is saved. */
+async function fillTrades(ctx, spec, note) {
+  const page = await ctx.pageReady('trades');
+  if (!page || !page.openForm) { toast('Trades sayfası açılamadı', 'err'); return; }
+  page.openForm(null);
+  const form = await waitFor(() => document.getElementById('trade-form'), 4000);
+  if (!form) { toast('Trades formu açılamadı', 'err'); return; }
+  const click = (sel) => { const b = form.querySelector(sel); if (b && !b.classList.contains('on')) b.click(); return !!b; };
+  const type = (name, value) => {
+    const el = form.querySelector('#tf-' + name);
+    if (!el || value === undefined || value === null || value === '') return;
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  click('#tf-product button[data-v="' + spec.product + '"]');
+  await waitFor(() => { const d = form.querySelector('#tf-trade_date'); return d && d.value ? d : null; }, 4000);
+  if (spec.structure) click('#tf-structure button[data-v="' + spec.structure + '"]');
+  if (spec.side) click('#tf-side button[data-v="' + spec.side + '"]');
+  type('fra', spec.fra);
+  type('value_date', spec.value_date);
+  type('end_date', spec.end_date);
+  type('price', rateText(spec.price));
+  if (isNum(spec.dv01)) type('dv01', num(spec.dv01, 0, false));
+  if (isNum(spec.notional)) type('notional', num(spec.notional, 0, false));
+  type('note', note || spec.note || '');
+  toast('Trades formu Fiyatlama\'dan dolduruldu: kontrol edip "İşlemi kaydet"', 'ok', 4000);
+}
+
 export class PricingPage {
   constructor(host, ctx) {
     this.host = host;
     this.ctx = ctx;
     this.data = null;
     this.seq = 0;
+    this.priced = false;                     // (numbers drawn at least once: an error dims them, else says why)
+    this.lastQuote = null;                   // the forward card's last quote logged: {id, key, quote}
+    this.trialOpen = false;
     this.build();
+    this.onHash = () => {
+      const f = hashFields(window.location.hash);
+      if (!f || !/^#\/?fiyatlama/.test(window.location.hash)) return;
+      this.clearHash();
+      this.send(f);
+    };
+    window.addEventListener('hashchange', this.onHash);
   }
 
   build() {
@@ -115,13 +219,36 @@ export class PricingPage {
         field('Yön', this.sideSeg), field('Büyüklük', h('div', { class: 'pr-pair' }, this.sizeKindSeg, this.sizeIn)),
         field('Fiyat (isteğe bağlı)', this.priceIn), this.priceKindField),
       this.errorLine = h('div', { class: 'errtxt pr-error', id: 'pr-error' }));
+    // B7: until the first answer the page says it is calculating (the panels below are empty till then)
+    this.loading = h('div', { class: 'banner pr-loading', id: 'pr-loading' }, 'Fiyatlama ' + WAIT);
     this.head = h('div', { class: 'pr-head', id: 'pr-head' });
-    this.tiles = h('div', { class: 'quote pr-tiles', id: 'pr-tiles' });
-    this.bucketBody = h('div', { class: 'body' });
+    // "İşlem gir ▾": the instrument into Günlük İşlemler's or Trades' form (A1)
+    this.tradeBtn = h('button', { class: 'btn sm', type: 'button', id: 'pr-trade', title: 'Fiyatlanan işlemi Günlük İşlemler\'e ya da Trades\'e gir '
+      + '(form dolu açılır, kaydetmek sizde)' }, 'İşlem gir ▾');
+    this.tradeBtn.addEventListener('click', () => this.tradeMenu(this.tradeBtn, this.data && this.data.trade, this.data && this.data.label));
+    this.tiles = h('div', { class: 'quote pr-tiles', id: 'pr-tiles' }, waiting());
+    this.bucketBody = h('div', { class: 'body' }, waiting());
     this.bucketPanel = h('section', { class: 'panel', id: 'pr-buckets-panel' },
       h('header', null, h('h2', null, 'DV01 kovaları ($ / bp)')), this.bucketBody,
-      this.bucketNote = h('div', { class: 'note' }));
-    this.schedBody = h('div', { class: 'body' });
+      (this.bucketNote = foldable('pr-buckets-note')).el);
+    // C3: each bucket's opposite TRY OIS, and DV01 Risk's buckets + this trade (nothing saved)
+    this.hedgeAll = h('button', { class: 'btn sm', type: 'button', id: 'pr-hedge-all', title: 'Bütün hedge\'leri Günlük İşlemler\'in "Excel\'den yapıştır" '
+      + 'penceresinde OIS olarak aç (önizleme, kaydetmek sizde)' }, 'Hepsine işlem gir');
+    this.hedgeAll.addEventListener('click', () => this.bookHedges());
+    this.trialBtn = h('button', { class: 'btn sm', type: 'button', id: 'pr-trial-btn', title: 'DV01 Risk\'in kovaları + bu işlem: önce / sonra '
+      + 'toplam DV01, VaR, PPK karar riski - hiçbir şey kaydedilmez' }, 'Pozisyona ekle (deneme)');
+    this.trialBtn.addEventListener('click', () => this.openTrial());
+    this.hedgeBody = h('div', { class: 'body', id: 'pr-hedge-body' });
+    this.hedgeNote = foldable('pr-hedge-note');
+    this.hedgePanel = h('section', { class: 'panel hidden', id: 'pr-hedge-panel' },
+      h('header', null, h('h2', null, 'Bu işlemi hedge\'le'), this.hedgeAll, this.trialBtn), this.hedgeBody, this.hedgeNote.el);
+    this.trialBody = h('div', { class: 'body', id: 'pr-trial' });
+    const trialClose = h('button', { class: 'btn sm', type: 'button', id: 'pr-trial-close', title: 'Kapat' }, '×');
+    trialClose.addEventListener('click', () => { this.trialOpen = false; this.trialPanel.classList.add('hidden'); });
+    this.trialPanel = h('section', { class: 'panel hidden', id: 'pr-trial-panel' },
+      h('header', null, h('h2', null, 'Pozisyona ekle (deneme) · DV01 Risk + bu işlem'), trialClose), this.trialBody,
+      (this.trialNote = foldable('pr-trial-note')).el);
+    this.schedBody = h('div', { class: 'body' }, waiting());
     this.schedTitle = h('h2', null, 'Ödeme takvimi');
     this.schedPanel = h('section', { class: 'panel fit', id: 'pr-schedule-panel' }, h('header', null, this.schedTitle), this.schedBody);
     this.notes = h('div', { class: 'body pr-notes', id: 'pr-notes' });
@@ -129,7 +256,7 @@ export class PricingPage {
     // the instrument's numbers - the tiles, the schedule - and Toplu fiyatlama in one column beside the DV01 buckets: the
     // bulk list on the first screen (the desk's layout review, 27.11.2026: "Hepsini yap")
     this.result = h('div', { class: 'pr-result', id: 'pr-result' },
-      h('section', { class: 'panel wide pr-summary' }, h('div', { class: 'pad' }, this.head, this.tiles)),
+      h('section', { class: 'panel wide pr-summary' }, h('div', { class: 'pad' }, h('div', { class: 'pr-headline' }, this.head, this.tradeBtn), this.tiles)),
       this.schedPanel);
     // Toplu fiyatlama: a list of lines priced as the instrument above, off the same curves (its own errors line by line)
     this.bulkIn = h('textarea', { id: 'pr-bulk', class: 'inp pr-bulk-in', rows: '6', spellcheck: 'false', autocomplete: 'off' });
@@ -139,17 +266,67 @@ export class PricingPage {
     this.bulkIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.sendBulk(); } });
     const run = h('button', { type: 'button', class: 'btn primary', id: 'pr-bulk-run', title: 'Satırları fiyatla (Ctrl+Enter)' }, 'Fiyatla');
     run.addEventListener('click', () => this.sendBulk());
+    this.bulkBook = h('button', { type: 'button', class: 'btn sm', id: 'pr-bulk-book', title: 'Fiyatlanan satırları Günlük İşlemler\'in "Excel\'den '
+      + 'yapıştır" penceresinde aç (önizleme; kaydetmek sizde) - tek satır için satırdaki "İşleme al"' }, 'Tümünü işleme al');
+    this.bulkBook.addEventListener('click', () => this.bookBulk());
     this.bulkHint = h('div', { class: 'muted small', id: 'pr-bulk-hint' });
     this.bulkInfo = h('span', { class: 'muted', id: 'pr-bulk-info' });
     this.bulkBody = h('div', { class: 'body', id: 'pr-bulk-body' });
-    this.bulkNote = h('div', { class: 'note', id: 'pr-bulk-note' });
+    this.bulkNote = foldable('pr-bulk-note');
     this.bulkPanel = h('section', { class: 'panel wide', id: 'pr-bulk-panel' },
-      h('header', null, h('h2', null, 'Toplu fiyatlama'), this.bulkInfo),
+      h('header', null, h('h2', null, 'Toplu fiyatlama'), this.bulkInfo, this.bulkBook),
       h('div', { class: 'pr-bulk-form' }, this.bulkIn, h('div', { class: 'pr-bulk-side' }, run, this.bulkHint)),
-      this.bulkBody, this.bulkNote);
-    const main = h('div', { class: 'pr-main', id: 'pr-main' }, this.bucketPanel,
+      this.bulkBody, this.bulkNote.el);
+    // F: the forward card - every source at the value date, the ladder, the quote (an FX forward only)
+    this.buildCard();
+    const left = h('div', { class: 'pr-left', id: 'pr-left' }, this.bucketPanel, this.hedgePanel, this.trialPanel);
+    const main = h('div', { class: 'pr-main', id: 'pr-main' }, left,
       h('div', { class: 'pr-col', id: 'pr-col' }, this.result, this.bulkPanel));
-    this.host.appendChild(h('div', { class: 'panels pricing', id: 'pricing' }, form, main, this.notesPanel));
+    // C2: the quotes given and the hit ratio, the desk's (tto/quotelog.py)
+    this.qlBody = h('div', { class: 'body', id: 'pr-quotelog' });
+    this.qlPanel = h('section', { class: 'panel wide', id: 'pr-quotelog-panel' },
+      h('header', null, h('h2', null, 'Kotasyon defteri · verilen kotalar ve isabet (müşteri / ürün)')), this.qlBody);
+    this.host.appendChild(h('div', { class: 'panels pricing', id: 'pricing' }, form, this.loading, this.card, main, this.qlPanel, this.notesPanel));
+    this.qlog = mountQuoteLog(this.qlBody, this.ctx, { id: 'pr-ql', days: 1 });
+  }
+
+  buildCard() {
+    this.cardInfo = h('span', { class: 'muted', id: 'pr-fwd-info' });
+    this.cardSources = h('div', { class: 'body', id: 'pr-fwd-sources-box' }, waiting());
+    this.clientIn = h('input', { type: 'text', class: 'inp', id: 'pr-fwd-client', placeholder: 'müşteri (isabet için)', autocomplete: 'off',
+      spellcheck: 'false', maxlength: '40' });
+    const keepClient = () => {
+      const f = this.data && this.data.inputs && this.data.inputs.by.fx;
+      if (f && (f.client || '') === this.clientIn.value.trim()) return;
+      this.send({ client: this.clientIn.value.trim() });
+    };
+    this.clientIn.addEventListener('change', keepClient);
+    this.clientIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); keepClient(); } });
+    const btn = (id, label, title, fn, cls) => {
+      const b = h('button', { class: 'btn' + (cls ? ' ' + cls : ''), type: 'button', id, title }, label);
+      b.addEventListener('click', fn);
+      return b;
+    };
+    this.copyBtn = btn('pr-fwd-copy', 'Kotasyon kopyala', 'Seçili kaynağın bid / ask kotasyonunu panoya kopyala ve kotasyon defterine yaz (açık)',
+      () => this.quoteAction('open'), 'primary');
+    this.doneBtn = btn('pr-fwd-done', 'Done → Günlük İşlemler', 'Müşteri işlem yaptı: kota done olur, Günlük İşlemler\'in FX forward formu '
+      + 'kotlanan seviyeden dolu açılır (parite, yön, tutar, valör, fiyat)', () => this.quoteAction('done'));
+    this.notDoneBtn = btn('pr-fwd-notdone', 'Done değil', 'Müşteri işlem yapmadı: kota "done değil" olur (isabet oranına girer)',
+      () => this.quoteAction('not_done'));
+    this.cardStatus = h('span', { class: 'muted', id: 'pr-fwd-status' });
+    this.ladderBody = h('div', { class: 'body', id: 'pr-fwd-ladder-box' });
+    this.cardNote = foldable('pr-fwd-note');
+    // the sources and the quote's buttons on the left, the ladder beside them (one screen at 1600 px; a narrow window
+    // puts the ladder under them)
+    this.card = h('section', { class: 'panel wide hidden', id: 'pr-fwd-card' },
+      h('header', null, h('h2', null, 'Forward · kaynaklar bu valörde'), this.cardInfo),
+      h('div', { class: 'pr-fwd-grid' },
+        h('div', { class: 'pr-fwd-left' }, this.cardSources,
+          h('div', { class: 'pr-fwd-actions', id: 'pr-fwd-actions' }, field('Müşteri', this.clientIn), this.copyBtn, this.doneBtn, this.notDoneBtn),
+          h('div', { class: 'pr-fwd-status' }, this.cardStatus), this.cardNote.el),
+        h('div', { class: 'pr-fwd-right' },
+          h('div', { class: 'pr-fwd-sub' }, 'Vade merdiveni · valörün iki yanındaki vadeler ve aradaki PPK toplantıları (mid; bid / ask ipucunda)'),
+          this.ladderBody)));
   }
 
   /** The Toplu box sent as it is (the server keeps it with the account, per asset, and prices every line) - once: leaving
@@ -163,7 +340,18 @@ export class PricingPage {
     this.send({ bulk: text });
   }
 
+  clearHash() {
+    try { window.history.replaceState(null, '', '#/fiyatlama'); } catch (e) { /* ignore */ }
+  }
+
   async load() {
+    // an address with fields (Ctrl+K "fiyatla …", a link): they are typed in, then the page is priced
+    const fields = hashFields(window.location.hash);
+    if (fields) {
+      this.clearHash();
+      this.apply(await api.post('/api/pricing', fields));
+      return;
+    }
     this.apply(await api.get('/api/pricing'));
   }
 
@@ -172,16 +360,23 @@ export class PricingPage {
     const seq = ++this.seq;
     const d = await api.get('/api/pricing');
     if (seq === this.seq && !this.sending) this.apply(d);
+    // (a refresh comes with every market tick: the quote log at most every 15 s - at once after a quote of this page)
+    if (this.qlog && Date.now() - (this.qlogAt || 0) > 15000) {
+      this.qlogAt = Date.now();
+      this.qlog.refresh();
+    }
   }
 
   async send(fields) {
     const seq = ++this.seq;
     this.sending = true;
+    this.stamp.textContent = WAIT;
     try {
       const d = await api.post('/api/pricing', fields);
       if (seq === this.seq) this.apply(d);
     } catch (err) {
       errorToast(err);
+      this.stamp.textContent = '';
     } finally {
       this.sending = false;
     }
@@ -220,6 +415,7 @@ export class PricingPage {
       const sent = this.sent && this.sent.key === key && el.value.trim() === this.sent.value;
       if (document.activeElement !== el || sent) el.value = f[key] || '';
     }
+    if (fx && document.activeElement !== this.clientIn) this.clientIn.value = f.client || '';
     this.bulkIn.placeholder = BULK_PLACEHOLDER[fx ? 'fx' : 'rate'];
     if (!this.bulkDirty) this.bulkIn.value = f.bulk || '';
   }
@@ -239,6 +435,7 @@ export class PricingPage {
 
   apply(d) {
     this.data = d;
+    this.loading.classList.add('hidden');
     if (d.inputs) this.fill(d.inputs);
     this.curveInfo.textContent = d.curve_text ? 'Eğriniz: ' + d.curve_text + ' (Ayarlar → Eğri interpolasyonu)' : '';
     this.stamp.textContent = new Date().toLocaleTimeString('tr-TR');
@@ -246,19 +443,64 @@ export class PricingPage {
     this.result.classList.toggle('stale', !!d.error);
     this.bucketPanel.classList.toggle('stale', !!d.error);
     this.notesPanel.classList.toggle('stale', !!d.error);
+    this.card.classList.toggle('stale', !!d.error);
+    this.hedgePanel.classList.toggle('stale', !!d.error);
     this.drawBulk(d);                         // (the lines have their own errors: priced whatever the instrument above says)
-    if (d.error || !d.label) return;          // (the last numbers stay on the page, dimmed, under the message)
+    const asset = (d.inputs && d.inputs.asset) || d.asset;
+    this.card.classList.toggle('hidden', asset !== 'fx');
+    this.hedgePanel.classList.remove('hidden');
+    if (d.error || !d.label) {                // (the last numbers stay on the page, dimmed, under the message)
+      if (!this.priced) this.unpriced(d.error || (d.available === false ? 'TRY eğrileri yok' : 'fiyatlanacak işlem yok'));
+      return;
+    }
+    this.priced = true;
     this.drawHead(d);
     this.drawTiles(d);
     this.drawBuckets(d);
     this.drawSchedule(d);
     this.drawNotes(d);
+    this.drawCard(d);
+    this.drawHedges(d);
+    // (the trial again when the instrument changed, else at most every 10 s: it evaluates DV01 Risk once more)
+    const key = JSON.stringify([d.inputs, d.label]);
+    if (this.trialOpen && (key !== this.trialKey || Date.now() - (this.trialAt || 0) > 10000)) this.loadTrial();
+  }
+
+  /** B7: no numbers yet and the inputs cannot be priced - each panel says so instead of staying empty. */
+  unpriced(why) {
+    const say = 'Fiyat yok: ' + why;
+    clear(this.tiles).appendChild(waiting(say, 'pr-unpriced'));
+    clear(this.bucketBody).appendChild(waiting(say));
+    clear(this.schedBody).appendChild(waiting(say));
+    clear(this.cardSources).appendChild(waiting(say));
+    clear(this.ladderBody);
+    clear(this.hedgeBody).appendChild(waiting(say));
   }
 
   drawHead(d) {
     clear(this.head);
     const when = serialDate(d.start) + ' → ' + serialDate(d.end) + ' · ' + num(d.days, 0) + ' gün';
     this.head.append(h('b', { id: 'pr-label' }, d.label + ' · ' + d.side), h('span', { class: 'muted' }, '  ' + when));
+    const t = d.trade || {};
+    this.tradeBtn.disabled = !(t.blotter || t.trades);
+    this.tradeBtn.title = this.tradeBtn.disabled ? ((t.why || {}).blotter || 'işlem girilemiyor')
+      : 'Fiyatlanan işlemi gir: ' + (t.level_from === 'fiyat' ? 'yazılan (ya da çözülen) fiyattan' : 'eğrinizin mid\'inden') + ' - form dolu açılır, kaydetmek sizde';
+  }
+
+  /** "İşlem gir ▾": Günlük İşlemler or Trades, the form filled with ``trade`` (tto/pricing.py ``trade_specs``). */
+  tradeMenu(anchor, trade, label) {
+    if (!trade) return;
+    const r = anchor.getBoundingClientRect();
+    const why = trade.why || {};
+    const from = trade.level_from === 'fiyat' ? 'yazılan fiyattan' : 'mid\'den';
+    menu(r.left, r.bottom + 2, [
+      { header: 'İşlem gir (' + from + ') · ' + (label || '') },
+      trade.blotter ? { id: 'pr-trade-blotter', label: 'Günlük İşlemler', action: () => this.ctx.openTrade(Object.assign(blotterSpec(trade.blotter),
+        { said: 'İşlem Fiyatlama\'dan dolduruldu: kontrol edip kaydedin' })) }
+        : { id: 'pr-trade-blotter', label: 'Günlük İşlemler · ' + (why.blotter || 'yok'), disabled: true },
+      trade.trades ? { id: 'pr-trade-trades', label: 'Trades (izlenen işlemler)', action: () => fillTrades(this.ctx, trade.trades, trade.note).catch(errorToast) }
+        : { id: 'pr-trade-trades', label: 'Trades · ' + (why.trades || 'yok'), disabled: true },
+    ]);
   }
 
   drawTiles(d) {
@@ -335,10 +577,10 @@ export class PricingPage {
     t.appendChild(h('tr', { class: 'pkg', id: 'pr-buckets-total' }, h('td', null, 'Toplam'), h('td', null, ''),
       h('td', { style: { textAlign: 'right' } }, signed(tot[m1], 2)), h('td', { style: { textAlign: 'right' } }, signed(tot[m2], 2))));
     clear(this.bucketBody).appendChild(t);
-    this.bucketNote.textContent = (d.family === 'ois' ? 'OIS kovaları (masanınki): her kota +1 bp, eğri aynı yöntemle yeniden. '
+    this.bucketNote.set((d.family === 'ois' ? 'OIS kovaları (masanınki): her kota +1 bp, eğri aynı yöntemle yeniden. '
       : 'Offshore eğrinin kotaları (FX swap ≤9A, XCCY 1Y–10Y): her kota +1 bp, eğri aynı yöntemle yeniden. ')
       + 'Kota: kovanın piyasa kotası - hedge\'in yapılacağı faiz (iki eğri de onu kendi vadesinde aynen verir). '
-      + '+ = faizler yükselince kazanır.';
+      + '+ = faizler yükselince kazanır.');
   }
 
   drawSchedule(d) {
@@ -383,15 +625,293 @@ export class PricingPage {
     for (const e of d.errors || []) line(e, 'pr-warn');
   }
 
+  // ------------------------------------------------------------------------------------------ the forward card (F)
+  drawCard(d) {
+    if (d.asset !== 'fx') return;
+    const c = d.card;
+    if (!c) { clear(this.cardSources).appendChild(waiting()); clear(this.ladderBody); return; }
+    if (c.error) { clear(this.cardSources).appendChild(h('div', { class: 'errtxt pad', id: 'pr-fwd-error' }, c.error)); clear(this.ladderBody); return; }
+    const ccy = c.ccy;
+    this.cardInfo.textContent = c.pair + ' · valör ' + serialDate(c.valor) + ' · ' + num(c.days, 0) + ' gün · spot ' + num(c.spot.bid, 4)
+      + ' / ' + num(c.spot.ask, 4) + ' · ' + ccy + ' %' + num((c.ccy_rate || 0) * 100, 2) + ' · OIS eğrisi ' + c.curve + ' · ' + c.mode;
+    const two = (q, digits, scale, signedDigits) => {
+      if (!q) return '–';
+      const f = (v) => (isNum(v) ? (signedDigits !== undefined ? signed(v * (scale || 1), signedDigits) : num(v * (scale || 1), digits)) : '–');
+      if (!isNum(q.bid) && !isNum(q.ask)) return isNum(q.mid) ? f(q.mid) + ' (mid)' : '–';
+      return f(q.bid) + ' / ' + f(q.ask);
+    };
+    const t = h('table', { class: 'plain', id: 'pr-fwd-sources' },
+      h('tr', null, h('th', { class: 'l' }, 'Kaynak'), h('th', null, 'TRY % (bid / ask)'), h('th', null, 'Outright'), h('th', null, 'Puan'),
+        h('th', { title: 'Kaynağın puanı − seçili kaynağın (bid / ask; yalnız mid olanda mid)' }, 'Fark (puan)'),
+        h('th', { title: 'Kaynağın TRY faizi − seçili kaynağın, bp' }, 'Fark (bp)'), h('th', { class: 'l' }, '')));
+    for (const s of c.sources) {
+      const on = s.id === c.picked;
+      const tr = h('tr', { class: 'pr-src' + (on ? ' on' : '') + (s.available ? '' : ' soft') });
+      tr.dataset.source = s.id;
+      const mark = h('td', { class: 'l', title: s.note }, (on ? '● ' : '○ ') + s.name);
+      tr.appendChild(mark);
+      if (!s.available) {
+        tr.appendChild(h('td', { class: 'l muted', colspan: '6' }, s.why || 'yok'));
+      } else {
+        const tip = (q, d2, scale) => (q && isNum(q.mid) ? 'mid ' + num(q.mid * (scale || 1), d2) : '');
+        tr.appendChild(h('td', { title: tip(s.try, 3, 100) }, two(s.try, TRY_DIGITS, 100)));
+        tr.appendChild(h('td', { title: tip(s.fwd, 4) }, two(s.fwd, 4)));
+        tr.appendChild(h('td', { title: tip(s.pts, 1) }, two(s.pts, 0)));
+        const diff = s.diff || null;
+        const dd = (k) => (diff ? (isNum(diff[k].bid) || isNum(diff[k].ask) ? diff[k] : { mid: diff[k].mid }) : null);
+        tr.appendChild(h('td', null, on ? '' : two(dd('pts'), 0, 1, 0)));
+        tr.appendChild(h('td', null, on ? '' : two(dd('bp'), 1, 1, 1)));
+        // what the row stands on, short (the whole in its tip): the matrix's row or the spread, the contract, a mid only
+        let extra = '';
+        let more = '';
+        if (s.id === 'ois' && s.row) { extra = s.row + ' satırı'; more = 'FORWARD KOTASYON\'un ' + s.row + ' satırı, yazdıklarınız dahil'; }
+        else if (s.id === 'ois' && s.spread) { extra = 'spread ' + num(s.spread.bid, 0) + ' / ' + num(s.spread.ask, 0); more = 'OIS (' + c.curve + ') + spread bid / ask, bp (' + c.mode + ')'; }
+        else if (s.id === 'viop' && s.contract) {
+          extra = s.contract.name + ' (' + signed(s.gap, 0) + ' g)';
+          more = s.contract.name + ' · vade ' + serialDate(s.contract.expiry) + ' (valöre ' + signed(s.gap, 0) + ' gün) · fiyat ' + num(s.contract.px_bid, 3) + ' / '
+            + num(s.contract.px_ask, 3) + ' · ima TRY ' + num(s.contract.try_bid * 100, 2) + ' / ' + num(s.contract.try_ask * 100, 2);
+        } else if (s.id === 'off' && !s.implied) { extra = 'eğri mid'; more = 'FX swap ima bu valöre ulaşmıyor: bid / ask yok, Fiyatlama\'nın offshore eğrisinin mid\'i'; }
+        tr.appendChild(h('td', { class: 'l muted small', title: more || null }, extra));
+        tr.addEventListener('click', () => { if (!on) this.send({ source: s.id }); });
+        tr.title = on ? 'Seçili kaynak: kotasyon ve Done bunun fiyatıyla' : 'Tıklayınca seçili kaynak bu olur';
+      }
+      t.appendChild(tr);
+    }
+    clear(this.cardSources).appendChild(t);
+    const q = c.sources.find((s) => s.id === c.picked) || {};
+    const lvl = c.deal.level;
+    this.doneBtn.disabled = !isNum(lvl);
+    this.doneBtn.title = isNum(lvl) ? 'Müşteri işlem yaptı: kota done olur, Günlük İşlemler\'in FX forward formu dolu açılır - '
+      + (c.deal.side === 'AL' ? ccy + ' alış, bid' : ccy + ' satış, ask') + ' ' + num(lvl, 4) + ' (' + q.name + ')' : 'Seçili kaynağın fiyatı yok';
+    this.drawLadder(c);
+    this.cardNote.set(c.sources.map((s) => s.name + ': ' + s.note).join('  ·  '));
+    if (this.lastQuote && this.lastQuote.key !== this.quoteKey(d)) this.cardStatus.textContent = '';
+  }
+
+  drawLadder(c) {
+    const ids = ['ret', 'ois', 'off', 'viop'];
+    const names = c.sources_text || {};
+    const head = [h('th', { class: 'l' }, 'Vade'), h('th', null, 'Valör'), h('th', null, 'Gün')];
+    for (const s of ids) head.push(h('th', { title: names[s] + ': TRY faizi (ACT/360 basit), mid' }, (names[s] || s) + ' %'), h('th', null, 'puan'));
+    const t = h('table', { class: 'plain', id: 'pr-fwd-ladder' }, h('tr', null, ...head));
+    for (const r of c.ladder) {
+      const kind = r.kinds.includes('valor') ? 'valor' : r.kinds.includes('mpc') ? 'mpc' : 'tenor';
+      const tr = h('tr', { class: 'pr-lad ' + kind });
+      tr.dataset.kind = kind;
+      tr.dataset.date = String(r.date);
+      const tip = r.mpc ? r.mpc + (isNum(r.step) ? ' · ima adım ' + signed(r.step, 1) + ' bp' : '') : '';
+      tr.append(h('td', { class: 'l', title: tip }, r.label + (r.viop ? ' · VİOP ' + r.viop : '')), h('td', null, serialDate(r.date)), h('td', null, num(r.days, 0)));
+      for (const s of ids) {
+        const v = r.by[s];
+        if (!v) { tr.append(h('td', { class: 'soft' }, '–'), h('td', { class: 'soft' }, '–')); continue; }
+        const bt = (q, n, scale) => (isNum(q.bid) ? 'bid / ask ' + num(q.bid * scale, n) + ' / ' + num(q.ask * scale, n) : '');
+        tr.append(h('td', { title: bt(v.try, 2, 100) }, isNum(v.try.mid) ? num(v.try.mid * 100, TRY_DIGITS) : '–'),
+          h('td', { title: bt(v.pts, 0, 1) }, isNum(v.pts.mid) ? num(v.pts.mid, 0) : '–'));
+      }
+      t.appendChild(tr);
+    }
+    clear(this.ladderBody).appendChild(t);
+  }
+
+  /** What a quote given is a quote of - the instrument, the source, the side, the amount; not its level (the market moves
+   * on after the copy: "Done" is still that quote, at the level it gave). */
+  quoteKey(d) {
+    const c = (d && d.card) || {};
+    return [d && d.label, c.picked, c.deal && c.deal.side, c.deal && c.deal.amount].join('|');
+  }
+
+  /** "Kotasyon kopyala" (status open), "Done → Günlük İşlemler" (done: the form filled at the quoted level) or "Done
+   * değil": the quote logged (tto/quotelog.py) - the last one copied of the same card updated, else a new one. */
+  async quoteAction(status) {
+    const d = this.data;
+    if (!d || !d.card || d.card.error) return;
+    const client = this.clientIn.value.trim();
+    const key = this.quoteKey(d);
+    let quote = null;
+    try {
+      if (status === 'open' || !this.lastQuote || this.lastQuote.key !== key) {
+        const res = await api.post('/api/pricing/quote', { client, language: quoteLang(), status });
+        quote = res.quote;
+        if (status === 'open') {
+          const ok = await copyText(res.text, 'Kotasyon kopyalandı · kota #' + res.id + ' (açık)');
+          if (!ok) toast('Panoya kopyalanamadı: kota #' + res.id + ' kotasyon defterinde', 'warn');
+        }
+        this.lastQuote = { id: res.id, key, quote };
+      } else {
+        quote = await setQuoteStatus(this.lastQuote.id, Object.assign({ status }, client ? { client } : {}));
+        if (!quote) return;
+        this.lastQuote.quote = quote;
+      }
+    } catch (err) {
+      errorToast(err);
+      return;
+    }
+    const word = { open: 'açık', done: 'done', not_done: 'done değil' }[status];
+    this.cardStatus.textContent = 'Kota #' + quote.id + ' · ' + word + (quote.client ? ' · ' + quote.client : '') + ' · ' + (quote.levels && quote.levels.text || '');
+    if (this.qlog) this.qlog.refresh();
+    if (status === 'done') {
+      const spec = tradeOfQuote(quote);
+      if (spec) this.ctx.openTrade(spec);
+      else toast('Kota done; işlem formu doldurulamadı (seviye yok)', 'warn');
+    } else if (status === 'not_done') {
+      toast('Kota #' + quote.id + ': done değil', 'ok');
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------ hedge (C3)
+  drawHedges(d) {
+    const hd = d.hedges;
+    const body = clear(this.hedgeBody);
+    this.hedgeRows = [];
+    if (!hd) { body.appendChild(waiting()); return; }
+    this.hedgeNote.set(hd.text || '');
+    const rows = (hd.rows || []).filter((r) => !r.error && r.nominal > 0);
+    this.hedgeAll.disabled = !rows.length;
+    this.trialBtn.disabled = false;
+    if (hd.family !== 'ois') { body.appendChild(h('div', { class: 'muted pad', id: 'pr-hedge-none' }, hd.text)); return; }
+    if (!(hd.rows || []).length) { body.appendChild(h('div', { class: 'muted pad', id: 'pr-hedge-none' }, 'Hedge edilecek DV01 yok.')); return; }
+    const t = h('table', { class: 'plain', id: 'pr-hedges' },
+      h('tr', null, h('th', { class: 'l' }, 'Kova'), h('th', null, 'Kota'), h('th', null, 'Kova DV01 ($)'), h('th', { class: 'l' }, 'Hedge'),
+        h('th', null, 'Nominal (TL)'), h('th', null, 'Hedge DV01 ($)'), h('th', null, 'Kalan ($)'), h('th', null, '')));
+    for (const r of hd.rows) {
+      const tr = h('tr');
+      tr.dataset.bucket = r.bucket;
+      if (r.error) {
+        tr.append(h('td', { class: 'l' }, r.bucket), h('td', { class: 'l errtxt', colspan: '7' }, r.error));
+        t.appendChild(tr);
+        continue;
+      }
+      const go = h('button', { class: 'btn sm', type: 'button', title: 'Bu hedge\'i Günlük İşlemler\'de aç (form dolu, kaydetmek sizde)' }, 'İşlem gir');
+      go.addEventListener('click', () => this.ctx.openTrade({ kind: 'ois', strategy: 'outright', side: r.side, tenors: [r.tenor],
+        level: rateText(r.quote), size: num(r.nominal, 0, false), sizeMode: 'nominal', note: 'Fiyatlama hedge · ' + d.label,
+        said: 'Hedge Fiyatlama\'dan dolduruldu: kontrol edip kaydedin' }));
+      tr.append(h('td', { class: 'l' }, r.bucket), h('td', null, isNum(r.quote) ? pct(r.quote, TRY_DIGITS) : '–'),
+        h('td', { class: tone(r.dv01, 0) === 'pos' ? 'buy' : 'sell' }, signed(r.dv01, 0)),
+        h('td', { class: 'l' }, r.side + ' ' + r.tenor), h('td', null, num(r.nominal, 0)), h('td', null, signed(r.hedge_dv01, 0)),
+        h('td', null, signed(r.left, 0)), h('td', null, go));
+      this.hedgeRows.push(r);
+      t.appendChild(tr);
+    }
+    t.appendChild(h('tr', { class: 'pkg', id: 'pr-hedges-total' }, h('td', null, 'Kalan toplam'), h('td', { colspan: '5' }, ''),
+      h('td', null, signed(hd.left, 0)), h('td', null, '')));
+    body.appendChild(t);
+  }
+
+  /** "Hepsine işlem gir": every hedge into Günlük İşlemler's "Excel'den yapıştır" (OIS), the preview's to save. */
+  bookHedges() {
+    const d = this.data;
+    const rows = (this.hedgeRows || []).filter((r) => r.nominal > 0);
+    if (!d || !rows.length) return;
+    const lines = [['Yön', 'Vade', 'Faiz', 'Nominal', 'Not'].join('\t')].concat(rows.map((r) => [r.side === 'PAY' ? 'B' : 'S', r.tenor,
+      rateText(r.quote) + '%', num(r.nominal, 0), 'Fiyatlama hedge · ' + d.label].join('\t')));
+    openBulk({ ctx: this.ctx }, { kind: 'ois', title: 'Fiyatlama hedge → işlem girişi', text: lines.join('\n'),
+      said: d.label + ' için ' + rows.length + ' hedge (Fiyatlama · Bu işlemi '
+      + 'hedge\'le): her kovanın karşı TRY OIS\'i, kovanın kotasından. Önizlemeye bakıp kaydedin.' });
+  }
+
+  // ------------------------------------------------------------------------------------------ Pozisyona ekle (deneme)
+  openTrial() {
+    this.trialOpen = true;
+    this.trialPanel.classList.remove('hidden');
+    clear(this.trialBody).appendChild(waiting());
+    this.loadTrial();
+    this.trialPanel.scrollIntoView({ block: 'nearest' });
+  }
+
+  async loadTrial() {
+    if (this.trialBusy) return;
+    this.trialBusy = true;
+    this.trialAt = Date.now();
+    this.trialKey = this.data ? JSON.stringify([this.data.inputs, this.data.label]) : null;
+    try {
+      const t = await api.get('/api/pricing/trial');
+      if (this.trialOpen) this.drawTrial(t);
+    } catch (err) {
+      clear(this.trialBody).appendChild(h('div', { class: 'errtxt pad' }, err.message));
+    } finally {
+      this.trialBusy = false;
+    }
+  }
+
+  drawTrial(t) {
+    const body = clear(this.trialBody);
+    if (!t.available) { body.appendChild(h('div', { class: 'muted pad', id: 'pr-trial-none' }, t.error || 'deneme yok')); return; }
+    this.trialNote.set(t.text);
+    const tl = (v) => (isNum(v) ? num(v, 0) : '–');
+    body.appendChild(h('div', { class: 'quote pr-tiles', id: 'pr-trial-tiles' },
+      tile('İşlem · ' + t.label + ' · ' + t.side, signed(t.deal_total, 0) + ' TL/bp', { title: 'Kolon: ' + t.columns + ' · USDTRY ' + num(t.usdtry, 4) }),
+      tile('Pozisyon toplam DV01 (TL/bp) önce', signed(t.total.before, 0), { id: 'pr-trial-before' }),
+      tile('… sonra', signed(t.total.after, 0), { id: 'pr-trial-after', tone: tone(t.total.after, 0) })));
+    const v = h('table', { class: 'plain', id: 'pr-trial-var' }, h('tr', null, h('th', { class: 'l' }, 'VaR'), h('th', null, 'DV01 önce'),
+      h('th', null, 'DV01 sonra'), h('th', null, 'VaR önce (TL)'), h('th', null, 'VaR sonra (TL)')));
+    for (const r of t.var) {
+      v.appendChild(h('tr', null, h('td', { class: 'l' }, r.name), h('td', null, signed(r.dv01, 0)), h('td', null, signed(r.dv01_after, 0)),
+        h('td', null, tl(r.var)), h('td', null, tl(r.var_after))));
+    }
+    body.appendChild(v);
+    if (t.var.every((r) => !isNum(r.var_after)) && t.var_status) body.appendChild(h('div', { class: 'muted pad' }, 'VaR: ' + t.var_status));
+    const p = h('table', { class: 'plain', id: 'pr-trial-ppk' }, h('tr', null, h('th', { class: 'l' }, 'PPK karar riski'), h('th', null, 'Tarih'),
+      h('th', null, 'Karar riski önce'), h('th', null, 'sonra'), h('th', null, '25 bp sürpriz P&L önce'), h('th', null, 'sonra')));
+    for (const r of t.ppk.slice(0, 9)) {
+      p.appendChild(h('tr', null, h('td', { class: 'l' }, r.name), h('td', null, serialDate(r.date)),
+        h('td', null, isNum(r.decision) ? signed(r.decision, 0) : '–'), h('td', null, isNum(r.decision_after) ? signed(r.decision_after, 0) : '–'),
+        h('td', null, signed(r.pnl25, 0)), h('td', null, signed(r.pnl25_after, 0))));
+    }
+    body.appendChild(p);
+    const b = h('table', { class: 'plain', id: 'pr-trial-buckets' }, h('tr', null, h('th', { class: 'l' }, 'DV01 Risk kovası'), h('th', null, 'Önce'),
+      h('th', null, 'Bu işlem'), h('th', null, 'Sonra')));
+    for (const r of t.buckets) {
+      if (Math.abs(r.before) < 0.5 && Math.abs(r.deal) < 0.5) continue;
+      const tr = h('tr', null, h('td', { class: 'l' }, r.name), h('td', null, signed(r.before, 0)), h('td', null, signed(r.deal, 0)), h('td', null, signed(r.after, 0)));
+      tr.dataset.bucket = r.name;
+      b.appendChild(tr);
+    }
+    body.appendChild(b);
+    body.appendChild(h('div', { class: 'muted pad', id: 'pr-trial-saved' }, 'Hiçbir şey kaydedilmedi: DV01 Risk sayfası ve girdileriniz aynı.'));
+  }
+
+  // ------------------------------------------------------------------------------------------ Toplu fiyatlama
+  /** "Tümünü işleme al": the priced lines into "Excel'den yapıştır" (an FX forward's as FX Forward, a spot TRY OIS's as OIS;
+   * an FRA or a forward start one by one with its own "İşleme al", an XCCY never). */
+  bookBulk() {
+    const b = this.data && this.data.bulk;
+    if (!b) return;
+    const rows = b.rows.filter((r) => !r.error && r.trade && r.trade.blotter);
+    if (b.asset === 'fx') {
+      const lines = [['Parite', 'Yön', 'Tutar', 'Valör', 'Forward kur', 'Not'].join('\t')].concat(rows.map((r) => {
+        const s = r.trade.blotter;
+        return [s.pair, s.dir, num(s.amount, 0), s.date, num(s.value, 4), r.trade.note].join('\t');
+      }));
+      if (!rows.length) { toast('İşleme alınacak satır yok', 'warn'); return; }
+      openBulk({ ctx: this.ctx }, { kind: 'fwd', title: 'Toplu fiyatlama → işlem girişi', text: lines.join('\n'),
+        said: 'Toplu fiyatlama\'dan ' + rows.length + ' FX forward (her satırın '
+        + (rows.some((r) => r.trade.level_from === 'fiyat') ? 'yazılan fiyatı, yoksa ' : '') + 'mid\'i). Önizlemeye bakıp kaydedin.' });
+      return;
+    }
+    const outright = rows.filter((r) => r.trade.blotter.strategy === 'outright');
+    if (!outright.length) { toast(rows.length ? 'FRA / ileri başlangıçlı satırlar tek tek "İşleme al" ile girilir' : 'İşleme alınacak satır yok', 'warn'); return; }
+    const dv = outright[0].trade.blotter.sizeMode === 'dv01';
+    const lines = [['Yön', 'Vade', 'Faiz', dv ? 'DV01 USD' : 'Nominal', 'Not'].join('\t')].concat(outright.map((r) => {
+      const s = r.trade.blotter;
+      return [s.side === 'PAY' ? 'B' : 'S', s.tenors[0], rateText(s.level) + '%', num(s.size, 0), r.trade.note].join('\t');
+    }));
+    const left = rows.length - outright.length;
+    openBulk({ ctx: this.ctx }, { kind: 'ois', title: 'Toplu fiyatlama → işlem girişi', text: lines.join('\n'),
+      said: 'Toplu fiyatlama\'dan ' + outright.length + ' TRY OIS'
+      + (left ? ' (' + left + ' FRA / ileri başlangıçlı satır tek tek "İşleme al" ile)' : '') + '. Önizlemeye bakıp kaydedin.' });
+  }
+
   /** Toplu fiyatlama: one row a line - the mid on both curves, the annuity (an FX forward's points), the size and its
-   * DV01 and, with a price on the line, the NPV (or the rate an NPV / upfront gives) - or the line's own error. */
+   * DV01 and, with a price on the line, the NPV (or the rate an NPV / upfront gives) - or the line's own error; and its
+   * "İşleme al". */
   drawBulk(d) {
     const b = d.bulk;
     const body = clear(this.bulkBody);
     if (!b) {
       this.bulkInfo.textContent = '';
       this.bulkHint.textContent = '';
-      this.bulkNote.textContent = '';
+      this.bulkNote.set('');
+      this.bulkBook.disabled = true;
       return;
     }
     const fx = b.asset === 'fx';
@@ -401,7 +921,8 @@ export class PricingPage {
     this.bulkInfo.textContent = asset + ' · ' + b.side + ' · ' + size + ' · fiyat tipi ' + b.kind_text + ' · ' + (b.family === 'off' ? 'offshore' : 'OIS')
       + ' eğrisi, ' + METHOD[m1] + ' önde';
     this.bulkHint.textContent = b.hint;
-    this.bulkNote.textContent = b.text;
+    this.bulkNote.set(b.text);
+    this.bulkBook.disabled = b.asset === 'xccy' || !b.rows.some((r) => !r.error);
     if (!b.rows.length) {
       body.appendChild(h('div', { class: 'muted pad', id: 'pr-bulk-empty' }, 'Satır yok: kutuya her satıra bir enstrüman yazın ya da yapıştırın, sonra "Fiyatla".'));
       return;
@@ -420,6 +941,7 @@ export class PricingPage {
       if (!fx) heads.push(['Peşin (bp)', '']);
       heads.push(['Fiyat − mid (' + (fx ? 'puan' : 'bp') + ')', '']);
     }
+    heads.push(['İşlem', 'l']);
     const t = h('table', { class: 'plain', id: 'pr-bulk-table' },
       h('tr', null, ...heads.map(([text, cls]) => h('th', { class: cls || null }, text))));
     b.rows.forEach((r, i) => {
@@ -454,11 +976,28 @@ export class PricingPage {
         if (!fx) tr.appendChild(cell(n && n.upfront[m1], 2, n ? other('Peşin', signed(n.upfront[m2], 2) + ' bp') : null));
         tr.appendChild(cell(n && n.dist[m1], fx ? 1 : 2, n ? other('Fiyat − mid', signed(n.dist[m2], fx ? 1 : 2)) : null));
       }
+      // İşleme al (A1): the line into Günlük İşlemler's form - at its price, else at the mid
+      const spec = r.trade && r.trade.blotter;
+      const acts = h('td', { class: 'l' });
+      if (spec) {
+        const go = h('button', { class: 'btn sm', type: 'button', title: 'Satırı Günlük İşlemler\'de aç (' + (r.trade.level_from === 'fiyat' ? 'satırın fiyatından' : 'mid\'den')
+          + '; form dolu, kaydetmek sizde)' }, 'İşleme al');
+        go.dataset.act = 'book';
+        go.addEventListener('click', () => this.ctx.openTrade(Object.assign(blotterSpec(spec, r.trade.note),
+          { said: 'Toplu fiyatlama satırı dolduruldu: kontrol edip kaydedin' })));
+        acts.appendChild(go);
+      } else if (r.trade) {
+        acts.appendChild(h('span', { class: 'muted small', title: (r.trade.why || {}).blotter || '' }, '–'));
+      }
+      tr.appendChild(acts);
       t.appendChild(tr);
     });
     body.appendChild(t);
     if (b.left_out) body.appendChild(h('div', { class: 'muted pad' }, b.left_out + ' satır daha var: en çok ' + b.rows.length + ' satır fiyatlanır.'));
   }
 
-  destroy() {}
+  destroy() {
+    window.removeEventListener('hashchange', this.onHash);
+    if (this.qlog) this.qlog.destroy();
+  }
 }

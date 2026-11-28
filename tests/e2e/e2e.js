@@ -3557,6 +3557,84 @@ async function clipAfter(page, action) {
     await page.click('#pr-asset button[data-v="fra"]');
     await prWait('^FRA 12x15');
 
+    // ------------------------------------------------------------------ Fiyatlama: the forward card, the quote log, hedge, trial (K3)
+    // the desk, 28.11.2026: "Bir de fiyatlama kisminda forward gelsin istiyorum ... done diye gunluk islemlere alabilmeliyim
+    // veya done olmadiysa da hit ratiosunu takip edebilmeliyim"; C2, C3, A1, B7
+    console.log('pricing: forward card');
+    await page.evaluate(() => { window.location.hash = '#/fiyatlama?asset=fx&pair=USDTRY&end=3M&side=AL&size=10m&size_kind=amount&source=ois'; });
+    await prWait('^USDTRY 3M · AL');
+    await page.waitForSelector('#pr-fwd-sources tr[data-source="ois"].on', { timeout: 60000 });
+    const k3A = await prApi();
+    const k3Rows = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#pr-fwd-sources tr[data-source]')]
+      .map((tr) => [tr.dataset.source, [...tr.children].map((td) => td.textContent)])));
+    const k3Lad = await page.evaluate(() => [...document.querySelectorAll('#pr-fwd-ladder tr[data-kind]')].map((tr) => tr.dataset.kind));
+    const k3Ois = k3A.card.sources.find((s) => s.id === 'ois');
+    const k3Fwd = (v) => v.toFixed(4).replace('.', ',');
+    check('Fiyatlama · forward kartı: the address\'s inputs typed in (the address cleaned); every source at the valör - RET, OIS + spread '
+      + '(FORWARD KOTASYON\'s own 3M row), offshore, VİOP - TRY % / outright / points; the ladder: tenors, PPK meetings, the valör',
+      (await page.evaluate(() => window.location.hash)) === '#/fiyatlama' && Object.keys(k3Rows).join(' ') === 'ret ois off viop'
+      && k3A.card.picked === 'ois' && k3Ois.row === '3M' && k3Rows.ois[2] === k3Fwd(k3Ois.fwd.bid) + ' / ' + k3Fwd(k3Ois.fwd.ask)
+      && k3Lad.filter((k) => k === 'valor').length === 1 && k3Lad.includes('mpc') && k3Lad.filter((k) => k === 'tenor').length >= 6,
+      { k3Rows, k3Lad });
+    // "Kotasyon kopyala" (logged open), "Done değil", then the hit ratio by client
+    await page.fill('#pr-fwd-client', 'E2E Müşteri');
+    await page.press('#pr-fwd-client', 'Enter');
+    await page.waitForFunction(() => ((window.tto.state.page.data || {}).inputs || { by: { fx: {} } }).by.fx.client === 'E2E Müşteri', null, { timeout: 30000 });
+    const k3Text = await clipAfter(page, () => page.click('#pr-fwd-copy'));
+    await page.waitForFunction(() => /^Kota #\d+ · açık/.test((document.getElementById('pr-fwd-status') || {}).textContent || ''), null, { timeout: 30000 });
+    const k3Id = Number(/#(\d+)/.exec(await page.textContent('#pr-fwd-status'))[1]);
+    await page.waitForSelector('#pr-ql-table tr[data-id="' + k3Id + '"][data-status="open"]', { timeout: 30000 });
+    await page.click('#pr-fwd-notdone');
+    await page.waitForSelector('#pr-ql-table tr[data-id="' + k3Id + '"][data-status="not_done"]', { timeout: 30000 });
+    const k3Log = (await api(page, 'ayşe yilmaz', 'GET', '/api/quote-log')).json;
+    const k3Hit = k3Log.hit.by_client.find((g) => g.key === 'E2E Müşteri') || {};
+    check('... "Kotasyon kopyala": the picked source\'s bid / ask on the clipboard, logged open with the client; "Done değil": the log '
+      + 'says so and the hit ratio by client counts it',
+      k3Text.startsWith('USDTRY forward 3M · ') && k3Text.includes(k3Fwd(k3Ois.fwd.bid) + ' / ' + k3Fwd(k3Ois.fwd.ask))
+      && k3Log.quotes.some((q) => q.id === k3Id && q.status === 'not_done' && q.client === 'E2E Müşteri' && q.levels.bid === k3Ois.fwd.bid)
+      && k3Hit.not_done >= 1 && k3Hit.ratio === 0 && (await page.$('#pr-ql-hit-client tr[data-key="E2E Müşteri"]')) !== null,
+      { k3Text: k3Text.slice(0, 120), k3Hit });
+    // RET picked, "Done → Günlük İşlemler": the FX forward form filled at the quoted level (AL: the bid) - nothing saved
+    await page.click('#pr-fwd-sources tr[data-source="ret"]');
+    await page.waitForSelector('#pr-fwd-sources tr[data-source="ret"].on', { timeout: 30000 });
+    const k3Ret = (await prApi()).card.sources.find((s) => s.id === 'ret');
+    const k3Before = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    await page.click('#pr-fwd-done');
+    await page.waitForFunction(() => window.tto.state.pageId === 'blotter' && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 60000 });
+    await page.waitForTimeout(500);
+    const k3Form = await page.evaluate(() => { const f = window.tto.state.page.fwd; return { dir: f.dir, basis: f.basis, value: f.manual.value,
+      date: f.date.value, amount: f.amount.value, pair: f.pair }; });
+    const k3After = (await api(page, 'ayşe yilmaz', 'GET', '/api/blotter')).json.trades.length;
+    const k3Done = (await api(page, 'ayşe yilmaz', 'GET', '/api/quote-log')).json.quotes.filter((q) => q.status === 'done' && q.source.includes('RET'));
+    const k3Day = (s) => { const x = new Date(Math.round((s - 25569) * 86400000));
+      return String(x.getUTCDate()).padStart(2, '0') + '.' + String(x.getUTCMonth() + 1).padStart(2, '0') + '.' + x.getUTCFullYear(); };
+    check('... RET picked, "Done → Günlük İşlemler": the quote done in the log, the FX forward form filled - USDTRY, alış, the RET bid '
+      + 'outright, the valör, 10m - nothing saved', k3Form.pair === 'USDTRY' && k3Form.dir === 'B' && k3Form.basis === 'FWD'
+      && k3Form.value === k3Fwd(k3Ret.fwd.bid) && k3Form.date === k3Day(k3A.card.valor) && k3Form.amount === '10000000'
+      && k3After === k3Before && k3Done.length >= 1, { k3Form, k3Before, k3After });
+    // a TRY OIS: each bucket's hedge, "Pozisyona ekle (deneme)", "İşlem gir ▾" and every Toplu line's "İşleme al"
+    await open(page, 'fiyatlama');
+    await page.click('#pr-asset button[data-v="ois"]');
+    await prType('#pr-end', '2Y3M');
+    await prWait('^TRY OIS 2Y3M');
+    await page.waitForSelector('#pr-hedges tr[data-bucket]', { timeout: 60000 });
+    const k3Hedges = await page.evaluate(() => [...document.querySelectorAll('#pr-hedges tr[data-bucket]')].map((tr) => tr.dataset.bucket));
+    await page.click('#pr-trial-btn');
+    await page.waitForSelector('#pr-trial-var', { timeout: 60000 });
+    const k3Trial = (await api(page, 'ayşe yilmaz', 'GET', '/api/pricing/trial')).json;
+    await page.click('#pr-trade');
+    await page.waitForSelector('#pr-trade-trades');
+    const k3Menu = await page.evaluate(() => [...document.querySelectorAll('.menu button')].map((b) => b.id + (b.disabled ? ':off' : '')));
+    await page.keyboard.press('Escape');
+    check('... a TRY OIS 2Y3M: the opposite TRY OIS at each bucket (2Y, 3Y); "Pozisyona ekle (deneme)": DV01 Risk before / after, nothing '
+      + 'saved; "İşlem gir ▾": Günlük İşlemler and Trades', k3Hedges.join(' ') === '2Y 3Y' && k3Trial.available && !k3Trial.saved
+      && Math.abs(k3Trial.total.after - k3Trial.total.before - k3Trial.deal_total) < 1e-6
+      && k3Menu.join(' ') === 'pr-trade-blotter pr-trade-trades', { k3Hedges, k3Menu, total: k3Trial.total });
+    await shot(page, '16d-fiyatlama-hedge-deneme');
+    await page.click('#pr-trial-close');
+    await page.click('#pr-asset button[data-v="fra"]');
+    await prWait('^FRA 12x15');
+
     // ------------------------------------------------------------------ Swaption: a TRY OIS swaption, to look at only
     console.log('swaption');
     await open(page, 'swaption');

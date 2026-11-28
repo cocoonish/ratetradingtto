@@ -121,6 +121,10 @@ CREATE TABLE IF NOT EXISTS tradebook_log (
     scope TEXT NOT NULL, owner TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS tradebook_log_trade ON tradebook_log (trade, id);
 CREATE INDEX IF NOT EXISTS tradebook_log_who ON tradebook_log (scope, owner, id);
+CREATE TABLE IF NOT EXISTS quote_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, quote_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+    payload TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL, updated_by TEXT, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS quote_log_date ON quote_log (quote_date, id);
 """
 
 
@@ -1918,3 +1922,43 @@ class Store(object):
             db.execute("DELETE FROM agenda_snoozes WHERE day<?", (keep_from,))
             db.execute("INSERT INTO agenda_snoozes (user, rule, day, until) VALUES (?,?,?,?) "
                        "ON CONFLICT(user, rule, day) DO UPDATE SET until=excluded.until", (user, rid, day, until))
+
+    # ------------------------------------------------------------------ the quote log (tto/quotelog.py)
+    def add_quote_log(self, day: str, payload: Dict[str, Any], status: str, user: Optional[str]) -> int:
+        """A quote given to a client (Kotasyon kopyala, Fiyatlama's forward card): kept with its day, status and who."""
+        ts = now_iso()
+        return self._x("INSERT INTO quote_log (quote_date, status, payload, created_by, created_at, updated_by, updated_at) "
+                       "VALUES (?,?,?,?,?,?,?)", (day, status, json.dumps(payload, ensure_ascii=False), user, ts, user, ts))
+
+    def quote_log(self, first: str, last: str) -> List[Dict[str, Any]]:
+        """The quotes of the days ``first`` … ``last`` (ISO), in the order they were given."""
+        rows = self._q("SELECT * FROM quote_log WHERE quote_date>=? AND quote_date<=? ORDER BY quote_date, id", (first, last))
+        return [self._quote_log_row(r) for r in rows]
+
+    def quote_log_item(self, qid: int) -> Optional[Dict[str, Any]]:
+        rows = self._q("SELECT * FROM quote_log WHERE id=?", (qid,))
+        return self._quote_log_row(rows[0]) if rows else None
+
+    def set_quote_log(self, qid: int, status: Optional[str], fields: Dict[str, Any], user: Optional[str]) -> Optional[Dict[str, Any]]:
+        """A quote's status (``None``: as it is) and fields of its record changed (``fields``: merged into it, a value
+        ``None`` taken out) - ``None`` when there is no such quote."""
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM quote_log WHERE id=?", (qid,)).fetchone()
+            if row is None:
+                return None
+            payload = json.loads(row["payload"])
+            for k, v in fields.items():
+                if v is None:
+                    payload.pop(k, None)
+                else:
+                    payload[k] = v
+            db.execute("UPDATE quote_log SET status=?, payload=?, updated_by=?, updated_at=? WHERE id=?",
+                       (status or row["status"], json.dumps(payload, ensure_ascii=False), user, now_iso(), qid))
+        return self.quote_log_item(qid)
+
+    @staticmethod
+    def _quote_log_row(r) -> Dict[str, Any]:
+        d = json.loads(r["payload"])
+        d.update({"id": r["id"], "date": r["quote_date"], "status": r["status"], "created_by": r["created_by"],
+                  "created_at": r["created_at"], "updated_by": r["updated_by"], "updated_at": r["updated_at"]})
+        return d

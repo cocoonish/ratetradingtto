@@ -648,6 +648,30 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().pricing, _user(request)))
 
     @handler
+    async def pricing_quote(request: Request):
+        # Fiyatlama's forward card: the picked source's quote as text, logged in the quote log (status open / done /
+        # not_done) - tto/quotelog.py
+        return ok(await call(svc().pricing_quote, _user(request), await _body(request)))
+
+    @handler
+    async def pricing_trial(request: Request):
+        # "Pozisyona ekle (deneme)": DV01 Risk's buckets + the instrument priced, before / after - nothing saved
+        return ok(await call(svc().pricing_trial, _user(request)))
+
+    @handler
+    async def quote_log(request: Request):
+        # the quote log: GET the quotes of a period (?from=&to=) and the hit ratio; POST a quote given
+        if request.method == "POST":
+            return ok(await call(svc().quote_log_add, _user(request), await _body(request)))
+        q = request.query_params
+        return ok(await call(svc().quote_log, _user(request), {"from": q.get("from"), "to": q.get("to")}))
+
+    @handler
+    async def quote_log_set(request: Request):
+        # a quote done / not done / open again, the trade it became, its client
+        return ok(await call(svc().quote_log_set, _user(request), int(request.path_params["quote_id"]), await _body(request)))
+
+    @handler
     async def swaption(request: Request):
         # Swaption: a TRY OIS swaption on the viewer's curve - its forward, the realized vols, payer / receiver / straddle
         # and their greeks (swaption.py); to look at only: the inputs come with the request, nothing is stored
@@ -1422,6 +1446,10 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/interp", interp_settings, methods=["GET", "POST"]),
         Route("/api/curve-points", curve_points, methods=["GET", "POST"]),
         Route("/api/pricing", pricing, methods=["GET", "POST"]),
+        Route("/api/pricing/quote", pricing_quote, methods=["POST"]),
+        Route("/api/pricing/trial", pricing_trial, methods=["GET"]),
+        Route("/api/quote-log", quote_log, methods=["GET", "POST"]),
+        Route("/api/quote-log/{quote_id:int}", quote_log_set, methods=["POST"]),
         Route("/api/swaption", swaption, methods=["GET"]),
         Route("/api/spreads", spreads),
         Route("/api/broker", broker),
