@@ -193,6 +193,22 @@ beside the older ones), now once a day.
     Hesapla a day comes to at most 200 hits a day". Their answer, 23.11.2026: "Ok".
   - Replay asks nothing (the off-list bonds' sides fall back to the mid and say why).
 
+**A quote's age** (28.11.2026, the desk's C4; `tto/marketdata/age.py`): **no request of its own.** The provider already
+times every value: `_Item.at` is when a key's value last changed - its answer, a tick that brings another value (not one
+that brings the same), a poll that does, the answer kept from earlier today after a restart; the helper process's values
+are timed as they reach the dashboard (`IsolatedBloombergProvider._got`). `Provider.quote_times(keys=None)` gives them for
+the price quotes - a `BDP` of `BID` / `ASK` / `MID` / `PX_LAST` (`PRICE_FIELDS`, their `PX_` spellings too) without
+overrides, holding a number; an order's size, the volume, a high / low are left out. Replay gives none (nothing moves).
+- A **market cell** (a cell whose formula calls `BDP` for a price, alone or in a chain) gets, as the page is made, the time
+  of the quote whose value it shows - else the latest of its quotes (`CellQuotes.at`; its keys read from the formula's
+  arguments as the user's calculation has them, as `replay.addin_callers` does): the cell's `qa` (epoch seconds;
+  `Renderer.cell`, live only). A cell typed over by the user ("elle değer") has none. Measured on the four workbooks:
+  ~5 µs a market cell (5 768 in `tto`, 3 243 in `borsa`).
+- **Old**: in market hours a price unchanged `quote_old` minutes (desk setting, 30; 0 never) of today's market, counted
+  from today's opening when it changed before. The page fades it and says "son değişim 10:42 (37 dk)" in its tooltip
+  (`static/js/quoteage.js`, which asks `/api/quotes/age` once a minute while a page shows market cells); `Ops.quotes` counts
+  them for the data status (`/api/status` → `ops.quotes`: the count, of how many, the oldest eight named).
+
 **One-off reference requests** (`Provider.reference(securities, fields, timeout)`; `BloombergProvider.reference`, through the
 helper process as `("ref", …)`): one `ReferenceDataRequest` per 100 securities, securities × fields hits counted like every
 request (`--max-hits`: none is sent once the day's count is at the cap), on keys of their own (`("REF", security, FIELD,

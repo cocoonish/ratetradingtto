@@ -2970,3 +2970,63 @@ of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an
 `duzenTryA…` checks (Masa's manual spot one click away, "Yardımcı tablolar"; the dialog's cells read on the VİOP page), its
 formula-in-an-input flow on the forward summary's dates (`EK_FWD!B5`, `C5`, `B6`: the date-to-date block left the Forward
 fiyatlama tab) and its Fiyatlama / Swaption checks (two decimals).
+
+### Toplu iş 28.11.2026 · Girdiler: yılsız tarih ve kotanın yaşı (28.11.2026)
+
+> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
+> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
+> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
+
+To the lists: **"A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"** - C4, a quote's age, is among them.
+And:
+
+> "Bir de tarih girdilerinde yil girmeden de algilayabilmeli. 26/12 yazdigimda otomatik 2026, 1/2 yazdigimda otomatik
+> 2027 getirecek ornegin su anda"
+
+to which, after the proposal (T: next such day; the cells that ask about the past the last one): **"Digerlerini de
+onayliyorum"** (28.11.2026).
+
+**A date typed without its year (T).** `26/12`, `26.12`, `26-12`, `26 Ara` / `26 Aralık` are the **next such day from
+today on**: on 28.11.2026 `26/12` is 26.12.2026 and `1/2` 01.02.2027; today's own day is today.
+- **An end counts from its start** when its start is a later date (the end of a period typed after its start - Forward's
+  broken-date block, Masa's date-to-date, an OIS / MPC entry, Trades' maturity): `1/3` after a start of 15.06.2027 is
+  01.03.2028, never a day before its start.
+- **The cells that ask about the past take the last such day up to today:** DV01 Risk's "Dünkü tarih" (`DV01_RISK!C112`,
+  `WORKDAY(SPOTDATE,-2,…)`), Masa's "Anket ayı" (`MASA!S155`, the month of the last survey), a Trades trade's day and its
+  close (they are never ahead): `27/11` there is 27.11.2026, `1/12` 01.12.2025. The list is `tto/datecells.py` `PAST`.
+- **29 February** is the nearest one that exists that way (29.02.2028 ahead of 28.11.2026, 29.02.2024 back); a day no year
+  has (`31/4`, `30/2`, `32/1`, `1/13`) is refused as any date that does not read. A date typed with its year is as before.
+  A day typed is never rolled to a business day (a tenor shortcut is): it is the day typed.
+- **Where:** every date a user types - a page's date cells (the cell's tooltip says what it became, as for a shortcut:
+  "Kısayol: 26/12 → 26.12.2026"; a list of days kept as text, VİOP's contracts, takes such a day as its item; a meeting's
+  date in the PPK list), Fiyatlama's start / maturity, Günlük İşlemler's value date (under the box: "26/12 → 26.12.2026")
+  and OIS dates - Ctrl+K's `işlem gir usdtry 26/12 10mn` with them -, Trades, the holiday lists and the meeting calendar of
+  Ayarlar. **Today** is the workbooks' TODAY() (the replay's 03.11.2026 in replay), Fiyatlama and Ayarlar' boxes the
+  computer's day. Alarms take no date today (their forms pick a tenor, a contract, a bond): nothing to read there.
+- **One parser** (`tto/inputs.py` `parse_date(text, today, past, after)`, its rule `day_month`; the browser's
+  `history.js parseTrDate` the same rule): a day without its year is read only where the caller says which day it is and
+  which way the input looks. A value read from a workbook or a store always has its year and is never given one.
+
+**A quote's age (C4).** The "BAYAT VERİ" badge catches only the whole feed: one price that stopped while the others flow
+was not seen.
+- The dashboard already knew when each price's value last changed (its answer, a tick that brings another value, a poll
+  that does); it is kept in memory per quote (`Provider.quote_times`) - **nothing is asked of Bloomberg**.
+- **A market cell** (a cell whose formula asks Bloomberg for a bid, an ask, a mid or a last price) says in its tooltip
+  **"son değişim 10:42 (37 dk)"** - the time of the quote whose value it shows (a chain's first source that answers, not
+  its fallback), else the latest of its quotes (a mid of a bid and an ask).
+- **Old, faded:** in market hours (the desk's days, `market_open` – `market_close`), a price unchanged for **N minutes of
+  today's market** - counted from today's opening when it last changed before (a quote that did not move overnight is not
+  old at 09:01). N is a desk setting, **30** by default, 0: never (`ops.settings` `quote_old`, İzleme · Alarmlar → Masa
+  alarmları → Ayarlar). Chosen as a start; the desk tunes it.
+- **The data status counts them:** `/api/status` → `ops.quotes` (how many of the prices are old, the oldest named with
+  their time and minutes) - the count Masa's Kontrol strip is to show ("3 eski kota"; the strip's chips are built with
+  its own cells).
+- Replay has no age (nothing moves there).
+
+Code: `tto/inputs.py` (`yearless`, `day_month`, `parse_date`, `parse_input`), `tto/datecells.py` (`PAST`, `past_cells`),
+`tto/service.py` (`_set_inputs`, `_typed_day_rule`, `_date_place`, `_typed_today`, `_fwd_payload`, `_ois_payload`,
+`set_holidays`), `tto/pricing.py` (`parse_when`), `tto/tradebook.py` (`_Form.date`), `tto/static/js/pages/history.js`
+(`parseTrDate`); `tto/marketdata/age.py`, `base.py` / `bloomberg.py` / `bbg_process.py` (`quote_times`, `PRICE_FIELDS`),
+`tto/render.py` (a market cell's `qa`), `tto/ops.py` (`quote_old`, `Ops.quotes`), `tto/server.py` (`/api/quotes/age`),
+`tto/static/js/quoteage.js`, `tto/static/css/app.css` (its block at the end). Tests: `tests/test_yilsiz_tarih.py`,
+`tests/test_kota_yasi.py`; the browser test's year-less date in the forward summary's free row.
