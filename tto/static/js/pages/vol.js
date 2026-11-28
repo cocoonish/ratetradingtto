@@ -13,6 +13,8 @@ const DEFAULT_ITEMS = '1y, 2y, 5y, 1y2y, 2y5y, 1y2y3y, 2y3y4y, 2y5y10y, 9x12';
 const BLUE = '4F81BD', ORANGE = 'F79646';
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
+/** A number with its sign: "+" only when its decimals show more than zero (never "+0,0"; num() writes no "-0,0"). */
+const signed = (v, d) => { const t = num(v, d, false); return (v > 0 && /[1-9]/.test(t) ? '+' : '') + t; };
 const serialOf = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000) + 25569;
 
 function seg(options, value, onChange, id) {
@@ -273,8 +275,8 @@ export class VolPage {
       }
       return [{ t: name, k: 's', b: 1 }, kindOf(r),
         { t: num(r.level, r.unit === 'pct' ? 2 : (r.unit === 'px' ? 3 : 1), false), v: r.level, k: 'n', tip: isoToTr(r.day) + ' kapanışı' },
-        isNum(r.change) ? { t: (r.change > 0 ? '+' : '') + num(r.change, digits(r), false), v: r.change, k: 'n' } : { t: '', k: '' },
-        isNum(r.sigma) ? { t: (r.sigma > 0 ? '+' : '') + num(r.sigma, 1, false) + ' σ', v: r.sigma, k: 'n', cls: Math.abs(r.sigma) >= 2 ? 'thru' : '',
+        isNum(r.change) ? { t: signed(r.change, digits(r)), v: r.change, k: 'n' } : { t: '', k: '' },
+        isNum(r.sigma) ? { t: signed(r.sigma, 1) + ' σ', v: r.sigma, k: 'n', cls: Math.abs(r.sigma) >= 2 ? 'thru' : '',
           tip: 'Son günün hareketi ÷ ' + d.window + ' günlük realized vol' } : { t: '', k: '' },
         vol(r, 10), vol(r, 20), vol(r, 60), vol(r, 120), vol(r, 250), { t: String(r.n), k: 'n', tip: isoToTr(r.first) + ' – ' + isoToTr(r.day) },
         { t: '', k: '', cls: 'act', act: { label: '📈', title: name + ' geçmişini çiz', fn: () => this.pick({ key: r.key }).catch(errorToast) } }];
@@ -316,7 +318,8 @@ export class VolPage {
       this.horizon, (v) => { this.horizon = v; keep('tto.vol.horizon', v); this.fillCarry(); }, 'carry-horizon'));
     const H = hz[this.horizon] || { label: '', days: 0 };
     const list = this.kind === 'list';
-    this.carryTitle.textContent = 'Carry / vol · ' + (list ? 'yazdıklarınız' : fly ? 'fly\'lar' : 'spread\'ler');
+    // (σ's window in the title: the same for every row - B20, 28.11.2026: the "Gün" column said 20 on each line)
+    this.carryTitle.textContent = 'Carry / vol · ' + (list ? 'yazdıklarınız' : fly ? 'fly\'lar' : 'spread\'ler') + ' · σ ' + d.window + ' gün';
     if (d.error) {
       this.carryNote.textContent = d.error;
       this.setGrid('carry', this.carryBody, [], [], 'Veri yok');
@@ -337,25 +340,25 @@ export class VolPage {
     const cr = (r) => r['cr_' + this.horizon], over = (r) => r['vol_' + this.horizon], ratio = (r) => r['ratio_' + this.horizon];
     // (the list keeps the order it was typed in; the sheet's tables come best ratio first)
     const rows = list ? d.rows.slice() : d.rows.slice().sort((a, b) => (isNum(ratio(b)) ? Math.abs(ratio(b)) : -1) - (isNum(ratio(a)) ? Math.abs(ratio(a)) : -1));
-    const sign = (v, digits) => (isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, digits, false), v, k: 'n' } : { t: '', k: '' });
+    const sign = (v, digits) => (isNum(v) ? { t: signed(v, digits), v, k: 'n' } : { t: '', k: '' });
     const zs = (d.z_windows || [60, 120, 250]).map(String);
     const zName = { 60: 'z 3a', 120: 'z 6a', 250: 'z 1y' };
     const zCell = (r, n) => {
       const v = r.z ? r.z[n] : null;
-      return isNum(v) ? { t: (v > 0 ? '+' : '') + num(v, 2, false), v, k: 'n', cls: Math.abs(v) >= 2 ? 'thru' : '',
+      return isNum(v) ? { t: signed(v, 2), v, k: 'n', cls: Math.abs(v) >= 2 ? 'thru' : '',
         tip: 'Son ' + Math.min(Number(n), r.closes || 0) + ' kapanışa göre z-score' } : { t: '', k: '' };
     };
     // (a caption that follows the horizon keeps one name for the user's column choice)
     this.setGrid('carry', this.carryBody, ['İşlem', { t: list ? 'Piyasa (% / bp)' : 'Piyasa (bp)', ck: 'Piyasa' }, { t: 'C+R ' + H.label + ' (bp)', ck: 'C+R ufukta' },
       'σ (bp/gün)', { t: 'σ ' + H.label + ' (bp)', ck: 'σ ufukta' }, 'C+R / σ', 'Carry\'yi alan']
-      .concat(zs.map((n) => zName[n] || 'z ' + n + 'g')).concat(['Gün']),
+      .concat(zs.map((n) => zName[n] || 'z ' + n + 'g')),
       rows.map((r) => [{ t: r.label, k: 's', b: 1 }, isNum(r.market) ? (r.kind === 'outright' ? { t: num(r.market, 2, false) + ' %', v: r.market, k: 'n' }
         : { t: num(r.market, 1, false), v: r.market, k: 'n' }) : { t: '', k: '' }, sign(cr(r), 1),
         isNum(r.vol) ? { t: num(r.vol, 1, false), v: r.vol, k: 'n', cls: r.full ? '' : 'soft', tip: r.n + ' değişim' + (r.full ? '' : ' (pencere dolmadı)') }
           : { t: r.error || '', k: 's', cls: 'soft' },
         isNum(over(r)) ? { t: num(over(r), 1, false), v: over(r), k: 'n' } : { t: '', k: '' },
-        isNum(ratio(r)) ? { t: (ratio(r) > 0 ? '+' : '') + num(ratio(r), 2, false), v: ratio(r), k: 'n', b: 1, cls: Math.abs(ratio(r)) >= 0.5 ? 'thru' : '' } : { t: '', k: '' },
-        isNum(cr(r)) && cr(r) !== 0 ? sideOf(r, cr(r)) : ''].concat(zs.map((n) => zCell(r, n))).concat([{ t: r.n ? String(r.n) : '', k: 'n' }])),
+        isNum(ratio(r)) ? { t: signed(ratio(r), 2), v: ratio(r), k: 'n', b: 1, cls: Math.abs(ratio(r)) >= 0.5 ? 'thru' : '' } : { t: '', k: '' },
+        isNum(cr(r)) && cr(r) !== 0 ? sideOf(r, cr(r)) : ''].concat(zs.map((n) => zCell(r, n)))),
       list ? 'Yukarıya OIS vadesi, spread ya da fly yazın (örn. 1y, 1y2y, 6m1y2y)' : 'Tabloda işlem yok', rows.map((r) => ({ key: 'OIS:' + r.kind + ':' + r.tenors.join('/'), text: r.tenors.join('').toLowerCase(), from: 'carry' })));
 
     // ---- the picture: carry against the volatility of the same time

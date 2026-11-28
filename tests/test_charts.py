@@ -198,7 +198,8 @@ def test_tlref_path_is_on_a_date_axis_and_the_usd_charts_fit_their_data(service)
 def test_the_workbook_values_reach_the_chart_unchanged(service):
     from conftest import cell
     rates = next(p["data"] for p in service.view(None, "masa")["panels"] if p["type"] == "chart" and p["id"] == "chart0")
-    assert [s["name"] for s in rates["series"]] == ["RET bid", "RET ask", "ICAP", "OIS zero", "VİOP"]
+    # (the offshore curve's one name - MASA!AI5 read "ICAP" before 28.11.2026)
+    assert [s["name"] for s in rates["series"]] == ["RET bid", "RET ask", "Offshore", "OIS zero", "VİOP"]
     for k, col in enumerate("GHIJK"):                            # MASA!AG6:AK16
         for i in range(11):
             v = cell(service, "MASA!A%s%d" % (col, 6 + i))

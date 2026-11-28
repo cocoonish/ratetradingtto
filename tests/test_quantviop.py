@@ -400,7 +400,8 @@ def test_the_page_in_replay_and_over_http(module_service):
     rows = v["viop"]["live"]["rows"]
     assert len(rows) == 12 and (rows[0]["ticker"], rows[0]["expiry"], rows[0]["g"]) == ("A1X6 Curncy", "2026-11-30", 26)
     assert (rows[-1]["ticker"], rows[-1]["name"], rows[-1]["expiry"]) == ("A1V7 Curncy", "Eki27", "2027-10-27")
-    assert rows[0]["bid"] == pytest.approx(33.5815, abs=1e-4) and rows[0]["ask"] == pytest.approx(33.8315, abs=1e-4)
+    # (at the strip's USDTRY spot, every page's since 28.11.2026 - 33,5815 / 33,8315 at Bloomberg's USDTRY MID before)
+    assert rows[0]["bid"] == pytest.approx(33.5943, abs=1e-4) and rows[0]["ask"] == pytest.approx(33.8442, abs=1e-4)
     assert all(r["bid"] < r["ask"] and r.get("fair") is None and not r.get("today") for r in rows)
     with TestClient(create_app(svc), headers=auth(svc, "VİOP HTTP")) as client:
         r = client.get("/api/quant/viop")

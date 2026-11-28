@@ -116,11 +116,12 @@ def test_ois_tabs_quotes_beside_outright_and_ppk_ima_in_two():
     v = raw("ois")
     t, p = tabs(v), panels(v)
     assert list(t) == ["quotes", "mpc", "mpcis", "best", "all"]
-    # Kotalar: OUTRIGHT first, beside it one column - SENARYOLAR, the stub (the one-table Hesaplayıcılar tab's), the solver
-    assert t["quotes"]["panels"] == ["B3", ["B2", "B18", "B8"], "chart3", "chart4", "B5"]
+    # Kotalar: OUTRIGHT first, beside it one column - SENARYOLAR, the stub (the one-table Hesaplayıcılar tab's); the solver's
+    # settings beside İMA PPK in MPC ima (28.11.2026, B12: they ran ~350 px below OUTRIGHT)
+    assert t["quotes"]["panels"] == ["B3", ["B2", "B18"], "chart3", "chart4", "B5"]
     # PPK ima in two, by the names the desk's own shortcuts use
     assert (t["mpc"]["title"], t["mpcis"]["title"]) == ("MPC ima", "MPC işlem")
-    assert t["mpc"]["panels"] == ["B4", "chart0", "chart1", "B6", "B7", "B22"]
+    assert t["mpc"]["panels"] == ["B4", "chart0", "chart1", "B6", "B7", ["B22", "B8"]]
     assert t["mpcis"]["panels"] == ["B13", "PPK1", "B14", "B15", "PPK2", "B16"]
     # IMPLIED RATES opens on its first 24 meetings (all of them one click away), the best lists fold their empty ranks
     assert p["B4"]["limit"] == {"rows": 24}
@@ -148,7 +149,7 @@ def test_the_desks_shortcuts_open_the_tabs_named_after_them(service):
     assert tab_of(masa, links["Kırık vade"]["panel"]) == "Forward fiyatlama" and tab_of(masa, links["PPK anket"]["panel"]) == "Faiz · PPK"
     # the menu's table search: a stacked panel's tab is its tab
     tables = {t["id"]: t["tab"] for t in next(x for x in service.nav() if x["id"] == "ois")["tables"]}
-    assert tables["B18"] == tables["B2"] == tables["B8"] == "Kotalar" and tables["B13"] == "MPC işlem"
+    assert tables["B18"] == tables["B2"] == "Kotalar" and tables["B8"] == "MPC ima" and tables["B13"] == "MPC işlem"
 
 
 # ============================================================================== USD · FOMC
@@ -156,12 +157,13 @@ def test_usd_tabs_main_table_first_and_the_fomc_inputs_in_view():
     v = raw("usd")
     t, p = tabs(v), panels(v)
     assert t["top"]["panels"] == ["top", "spr", "fly", "inp", "chk"] and p["cap"]["hidden"]      # (its caption: the page's title)
-    assert t["fomc"]["panels"] == ["fomc", "inp", "fomc-chart"] and t["curve"]["panels"] == ["crv", "inp", "curve-chart"]
+    # (28.11.2026, B11: the scenario view a table of its own beside the chart - test_duzen_try_fx.py)
+    assert t["fomc"]["panels"] == ["fomc", "fomc-sc", "fomc-chart", "inp"] and t["curve"]["panels"] == ["crv", "inp", "curve-chart"]
     assert t["trades"]["panels"] == ["t1", "t2", "t3", "t4", "t5", "inp"]
     cols = p["fomc"]["cols"]
     # "PENCERE OIS → FOMC ADIMI" (AA:AE: the market's window rate, then the four two-way inputs) right after İma O/N % (K)
     assert cols[cols.index("K") + 1:cols.index("K") + 6] == ["AA", "AB", "AC", "AD", "AE"]
-    assert sorted(cols, key=col_to_index) == [index_to_col(c) for c in range(1, col_to_index("AE") + 1)]
+    assert sorted(set(cols) | set(p["fomc-sc"]["cols"]), key=col_to_index) == [index_to_col(c) for c in range(1, col_to_index("AE") + 1)]
     assert p["fomc"]["freeze"] == 2 and cols[:2] == ["A", "B"]
     for pid, first, last in (("top", 5, 14), ("spr", 20, 29), ("fly", 34, 43)):
         assert p[pid]["grow"] == {"key": "H", "first": first, "extra": 1, "last": last}
@@ -270,7 +272,8 @@ def test_a_tab_may_hold_a_column_of_stacked_panels():
     dashboard reads the ids in their order (tests/test_views.py: every tab names real panels)."""
     views = {v["id"]: v for v in load_views()}
     assert flat(tabs(views["masa"])["viop"]["panels"]) == ["B15", "B16D", "B16", "B17D", "B17"]
-    assert flat(tabs(views["ois"])["quotes"]["panels"]) == ["B3", "B2", "B18", "B8", "chart3", "chart4", "B5"]
+    assert flat(tabs(views["ois"])["quotes"]["panels"]) == ["B3", "B2", "B18", "chart3", "chart4", "B5"]
+    assert flat(tabs(views["ois"])["mpc"]["panels"])[-2:] == ["B22", "B8"]      # (the solver's settings under İMA PPK: B12)
     assert flat(tabs(views["masa"])["sig"]["panels"]) == ["B18D", "B18", "B19D", "B19", "B23D", "B23", "B20"]
 
 

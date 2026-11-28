@@ -97,7 +97,7 @@ def test_the_desk_pages_summary_shows_the_on_beside_each_implied_rate(svc):
     assert p["title"] == "VİOP  ·  kontratlar, ima TRY ve baz" and d["c"] == SHOWN
     head = [c.get("t") for c in d["rows"][d["r"].index(109)]]
     assert head == ["Kontrat", "Gün", "Bid", "Ask", "İma bid (360)", "ON bid (360)", "İma ask (360)", "ON ask (360)", "TRY OIS",
-                    "VİOP − OIS (bp)", "Baz (bp)", "Baz z", "Baz yüzdelik", "VİOP − FX sw (bp)", "VİOP−FX z"]
+                    "VİOP − OIS (bp)", "Baz (bp)", "Baz z", "Baz yüzdelik", "VİOP − Offshore (bp)", "VİOP − Offshore z"]
     assert "ON karşılığı" in p["note"] and "TRY Repo" in p["note"]
     viop = {pid: panel(svc, None, "viop", pid)["data"] for pid in ("B5", "B7")}
     for k, r in enumerate(ROWS):
@@ -114,9 +114,10 @@ def test_the_desk_pages_summary_shows_the_on_beside_each_implied_rate(svc):
             # the VİOP page's TRY Repo of the same contract, as it reads there
             page = viop["B5" if side == "bid" else "B7"]
             assert shown[on_col]["t"] == page["rows"][page["r"].index(on_row)][page["c"].index(col)]["t"]
-    # the replay day's first contract (30.11.2026, 26 days): 33,58 % bid -> 33,20 % its ON, 33,83 % ask -> 33,44 %
+    # the replay day's first contract (30.11.2026, 26 days): 33,59 % bid -> 33,21 % its ON, 33,84 % ask -> 33,45 % (at the
+    # strip's USDTRY spot, every page's since 28.11.2026; 33,58 / 33,20 / 33,83 / 33,44 at Bloomberg's USDTRY MID)
     first = dict(zip(d["c"], d["rows"][d["r"].index(110)]))
-    assert [first[c]["t"] for c in ("B", "C", "F", "A", "G", "O")] == ["30.11.2026", "26", "33,58%", "33,20%", "33,83%", "33,44%"]
+    assert [first[c]["t"] for c in ("B", "C", "F", "A", "G", "O")] == ["30.11.2026", "26", "33,59%", "33,21%", "33,84%", "33,45%"]
 
 
 def test_the_on_follows_the_rate_and_its_days(svc):

@@ -496,8 +496,9 @@ def test_inputs_typed_beside_a_table_are_its_own(service):
     on = {(r, col) for r, row in zip(carry["r"], carry["rows"]) for col, c in zip(carry["c"], row) if c.get("i")}
     assert {(2, "F"), (2, "H"), (3, "H"), (3, "J"), (4, "B"), (4, "D"), (4, "F")} <= on   # DV01, lot, C+R, horizons
     usd = {s["id"]: s["panels"] for s in service.view(user, "usd")["sections"]}
-    # (the main table first, Girdiler right after it - beside the chart -; on İşlemler last: the desk's layout review)
-    assert "inp" in usd["top"] and usd["fomc"][:2] == ["fomc", "inp"] and usd["curve"][:2] == ["crv", "inp"]
+    # (the main table first, Girdiler right after it - beside the chart -; on İşlemler last: the desk's layout review; on
+    # FOMC the scenario view beside the chart and Girdiler under them - B11, 28.11.2026)
+    assert "inp" in usd["top"] and usd["fomc"] == ["fomc", "fomc-sc", "fomc-chart", "inp"] and usd["curve"][:2] == ["crv", "inp"]
     assert "inp" in usd["trades"]
 
 

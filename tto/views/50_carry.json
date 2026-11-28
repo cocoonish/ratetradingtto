@@ -46,7 +46,7 @@
    "scope": "user",
    "group": "carry-4",
    "kind": "auto",
-   "label": "'Yıllık vol' per tenor (Ufuk B table)"
+   "label": "'Yıllık vol' per tenor (Ufuk B table; formula default: the tenor's realized vol, daily σ × √252 from EK_VAR - DV01 Risk → VaR's window)"
   }
  ],
  "panels": [
@@ -110,7 +110,8 @@
    "type": "table",
    "title": "Ufuk B · outright",
    "range": "A23:O39",
-   "hidden": false
+   "hidden": false,
+   "note": "Yıllık vol: varsayılanı vadenin gerçekleşen vol'ü - OIS kotasının günlük hareketlerinin σ'sı (bp) × √252, DV01 Risk → VaR'daki pencerede (EK_VAR; 18M, 1Y ile 2Y'nin ortası). Kendi değerinizi yazabilirsiniz; silince (Delete) varsayılana döner. Tarihçe yoksa boş. C+R/vol = yıllık C+R ÷ yıllık vol."
   },
   {
    "id": "B6",

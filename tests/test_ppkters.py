@@ -485,7 +485,7 @@ def test_the_tables_sit_after_their_sources_and_their_inputs_are_new(service):
     assert (panels["PPK1"]["sheet"], panels["PPK1"]["range"]) == (ex.PPK_SHEET, "A1:M%d" % (ex.PPK_FIRST + WINDOWS - 1))
     assert (panels["PPK2"]["sheet"], panels["PPK2"]["range"]) == (ex.PPK_SHEET, "P1:W%d" % (ex.PPK_FIRST + PAIRS - 1))
     assert panels["B21"]["range"] == "A334:W438"
-    assert next(p for p in usd["panels"] if p["id"] == "fomc")["range"] == "A71:AE83"
+    assert next(p for p in usd["panels"] if p["id"] == "fomc")["range"] == "A73:AE83"           # (from its header row: B11)
     for p in (panels["PPK1"], panels["PPK2"], panels["B21"], next(p for p in usd["panels"] if p["id"] == "fomc")):
         assert "yazın" in p["note"], p["id"]
     assert "Broker Chat" in panels["PPK1"]["note"] and "Bootstrap" in panels["PPK1"]["note"]

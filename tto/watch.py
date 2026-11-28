@@ -75,7 +75,9 @@ OFF_ROWS = {"O/N": 6, "T/N": 7, "1W": 8, "2W": 9, "1M": 10, "2M": 11, "3M": 12, 
 OFF_SIDES = {"bid": "I", "mid": "J", "ask": "K"}
 #: a VİOP contract: its ticker in row 1 (L..W), its numbers one column to the right (M..X)
 VIOP_TICKERS = "LMNOPQRSTUVW"
-VIOP_METRICS = {"ois": ("OIS − VİOP", 18, "bp", 10000.0), "try_bid": ("ima TRY bid", 13, "pct", 100.0),
+#: ("ois": row 18 reads "VİOP mid − OIS (bp)" since 28.11.2026 - the desk's one spread rule -; the watch's "OIS − VİOP" keeps
+#: its sign and name, which the users' items and alarm expressions carry: the same number, negated)
+VIOP_METRICS = {"ois": ("OIS − VİOP", 18, "bp", -1.0), "try_bid": ("ima TRY bid", 13, "pct", 100.0),
                 "try_ask": ("ima TRY ask", 25, "pct", 100.0), "try_mid": ("ima TRY orta", (13, 25), "pct", 100.0),
                 "repo_bid": ("O/N repo bid", 17, "pct", 100.0), "repo_ask": ("O/N repo ask", 29, "pct", 100.0),
                 "ois_rate": ("OIS (vade)", 77, "pct", 100.0), "bid": ("fiyat bid", 16, "fx", 1.0),

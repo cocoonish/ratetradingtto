@@ -559,7 +559,7 @@
    "scope": "user",
    "group": "forward-spot",
    "kind": "number",
-   "label": "USDTRY / EURTRY spot (boş = Bloomberg mid)"
+   "label": "USDTRY / EURTRY spot (boş: USDTRY üst şeridin spotu - BBG ya da manuel spot, MASA!H2; EURTRY Bloomberg mid)"
   },
   {
    "range": "I2",
@@ -2204,14 +2204,14 @@
   {
    "id": "B3",
    "type": "table",
-   "title": "ICAP Implied TL Curve",
+   "title": "Offshore · TRY faizi (ACT/360 basit): FX swap ima 1H–9A, XCCY zero 1Y+",
    "range": "F4:K22",
    "hidden": false
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "TRY OIS Simple Zero Rates",
+   "title": "TRY OIS · basit zero (ACT/360)",
    "range": "N4:P27",
    "hidden": false
   },
@@ -2241,7 +2241,17 @@
    "type": "table",
    "title": "O/N eşlenikleri",
    "range": "D99:N119",
-   "hidden": false
+   "cols": ["D", "E", "F", "G", "H", "I"],
+   "hidden": false,
+   "note": "O/N = 360·((1 + r·gün/360)^(1/gün) − 1), her eğrinin kendi faizinden. Fark sütunları spread kuralıyla: X − OIS, bp, tam sayı. Ara sütunlar (OIS / VİOP gün, OIS ln DF, VİOP faizi) Yardımcı tablolar'da: 'O/N eşlenikleri · ara sütunlar'."
+  },
+  {
+   "id": "B27y",
+   "type": "table",
+   "title": "Yardımcı · O/N eşlenikleri · ara sütunlar (OIS gün, OIS ln DF, VİOP gün, VİOP faizi)",
+   "range": "K99:N119",
+   "hidden": true,
+   "keep_title": true
   },
   {
    "id": "chart0",
@@ -2502,6 +2512,14 @@
    "note": "Fwd temiz fiyat (elle): bir buy / sell-back (geri satım) temiz fiyatı yazın - İma repo, B/E formülünün tersi: (fiyat − Temiz Fiyat + Kupon)·365/(Dirty Price·N). O repo Carry'ye yazılınca B/E yazdığınız fiyat olur."
   },
   {
+   "id": "B24b",
+   "type": "table",
+   "title": "Yardımcı · Tahvil carry'nin Bloomberg alanları (Yield, Dirty Price, Coupon, B/E Yield; yalnız ISIN yazılınca sorulur)",
+   "range": "AA59:AA68",
+   "hidden": true,
+   "keep_title": true
+  },
+  {
    "id": "B25",
    "type": "table",
    "title": "Yardımcı · Forward faiz hesaplayıcı (iki faizden; tek yeri: Masa → Faiz · PPK → TARİH ARASI FAİZ)",
@@ -2512,7 +2530,7 @@
   {
    "id": "B12",
    "type": "table",
-   "title": "Bloomberg ticker'ları (ICAP · TRY OIS · USD OIS · EUR OIS)",
+   "title": "Bloomberg ticker'ları (Offshore · TRY OIS · USD OIS · EUR OIS)",
    "range": "AO4:AR26",
    "hidden": false
   },
@@ -2672,7 +2690,7 @@
     "chart0",
     "B12"
    ],
-   "note": "Eğrilerin okuduğu Bloomberg ticker'ları (ICAP, TRY OIS, USD OIS, EUR OIS) en altta."
+   "note": "Eğrilerin okuduğu Bloomberg ticker'ları (Offshore - ICAP kaynağı -, TRY OIS, USD OIS, EUR OIS) en altta. Eğri adları: başlıktaki ? işareti."
   },
   {
    "id": "off",

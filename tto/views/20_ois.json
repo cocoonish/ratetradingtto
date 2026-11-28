@@ -415,8 +415,9 @@
    "id": "B1",
    "type": "table",
    "title": "Parametreler  ·  bütün sekmelerdeki tablolar bunları okur (DV01/bacak, yuvarlama, senaryo tabanı, C+R, ufuklar, vade limiti, TLREF normalleşmesi)",
-   "range": "A2:L6",
-   "hidden": false
+   "range": "A1:L6",
+   "hidden": false,
+   "note": "Bütün sekmelerdeki tablolar bunları okur: DV01/bacak, yuvarlama, senaryo tabanı, C+R, ufuklar, vade limiti, TLREF normalleşmesi. Başlık ayarların özetidir (OIS_MAIN!A1): panel katlıyken de görünür."
   },
   {
    "id": "B2",
@@ -727,7 +728,7 @@
    "title": "Kotalar",
    "panels": [
     "B3",
-    ["B2", "B18", "B8"],
+    ["B2", "B18"],
     "chart3",
     "chart4",
     "B5"
@@ -742,7 +743,7 @@
     "chart1",
     "B6",
     "B7",
-    "B22"
+    ["B22", "B8"]
    ]
   },
   {

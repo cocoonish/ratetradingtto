@@ -444,7 +444,7 @@
   {
    "id": "B13",
    "type": "table",
-   "title": "ICAP",
+   "title": "Offshore",
    "range": "K84:X95",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false
@@ -558,7 +558,7 @@
   {
    "id": "B28",
    "type": "table",
-   "title": "FX swap ima TRY ff",
+   "title": "Offshore TRY ff",
    "range": "K264:X276",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
@@ -567,7 +567,7 @@
   {
    "id": "B29",
    "type": "table",
-   "title": "VİOP orta ima ff − FX swap ima ff (bp)",
+   "title": "VİOP orta ima ff − Offshore ff (bp)",
    "range": "K278:X290",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
@@ -576,7 +576,7 @@
   {
    "id": "B30",
    "type": "table",
-   "title": "FX swap ima ff − OIS FRA (bp)",
+   "title": "Offshore ff − OIS FRA (bp)",
    "range": "K292:X304",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "hidden": false,
@@ -603,7 +603,7 @@
   {
    "id": "B35",
    "type": "table",
-   "title": "FX SWAP BAZI",
+   "title": "OFFSHORE − OIS BAZI",
    "range": "K353:S365",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S"],
    "freeze": 1,
@@ -612,7 +612,7 @@
   {
    "id": "B36",
    "type": "table",
-   "title": "VİOP − FX SWAP",
+   "title": "VİOP − OFFSHORE",
    "range": "K366:X378",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
    "freeze": 1,
@@ -865,14 +865,14 @@
   {
    "id": "B3",
    "type": "table",
-   "title": "TRY OIS basit zero faiz",
+   "title": "TRY OIS · kotalar (ACT/365 basit)",
    "range": "B41:E52",
    "hidden": false
   },
   {
    "id": "B4",
    "type": "table",
-   "title": "ICAP ima TL eğrisi",
+   "title": "Offshore · ICAP kotaları (FX swap ima 1H–9A basit, XCCY par 1Y+; ACT/360)",
    "range": "B56:E69",
    "hidden": false
   },

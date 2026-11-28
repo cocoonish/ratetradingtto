@@ -239,9 +239,10 @@ def _page_cell(service, vid, ref, panels=None):
 def test_numbers_read_as_on_the_rest_of_the_dashboard(service):
     """9: day counts as whole days ("1.097", not "1.097,00"), DV01 Risk's P&L rates with two decimals as its other tabs,
     Borsa's O/N swap points as points ("415,50", not "415,50000000") - their look only: the values are the cells' own."""
-    days = _page_cell(service, "forward", "Forward!K112", ["B27"])
+    # (the O/N table's day columns stand in its helper table since 28.11.2026: "O/N eşlenikleri · ara sütunlar", B27y)
+    days = _page_cell(service, "forward", "Forward!K112", ["B27y"])
     assert re.match(r"^\d{1,3}(\.\d{3})*$", days["t"]) and days["v"] == cell(service, "Forward!K112") == int(days["v"])
-    vgun = _page_cell(service, "forward", "Forward!M112", ["B27"])
+    vgun = _page_cell(service, "forward", "Forward!M112", ["B27y"])
     assert re.match(r"^\d{1,3}(\.\d{3})*$", vgun["t"]) and vgun["v"] == cell(service, "Forward!M112")
     for ref in ("DV01_RISK!D120", "DV01_RISK!E120", "DV01_RISK!G112"):
         c = _page_cell(service, "dv01", ref)

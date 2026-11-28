@@ -34,6 +34,8 @@ const BLUE = '4F81BD', ORANGE = 'F79646', PURPLE = '8064A2', GREEN = '9BBB59';
 const REFRESH_MS = 12000;
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
+/** A number with its sign: "+" only when its decimals show more than zero (never "+0,0"; num() writes no "-0,0"). */
+const signed = (v, d) => { const t = num(v, d, false); return (v > 0 && /[1-9]/.test(t) ? '+' : '') + t; };
 
 function pref(key, fallback) {
   try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
@@ -379,7 +381,7 @@ export class FxPage {
       const c = (v, dd) => cellNum(v, dd, { cls: pick.trim() });
       return [{ t: r.pair, k: 's', b: 1, cls: pick.trim(), tip: r.group }, { t: r.group, k: 's', cls: (pick + ' muted').trim() },
         isNum(r.spot) ? { t: num(r.spot, d, false), v: r.spot, k: 'n', b: 1, cls: pick.trim() } : { t: r.spot_why || '', k: 's', cls: (pick + ' soft').trim() },
-        isNum(r.chg) ? { t: (r.chg > 0 ? '+' : '') + num(r.chg, 2, false) + '%', v: r.chg, k: 'n', cls: pick.trim(),
+        isNum(r.chg) ? { t: signed(r.chg, 2) + '%', v: r.chg, k: 'n', cls: pick.trim(),
           tip: 'Son kapanışa göre' } : { t: '', k: '', cls: pick.trim() },
         c(r.ATM_1W, 2), c(r.ATM_1M, 2), c(r.ATM_3M, 2), c(r.ATM_1Y, 2), c(r.RR25_1M, 2), c(r.RR25_3M, 2), c(r.BF25_1M, 2), c(r.RR10_1M, 2),
         cellNum(r.move_1m, d, { cls: pick.trim(), tip: '1 ayda ±1σ, yalnız ATM 1M vol ile: forward × ATM × √(gün / 365) — simetrik, skew yok' }),
@@ -446,7 +448,7 @@ export class FxPage {
       : { t: '', k: '' });
     const rows = s.rows.map((r) => {
       const fit = r.fit ? Math.max(...Object.values(r.fit).filter(isNum).map(Math.abs)) : null;
-      const fitTip = r.fit ? Object.entries(r.fit).map(([k, v]) => k + ': ' + (isNum(v) ? (v > 0 ? '+' : '') + num(v, 3, false) : '–')).join('\n') : '';
+      const fitTip = r.fit ? Object.entries(r.fit).map(([k, v]) => k + ': ' + (isNum(v) ? signed(v, 3) : '–')).join('\n') : '';
       const fwdMine = (r.own || []).includes('FWD');
       const q = r.q || {};
       return [{ t: r.tenor, k: 's', b: 1 }, { t: r.date ? isoToTr(r.date) : '', k: 's', tip: 'Teslim (valör) tarihi' }, cellNum(r.days, 0),
