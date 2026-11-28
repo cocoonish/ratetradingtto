@@ -910,9 +910,11 @@ class _Form(object):
 
     def date(self, key: str, what: str, start: Optional[_dt.date], cal: Tuple[str, ...],
              src: Optional[Dict[str, Any]] = None, err: Optional[str] = None,
-             required: bool = False) -> Tuple[Optional[_dt.date], Optional[str]]:
+             required: bool = False, past: bool = False) -> Tuple[Optional[_dt.date], Optional[str]]:
         """A date: as a date ("18.11.2026", "2026-11-18") or a shortcut of the dashboard ("2Y", "1A", "ay sonu", "+2" -
-        tto/shortcuts.py) counted from ``start`` on the business days of ``cal``; with the tenor it says ("2Y")."""
+        tto/shortcuts.py) counted from ``start`` on the business days of ``cal``; with the tenor it says ("2Y").  A day
+        without its year ("26/12", the desk 28.11.2026) is the next such day from today - and from ``start`` - on;
+        ``past`` (a trade's day, its close) the last one up to today (tto/inputs.py ``parse_date``)."""
         err = err or key
         v = (src or self.raw).get(key)
         if self._blank(v):
@@ -935,10 +937,12 @@ class _Form(object):
             tenor = tenor_of(sc)
             self.echo[err] = "%s → %s" % (s, day.strftime("%d.%m.%Y"))
             return day, tenor
-        serial = parse_date(s)
+        serial = parse_date(s, self.today, past=past, after=start)
         if serial is None:
             self.fail(err, "%s anlaşılamadı: %s" % (what, s))
             return None, None
+        if parse_date(s) is None:                    # (typed without its year: the form says which day it is)
+            self.echo[err] = "%s → %s" % (s, serial_to_date(serial).strftime("%d.%m.%Y"))
         return serial_to_date(serial), None
 
     def choice(self, key: str, options: Sequence[str], what: str, src: Optional[Dict[str, Any]] = None,
@@ -1494,7 +1498,7 @@ class TradeBook(object):
             t["pair"] = pair
         cal = self._calendar(product, pair)
         today = self._today()
-        td, _ = f.date("trade_date", "İşlem tarihi", today, cal, required=True)
+        td, _ = f.date("trade_date", "İşlem tarihi", today, cal, required=True, past=True)
         if td is not None and td > today:
             f.fail("trade_date", "işlem tarihi bugünden ileri olamaz")
         t["trade_date"] = _iso(td)
@@ -2299,7 +2303,7 @@ class TradeBook(object):
             raise ServiceError("işlem zaten kapanmış")
         f = _Form({"close_date": close_date, "close_price": close_price}, lang, self._today(), self._holidays)
         cal = self._calendar(row["product"], row.get("pair"))
-        day, _ = f.date("close_date", "Kapanış tarihi", self._today(), cal, required=True)
+        day, _ = f.date("close_date", "Kapanış tarihi", self._today(), cal, required=True, past=True)
         price = f.number("close_price", "Kapanış fiyatı", required=True,
                          rate=row["product"] in ("ois", "sofr") or row.get("price_kind") == "yield")
         if day is not None and day > self._today():

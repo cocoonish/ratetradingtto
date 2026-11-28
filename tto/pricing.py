@@ -133,10 +133,11 @@ _WEEKS = re.compile(r"^(\d{1,2})\s*(?:w|h|hafta|week|weeks)$")
 _PAIR = re.compile(r"^(.+?)\s*[x×*]\s*(.+)$")
 
 
-def parse_when(text: Any) -> Optional[Tuple[str, float]]:
+def parse_when(text: Any, today: Any = None) -> Optional[Tuple[str, float]]:
     """A start or a maturity as typed: ``("spot", 0)`` - empty, "spot" -, ``("m", months)`` - "1Y", "18M", "2Y3M", "3A",
     "1 yıl 6 ay", a bare "12" (an FRA's months) -, ``("w", weeks)`` - "2W", "2H" - or ``("d", serial)`` - a date
-    ("04.05.2028", "2028-05-04", "4 May 2028"); ``None`` when it is none of them."""
+    ("04.05.2028", "2028-05-04", "4 May 2028"; a day without its year, "26/12", the next one from ``today`` on - the
+    computer's day when none is given: tto/inputs.py ``parse_date``); ``None`` when it is none of them."""
     if isinstance(text, (int, float)) and not isinstance(text, bool):
         return ("m", float(int(text))) if float(text) == int(text) and 0 < text < 1000 else None
     s = " ".join(_fold(str(text or "")).split())
@@ -151,7 +152,8 @@ def parse_when(text: Any) -> Optional[Tuple[str, float]]:
     if m and (m.group(1) or m.group(2)):
         months = int(m.group(1) or 0) * 12 + int(m.group(2) or 0)
         return ("m", float(months)) if 0 < months < 1000 else None
-    d = parse_date(str(text))
+    import datetime as _dt
+    d = parse_date(str(text), today if today is not None else _dt.date.today())
     return ("d", d) if d is not None else None
 
 

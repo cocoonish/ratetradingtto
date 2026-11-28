@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from .xl.values import date_to_serial
+from .xl.values import date_to_serial, serial_to_date
 
 _NUM = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 _DMY = re.compile(r"^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})$")
 _YMD = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})")
+#: a day and its month without a year: "26/12", "26.12", "26-12" (the desk, 28.11.2026)
+_DM = re.compile(r"^(\d{1,2})[./-](\d{1,2})$")
 _TR_MONTHS = {"oca": 1, "şub": 2, "sub": 2, "mar": 3, "nis": 4, "may": 5, "haz": 6, "tem": 7, "ağu": 8, "agu": 8,
               "eyl": 9, "eki": 10, "kas": 11, "ara": 12,
               "jan": 1, "feb": 2, "apr": 4, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
@@ -103,8 +105,62 @@ def parse_amount(text: str, lang: str = "tr") -> Optional[float]:
     return x * _UNITS.get((m.group(2) or "").lower(), 1.0)
 
 
-def parse_date(text: str) -> Optional[float]:
-    """Date text -> Excel serial (``3.11.2026``, ``03/11/26``, ``2026-11-03``, ``3 Kas 2026``)."""
+def as_day(when: Any) -> _dt.date:
+    """A day given as a date (a datetime's day), an Excel serial or an ISO text ("2026-11-28")."""
+    if isinstance(when, _dt.datetime):
+        return when.date()
+    if isinstance(when, _dt.date):
+        return when
+    if isinstance(when, (int, float)) and not isinstance(when, bool):
+        return serial_to_date(float(when))
+    return _dt.date.fromisoformat(str(when).strip()[:10])
+
+
+def yearless(text: Any) -> Optional[Tuple[int, int]]:
+    """(day, month) of a date typed without its year - ``26/12``, ``26.12``, ``26-12``, ``26 Ara``, ``26 Aralık`` -;
+    ``None`` for any other text (a date with its year, a number, a tenor)."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip()
+    m = _DM.match(s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    parts = re.split(r"[\s.\-/]+", s)
+    if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) <= 2 and _fold(parts[1])[:3] in _TR_MONTHS:
+        return int(parts[0]), _TR_MONTHS[_fold(parts[1])[:3]]
+    return None
+
+
+def day_month(day: int, month: int, today: Any, past: bool = False, after: Any = None) -> Optional[_dt.date]:
+    """The day ``day``.``month`` the desk means when it types no year (the desk, 28.11.2026: "26/12 yazdigimda otomatik
+    2026, 1/2 yazdigimda otomatik 2027"): the first one from ``today`` on - and from ``after`` on, when it is later (the
+    end of a period counts from its start: "1/3" after a start of 15.06.2027 is 01.03.2028) -; with ``past`` (a cell
+    that asks about the past: yesterday's date, a trade's day) the last one up to ``today``.  29 February is the nearest
+    one there is that way (29.02.2028 from 28.11.2026; 29.02.2024 back); a day no year has (31.04, 30.02, 0.5, 1.13) is
+    ``None``."""
+    t = as_day(today)
+    if not past and after is not None:
+        t = max(t, as_day(after))
+    step = -1 if past else 1
+    for k in range(9):                       # (two 29 Februaries are at most eight years apart: 2096 → 2104)
+        try:
+            d = _dt.date(t.year + step * k, month, day)
+        except (ValueError, OverflowError):
+            if month == 2 and day == 29:
+                continue                     # (not a leap year: the next one)
+            return None
+        if (d <= t) if past else (d >= t):
+            return d
+    return None
+
+
+def parse_date(text: str, today: Any = None, past: bool = False, after: Any = None) -> Optional[float]:
+    """Date text -> Excel serial (``3.11.2026``, ``03/11/26``, ``2026-11-03``, ``3 Kas 2026``).
+
+    A day and month without a year (``26/12``, ``26.12``, ``26-12``, ``26 Ara``: :func:`yearless`) is read only when
+    ``today`` is given - a date a user types, where the caller knows the day and which way the input looks: the next
+    such day from ``today`` on (from ``after`` on when that is later), ``past`` the last one (:func:`day_month`).  A value
+    read from a workbook or a store always has its year and is never given one."""
     s = text.strip()
     m = _DMY.match(s)
     try:
@@ -122,6 +178,11 @@ def parse_date(text: str) -> Optional[float]:
             if y < 100:
                 y += 2000
             return date_to_serial(_dt.date(y, _TR_MONTHS[parts[1][:3].lower()], int(parts[0])))
+        if today is not None:
+            dm = yearless(s)
+            if dm is not None:
+                d = day_month(dm[0], dm[1], today, past, after)
+                return date_to_serial(d) if d is not None else None
     except (ValueError, OverflowError):
         return None
     return None
@@ -159,11 +220,14 @@ def parse_check(raw: Any, lang: str = "tr") -> Optional[float]:
 
 
 def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, kind: str = "auto",
-                options: Optional[List[str]] = None, lang: str = "tr", aliases: Optional[Dict[str, str]] = None) -> Any:
+                options: Optional[List[str]] = None, lang: str = "tr", aliases: Optional[Dict[str, str]] = None,
+                today: Any = None, past: bool = False, after: Any = None) -> Any:
     """Convert user text to the value stored in the cell.
 
     * empty text -> ``None`` (blank cell)
-    * date cells accept dates (or serial numbers)
+    * date cells accept dates (or serial numbers) - a day and month without a year too ("26/12": the next such day from
+      ``today`` - the computer's day when the caller gives none - on, from ``after`` on when that is later; ``past``: the
+      last one - :func:`parse_date`); a list of days kept as text takes such a day as its item
     * percent cells store a fraction: ``35,5`` / ``35,5%`` / ``0,355`` all give 0.355 (Excel's automatic
       percent entry: a typed number of 1 or more is a percentage, a smaller one is the fraction itself)
     * amount cells (a nominal, a trade size: declared ``"kind": "amount"`` in the page definition - a number format
@@ -192,6 +256,8 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
         return None
     if len(s) > 2000:
         raise InputError("girdi çok uzun")
+    if today is None:
+        today = _dt.date.today()                 # (what a user types: a day without its year counts from today)
     if aliases:
         typed = _fold(s)
         for word, item in aliases.items():
@@ -205,8 +271,8 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
                 n = parse_number(o, lang)
                 return n if n is not None and re.match(r"^[+-]?[\d.,]+$", o) else o
         # a list of days kept as text (VİOP contracts "30.11.2026", matched by the formulas as text): a day typed
-        # another way ("30.11.26", "30/11/2026") is that item - never a date number the list does not hold
-        day = parse_date(s)
+        # another way ("30.11.26", "30/11/2026", "30/11") is that item - never a date number the list does not hold
+        day = parse_date(s, today, past, after)
         if day is not None:
             for o in options:
                 if parse_date(o) == day:
@@ -221,7 +287,7 @@ def parse_input(raw: Any, percent_cell: bool = False, date_cell: bool = False, k
             raise InputError("tutar anlaşılamadı: %r (örn. 100m, 2,5mn, 500k, 100.000.000)" % s)
         return n
     if date_cell or kind == "date":
-        d = parse_date(s)
+        d = parse_date(s, today, past, after)
         if d is not None:
             return d
         n = parse_number(s, lang)

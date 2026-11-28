@@ -45,7 +45,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import layout as lay
-from .inputs import InputError, parse_input
+from .inputs import InputError, parse_input, yearless
 from .service import ServiceError, _from_json, _to_json
 from .store import now_iso
 from .xl import numfmt
@@ -447,9 +447,12 @@ class Copies(object):
             fsi, frc = h.member_cell if h is not None else (si, rc)      # (a two-way member: read in its cell's format)
             xf = book.model.sheets[fsi].styles.get(frc, 0)
             fmt = book.model.numfmts[xf] if xf < len(book.model.numfmts) else "General"
+            # a day typed without its year ("26/12"): as in the table - the next one, an end from its start on, the last
+            # one in a cell that asks about the past (Service._typed_day_rule; the copy's own values count)
+            rule = (self.svc._typed_day_rule(book, fsi, frc, d, calc, {}) if yearless(raw) else (None, False, None))
             try:
                 val = parse_input(raw, numfmt.is_percent_format(fmt), numfmt.is_date_format(fmt), d.kind,
-                                  book.options_for(si, rc, calc), lang, d.aliases)
+                                  book.options_for(si, rc, calc), lang, d.aliases, *rule)
             except InputError as exc:
                 errors.append("%s: %s" % (shown, exc))
                 continue

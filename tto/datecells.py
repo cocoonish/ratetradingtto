@@ -30,6 +30,10 @@ not say (:meth:`DateCells.context`): the **pair** is that of the dates the cell'
 ``D2``: USDTRY) -, when they agree (a row's spot date that is USDTRY's or EURTRY's as the row says has none); the
 **start** is the date the workbook counts the cell's days from (``O35 = O34-O33``: the End counts from the Start), else
 the pair's spot date.
+
+A day typed without its year ("26/12": tto/inputs.py :func:`~tto.inputs.day_month`, the desk 28.11.2026) is the next
+such day - from the cell's start on, when that start is a later date (the End of a period) - except in the cells that
+ask about the past (:data:`PAST`: yesterday's date, the month of the last survey), where it is the last one.
 """
 from __future__ import annotations
 
@@ -669,6 +673,20 @@ def show_inputs(book) -> List[Key]:
 def _fmt(model: Model, si: int, rc: int) -> str:
     xf = model.sheets[si].styles.get(rc, 0)
     return model.xfs[xf][0] if xf < len(model.xfs) else "General"
+
+
+#: The date inputs that ask about the past: a day typed there without its year is the last such day up to today, not
+#: the next (the desk, 28.11.2026: "Geçmişi soran hücrelerde ... en son geçen gün") - DV01 Risk's "Dünkü tarih" (the
+#: day of yesterday's P&L explanation, ``WORKDAY(SPOTDATE,-2,…)``) and Masa's "Anket ayı" (the month of the last survey
+#: of the market participants).  Fixed cells of their sheets: no row of a meeting, a contract or a bond moves them.
+PAST: Dict[str, Tuple[str, ...]] = {
+    "tto": ("DV01_RISK!C112", "MASA!S155"),
+}
+
+
+def past_cells(book_id: str, model: Model) -> frozenset:
+    """The cells of :data:`PAST` a book has (a sheet it does not have: none)."""
+    return frozenset(cells_of(model, PAST.get(book_id, ())))
 
 
 #: The cells shown as dates (:func:`apply`): every formula cell the rule finds a date that is not formatted as one -

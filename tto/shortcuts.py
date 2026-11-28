@@ -24,7 +24,10 @@ the caller's to say: the row's spot / value date where the page definition names
 tto/views/__init__.py) or the cell's formulas do (tto/datecells.py: the date the workbook counts its days from), else
 today's spot.  The business days are those of the calendar the caller gives (the desk's holiday lists of both
 currencies of the pair: :func:`tto.extras.pair_calendar`).  Text that starts with "=" is a formula, never a shortcut;
-anything that is no shortcut here (a date, a number) is parsed as it always was.
+anything that is no shortcut here (a date, a number) is parsed as it always was.  A day and month without a year
+("26/12", "26.12", "1-2", "26 Ara") is no shortcut either: it is a date, read by the one parser of typed dates
+(:func:`tto.inputs.parse_date`) - the next such day from today on (from the cell's start on when that is later), the
+last one in a cell that asks about the past (:data:`tto.datecells.PAST`); never rolled to a business day: the day typed.
 """
 from __future__ import annotations
 
