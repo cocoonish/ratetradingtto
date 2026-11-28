@@ -1973,7 +1973,7 @@ a.golink { text-decoration: none; white-space: nowrap; }
 /* The forward card (every source at the value date, the ladder, the quote), the column of the DV01 buckets with
    "Bu işlemi hedge'le" and "Pozisyona ekle (deneme)" under them, "İşlem gir ▾" on the result, the quote log. */
 .pricing .pr-main > .pr-left { flex: 0 1 auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; max-width: 660px; }
-.pricing .pr-left > .panel { flex: 0 0 auto; }
+.pricing .pr-left > .panel, .pricing .pr-left > #pr-buckets-panel { flex: 0 0 auto; }   /* (not the 430px basis of a row: a column's height) */
 .pricing .pr-headline { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
 .pricing .pr-loading { flex: 1 1 100%; margin: 0; }
 .pricing .pr-wait { padding: 10px 12px; }

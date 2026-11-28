@@ -1130,6 +1130,61 @@ Code: `tto/pricing.py` (`Curves.pillars`, the bucket rows of `price`), `tto/stat
 Tests: `tests/test_pricing.py` (`test_each_dv01_bucket_says_its_quote_the_rate_its_bump_moves`), `tests/test_curvepoints.py`
 (a typed point's quote), the browser test's Fiyatlama checks.
 
+### Fiyatlama: forward kartı, kotasyon defteri, hedge ve deneme, işlem gir (28.11.2026)
+
+The desk, to the integrator's lists of 20 + 20 + 20 proposals (28.11.2026): **"A - Yildizlilari yap. B - Hepsini yap. C -
+2-3-4-5-8-10-12-13-16"** (here: C2 the quote log, C3 hedge and trial, A1 "Fiyatladığın yerden işlem gir", B7 the empty and
+loading states), and of Fiyatlama:
+
+> "Bir de fiyatlama kisminda forward gelsin istiyorum. Oraya yazdigimda forward fiyatlamak icin de isimi kolaylastiracak
+> bir sey olmali. Vadeleri rahat gorup, rette veya diger curvelerde ne oldugunu vs rahat gorebilecegim bir sey olmali.
+> Fiyatladiktan sonra bunu done diye gunluk islemlere alabilmeliyim veya done olmadiysa da hit ratiosunu takip
+> edebilmeliyim."
+
+and, of the proposal written from it (F) with the others: **"Digerlerini de onayliyorum"**.
+
+**What was built:**
+- **The forward card** (an FX forward on Fiyatlama): every source at the value date, each by its own rule - none takes
+  another curve's number (docs/curves.md, Fiyatlama): **RET** (its bid / ask linear in days between RET's tenors, as the
+  Forward sheet and FORWARD KOTASYON read RET at a date), **OIS + spread** (FORWARD KOTASYON's rule: the chosen OIS curve's
+  ACT/360 simple rate + the general spread, the market's in "Piyasa spread"; a value date that is one of the matrix's rows
+  is that row as the user sees it, their typed values included; any other date the matrix's own formulas at that date in a
+  layer of the engine - nothing of the user's changes), **the offshore market** (the Forward sheet's FX swap implied bid /
+  ask at the date; Fiyatlama's offshore curve for the mid) and **VİOP** (a contract expiring near the date: its implied
+  TRY rate). Each one's TRY rate, outright and points, bid and ask, and its difference to the source picked (points, bp);
+  the **ladder** (the standard tenors around the value date and the PPK meetings between them); **Kotasyon kopyala**,
+  **Done → Günlük İşlemler** (the FX forward form filled at the quoted level), **Done değil**.
+- **The quote log** (C2): every "Kotasyon kopyala" of a table and every quote of the card, with its status; the hit ratio
+  by client and by product; "Bu fiyattan işlem gir" on a quote.
+- **C3**: "Bu işlemi hedge'le" (each OIS bucket's opposite TRY OIS) and "Pozisyona ekle (deneme)" (DV01 Risk's buckets +
+  the instrument, before / after: the total DV01, the VaRs, the PPK decision risk) - nothing saved.
+- **A1**: "İşlem gir ▾" (Günlük İşlemler / Trades) on the result, "İşleme al" on every Toplu line.
+
+**Choices made while building it** (said on the page and in README; ask the desk before changing):
+- **The source picked first is OIS + spread** (FORWARD KOTASYON's, the desk's pricing design); the picked one is kept per
+  user. A source the date does not have (VİOP far from a contract) falls back to it.
+- **The desk's side of a quote**: AL (the desk buys the currency) deals at the bid, SAT at the ask - each side on its own
+  spot (bid / ask), as FORWARD KOTASYON prices them.
+- **VİOP is "near" within 7 calendar days** of a contract's expiry; its implied TRY rate is applied at the value date's
+  days (the contract's own price and expiry in the tip). No EURTRY contract.
+- **The ladder**: 1W, 2W, 1M, 2M, 3M, 6M, 9M, 1Y (and 18M, 2Y past 1Y) up to the first tenor at or past the value date, the
+  PPK meetings between the spot and that tenor (their decision days), the value date; each source's mid (bid / ask in the
+  tip).
+- **The hit ratio** is done / (done + not done): a quote still open counts in neither. The log is the desk's: everyone sees
+  every quote with who gave it. A table copied whole is one record without levels (its text says what was sent).
+- **"Done"** marks the quote done when the form opens; the trade is saved by the trader in Günlük İşlemler as always (the
+  quote's number goes with the form, `quote_log`, for the blotter to keep: integrator note).
+- **No OIS hedge for an offshore instrument** (XCCY, FX forward): offshore ≠ OIS; the card says so.
+- **The trial's columns**: a TRY OIS / FRA goes to DV01 Risk's TLREF column (VaR) and to the position (its formula default,
+  Onshore + TLREF, follows the column); an XCCY / FX forward only to the Offshore column, never OIS. Which Murex column the
+  desk's OIS trades belong to (Onshore or TLREF) was asked for C1 and not answered: TLREF until the desk says.
+
+Code: `tto/pricing.py` (`forward_card`, `sources_at`, `ladder_dates`, `card_quote_text`, `hedges`, `to_buckets`,
+`trade_specs`), `tto/quotelog.py`, `tto/store.py` (`quote_log`), `tto/service.py` (`_forward_card`, `pricing_quote`,
+`_pricing_trial`, `quote_log*`, the log in `client_quote`), `tto/server.py`, `tto/static/js/pages/pricing.js`,
+`tto/static/js/quotelog.js`. Tests: `tests/test_fiyatlama_forward.py`, `tests/test_quotelog.py`, the browser test's checks
+after Fiyatlama's.
+
 ### Ways back: a quote's spread, a forward price's repo, a move's vol (24.11.2026)
 
 Fourteen pricing tools that worked one way only were listed to the desk; the desk answered "1-2-3-4-5-6-7-8-11-11-13",

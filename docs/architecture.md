@@ -250,6 +250,14 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   - **Derived inputs** (values worked out for a user, such as the PPK mirror) live in `engine.derived` and join only
     through `engine.set_user_inputs`. A `Calc(engine, shared, overlay)` built by hand does not see them (see
     [curves.md](curves.md#asw-fx-the-asw-sheet-repriced-on-offshore-rates)).
+- **Layers** (`engine.layer(key, parent, overlay)`, `xl.engine.LayerCalc`): a calculation on top of a user's (or the
+  shared one) with inputs of its own, evaluating only what follows them - their derived inputs included, as the user's
+  calculation is the parent. Who uses them: temporary table copies (`tto/copies.py`), a period's blotter tables
+  (`_blotter_layer`), the offshore history, and Fiyatlama (28.11.2026): the forward card evaluates FORWARD KOTASYON's
+  row at any date with a row's valör (`EK_FWD!B`) set in a layer (`("pricing-fwd", user, k)`, up to three of ten rows,
+  dropped when the page leaves the FX forward; a row with an "Elle değer" on what the date's evaluation reads is not used),
+  and "Pozisyona ekle (deneme)" adds the instrument's DV01 to DV01 Risk's pastes in a layer (`("pricing-trial", user)`,
+  dropped right after it is read). Nothing of a layer is stored, and the user's calculation never sees it.
 - **Array arithmetic has fast paths** (`tto/xl/values.py`, `tto/xl/functions.py`). Each keeps its general path, the
   code it had before, for everything else:
 
@@ -371,7 +379,7 @@ figures' number format and Masa chart 2's RET ask colour.
 | Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `twoway` (two-way tables), `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `decimals` (each user's own decimals, on the answers), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay}`, `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve` (also "TLREF over a window": a meeting window's rate ↔ its O/N on business days, the PPK step's one conversion - EK_PPK, Broker Chat), `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption` - `vol_unit` also a premium or breakeven, `<kind>:<measure>`, two-way), `bonds` (catalog) |
-| Pages and features | `varrisk` (DV01 Risk → VaR: the realized covariances of the OIS and offshore DV01 buckets from the history, written into EK_VAR), `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
+| Pages and features | `varrisk` (DV01 Risk → VaR: the realized covariances of the OIS and offshore DV01 buckets from the history, written into EK_VAR), `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `quotelog` (the quotes given to clients and the hit ratio; below), `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
 | Quant | `quant` (the runner) + `quantfam`, `quantmath`, `quantuniv`, `quantsira`, `quanttrend`, `quantml`, `quantbt`, `quantlevels`, `quantcons`, `quantcurve`, `quantopt`, `quantoptspot`, `quantlead`, `quantviop`, `quantintraday`, `quantpath`, `quantdibssw` |
 | Ops | `ops` (log, backups, freshness), `progress`, `datadir` (one dashboard per data folder, the network drive), `recover` (`kurtar`: a damaged database read back) |
 
@@ -388,6 +396,7 @@ figures' number format and Masa chart 2's RET ask colour.
 | `bbg_usage` | today's Bloomberg hits by key (the status window's sheets and fields), kept across a restart |
 | `ret_history`, `ret_fair_log` | RET editor, `retfair` |
 | `broker_quotes` | `brokerchat` |
+| `quote_log` | `quotelog` (28.11.2026): a quote given to a client - its day, status (`open` / `done` / `not_done`), who and when, the record (`payload`: product, instrument, pair, side, levels, source, page, client, value date, size, text, `trade_id`). Written by `Service.client_quote` (every "Kotasyon kopyala"), `Service.pricing_quote` (Fiyatlama's forward card) and `POST /api/quote-log`; recovered by its number and birth, the later `updated_at` winning (`recover.RULES`) |
 | `watch_closes` | `watch` |
 | `feedback`, `chat`, `agenda*` | `desk` |
 | `kv` | everyone, JSON values (table below) |
@@ -614,6 +623,38 @@ Günlük İşlemler's entry is filled from other pages; nothing below saves a tr
   "Excel'den yapıştır" with its own preview
   (`/api/blotter/bulk/preview`) and save (`/api/blotter/bulk`, one transaction) → the browser then resets the kept rows'
   Tutar cells (`/api/reset`, found by "Satır").
+- **Fiyatlama** (28.11.2026, A1 and C3; `pages/pricing.js`): `/api/pricing` answers with `trade` - the instrument as
+  Günlük İşlemler's form takes it (`blotter`: `BlotterPage.fillForm`'s spec, numbers left as numbers) and as Trades'
+  "Yeni işlem" (`trades`), `null` with the reason where the form has no such product (`pricing.trade_specs`) - and every
+  Toplu line its own; "İşlem gir ▾" opens `ctx.openTrade` or fills Trades' form (`fillTrades`, the Ctrl+K way with the
+  structure, start, FRA and rate too). Its hedges ("Hepsine işlem gir") and "Tümünü işleme al" open "Excel'den
+  yapıştır" with a paste of their own (`openBulk(page, from)`, as TOPLU FORWARD does). The forward card's "Done" opens the
+  FX forward form at the quoted level (`quotelog.js` `tradeOfQuote`) with the quote's number in the spec (`quote_log`).
+- **The page's inputs from its address** (`#/fiyatlama?asset=ois&end=2Y3M&side=PAY&size=1000&size_kind=dv01`; the names
+  are the inputs' own: `asset`, `pair`, `start`, `end`, `side`, `size`, `size_kind`, `price`, `price_kind`, `source`,
+  `client`): `PricingPage` sends them as one POST when it opens (and on a `hashchange` while it is open), then puts the
+  address back to `#/fiyatlama` (`history.replaceState`).
+
+### The quote log (`tto/quotelog.py`)
+
+The desk, 28.11.2026: "Fiyatladiktan sonra bunu done diye gunluk islemlere alabilmeliyim veya done olmadiysa da hit
+ratiosunu takip edebilmeliyim" (and C2 of the day's list).
+- **What writes a quote:** `Service.client_quote` - every table's "Kotasyon kopyala" (a row, a part, or the whole table:
+  one record; `quotelog.from_table` reads the levels the table shows - its first two-sided outright, TRY rate or points),
+  so a table that opts in to `client_quote` later is logged with no code of its own; `Service.pricing_quote` - Fiyatlama's
+  forward card (`POST /api/pricing/quote` {source?, client?, language?, status?} → {text, id, quote, card}); and `POST
+  /api/quote-log` {product, instrument, pair?, side?, levels {bid, ask, mid?, unit?, kind?, text?}, source, size?, client?,
+  page, value_date?, status?} → {id, quote} (any page's own quote) - "Kota mesajı" (`quote.js`, a message the browser
+  writes, never through `client_quote`) posts its copy there (`quotelog.js` `logQuoteMessage`: one record, its text what
+  was sent, no levels).
+- **Its status:** `POST /api/quote-log/{id}` {status: "done" | "not_done" | "open", trade_id?, client?, note?} → {quote}.
+- **Reading:** `GET /api/quote-log?from=&to=` (ISO days or typed dates; none: today; at most 400 days) → {quotes, hit:
+  {by_client, by_product, all}, from, to, today, statuses}. The hit ratio is done / (done + not done) per group; `unbooked`
+  counts the done quotes without a `trade_id`.
+- **The component:** `tto/static/js/quotelog.js` `mountQuoteLog(container, ctx, {id, days, onChange})` → {el, refresh,
+  destroy}: the period (today, 7, 30 days), the hit tables, the quotes with Done / Done değil / Açık, the client typed in
+  place and "Bu fiyattan işlem gir" (an FX forward's quoted level into Günlük İşlemler's form, the quote done). Fiyatlama
+  mounts it as "Kotasyon defteri"; Günlük İşlemler as "Verilen kotalar".
 
 ### Kâğıt Fiyatlama
 

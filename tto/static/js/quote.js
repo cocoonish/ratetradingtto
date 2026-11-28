@@ -8,6 +8,7 @@
 // A set with "mid" quotes mid ± half a width typed in bp (or the mid alone when no width is given).
 import { h, clear, modal, copyText } from './ui.js';
 import { num, parseNumber } from './format.js';
+import { logQuoteMessage } from './quotelog.js';
 
 function pref(key, fallback) {
   try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; }
@@ -134,7 +135,7 @@ export function openQuoteMessage(pageId, panel) {
   m.body.appendChild(text);
   m.body.appendChild(h('div', { class: 'muted' }, 'Sayılar tabloda göründüğü gibidir (sizin değiştirdikleriniz dahil). Seçim bu tablo için hatırlanır.'));
   const copy = h('button', { class: 'btn primary', type: 'button', id: 'quote-copy' }, 'Kopyala');
-  copy.addEventListener('click', () => copyText(text.value, 'Kota mesajı kopyalandı'));
+  copy.addEventListener('click', () => { copyText(text.value, 'Kota mesajı kopyalandı'); logQuoteMessage(pageId, panel, set(), text.value); });
   m.foot.appendChild(h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Kapat'));
   m.foot.appendChild(copy);
   render();

@@ -1,8 +1,8 @@
 // Kotasyon defteri (tto/quotelog.py; the desk, 28.11.2026: "Fiyatladiktan sonra bunu done diye gunluk islemlere
 // alabilmeliyim veya done olmadiysa da hit ratiosunu takip edebilmeliyim"): the quotes given to clients - every table's
-// "Kotasyon kopyala" and Fiyatlama's forward card log one - with their status (Açık / Done / Done değil), and the hit
-// ratio, done / (done + done değil), by client and by product.  The whole desk's log: everyone sees every quote and who
-// gave it.
+// "Kotasyon kopyala", every "Kota mesajı" and Fiyatlama's forward card log one - with their status (Açık / Done / Done
+// değil), and the hit ratio, done / (done + done değil), by client and by product.  The whole desk's log: everyone sees
+// every quote and who gave it.
 //
 // ``mountQuoteLog(container, ctx, opts)`` draws it into ``container`` and returns {el, refresh, destroy}: Günlük
 // İşlemler's folded "Verilen kotalar" and Fiyatlama's "Kotasyon defteri" mount it.  ``opts``: {id (the prefix of its DOM
@@ -62,6 +62,21 @@ export function tradeOfQuote(q, dir) {
   if (typeof q.size === 'number' && q.size > 0) spec.amount = num(q.size, 0, false);
   if (typeof q.spot === 'number' && kind === 'outright') spec.spot = num(q.spot, 4, false);
   return spec;
+}
+
+/** "Kota mesajı" copied (quote.js: a message the browser writes, never through the server's client_quote): logged as one
+ * quote, its text what was sent - the copy stands whatever the log answers. */
+export function logQuoteMessage(pageId, panel, set, text) {
+  if (!text || !panel) return;
+  const spec = panel.quote || {};
+  const prefix = String(spec.prefix || '').trim();
+  const pair = /^[A-Z]{6}$/.test(prefix) ? prefix : '';
+  const title = String(panel.title || '').split('  ·  ')[0];
+  api.post('/api/quote-log', {
+    product: pair ? 'FX forward' : (prefix || title || 'Kota mesajı').slice(0, 40),
+    instrument: (String(text).split('\n')[0] || prefix || title || 'kota').slice(0, 120),
+    pair, source: 'Kota mesajı' + (set && set.name ? ' · ' + set.name : ''), page: pageId, panel: panel.id || '', text, levels: {},
+  }).catch(() => { /* (the message is copied either way) */ });
 }
 
 /** Set a quote's status (and what goes with it): the server's answer, or null after a toast. */

@@ -360,7 +360,11 @@ export class PricingPage {
     const seq = ++this.seq;
     const d = await api.get('/api/pricing');
     if (seq === this.seq && !this.sending) this.apply(d);
-    if (this.qlog) this.qlog.refresh();
+    // (a refresh comes with every market tick: the quote log at most every 15 s - at once after a quote of this page)
+    if (this.qlog && Date.now() - (this.qlogAt || 0) > 15000) {
+      this.qlogAt = Date.now();
+      this.qlog.refresh();
+    }
   }
 
   async send(fields) {
@@ -457,7 +461,9 @@ export class PricingPage {
     this.drawNotes(d);
     this.drawCard(d);
     this.drawHedges(d);
-    if (this.trialOpen) this.loadTrial();
+    // (the trial again when the instrument changed, else at most every 10 s: it evaluates DV01 Risk once more)
+    const key = JSON.stringify([d.inputs, d.label]);
+    if (this.trialOpen && (key !== this.trialKey || Date.now() - (this.trialAt || 0) > 10000)) this.loadTrial();
   }
 
   /** B7: no numbers yet and the inputs cannot be priced - each panel says so instead of staying empty. */
@@ -812,6 +818,8 @@ export class PricingPage {
   async loadTrial() {
     if (this.trialBusy) return;
     this.trialBusy = true;
+    this.trialAt = Date.now();
+    this.trialKey = this.data ? JSON.stringify([this.data.inputs, this.data.label]) : null;
     try {
       const t = await api.get('/api/pricing/trial');
       if (this.trialOpen) this.drawTrial(t);
