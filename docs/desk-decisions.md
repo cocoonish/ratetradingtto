@@ -3106,67 +3106,7 @@ of stacked panels as an array in a tab's list), `tto/views/__init__.py` (such an
 formula-in-an-input flow on the forward summary's dates (`EK_FWD!B5`, `C5`, `B6`: the date-to-date block left the Forward
 fiyatlama tab) and its Fiyatlama / Swaption checks (two decimals).
 
-### Toplu iş 28.11.2026 · Girdiler: yılsız tarih ve kotanın yaşı (28.11.2026)
-
-> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
-> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
-> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
-
-To the lists: **"A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"** - C4, a quote's age, is among them.
-And:
-
-> "Bir de tarih girdilerinde yil girmeden de algilayabilmeli. 26/12 yazdigimda otomatik 2026, 1/2 yazdigimda otomatik
-> 2027 getirecek ornegin su anda"
-
-to which, after the proposal (T: next such day; the cells that ask about the past the last one): **"Digerlerini de
-onayliyorum"** (28.11.2026).
-
-**A date typed without its year (T).** `26/12`, `26.12`, `26-12`, `26 Ara` / `26 Aralık` are the **next such day from
-today on**: on 28.11.2026 `26/12` is 26.12.2026 and `1/2` 01.02.2027; today's own day is today.
-- **An end counts from its start** when its start is a later date (the end of a period typed after its start - Forward's
-  broken-date block, Masa's date-to-date, an OIS / MPC entry, Trades' maturity): `1/3` after a start of 15.06.2027 is
-  01.03.2028, never a day before its start.
-- **The cells that ask about the past take the last such day up to today:** DV01 Risk's "Dünkü tarih" (`DV01_RISK!C112`,
-  `WORKDAY(SPOTDATE,-2,…)`), Masa's "Anket ayı" (`MASA!S155`, the month of the last survey), a Trades trade's day and its
-  close (they are never ahead): `27/11` there is 27.11.2026, `1/12` 01.12.2025. The list is `tto/datecells.py` `PAST`.
-- **29 February** is the nearest one that exists that way (29.02.2028 ahead of 28.11.2026, 29.02.2024 back); a day no year
-  has (`31/4`, `30/2`, `32/1`, `1/13`) is refused as any date that does not read. A date typed with its year is as before.
-  A day typed is never rolled to a business day (a tenor shortcut is): it is the day typed.
-- **Where:** every date a user types - a page's date cells (the cell's tooltip says what it became, as for a shortcut:
-  "Kısayol: 26/12 → 26.12.2026"; a list of days kept as text, VİOP's contracts, takes such a day as its item; a meeting's
-  date in the PPK list), Fiyatlama's start / maturity, Günlük İşlemler's value date (under the box: "26/12 → 26.12.2026")
-  and OIS dates - Ctrl+K's `işlem gir usdtry 26/12 10mn` with them -, Trades, the holiday lists and the meeting calendar of
-  Ayarlar. **Today** is the workbooks' TODAY() (the replay's 03.11.2026 in replay), Fiyatlama and Ayarlar' boxes the
-  computer's day. Alarms take no date today (their forms pick a tenor, a contract, a bond): nothing to read there.
-- **One parser** (`tto/inputs.py` `parse_date(text, today, past, after)`, its rule `day_month`; the browser's
-  `history.js parseTrDate` the same rule): a day without its year is read only where the caller says which day it is and
-  which way the input looks. A value read from a workbook or a store always has its year and is never given one.
-
-**A quote's age (C4).** The "BAYAT VERİ" badge catches only the whole feed: one price that stopped while the others flow
-was not seen.
-- The dashboard already knew when each price's value last changed (its answer, a tick that brings another value, a poll
-  that does); it is kept in memory per quote (`Provider.quote_times`) - **nothing is asked of Bloomberg**.
-- **A market cell** (a cell whose formula asks Bloomberg for a bid, an ask, a mid or a last price) says in its tooltip
-  **"son değişim 10:42 (37 dk)"** - the time of the quote whose value it shows (a chain's first source that answers, not
-  its fallback), else the latest of its quotes (a mid of a bid and an ask).
-- **Old, faded:** in market hours (the desk's days, `market_open` – `market_close`), a price unchanged for **N minutes of
-  today's market** - counted from today's opening when it last changed before (a quote that did not move overnight is not
-  old at 09:01). N is a desk setting, **30** by default, 0: never (`ops.settings` `quote_old`, İzleme · Alarmlar → Masa
-  alarmları → Ayarlar). Chosen as a start; the desk tunes it.
-- **The data status counts them:** `/api/status` → `ops.quotes` (how many of the prices are old, the oldest named with
-  their time and minutes) - the count Masa's Kontrol strip is to show ("3 eski kota"; the strip's chips are built with
-  its own cells).
-- Replay has no age (nothing moves there).
-
-Code: `tto/inputs.py` (`yearless`, `day_month`, `parse_date`, `parse_input`), `tto/datecells.py` (`PAST`, `past_cells`),
-`tto/service.py` (`_set_inputs`, `_typed_day_rule`, `_date_place`, `_typed_today`, `_fwd_payload`, `_ois_payload`,
-`set_holidays`), `tto/pricing.py` (`parse_when`), `tto/tradebook.py` (`_Form.date`), `tto/static/js/pages/history.js`
-(`parseTrDate`); `tto/marketdata/age.py`, `base.py` / `bloomberg.py` / `bbg_process.py` (`quote_times`, `PRICE_FIELDS`),
-`tto/render.py` (a market cell's `qa`), `tto/ops.py` (`quote_old`, `Ops.quotes`), `tto/server.py` (`/api/quotes/age`),
-`tto/static/js/quoteage.js`, `tto/static/css/app.css` (its block at the end). Tests: `tests/test_yilsiz_tarih.py`,
-`tests/test_kota_yasi.py`; the browser test's year-less date in the forward summary's free row.
-
-### Toplu iş: 20 + 20 + 20 öneri, yeniden düzenleme (28.11.2026)
+### Toplu iş 28.11.2026: 20 + 20 + 20 öneri, yeniden düzenleme
 
 The desk's request, the morning of 28.11.2026:
 
@@ -3192,11 +3132,13 @@ and, beside them:
 > Bunlari da dusun. Yeni onerilerle de gel sonra toplu yapalim"
 
 To the two questions asked before the work: A8 (DV01 Risk Pozisyon's default) **"Onshore + tlref"**; B4 (which USDTRY
-spot) **"Bbg veya manuel spot"** - every page uses the top strip's spot; and **"Digerlerini de onayliyorum"**: the
+spot) **"Bbg veya manual spot"** - every page uses the top strip's spot; and **"Digerlerini de onayliyorum"**: the
 reorganization of the pages (R), the forward card in Fiyatlama (F) and the year-less dates (T).
 
 Approved: A1, A3, A4, A5, A6, A7, A8, A10, A11, A14; B1-B20; C2, C3, C4, C5, C8, C10, C12, C13, C16; R, F, T. Eight
 builders, one installer.
+
+Each builder's part follows (`toplu-*` branches of v2, merged and tested together, one push); Fiyatlama's (K3: the forward card, the quote log, hedge and trial) is under Fiyatlama, "Fiyatlama: forward kartı, kotasyon defteri, hedge ve deneme, işlem gir", and DV01 Risk / Bugün's (K5) under DV01 Risk, "DV01 Risk and Bugün: paste once, the morning meeting".
 
 #### Kabuk (K1): the menu, the shell's rows and notes, the personal badge, the values of an earlier day
 
@@ -3292,20 +3234,193 @@ Code: `tto/navmenu.py` (the menu), `tto/quant.py` (`MENU`: VİOP into Sinyaller,
 `test_dibsgenel`, `test_fiyatyukleme`, `test_fx`, `test_kagitfiyat`, `test_pageboxes`, `test_pricing`, `test_quant`,
 `test_service`, `test_duzen_masa`; the browser test's "kabuk ·" checks.
 
-### Toplu iş · Quant: the card, the tables, WIRP's AL / SAT lines, the bugs (28.11.2026)
+#### Girdiler (K2): yılsız tarih ve kotanın yaşı
 
-The desk asked for the review:
+C4, a quote's age, is among the approved items. And:
 
-> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
-> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
-> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
+> "Bir de tarih girdilerinde yil girmeden de algilayabilmeli. 26/12 yazdigimda otomatik 2026, 1/2 yazdigimda otomatik
+> 2027 getirecek ornegin su anda"
 
-and answered the three lists (A işleyiş, B düzen, C yeni özellik; their evidence in the session notes,
-`oneriler-28-11.md`):
+to which, after the proposal (T: next such day; the cells that ask about the past the last one): **"Digerlerini de
+onayliyorum"** (28.11.2026).
 
-> "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"
+**A date typed without its year (T).** `26/12`, `26.12`, `26-12`, `26 Ara` / `26 Aralık` are the **next such day from
+today on**: on 28.11.2026 `26/12` is 26.12.2026 and `1/2` 01.02.2027; today's own day is today.
+- **An end counts from its start** when its start is a later date (the end of a period typed after its start - Forward's
+  broken-date block, Masa's date-to-date, an OIS / MPC entry, Trades' maturity): `1/3` after a start of 15.06.2027 is
+  01.03.2028, never a day before its start.
+- **The cells that ask about the past take the last such day up to today:** DV01 Risk's "Dünkü tarih" (`DV01_RISK!C112`,
+  `WORKDAY(SPOTDATE,-2,…)`), Masa's "Anket ayı" (`MASA!S155`, the month of the last survey), a Trades trade's day and its
+  close (they are never ahead): `27/11` there is 27.11.2026, `1/12` 01.12.2025. The list is `tto/datecells.py` `PAST`.
+- **29 February** is the nearest one that exists that way (29.02.2028 ahead of 28.11.2026, 29.02.2024 back); a day no year
+  has (`31/4`, `30/2`, `32/1`, `1/13`) is refused as any date that does not read. A date typed with its year is as before.
+  A day typed is never rolled to a business day (a tenor shortcut is): it is the day typed.
+- **Where:** every date a user types - a page's date cells (the cell's tooltip says what it became, as for a shortcut:
+  "Kısayol: 26/12 → 26.12.2026"; a list of days kept as text, VİOP's contracts, takes such a day as its item; a meeting's
+  date in the PPK list), Fiyatlama's start / maturity, Günlük İşlemler's value date (under the box: "26/12 → 26.12.2026")
+  and OIS dates - Ctrl+K's `işlem gir usdtry 26/12 10mn` with them -, Trades, the holiday lists and the meeting calendar of
+  Ayarlar. **Today** is the workbooks' TODAY() (the replay's 03.11.2026 in replay), Fiyatlama and Ayarlar' boxes the
+  computer's day. Alarms take no date today (their forms pick a tenor, a contract, a bond): nothing to read there.
+- **One parser** (`tto/inputs.py` `parse_date(text, today, past, after)`, its rule `day_month`; the browser's
+  `history.js parseTrDate` the same rule): a day without its year is read only where the caller says which day it is and
+  which way the input looks. A value read from a workbook or a store always has its year and is never given one.
 
-> "Digerlerini de onayliyorum"
+**A quote's age (C4).** The "BAYAT VERİ" badge catches only the whole feed: one price that stopped while the others flow
+was not seen.
+- The dashboard already knew when each price's value last changed (its answer, a tick that brings another value, a poll
+  that does); it is kept in memory per quote (`Provider.quote_times`) - **nothing is asked of Bloomberg**.
+- **A market cell** (a cell whose formula asks Bloomberg for a bid, an ask, a mid or a last price) says in its tooltip
+  **"son değişim 10:42 (37 dk)"** - the time of the quote whose value it shows (a chain's first source that answers, not
+  its fallback), else the latest of its quotes (a mid of a bid and an ask).
+- **Old, faded:** in market hours (the desk's days, `market_open` – `market_close`), a price unchanged for **N minutes of
+  today's market** - counted from today's opening when it last changed before (a quote that did not move overnight is not
+  old at 09:01). N is a desk setting, **30** by default, 0: never (`ops.settings` `quote_old`, İzleme · Alarmlar → Masa
+  alarmları → Ayarlar). Chosen as a start; the desk tunes it.
+- **The data status counts them:** `/api/status` → `ops.quotes` (how many of the prices are old, the oldest named with
+  their time and minutes) - the count Masa's Kontrol strip is to show ("3 eski kota"; the strip's chips are built with
+  its own cells).
+- Replay has no age (nothing moves there).
+
+Code: `tto/inputs.py` (`yearless`, `day_month`, `parse_date`, `parse_input`), `tto/datecells.py` (`PAST`, `past_cells`),
+`tto/service.py` (`_set_inputs`, `_typed_day_rule`, `_date_place`, `_typed_today`, `_fwd_payload`, `_ois_payload`,
+`set_holidays`), `tto/pricing.py` (`parse_when`), `tto/tradebook.py` (`_Form.date`), `tto/static/js/pages/history.js`
+(`parseTrDate`); `tto/marketdata/age.py`, `base.py` / `bloomberg.py` / `bbg_process.py` (`quote_times`, `PRICE_FIELDS`),
+`tto/render.py` (a market cell's `qa`), `tto/ops.py` (`quote_old`, `Ops.quotes`), `tto/server.py` (`/api/quotes/age`),
+`tto/static/js/quoteage.js`, `tto/static/css/app.css` (its block at the end). Tests: `tests/test_yilsiz_tarih.py`,
+`tests/test_kota_yasi.py`; the browser test's year-less date in the forward summary's free row.
+
+#### İşlem girişi (K4)
+
+This part (builder K4, branch `toplu-islem`) is A1's OIS lists, A4, A5 and A14's OIS /
+forward tables - the proposals with their evidence in the session notes (`oneriler-28-11.md`):
+
+- **A1 · Fiyatladığın yerden işlem gir (OIS listeleri).** A price of OIS · PPK's EN İYİ 15 SPREAD / FLY / FRA, TÜM
+  SPREADLER / FLY'LAR / FORWARD-FRA, MPC SPREAD and Masa's SİNYALLER · OIS en iyi 5, right-clicked → "İşlem gir": the
+  entry form filled with the row's instrument as the list names it and the price as the level. Günlük İşlemler gained a
+  strategy for MPC SPREAD: **MPC spread**, two meeting swaps back to back.
+- **A4 · Ctrl+K.** `işlem gir` for OIS (outright, spread, fly, FRA, MPC, MPC spread) and DİBS into Günlük İşlemler, each
+  suggestion naming the book; `fiyatla …` opens Fiyatlama filled through its address.
+- **A5 · "İşlemi kaydet"ten önce kontrol** (the desk's list: "RET bugün yüklenmemiş, veri BAYAT, OIS seviyesi mid'den N
+  bp uzak, tutar alışılmışın ~10 katı → tek tık onay; Karşı taraf listeden").
+- **A14 · Kota mesajı her tabloda, sıfır genişlik yok** (its OIS / forward part): Kota mesajı and Kotasyon kopyala on MPC
+  OIS, EN İYİ 15 FRA and Masa's TARİH ARASI FAİZ; FORWARD KOTASYON's ask ≤ bid warning and a two-way "Genişlik (bp)".
+
+**Choices made while building them** (said in README; ask the desk before changing):
+- **A mid on a list is a mid: no side.** The lists' price is the market (Piyasa) - the form opens with the side unchosen
+  (as MPC OIS's market always did); the lists' YÖN is the model's view, the trade's side is the trader's.
+- **MPC spread** (`blotter.ois_legs`, strategy `mpcspread`): start → mid and mid → end, later − earlier in bp; the sides in
+  OIS_MAIN's own words, "PAY k+1 / REC k" (pays the later period, "buys" the spread) and "REC k+1 / PAY k"; both legs the
+  same DV01 (the sheet's "Nominal MPCk / MPCk+1" - equal to it on the recorded day); the earlier leg at its market rate
+  (or typed), the later one that + the level. A spread whose earlier period has run off has no "Ters işlem" (only the
+  later period is left: a meeting swap).
+- **Ctrl+K's words:** a size under a million is a DV01 ($/bp), from a million a nominal (TL) - "dv01" / "nom" say it;
+  "3m" is a tenor (a size is "3mn"); a FRA is "9x12" (start × end) or the lists' "1y1y" (start and length), two tenors
+  written together with a spread's side ("1y2y steepener") a spread; "dec mpc" is the period from the next December
+  decision (as the broker chat reads it: MPC1 → MPC2 on the recorded day); a bond's "mar28" / "15.03.28" is the bond the
+  broker chat would read (the month's fixed coupon bond, of several the benchmark). `fiyatla`'s address carries
+  `/api/pricing`'s own fields - asset, pair, start, end, side, size_kind, size, price, price_kind -; a swap without a start
+  starts at spot and a price not said is empty (what the page kept from before does not stay under a new instrument).
+- **The checks** (`blotter.pre_save_warnings`): the thresholds are the desk's - **10 bp** from mid, **10×** the usual - one
+  for everybody, anyone changes them ("Kayıt kontrolleri"); the usual size is the median of the same kind over the **last
+  60 days before today** (an OIS package's largest leg DV01, a forward's amount by pair, a bond's nominal), judged from 5
+  trades on; the level check is the OIS's (every strategy, either side of mid - a level that far in the trader's favour
+  is as likely a slip) and a bond's price in yield by its modified duration, not a forward's (its price comes from RET by
+  default; RET is checked instead); the RET's day and the feed only when live (replay is the recorded day); a counterparty
+  written inside another or with the same letters ("Garanti BBVA" / "Garanti") is asked about, a case difference is not
+  (Excel's CPT × VADE reads it as one); a check that cannot be made never stops a trade; an edit ("Değişikliği kaydet") and
+  a paste are not checked.
+- **The width is centred** (as Kota mesajı's): the general spreads at the desk's spread (`MASA!I60`) ∓ ½ width; a bid
+  typed keeps the width above it; the ask typed replaces the width. Nothing typed: the numbers as before, width 0, the
+  dates without a width red and counted. EURTRY follows USDTRY's general spreads (their width with them) and has a width
+  of its own around their middle. Kotasyon kopyala on the OIS rate tables copies the mid (one-sided, as the table
+  shows it); the width is Kota mesajı's.
+
+Code: `tto/tradehint.py` (`ois_name`, `OIS_SIDES`, `"auto"`, `"tenor_cols"`), `tto/views/20_ois.json` and `10_masa.json`
+(the hints, the quote specs, the groups `ekfwd-width` / `ekfwd-eur-width`), `tto/blotter.py` (`mpcspread`, `bond_isin`,
+`check_settings`, `usual_sizes`, `similar_name`, `pre_save_warnings`), `tto/service.py` (`blotter_check`, `blotter_checks`,
+`_past_trades`, `_counterparties`; `_ois_market`'s decision days; `_bond_payload`), `tto/server.py` (`/api/blotter/check`,
+`/api/blotter/checks`), `tto/entry.py` (the template's MPC spread), `tto/extras.py` (`_fwd_width_cells`, `FWD_WIDTH*`,
+`_look_if`), `tto/static/js/commands.js`, `tto/static/js/pages/blotter.js` (the MPC spread form, `checkBeforeSave`,
+`openChecks`, the counterparty list, `mpc_month`, a bond's short name said back), `blotterentry.js`, `app.css` (its K4
+block). Tests: `tests/test_tradehint.py`, `test_blotter_fx_mpc.py`, `test_blotter_checks.py`, `test_commands.py`,
+`test_quotes.py`, `test_fwd_twoway.py`, `test_extras.py` (the matrices' inputs); the browser test's "işlem girişi" checks.
+
+#### Tahvil sayfaları (K6)
+
+On the pages (28.11.2026): "Bir de genel sayfalari da daha duzenli yapabiliriz, ornegin kagit kismi cok
+duzensiz ve her sey her yerde gibi. Bunlari da dusun. Yeni onerilerle de gel sonra toplu yapalim".
+
+The bond side of it (builder K6; the menu itself - DİBS Piyasa / DİBS Fiyatlama / DİBS RV - is the shell's):
+
+- **One home for the bond table (R).** DİBS Trading's summary is the bond table: DİBS RV · Genel's table (37 columns, ~25
+  the same as the summary's 32) is gone, its own columns - the clean price in use, the simple yield, each fitted ASW
+  curve's ASW at the bond's years, the zero-coupon curve's model yield / cheap-rich / fair price, the OIS hedge ratio -
+  moved into the summary; Genel shows the fit, the charts, the settings and a link ("Kâğıt tablosu: Trading listesi ·
+  özet →"); Tüm Kâğıtlar keeps the list management. One column order on the bond tables - Kâğıt · Valör · Fiyat bid / ask ·
+  Getiri (basit / bileşik) · ON · ASW OIS · ASW FX · Adil · Ucuz / pahalı · Sinyal · Süre · DV01 · Carry -, the summary's
+  groups by measure with the curves side by side (OIS / FX; the zero-coupon curve a group of its own, its yield BIST's
+  simple). Read three ways under "Sütunlar": **Trading / RV / Risk** (and Tümü).
+- **The same bond column everywhere (R).** The short name ("12.09.29"), its ISIN in the tip, frozen, first - DİBS Trading's
+  summary and value dates, Tüm Kâğıtlar, DİBS RV, DİBS ASW, Kâğıt Fiyatlama; a click on it opens the bond's card (as ▸).
+  The value date "T1 · 04.11" (TRY business days after today; the Bloomberg source ISL0 / ISL1 in the tip) on the summary
+  and in Kâğıt Fiyatlama's kind headings. UCUZ green, PAHALI red (B6: Bugün's and Günlük İşlemler' buy / sell); bp whole
+  on the summary and Tüm Kâğıtlar' new columns (B5's rule); the calculation sheets (DİBS RV, DİBS ASW) keep the
+  workbook's formats, a column the dashboard adds there that of the sheet's own beside it (DİBS ASW's ASW FX ima: one
+  decimal, as its ASW and its history's offshore ASWs).
+- **B16.** DİBS RV: right after Valör the compound yield, its O/N, ASW / DM, cheap / rich, the signal; Ad, Bilinen kupon,
+  Son işlem tarihi, Fiyat durumu last; Ayarlar in two panels. Tüm Kâğıtlar: Tür, Kalan gün, Kaynak (and the ISIN, now in the
+  name's tip) hidden by default.
+- **B17.** DİBS ASW's OIS and FX "ASW — kalan vade" charts side by side, its folded history a full-width bar; Genel's empty
+  switch / pair one line; Hazine İhalesi's Kâğıt 2 / 3 folded to their ISIN row while it is empty (Kâğıt 1 always open),
+  the inputs first (the realized nominal beside the bids).
+- **C10, the quote ticket at any value date.** The bond card's Kâğıt Fiyatlama block (`/api/kagit-fiyat?ticket=1`) and
+  Manuel Tahvil (its sheet's own block): value date, nominal, centre, spread → bid / ask yields (compound, simple), clean and
+  dirty prices, the amount, DV01, the OIS hedge nominal; Kopyala; İşlem gir.
+- **C12.** Tüm Kâğıtlar: every fixed coupon bond, bill and zero coupon bond with Kâğıt Fiyatlama's market yield, its price
+  (the curve's where there is no market) and the market's gap to the curve - 12 of 26 fixed coupon rows had no yield; one
+  whose coupon the desk's list does not know (TRT210329T17) says so ("–", the reason in the tip).
+- **C13.** Kâğıt Fiyatlama's levels as alarm names, `[12.09.29 adil]` / `[12.09.29 AL]` / `[12.09.29 SAT]`, and in each ▸
+  (and the card) "Piyasa AL / SAT'a gelince alarm" - two alarms on the screen yield against AL and SAT.
+- **A14 (bonds).** The desk's quote, not Bloomberg's: Kâğıt Fiyatlama's "Kotasyon kopyala (masanın)" (its Kotan: fair ± half
+  the bucket's width) and each bond's own; Manuel Tahvil's ticket (Kota mesajı); DİBS RV's Kota mesajı a "masanın kotası" set
+  (the row's yield ± half the width typed). Copies are logged as quotes given where the quote log is there.
+- **B2 / B7 on the bond pages.** Notes two lines ("devamı") on Genel, Kâğıt Fiyatlama and Kâğıt Fiyat Yükleme; "hesaplanıyor"
+  until the first answer (Kâğıt Fiyatlama's table, Genel, Fiyat Yükleme's file and labels, Tüm Kâğıtlar' new columns).
+
+**Choices made while building it** (ask the desk before changing):
+- DİBS Trading's summary opens on the **Trading** preset for a user who never chose its columns (★, Kâğıt, vade, kalan,
+  valör, bid / ask, son işlem, ne zaman, basit / bileşik getiri, ON, ASW OIS / FX, ucuz / pahalı OIS, sinyal OIS / FX, DV01,
+  1.000$ nominal, C+R, the broker board, ▸); the adil / eğri / sıfır kupon columns are RV's, one click away. A user who had
+  chosen the summary's columns keeps the choice (the new columns show).
+- The ticket's **spread is the full bid–ask width** (bp), its default the bond's bucket's quote width (Kâğıt Fiyatlama's,
+  the administrators'); bid = centre + spread / 2 (the desk buys at the higher yield). The default centre: the market's
+  yield, else Kâğıt Fiyatlama's price; the value date's default T1.
+- The ticket's **DV01** is one bp of the BIST simple yield (DİBS RV's and Manuel Tahvil's DV01); its **OIS hedge** a TRY
+  OIS to the bond's maturity on the workbook's Bootstrap, quarterly from maturity, the short period first - the nominal
+  with the bond's DV01 (not rounded; Manuel Tahvil's shows the OIS page's rounding and the exact one).
+- Manuel Tahvil's ticket is at **the page's valör** (Girdiler B3: bugün, ON, TN or a date) - the sheet's period table is
+  at that date; the card's ticket prices any value date.
+- Kâğıt Fiyatlama's levels for the alarms and Tüm Kâğıtlar are **the desk's** (everybody's calculation, no one's typed
+  inputs), at most a minute old; the alarm reads the user's own screen yield (DİBS RV!T).
+- DİBS RV's desk quote is a Kota mesajı set (`"yield": true` in quote.js): the yield the row shows (compound or simple) ±
+  half the width typed in the dialog - one width for the rows chosen.
+- Not done here (the shell's or other builders' files): a click on a bond on Bugün and Gün Sonu Matrisi (their pages); the
+  DİBS Piyasa / Fiyatlama / RV menu.
+
+Code: `tto/service.py` (`_trading_keys`, `_trading_columns`, `_trading_table`, `_valor_cell`, `_signal_colour`,
+`_bond_label_cell`, `column_presets`, `TRADING_PRESETS`, `_hidden_defaults`, `UNI_KF` / `_universe_kf_cells`, `_bond_rows`'
+`unless`), `tto/dibsgenel.py` (`zero_for`; no table), `tto/kagitfiyat.py` (`snapshot`, `make_snapshot`, `level`, `ticket`,
+`ois_annuity`, `dv01_of`, `compound_of`, `ticket_text`; `valor` on the page's rows), `tto/bonds.py` (`valor_label`,
+`value_day`, `business_days_after`), `tto/watch.py` (`KF_METRICS`), `tto/extras.py` (`_man_ticket`), the bond view JSONs,
+`pages/dibsgenel.js`, `pages/kagitfiyat.js`, `pages/fiyatyukleme.js`, `kagitblock.js` (`ticketBox`, `alarmButton`,
+`copyDeskQuote`, `logQuote`), `bonds.js`, `columns.js` (presets), `quote.js` (`"yield"`), the "Tahvil toplu (K6)" block at
+the end of `app.css`. Tests: `tests/test_toplu_tahvil.py`; `test_dibsgenel.py`, `test_duzen_tahvil.py`, `test_kagit_on.py`,
+`test_columns.py`, `test_tradehint.py`, `test_bonds.py`, `test_service.py` (the ISIN now the bond tables' second column); the
+browser test's "toplu tahvil" checks.
+
+#### Quant (K7): the card, the tables, WIRP's AL / SAT lines, the bugs
+
+(The lists' evidence: the session notes, `oneriler-28-11.md`.)
 
 This part (builder K7): **B1** and **B18** of the layout list, **C16** of the new features, and the bugs the review found
 on the way (listed as needing no decision). No Bloomberg request is new; Bootstrap and every curve are untouched.
@@ -3386,155 +3501,7 @@ S155, OIS_MAIN!B84:D99 and BJ), `tto/quant.py` (`view`'s user, `book_view`, the 
 toplu" at its end). Tests: `tests/test_toplu_quant.py`, `tests/test_quantdibssw.py`; the browser test's "toplu 28.11 ·
 quant" checks and the adapted Carry + momentum, Eğri and list checks.
 
-### Toplu iş: işlem girişi (28.11.2026)
-
-The desk's request (28.11.2026):
-
-> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
-> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu
-> genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
-
-and its answer to the three lists: **"A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"**, then
-**"Digerlerini de onayliyorum"**. This part (builder K4, branch `toplu-islem`) is A1's OIS lists, A4, A5 and A14's OIS /
-forward tables - the proposals with their evidence in the session notes (`oneriler-28-11.md`):
-
-- **A1 · Fiyatladığın yerden işlem gir (OIS listeleri).** A price of OIS · PPK's EN İYİ 15 SPREAD / FLY / FRA, TÜM
-  SPREADLER / FLY'LAR / FORWARD-FRA, MPC SPREAD and Masa's SİNYALLER · OIS en iyi 5, right-clicked → "İşlem gir": the
-  entry form filled with the row's instrument as the list names it and the price as the level. Günlük İşlemler gained a
-  strategy for MPC SPREAD: **MPC spread**, two meeting swaps back to back.
-- **A4 · Ctrl+K.** `işlem gir` for OIS (outright, spread, fly, FRA, MPC, MPC spread) and DİBS into Günlük İşlemler, each
-  suggestion naming the book; `fiyatla …` opens Fiyatlama filled through its address.
-- **A5 · "İşlemi kaydet"ten önce kontrol** (the desk's list: "RET bugün yüklenmemiş, veri BAYAT, OIS seviyesi mid'den N
-  bp uzak, tutar alışılmışın ~10 katı → tek tık onay; Karşı taraf listeden").
-- **A14 · Kota mesajı her tabloda, sıfır genişlik yok** (its OIS / forward part): Kota mesajı and Kotasyon kopyala on MPC
-  OIS, EN İYİ 15 FRA and Masa's TARİH ARASI FAİZ; FORWARD KOTASYON's ask ≤ bid warning and a two-way "Genişlik (bp)".
-
-**Choices made while building them** (said in README; ask the desk before changing):
-- **A mid on a list is a mid: no side.** The lists' price is the market (Piyasa) - the form opens with the side unchosen
-  (as MPC OIS's market always did); the lists' YÖN is the model's view, the trade's side is the trader's.
-- **MPC spread** (`blotter.ois_legs`, strategy `mpcspread`): start → mid and mid → end, later − earlier in bp; the sides in
-  OIS_MAIN's own words, "PAY k+1 / REC k" (pays the later period, "buys" the spread) and "REC k+1 / PAY k"; both legs the
-  same DV01 (the sheet's "Nominal MPCk / MPCk+1" - equal to it on the recorded day); the earlier leg at its market rate
-  (or typed), the later one that + the level. A spread whose earlier period has run off has no "Ters işlem" (only the
-  later period is left: a meeting swap).
-- **Ctrl+K's words:** a size under a million is a DV01 ($/bp), from a million a nominal (TL) - "dv01" / "nom" say it;
-  "3m" is a tenor (a size is "3mn"); a FRA is "9x12" (start × end) or the lists' "1y1y" (start and length), two tenors
-  written together with a spread's side ("1y2y steepener") a spread; "dec mpc" is the period from the next December
-  decision (as the broker chat reads it: MPC1 → MPC2 on the recorded day); a bond's "mar28" / "15.03.28" is the bond the
-  broker chat would read (the month's fixed coupon bond, of several the benchmark). `fiyatla`'s address carries
-  `/api/pricing`'s own fields - asset, pair, start, end, side, size_kind, size, price, price_kind -; a swap without a start
-  starts at spot and a price not said is empty (what the page kept from before does not stay under a new instrument).
-- **The checks** (`blotter.pre_save_warnings`): the thresholds are the desk's - **10 bp** from mid, **10×** the usual - one
-  for everybody, anyone changes them ("Kayıt kontrolleri"); the usual size is the median of the same kind over the **last
-  60 days before today** (an OIS package's largest leg DV01, a forward's amount by pair, a bond's nominal), judged from 5
-  trades on; the level check is the OIS's (every strategy, either side of mid - a level that far in the trader's favour
-  is as likely a slip) and a bond's price in yield by its modified duration, not a forward's (its price comes from RET by
-  default; RET is checked instead); the RET's day and the feed only when live (replay is the recorded day); a counterparty
-  written inside another or with the same letters ("Garanti BBVA" / "Garanti") is asked about, a case difference is not
-  (Excel's CPT × VADE reads it as one); a check that cannot be made never stops a trade; an edit ("Değişikliği kaydet") and
-  a paste are not checked.
-- **The width is centred** (as Kota mesajı's): the general spreads at the desk's spread (`MASA!I60`) ∓ ½ width; a bid
-  typed keeps the width above it; the ask typed replaces the width. Nothing typed: the numbers as before, width 0, the
-  dates without a width red and counted. EURTRY follows USDTRY's general spreads (their width with them) and has a width
-  of its own around their middle. Kotasyon kopyala on the OIS rate tables copies the mid (one-sided, as the table
-  shows it); the width is Kota mesajı's.
-
-Code: `tto/tradehint.py` (`ois_name`, `OIS_SIDES`, `"auto"`, `"tenor_cols"`), `tto/views/20_ois.json` and `10_masa.json`
-(the hints, the quote specs, the groups `ekfwd-width` / `ekfwd-eur-width`), `tto/blotter.py` (`mpcspread`, `bond_isin`,
-`check_settings`, `usual_sizes`, `similar_name`, `pre_save_warnings`), `tto/service.py` (`blotter_check`, `blotter_checks`,
-`_past_trades`, `_counterparties`; `_ois_market`'s decision days; `_bond_payload`), `tto/server.py` (`/api/blotter/check`,
-`/api/blotter/checks`), `tto/entry.py` (the template's MPC spread), `tto/extras.py` (`_fwd_width_cells`, `FWD_WIDTH*`,
-`_look_if`), `tto/static/js/commands.js`, `tto/static/js/pages/blotter.js` (the MPC spread form, `checkBeforeSave`,
-`openChecks`, the counterparty list, `mpc_month`, a bond's short name said back), `blotterentry.js`, `app.css` (its K4
-block). Tests: `tests/test_tradehint.py`, `test_blotter_fx_mpc.py`, `test_blotter_checks.py`, `test_commands.py`,
-`test_quotes.py`, `test_fwd_twoway.py`, `test_extras.py` (the matrices' inputs); the browser test's "işlem girişi" checks.
-
-### Toplu iş: tahvil sayfaları (28.11.2026)
-
-The desk's request (28.11.2026): "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek
-20 sey listelemeye calis. Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa
-sayfa, hem de dashboardu genel olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner." - and on the pages: "Bir
-de genel sayfalari da daha duzenli yapabiliriz, ornegin kagit kismi cok duzensiz ve her sey her yerde gibi. Bunlari da
-dusun. Yeni onerilerle de gel sonra toplu yapalim".
-
-To the lists: "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"; to the reorganization (R), the forward
-card and the year-less dates: "Digerlerini de onayliyorum".
-
-The bond side of it (builder K6; the menu itself - DİBS Piyasa / DİBS Fiyatlama / DİBS RV - is the shell's):
-
-- **One home for the bond table (R).** DİBS Trading's summary is the bond table: DİBS RV · Genel's table (37 columns, ~25
-  the same as the summary's 32) is gone, its own columns - the clean price in use, the simple yield, each fitted ASW
-  curve's ASW at the bond's years, the zero-coupon curve's model yield / cheap-rich / fair price, the OIS hedge ratio -
-  moved into the summary; Genel shows the fit, the charts, the settings and a link ("Kâğıt tablosu: Trading listesi ·
-  özet →"); Tüm Kâğıtlar keeps the list management. One column order on the bond tables - Kâğıt · Valör · Fiyat bid / ask ·
-  Getiri (basit / bileşik) · ON · ASW OIS · ASW FX · Adil · Ucuz / pahalı · Sinyal · Süre · DV01 · Carry -, the summary's
-  groups by measure with the curves side by side (OIS / FX; the zero-coupon curve a group of its own, its yield BIST's
-  simple). Read three ways under "Sütunlar": **Trading / RV / Risk** (and Tümü).
-- **The same bond column everywhere (R).** The short name ("12.09.29"), its ISIN in the tip, frozen, first - DİBS Trading's
-  summary and value dates, Tüm Kâğıtlar, DİBS RV, DİBS ASW, Kâğıt Fiyatlama; a click on it opens the bond's card (as ▸).
-  The value date "T1 · 04.11" (TRY business days after today; the Bloomberg source ISL0 / ISL1 in the tip) on the summary
-  and in Kâğıt Fiyatlama's kind headings. UCUZ green, PAHALI red (B6: Bugün's and Günlük İşlemler' buy / sell); bp whole
-  on the summary and Tüm Kâğıtlar' new columns (B5's rule); the calculation sheets (DİBS RV, DİBS ASW) keep the
-  workbook's formats, a column the dashboard adds there that of the sheet's own beside it (DİBS ASW's ASW FX ima: one
-  decimal, as its ASW and its history's offshore ASWs).
-- **B16.** DİBS RV: right after Valör the compound yield, its O/N, ASW / DM, cheap / rich, the signal; Ad, Bilinen kupon,
-  Son işlem tarihi, Fiyat durumu last; Ayarlar in two panels. Tüm Kâğıtlar: Tür, Kalan gün, Kaynak (and the ISIN, now in the
-  name's tip) hidden by default.
-- **B17.** DİBS ASW's OIS and FX "ASW — kalan vade" charts side by side, its folded history a full-width bar; Genel's empty
-  switch / pair one line; Hazine İhalesi's Kâğıt 2 / 3 folded to their ISIN row while it is empty (Kâğıt 1 always open),
-  the inputs first (the realized nominal beside the bids).
-- **C10, the quote ticket at any value date.** The bond card's Kâğıt Fiyatlama block (`/api/kagit-fiyat?ticket=1`) and
-  Manuel Tahvil (its sheet's own block): value date, nominal, centre, spread → bid / ask yields (compound, simple), clean and
-  dirty prices, the amount, DV01, the OIS hedge nominal; Kopyala; İşlem gir.
-- **C12.** Tüm Kâğıtlar: every fixed coupon bond, bill and zero coupon bond with Kâğıt Fiyatlama's market yield, its price
-  (the curve's where there is no market) and the market's gap to the curve - 12 of 26 fixed coupon rows had no yield; one
-  whose coupon the desk's list does not know (TRT210329T17) says so ("–", the reason in the tip).
-- **C13.** Kâğıt Fiyatlama's levels as alarm names, `[12.09.29 adil]` / `[12.09.29 AL]` / `[12.09.29 SAT]`, and in each ▸
-  (and the card) "Piyasa AL / SAT'a gelince alarm" - two alarms on the screen yield against AL and SAT.
-- **A14 (bonds).** The desk's quote, not Bloomberg's: Kâğıt Fiyatlama's "Kotasyon kopyala (masanın)" (its Kotan: fair ± half
-  the bucket's width) and each bond's own; Manuel Tahvil's ticket (Kota mesajı); DİBS RV's Kota mesajı a "masanın kotası" set
-  (the row's yield ± half the width typed). Copies are logged as quotes given where the quote log is there.
-- **B2 / B7 on the bond pages.** Notes two lines ("devamı") on Genel, Kâğıt Fiyatlama and Kâğıt Fiyat Yükleme; "hesaplanıyor"
-  until the first answer (Kâğıt Fiyatlama's table, Genel, Fiyat Yükleme's file and labels, Tüm Kâğıtlar' new columns).
-
-**Choices made while building it** (ask the desk before changing):
-- DİBS Trading's summary opens on the **Trading** preset for a user who never chose its columns (★, Kâğıt, vade, kalan,
-  valör, bid / ask, son işlem, ne zaman, basit / bileşik getiri, ON, ASW OIS / FX, ucuz / pahalı OIS, sinyal OIS / FX, DV01,
-  1.000$ nominal, C+R, the broker board, ▸); the adil / eğri / sıfır kupon columns are RV's, one click away. A user who had
-  chosen the summary's columns keeps the choice (the new columns show).
-- The ticket's **spread is the full bid–ask width** (bp), its default the bond's bucket's quote width (Kâğıt Fiyatlama's,
-  the administrators'); bid = centre + spread / 2 (the desk buys at the higher yield). The default centre: the market's
-  yield, else Kâğıt Fiyatlama's price; the value date's default T1.
-- The ticket's **DV01** is one bp of the BIST simple yield (DİBS RV's and Manuel Tahvil's DV01); its **OIS hedge** a TRY
-  OIS to the bond's maturity on the workbook's Bootstrap, quarterly from maturity, the short period first - the nominal
-  with the bond's DV01 (not rounded; Manuel Tahvil's shows the OIS page's rounding and the exact one).
-- Manuel Tahvil's ticket is at **the page's valör** (Girdiler B3: bugün, ON, TN or a date) - the sheet's period table is
-  at that date; the card's ticket prices any value date.
-- Kâğıt Fiyatlama's levels for the alarms and Tüm Kâğıtlar are **the desk's** (everybody's calculation, no one's typed
-  inputs), at most a minute old; the alarm reads the user's own screen yield (DİBS RV!T).
-- DİBS RV's desk quote is a Kota mesajı set (`"yield": true` in quote.js): the yield the row shows (compound or simple) ±
-  half the width typed in the dialog - one width for the rows chosen.
-- Not done here (the shell's or other builders' files): a click on a bond on Bugün and Gün Sonu Matrisi (their pages); the
-  DİBS Piyasa / Fiyatlama / RV menu.
-
-Code: `tto/service.py` (`_trading_keys`, `_trading_columns`, `_trading_table`, `_valor_cell`, `_signal_colour`,
-`_bond_label_cell`, `column_presets`, `TRADING_PRESETS`, `_hidden_defaults`, `UNI_KF` / `_universe_kf_cells`, `_bond_rows`'
-`unless`), `tto/dibsgenel.py` (`zero_for`; no table), `tto/kagitfiyat.py` (`snapshot`, `make_snapshot`, `level`, `ticket`,
-`ois_annuity`, `dv01_of`, `compound_of`, `ticket_text`; `valor` on the page's rows), `tto/bonds.py` (`valor_label`,
-`value_day`, `business_days_after`), `tto/watch.py` (`KF_METRICS`), `tto/extras.py` (`_man_ticket`), the bond view JSONs,
-`pages/dibsgenel.js`, `pages/kagitfiyat.js`, `pages/fiyatyukleme.js`, `kagitblock.js` (`ticketBox`, `alarmButton`,
-`copyDeskQuote`, `logQuote`), `bonds.js`, `columns.js` (presets), `quote.js` (`"yield"`), the "Tahvil toplu (K6)" block at
-the end of `app.css`. Tests: `tests/test_toplu_tahvil.py`; `test_dibsgenel.py`, `test_duzen_tahvil.py`, `test_kagit_on.py`,
-`test_columns.py`, `test_tradehint.py`, `test_bonds.py`, `test_service.py` (the ISIN now the bond tables' second column); the
-browser test's "toplu tahvil" checks.
-
-### TRY · FX sayfaları: tek spot, tek ad, tek spread kuralı (28.11.2026)
-
-> "Simdi tum sayfalari tek tek tekrar incele. Duzen veya deskte isleyis olarak yapilabilecek 20 sey listelemeye calis.
-> Bunlarin hepsi deskte isimizi kolaylastiran seyler olsun. 20 tane de duzen incele. Hem sayfa sayfa, hem de dashboardu genel
-> olarak duzen olarak incele. 20 tane de yeni ozellik eklemeyi oner."
-
-> "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16"
+#### TRY · FX sayfaları (K8): tek spot, tek ad, tek spread kuralı
 
 To the question which USDTRY spot the pages use (B4: the strip's `MASA!H2` and `OIS_MAIN!D2` / `Forward!F2`, Bloomberg's MID,
 differed - 49,9973 / 49,9977 on the replay day): **"Bbg veya manual spot"** - every page uses the top strip's spot (Spot
