@@ -8339,6 +8339,8 @@ class Service(object):
     #: the columns a date's evaluation reads that depend on the valör only (a user's "Elle değer" on one of them, or on a
     #: helper X..AL, makes the row unusable for another date)
     FWD_PURE = (3, 12, 15, 18, 19, 22, 23) + tuple(range(24, 39))
+    #: a row's columns looked at for anything typed (A … CB: the matrix, its helpers and stores to AY, room for more)
+    FWD_ROW_LAST = 80
     #: the VİOP sheet's contracts: columns M … X; rows 1 (the ticker, one column to the left), 9 expiry, 10 VKGS, 13 / 25
     #: implied TRY bid / ask (decimal), 14 / 26 points, 16 / 28 price bid / ask
     VIOP_CONTRACTS = (13, 24)
@@ -8347,7 +8349,8 @@ class Service(object):
     FWD_LAYERS = 3
 
     def _fwd_layer_keys(self, user: str) -> List[Tuple[str, str, int]]:
-        return [("pricing-fwd", user, k) for k in range(self.FWD_LAYERS)]
+        # (the user first, as every layer of a user is keyed: the idle sweep and copies.drop give them back with the user)
+        return [(user, "pricing-fwd", k) for k in range(self.FWD_LAYERS)]
 
     def _drop_fwd_layers(self, user: str, book, keep: int = 0) -> None:
         for key in self._fwd_layer_keys(user)[keep:]:
@@ -8390,14 +8393,20 @@ class Service(object):
             if v is not None and v not in own_rows:
                 own_rows[v] = r
         ov = self._overlay(user, book) if user else {}
-        free = [r for r in range(r1, r2 + 1) if not any((si, r * COLS + col) in ov for col in self.FWD_PURE)]
+        desk = book.engine.input_value[si]                                  # (a value the desk typed for everyone)
+        typed = lambda r, cols: any((si, r * COLS + col) in ov or r * COLS + col in desk for col in cols)      # noqa: E731
+        # the rows a date is evaluated in: first the ones with nothing of the user's typed in them (but their valör) - the
+        # row is then the matrix itself at the date, its TRY % / fwd / puan read as it computes them, whatever its rule;
+        # then the ones typed into only where the date's own numbers do not look (their spread etc.: the rule applied here)
+        clean = [r for r in range(r1, r2 + 1) if not typed(r, [col for col in range(1, self.FWD_ROW_LAST + 1) if col != c["valor"]])]
+        free = clean + [r for r in range(r1, r2 + 1) if r not in clean and not typed(r, self.FWD_PURE)]
 
-        def point(src, r: int, day: float, own: bool) -> pr.FwdPoint:
+        def point(src, r: int, day: float, own: bool, label: Optional[str] = None) -> pr.FwdPoint:
             g = lambda key: num(src.get(si, r, c[key]))                    # noqa: E731
             mine = None
             if own:
                 mine = {k: g(k) for k in ("try_bid", "try_ask", "fwd_bid", "fwd_ask", "pts_bid", "pts_ask", "sp_bid", "sp_ask")}
-                mine["label"] = str(src.get(si, r, c["label"]) or "")
+                mine["label"] = label if label is not None else str(src.get(si, r, c["label"]) or "")
             return pr.FwdPoint(date=day, days=g("days"), ois=g("ois"), ccy=g("ccy"), ret_bid=g("ret_bid"), ret_ask=g("ret_ask"),
                                mkt_bid=g("mkt_bid"), mkt_ask=g("mkt_ask"), own=mine)
 
@@ -8420,7 +8429,7 @@ class Service(object):
             layer = book.engine.layer(self._fwd_layer_keys(user)[k], parent,
                                       {(si, r * COLS + c["valor"]): float(day) for r, day in zip(free, days)})
             for r, day in zip(free, days):
-                points[day] = point(layer, r, day, False)
+                points[day] = point(layer, r, day, r in clean, label="")    # (a clean row: the matrix's own numbers)
         self._drop_fwd_layers(user, book, keep=len(batches))
         # VİOP's USDTRY contracts (none for EURTRY)
         contracts = []
@@ -8527,7 +8536,7 @@ class Service(object):
                 if cc == col["dv01"] and rc in eng.fml[si] and (si, rc) not in ov and rc not in eng.input_value[si]:
                     continue                                   # (a formula default - Onshore + TLREF: it follows the column)
                 add[(si, rc)] = (num(calc.get(si, r, cc)) or 0.0) + d / sign
-        key = ("pricing-trial", user)
+        key = (user, "pricing-trial")
         after = eng.layer(key, calc, add)
         try:
             def read(src) -> Dict[str, Any]:

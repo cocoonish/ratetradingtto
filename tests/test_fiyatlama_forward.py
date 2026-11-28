@@ -40,7 +40,7 @@ def src(card, sid):
     return next(s for s in card["sources"] if s["id"] == sid)
 
 
-def row(svc, user, r, cols="CFGHIJKLMNORSVW"):
+def row(svc, user, r, cols="CDEFGHIJKLMNORSVW"):
     return {c: cell(svc, "EK_FWD!%s%d" % (c, r), user) for c in cols}
 
 
@@ -84,7 +84,7 @@ def test_at_a_broken_date_the_card_is_the_matrix_formulas_at_that_date_and_nothi
     svc.set_inputs(other, "tto", [{"ref": "EK_FWD!B11", "value": "15.03.2027"}])
     w = row(svc, other, 11)
     o = src(card, "ois")
-    assert "row" not in o and card["days"] == w["C"]
+    assert not o.get("row") and card["days"] == w["C"] and o["spread"] == {"bid": w["D"], "ask": w["E"]}
     for side, f, t, p in (("bid", "J", "M", "H"), ("ask", "K", "N", "I")):
         assert o["fwd"][side] == pytest.approx(w[f], rel=1e-14) and o["try"][side] == pytest.approx(w[t] / 100, rel=1e-14)
         assert o["pts"][side] == pytest.approx(w[p], abs=1e-6)
@@ -95,9 +95,30 @@ def test_at_a_broken_date_the_card_is_the_matrix_formulas_at_that_date_and_nothi
     assert dict(svc.store.user_inputs(u, "tto")) == stored
     assert cell(svc, "EK_FWD!B11", u) in (None, "")
     book = svc.books["tto"]
-    assert ("pricing-fwd", u, 0) in book.engine.layers
+    assert (u, "pricing-fwd", 0) in book.engine.layers
+    # (keyed by the user first, as every user's layer: the idle sweep and copies.drop give them back with the user)
+    assert not [k for k in book.engine.layers if isinstance(k, tuple) and k and k[0] in ("pricing-fwd", "pricing-trial")]
     svc.pricing(u, {"asset": "ois"})                                             # (another instrument: the layers go)
-    assert not [k for k in book.engine.layers if k[:2] == ("pricing-fwd", u)]
+    assert not [k for k in book.engine.layers if k[:2] == (u, "pricing-fwd")]
+
+
+def test_with_every_row_typed_into_the_card_applies_the_matrix_rule_itself(svc):
+    """A user whose every matrix row holds a spread of its own (no row is the matrix as it is at another date): the date's
+    own numbers (OIS rate, RET, market spread, days) from a row in a layer, the rule - OIS + the general spread - applied
+    to them; the same numbers as a row typed only with that date."""
+    u = svc.login("Fwd Kart Hep Yazılı")["user"]
+    other = svc.login("Fwd Kart Yalnız Tarih")["user"]
+    svc.set_inputs(u, "tto", [{"ref": "EK_FWD!D%d" % r, "value": "-120"} for r in range(5, 15)])
+    card = fx(svc, u, end="15.03.2027")["card"]
+    svc.set_inputs(other, "tto", [{"ref": "EK_FWD!B11", "value": "15.03.2027"}])
+    w = row(svc, other, 11)
+    o = src(card, "ois")
+    assert "row" not in o and o["spread"] == {"bid": cell(svc, "EK_FWD!D4", u), "ask": cell(svc, "EK_FWD!E4", u)}
+    for side, f, t in (("bid", "J", "M"), ("ask", "K", "N")):
+        assert o["fwd"][side] == pytest.approx(w[f], rel=1e-14) and o["try"][side] == pytest.approx(w[t] / 100, rel=1e-14)
+    # its own 3M row stays its own: the spread typed there
+    three = src(fx(svc, u, end="3M")["card"], "ois")
+    assert three["row"] == "3M" and three["try"]["bid"] == pytest.approx(cell(svc, "EK_FWD!L7", u) / 100 - 0.012, abs=1e-12)
 
 
 def test_the_spread_rule_market_mode_and_a_row_s_own_spread(svc):
@@ -105,7 +126,8 @@ def test_the_spread_rule_market_mode_and_a_row_s_own_spread(svc):
     svc.set_inputs(u, "tto", [{"ref": "EK_FWD!B4", "value": "Piyasa spread"}])
     card = fx(svc, u, end="15.03.2027")["card"]
     o, off = src(card, "ois"), src(card, "off")
-    assert card["mode"] == "Piyasa spread" and o["try"]["bid"] == off["try"]["bid"] and o["fwd"]["ask"] == off["fwd"]["ask"]
+    assert card["mode"] == "Piyasa spread" and o["try"]["bid"] == pytest.approx(off["try"]["bid"], rel=1e-14)
+    assert o["fwd"]["ask"] == pytest.approx(off["fwd"]["ask"], rel=1e-14)
     v = svc.login("Fwd Kart Spread")["user"]
     svc.set_inputs(v, "tto", [{"ref": "EK_FWD!D7", "value": "-100"}])            # (the 3M row's own bid spread)
     o = src(fx(svc, v, end="3M")["card"], "ois")
@@ -227,7 +249,7 @@ def test_pozisyona_ekle_deneme_dv01_risk_before_and_after_nothing_saved(svc):
     # nothing saved: the user's inputs and the page's cells as they were, the layer given back
     assert dict(svc.store.user_inputs(u, "tto")) == stored and cell(svc, "DV01_RISK!C26", u) == 500
     assert cell(svc, "DV01_RISK!Y45", u) in (0, 0.0, None)
-    assert ("pricing-trial", u) not in svc.books["tto"].engine.layers
+    assert (u, "pricing-trial") not in svc.books["tto"].engine.layers
     # an offshore instrument: the Offshore column only - never OIS: the position and its PPK risk as they were
     svc.pricing(u, {"asset": "xccy", "end": "2Y", "side": "PAY"})
     x = svc.pricing_trial(u)

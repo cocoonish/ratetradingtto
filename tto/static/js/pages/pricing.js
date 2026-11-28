@@ -713,9 +713,11 @@ export class PricingPage {
     clear(this.ladderBody).appendChild(t);
   }
 
+  /** What a quote given is a quote of - the instrument, the source, the side, the amount; not its level (the market moves
+   * on after the copy: "Done" is still that quote, at the level it gave). */
   quoteKey(d) {
     const c = (d && d.card) || {};
-    return [d && d.label, c.picked, c.deal && c.deal.side, c.deal && c.deal.amount, c.deal && c.deal.level].join('|');
+    return [d && d.label, c.picked, c.deal && c.deal.side, c.deal && c.deal.amount].join('|');
   }
 
   /** "Kotasyon kopyala" (status open), "Done → Günlük İşlemler" (done: the form filled at the quoted level) or "Done
@@ -802,7 +804,8 @@ export class PricingPage {
     if (!d || !rows.length) return;
     const lines = [['Yön', 'Vade', 'Faiz', 'Nominal', 'Not'].join('\t')].concat(rows.map((r) => [r.side === 'PAY' ? 'B' : 'S', r.tenor,
       rateText(r.quote) + '%', num(r.nominal, 0), 'Fiyatlama hedge · ' + d.label].join('\t')));
-    openBulk({ ctx: this.ctx }, { kind: 'ois', text: lines.join('\n'), said: d.label + ' için ' + rows.length + ' hedge (Fiyatlama · Bu işlemi '
+    openBulk({ ctx: this.ctx }, { kind: 'ois', title: 'Fiyatlama hedge → işlem girişi', text: lines.join('\n'),
+      said: d.label + ' için ' + rows.length + ' hedge (Fiyatlama · Bu işlemi '
       + 'hedge\'le): her kovanın karşı TRY OIS\'i, kovanın kotasından. Önizlemeye bakıp kaydedin.' });
   }
 
@@ -880,7 +883,8 @@ export class PricingPage {
         return [s.pair, s.dir, num(s.amount, 0), s.date, num(s.value, 4), r.trade.note].join('\t');
       }));
       if (!rows.length) { toast('İşleme alınacak satır yok', 'warn'); return; }
-      openBulk({ ctx: this.ctx }, { kind: 'fwd', text: lines.join('\n'), said: 'Toplu fiyatlama\'dan ' + rows.length + ' FX forward (her satırın '
+      openBulk({ ctx: this.ctx }, { kind: 'fwd', title: 'Toplu fiyatlama → işlem girişi', text: lines.join('\n'),
+        said: 'Toplu fiyatlama\'dan ' + rows.length + ' FX forward (her satırın '
         + (rows.some((r) => r.trade.level_from === 'fiyat') ? 'yazılan fiyatı, yoksa ' : '') + 'mid\'i). Önizlemeye bakıp kaydedin.' });
       return;
     }
@@ -892,7 +896,8 @@ export class PricingPage {
       return [s.side === 'PAY' ? 'B' : 'S', s.tenors[0], rateText(s.level) + '%', num(s.size, 0), r.trade.note].join('\t');
     }));
     const left = rows.length - outright.length;
-    openBulk({ ctx: this.ctx }, { kind: 'ois', text: lines.join('\n'), said: 'Toplu fiyatlama\'dan ' + outright.length + ' TRY OIS'
+    openBulk({ ctx: this.ctx }, { kind: 'ois', title: 'Toplu fiyatlama → işlem girişi', text: lines.join('\n'),
+      said: 'Toplu fiyatlama\'dan ' + outright.length + ' TRY OIS'
       + (left ? ' (' + left + ' FRA / ileri başlangıçlı satır tek tek "İşleme al" ile)' : '') + '. Önizlemeye bakıp kaydedin.' });
   }
 

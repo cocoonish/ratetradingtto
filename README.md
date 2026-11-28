@@ -3083,7 +3083,9 @@ gönderilecek kotasyonu panoya koyar: parite / enstrüman, başlangıç (valör)
 outright, TRY ve döviz (USD / EUR) faizi, tablonun tutarı varsa tutar, yönü biliyorsa yön; iki taraflı tablolarda bid / ask.
 Yanındaki **▾** dili seçer (**Türkçe** / **English**; seçince o dilde kopyalar, seçim tarayıcıda hatırlanır); sayılar dile
 göre yazılır (`34,25` / `34.25`, `12.663` / `12,663`, `04.12.2026` / `04 Dec 2026`), her sayı tablodaki biçimiyle (hane
-sayısı tablodakidir). Biçim RET penceresinin "Kopyala (mesaj)"ı gibi hizalı metindir:
+sayısı tablodakidir). Her kopyalama (bir satırınki de, **Kota mesajı** da) **kotasyon defterine** açık kota olarak yazılır
+(seviyeleri tablonun gösterdiği; Fiyatlama → *Kotasyon defteri*: done / done değil ve müşteriye, ürüne göre isabet oranı).
+Biçim RET penceresinin "Kopyala (mesaj)"ı gibi hizalı metindir:
 
 ```
 USDTRY forward 1M · 03.11.2026 · bid / ask

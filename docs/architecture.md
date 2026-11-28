@@ -254,9 +254,9 @@ out from it. Built once, declared per table; FORWARD KOTASYON (USDTRY and EURTRY
   shared one) with inputs of its own, evaluating only what follows them - their derived inputs included, as the user's
   calculation is the parent. Who uses them: temporary table copies (`tto/copies.py`), a period's blotter tables
   (`_blotter_layer`), the offshore history, and Fiyatlama (28.11.2026): the forward card evaluates FORWARD KOTASYON's
-  row at any date with a row's valör (`EK_FWD!B`) set in a layer (`("pricing-fwd", user, k)`, up to three of ten rows,
+  row at any date with a row's valör (`EK_FWD!B`) set in a layer (`(user, "pricing-fwd", k)`, up to three of ten rows,
   dropped when the page leaves the FX forward; a row with an "Elle değer" on what the date's evaluation reads is not used),
-  and "Pozisyona ekle (deneme)" adds the instrument's DV01 to DV01 Risk's pastes in a layer (`("pricing-trial", user)`,
+  and "Pozisyona ekle (deneme)" adds the instrument's DV01 to DV01 Risk's pastes in a layer (`(user, "pricing-trial")`,
   dropped right after it is read). Nothing of a layer is stored, and the user's calculation never sees it.
 - **Array arithmetic has fast paths** (`tto/xl/values.py`, `tto/xl/functions.py`). Each keeps its general path, the
   code it had before, for everything else:
