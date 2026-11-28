@@ -2167,3 +2167,30 @@ table.grid td input.qmine { width: 76px; height: 22px; padding: 1px 4px; font: i
    line each, in the warning's colour ------------------------------------------------------------------------------------ */
 #blotter-check .checklist { margin: 0 0 10px 18px; padding: 0; }
 #blotter-check .checklist li { margin: 4px 0; color: var(--neg); line-height: 1.4; }
+/* ------------------------------------------------------------------------------------------------- Tahvil toplu (K6)
+   (28.11.2026, the desk: "kagit kismi cok duzensiz ve her sey her yerde gibi"): the bond column every bond table shows
+   first (its name a link to the bond's card), Kâğıt Fiyatlama's frozen ▸ and name, the quote ticket, Genel's link to the
+   bond table's one home (DİBS Trading), Tüm Kâğıtlar' curve prices. */
+table.grid td.bondlink { cursor: pointer; }
+table.grid td.bondlink:hover { text-decoration: underline; color: var(--accent-ink); }
+table.grid td.kf-curve { font-style: italic; }
+#kf-table td.bondlink { cursor: pointer; }
+#kf-table td.bondlink:hover { text-decoration: underline; color: var(--accent-ink); }
+#kf-table .kf-fz0 { position: sticky; left: 0; z-index: 2; width: 24px; min-width: 24px; max-width: 24px; box-sizing: border-box;
+  background: var(--surface); }
+#kf-table .kf-fz1 { position: sticky; left: 24px; z-index: 2; background: var(--surface); box-shadow: 1px 0 0 var(--line); }
+#kf-table tr.kf-kind td { background: var(--sub-bg); }
+.kf-wait, .fy-wait, .dg-wait { padding: 14px 4px; }
+.kf-row-acts, .kf-card-acts { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
+.kf-ticket-head { margin: 12px 0 4px; font-size: 13px; }
+.kf-ticket { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface-2, var(--surface)); }
+.kf-ticket-in { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-bottom: 6px; }
+.kf-ticket-in .field.inline { display: inline-flex; gap: 6px; align-items: center; }
+.kf-ticket-in input.inp { width: auto; }
+.kf-ticket table.kf-ticket-table { width: auto; margin: 2px 0 4px; }
+.kf-ticket table.kf-ticket-table th.l { text-align: left; }
+.kf-ticket-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.dg-trading { margin: 0 0 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.dg-none { padding: 8px 4px; }
+table.plain td.bondlink { cursor: pointer; }
+table.plain td.bondlink:hover { text-decoration: underline; color: var(--accent-ink); }

@@ -2,7 +2,7 @@
 import { api } from './api.js';
 import { h, clear, modal, toast, errorToast, confirmDialog } from './ui.js';
 import { isoToTr, num } from './format.js';
-import { kagitBlock } from './kagitblock.js';
+import { kagitBlock, ticketBox, alarmButton } from './kagitblock.js';
 
 const KIND_ORDER = ['all', 'fixed', 'float', 'frn', 'cpi', 'bill', 'zero'];
 const KIND_TEXT = { all: 'Tümü', fixed: 'Sabit', float: 'TLREF', frn: 'FRN', cpi: 'TÜFE', bill: 'Bono', zero: 'Kuponsuz' };
@@ -172,13 +172,19 @@ export async function openBondCard(ctx, isin) {
     .filter(Boolean).join(' · ');
   m.body.appendChild(h('p', { class: 'facts' }, facts || 'Masanın DİBS listesinde olmayan bir kâğıt'));
   const section = (title, el) => { m.body.appendChild(h('h3', null, title)); m.body.appendChild(el); };
-  // Kâğıt Fiyatlama's block (its page's figures for this bond): asked apart, so the card opens at once
+  // Kâğıt Fiyatlama's block (its page's figures for this bond): asked apart, so the card opens at once - with the bond's
+  // AL / SAT as alarms (C13) and its quote ticket at any value date (C10; the desk, 28.11.2026)
   const kf = h('div', { id: 'kf-card-host' }, h('p', { class: 'muted' }, 'hesaplanıyor…'));
   section('Kâğıt fiyatlama', kf);
   api.get('/api/kagit-fiyat?isin=' + encodeURIComponent(d.isin)).then((k) => {
     const row = (k && k.rows || [])[0];
     const curve = (k && k.curve_rows || [])[0];
     clear(kf).appendChild(row || curve ? kagitBlock(row, k.rules, k.projection, curve) : h('p', { class: 'muted' }, (k && k.why) || 'Kâğıt fiyatlanmadı'));
+    if (row && row.priced) kf.appendChild(h('div', { class: 'kf-card-acts' }, alarmButton(row, 'kf-card-alarm-')));
+    if (row || curve) {
+      kf.appendChild(h('h4', { class: 'kf-ticket-head' }, 'Kotasyon fişi · her valörde'));
+      kf.appendChild(ticketBox(ctx, d.isin, { page: 'kart' }));
+    }
   }).catch((err) => { clear(kf).appendChild(h('p', { class: 'muted', id: 'kf-card-why' }, (err && err.message) || 'Kâğıt fiyatlanmadı')); });
   // ``left``: the columns of text (the others are numbers, right-aligned)
   const table = (heads, rows, cls, left = [0]) => {
@@ -256,10 +262,11 @@ export async function openBondCard(ctx, isin) {
   m.foot.appendChild(h('button', { class: 'btn primary', type: 'button', onclick: () => m.close() }, 'Kapat'));
 }
 
-/** ▸ in a table of bonds opens the card of the bond of its row (the ISIN is in the cell's tip). */
+/** ▸ in a table of bonds - and the bond's name (the bond column every bond table shows first, 28.11.2026: "hangi sayfada
+ * olursa kâğıda tıklayınca aynı kâğıt kartı") - opens the card of the bond of its row (the ISIN is in the cell's tip). */
 export function bondCardLinks(ctx, el) {
   el.addEventListener('click', (e) => {
-    const td = e.target.closest('td.cardlink');
+    const td = e.target.closest('td.cardlink, td.bondlink');
     if (!td) return;
     const code = ((td.title || '').match(/[A-Z]{2}[A-Z0-9]{9}\d/) || [])[0];
     if (code) openBondCard(ctx, code);

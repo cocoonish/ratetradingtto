@@ -75,7 +75,7 @@ def test_the_tables_that_take_part():
     assert names == {"masa/EKS", "masa/EKSE", "masa/B3", "masa/B8", "masa/B10", "masa/B15", "masa/B22", "forward/FR1",
                      "forward/FR2", "forward/EKF1", "forward/EKF5", "forward/B19", "forward/BK1", "ois/B3", "ois/B13", "dibs/B3",
                      "dibslive/L1", "kagitlar/U1", "asw/tbl", "dv01/B14", "ois/B9", "ois/B10", "ois/B11", "ois/B15", "ois/B19",
-                     "ois/B20", "ois/B21", "masa/B18"}
+                     "ois/B20", "ois/B21", "masa/B18", "manuel/B12"}    # (manuel/B12: Manuel Tahvil's quote ticket, 28.11.2026)
     with pytest.raises(ValueError):
         th.parse("sp mid")
     assert th.parse("try ask") == ("try", "ask") and th.parse("ois") == ("ois", None)

@@ -8,6 +8,7 @@ import pytest
 
 from conftest import cell
 from tto import bonds as bd
+from tto import dibsgenel as dg
 from tto import extras as ex
 from tto import rvfair
 from tto.store import user_key
@@ -138,15 +139,19 @@ def test_every_trading_bond_has_its_fair_values_or_why_not(service, tmp_path):
     s = service
     u = s.login("Adil Değer Yok")["user"]
     d = summary(s, u)
+    # (28.11.2026, one order on the bond tables: each measure a group, its curves side by side - OIS / FX; a column keeps its
+    # letter of before, test_toplu_tahvil.py)
     tops = [c.get("t") for c in d["rows"][0] if not c.get("sk")]
-    assert tops == ["", "Fiyat", "OIS'e göre", "FX swap'a göre", "Risk", "Carry", "Broker", ""]
+    assert tops == ["", "Fiyat", "Getiri %", "ASW (bp)", "Eğri ASW (bp)", "Adil getiri %", "Adil fiyat", "Ucuz / pahalı (bp, + ucuz)",
+                    "Sinyal", dg.ZERO_GROUP, "Risk", "Carry", "Broker", ""]
     heads = [c["t"] for c in d["rows"][1]]
-    assert heads[:13] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Getiri %",
-                          "ON karşılık %", "ASW / DM"]                     # (the yield's O/N equivalent beside it: 26.11.2026)
-    assert heads[13:22] == ["Adil getiri %", "Adil fiyat", "Pahalı / ucuz", "Sinyal", "ASW FX", "Adil getiri %", "Adil fiyat",
-                            "Pahalı / ucuz", "Sinyal"]
-    assert heads[22:27] == ["Mod. süre", "DV01 / 1mn", s.USD_DV01_HEAD, "C+R (bp)", "T0→T1 repo %"] and heads[-1] == "Kart"
-    assert d["c"][:13] == list("ABCDEFGHIJK") + ["AF", "L"] and d["c"][13:22] == ["Y", "Z", "M", "N", "AA", "AB", "AC", "AD", "AE"]
+    assert heads[:14] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör", "Bid", "Ask", "Son işlem", "Ne zaman", "Kullanılan temiz",
+                          "Basit", "Bileşik", "ON karşılık"]               # (the yield's O/N equivalent beside it: 26.11.2026)
+    assert heads[14:26] == ["OIS / DM", "FX"] + ["OIS", "FX"] * 5
+    assert heads[29:36] == ["Mod. süre", "DV01 / 1mn", s.USD_DV01_HEAD, "OIS hedge oranı", "C+R (bp)", "T0→T1 repo %", "Broker bid"]
+    assert heads[-1] == "Kart"
+    assert d["c"][:14] == list("ABCDEFGHIJ") + ["AG", "AH", "K", "AF"]
+    assert d["c"][14:26] == ["L", FX_ASW, "AI", "AJ", OIS_YIELD, FX_YIELD, OIS_PRICE, FX_PRICE, "M", FX_RICH, "N", FX_SIGNAL]
     lines = [row for row in d["rows"][2:] if row[-1].get("t") == "▸"]
     assert len(lines) == len([v for v in s._list_values(u, "tto", "DİBS RV!A5:A54") if v]) >= 15
     for line in lines:
@@ -206,11 +211,14 @@ def test_the_bond_lists_show_only_their_bonds_the_asw_table_in_the_trading_lists
     assert captions == ["%s · %d kâğıt" % (names[k], count[k]) for k, _, _ in ex.UNI_KINDS if k in count]
     assert captions[:2] == ["Bono · 2 kâğıt", "Sabit kuponlu · 14 kâğıt"]          # (the desk's list: bills first)
     kinds, mats = [], []
+    b = asw["c"].index("B")
     for row, r in zip(asw["rows"], asw["r"]):
         if r < 7:
             continue
         isin = cell(s, "ASW!B%d" % r, book="asw")
-        assert row[0]["t"] == isin                                                   # each row is still its cell's
+        assert row[b]["t"] == isin                                                   # each row is still its cell's
+        # (the bond column first: its short name, the ISIN in the tip, a click opens its card - 28.11.2026)
+        assert row[0]["t"] == bd.short_label(bd.by_isin(isin)) and row[0]["cls"] == "bondlink" and row[0]["tip"].startswith(isin)
         kinds.append(bd.by_isin(isin)["kind"])
         mats.append(bd.by_isin(isin)["maturity"])
     order = [k for k, _, _ in ex.UNI_KINDS]
@@ -243,33 +251,35 @@ def test_a_launchpad_box_keeps_its_bonds(service):
         return d["rows"][d["r"].index(r)]
 
     # the DİBS ASW table, as the version before answered its boxes: the header row (6) and the bonds picked - by number
-    # with the header among them, by the first text with an empty row's number (31 holds no bond: not shown any more)
-    head = ["ISIN", "Kaynak (boş=genel)", "Manuel temiz", "Eğri / grafik (1 / 0 / x)", "Etiket", "Ad"]
+    # with the header among them, by the first text with an empty row's number (31 holds no bond: not shown any more); the
+    # ISIN that was the first text then still finds its bond, whose short name comes first now (28.11.2026)
+    head = ["Kâğıt", "ISIN", "Kaynak (boş=genel)", "Manuel temiz", "Eğri / grafik (1 / 0 / x)", "Etiket"]
     for rows in ([6, 8, 25, 31], ["TRB170327T15", "TRT110930T36", 31], [8, 25]):
         d = part("asw", "tbl", rows)
         assert d["r"] == [6, 8, 25] and 0 not in d["r"], (rows, d["r"])
         assert firsts(d, 6)[0] == head and d["rows"][0] == page_row("asw", "tbl", 6)
-        assert [x[0] for x in firsts(d)[1:]] == ["TRB170327T15", "TRT110930T36"]
+        assert [x[0] for x in firsts(d)[1:]] == ["17.03.27 Bono", "11.09.30 TLREF"]
     keys = s.panels(u, [{"view": "asw", "panel": "tbl", "key": "k", "keys": True}])["panels"]["k"]["rk"]
     whole = next(p for p in s.view(u, "asw")["panels"] if p["id"] == "tbl")["data"]
     assert [k for k, r in zip(keys, whole["r"]) if r in (0, 6)] == [None] * 4                # (no caption is a row to pick)
     assert part("asw", "tbl", [FIXED])["r"] == [6, 7 + s._list_values(u, "asw", "ASW!B7:B56").index(FIXED)]
-    # DİBS Trading's value dates: its header rows are rows like the others (as before), the empty ones are not shown
-    for rows in ([4, 5, 26], ["ISIN", BILL, TLREF]):
+    # DİBS Trading's value dates: its header rows are rows like the others (as before), the empty ones are not shown; a box
+    # kept by the texts that came first before the bond's short name did ("ISIN", the ISINs) still finds its rows
+    for rows in ([4, 5, 26], ["ISIN", BILL, TLREF], ["Kâğıt", "10.02.27 Bono", "09.01.30 TLREF"]):
         d = part("dibslive", "L1", rows)
-        assert d["r"] == [4, 5, 26] and [x[0] for x in firsts(d)] == ["ISIN", BILL, TLREF], rows
+        assert d["r"] == [4, 5, 26] and [x[0] for x in firsts(d)] == ["Kâğıt", "10.02.27 Bono", "09.01.30 TLREF"], rows
     assert part("dibslive", "L1", [2, 3, 4, 8, 16])["r"] == [2, 3, 4, 8]                  # (7 and 16 hold no bond)
     d = part("dibslive", "L1", ["T0", FIXED, 7])
-    assert d["r"] == [3, 8] and firsts(d, 6)[0][-1] == "T0 · aynı gün"
+    assert d["r"] == [3, 8] and "T0 · aynı gün" in firsts(d, 8)[0]
     # the trading summary: its rows numbered as before the groups (captions 1, then a row each: bills 3-4 under their
     # caption, the fixed coupon bonds from 6 by maturity - 15.03.28 the fifth, the last TLREF 23), its header row as it was,
-    # the groups of columns above it (they tell its two "Adil getiri %" apart)
+    # the groups of columns above it (they tell its "OIS" / "FX" captions apart)
     for rows in ([3, 10, 23], [1, 3, 10, 23]):
         d = part("dibslive", "L0", rows)
         assert d["r"] == [0, 1, 3, 10, 23], (rows, d["r"])
         assert firsts(d, 6)[1] == ["★", "Kâğıt", "ISIN", "Vade", "Kalan yıl", "Valör"]
         assert [row[2]["t"] for row in d["rows"][2:]] == [BILL, FIXED, "TRT110930T36"]
-        assert "OIS'e göre" in [c.get("t") for c in d["rows"][0]]
+        assert "Adil getiri %" in [c.get("t") for c in d["rows"][0]]
     d = part("dibslive", "L0", ["Bono", 3])
     assert d["r"] == [0, 1, 2, 3] and firsts(d)[2] == ["Bono · kuponsuz · 2"]
     keys = s.panels(u, [{"view": "dibslive", "panel": "L0", "key": "k", "keys": True}])["panels"]["k"]["rk"]

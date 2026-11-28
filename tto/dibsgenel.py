@@ -1,37 +1,28 @@
-"""DİBS RV · Genel: the trading list's bonds on one page - what DİBS RV and DİBS ASW work out of each bond, side by side,
-and the bonds against a zero-coupon curve fitted to them live.
+"""DİBS RV · Genel: the trading list's bonds at a glance - the charts, the zero-coupon curve fitted to them live, the
+settings the figures read - and a link to the bond table's one home, DİBS Trading's summary.
 
 **The menu.**  Tahvil → "DİBS RV" is one entry with three tabs: **Genel** (this page), **RV hesap tablosu** (``dibs``, the
 DİBS RV sheet) and **ASW hesap tablosu** (``asw``, the DİBS ASW sheet).  The two sheets keep their pages and their
 addresses (``#/dibs``, ``#/asw``: launchpad boxes, alarms, watched cells, Ctrl+K and the bond card's links find them as
 before); only the menu shows them as tabs (``menu``: the nav's ``menu`` / ``menu_title`` / ``tab``, as quant's entries).
 
-**The table** (one row a bond of the trading list - DİBS RV!A5:A54 -, kind by kind, by maturity, as DİBS Trading's
-summary; every row keyed by its ISIN), in groups of columns:
+**One home for the bond table** (the desk, 28.11.2026: "kagit kismi cok duzensiz ve her sey her yerde gibi"; the
+reorganization's "Genel yalnız grafikler + Trading tablosuna bağlantı").  Genel no longer has a table of its own: its
+columns - the clean price in use, the simple yield, each fitted ASW curve's ASW at the bond's years, the zero-coupon
+curve's model yield, cheap / rich and fair price, the OIS hedge ratio - are DİBS Trading's summary's now
+(``Service._trading_table``; its presets Trading / RV / Risk under "Sütunlar"), and this page links to it.  What the
+summary reads of the zero-coupon curve is :meth:`DibsGenel.zero_for` here: the same fit, kept, for the same inputs.
 
-* Kâğıt · Fiyat (the value date's Bloomberg source, bid / ask as DİBS RV has them, the last trade, the clean price in use)
-  · Getiri (BIST compound and simple, DİBS RV!T / S, and their O/N equivalent on TLREF's convention, BO - 26.11.2026);
-* **OIS ASW** - DİBS RV's ASW / DM (Z), the fitted curve's ASW at the bond's years (rvfair: a + b·t + c·t², AA on a fixed
-  coupon bond), cheap / rich (AB), signal (AC), the fair yield and clean price on the curve (rvfair);
-* **FX swap ASW** - the same on the FX swap implied TRY curve (EK_FX: TRYI 1–9M FX swap implied, TRYSAQ 1–10Y XCCY, 18M
-  computed off the offshore XCCY curve, the OIS quote where there is no price; each rate read by its own convention, ``aswfx``; named as the ASW page names it,
-  ``rvfair.FX_CURVE_TEXT``), as DİBS ASW computes its
-  "ASW FX" (rvfair's FX side: ASW!R / S / T on that curve, DİBS RV's threshold);
-* **Sıfır kupon eğrisi** - a Nelson-Siegel zero curve fitted now to the trading list's fixed coupon bonds, the bills
-  priced on it, not fitted (the desk's decision of 18.11.2026; TLREF floaters, FRNs and CPI linkers out, the reason in
-  the cell): the model yield, cheap / rich (bp, + cheap) and the fair clean price on the curve;
-* Risk (DİBS RV!AG, AI, AJ) · Carry (AO) · Broker (today's Broker Chat board, as on DİBS Trading) · ▸ the bond's card ·
-  ★ off the trading list.
-
-Every figure is its source's: a cell of DİBS RV, rvfair's fair values (the same as DİBS Trading's and the card's), the
-live fit.  **The fit is quantcurve's** ("DİBS adil değeri"): the bonds as ``quantcurve.read_engine`` reads DİBS RV (here
-the user's own calculation of it), their simple yields, ``quantcurve.BondFit`` / ``dibs_search`` / ``refit`` as
-``quantcurve.fam_dibs`` runs them on today's quotes - the model (``quantcurve.DIBS_MODEL``, Nelson-Siegel) and its τ
-searched on the bonds now, then the β with them held; a bond's cheap / rich is the fit's residual (its yield − the
-model yield, bp of the simple yield), the model yield the yield − it (the quant page's "Model"), the fair price
-``quantcurve.quote_bond``'s clean price; the fit's line says its RMSE and its leave-one-out RMSE (``BondFit.loo``).
-The τ are searched again when the bonds (or the day) change, else only the β follow the yields - as the quant fit does
-live.
+**The zero-coupon curve** - a Nelson-Siegel zero curve fitted now to the trading list's fixed coupon bonds, the bills
+priced on it, not fitted (the desk's decision of 18.11.2026; TLREF floaters, FRNs and CPI linkers out, the reason in
+the cell): each bond's model yield, cheap / rich (bp, + cheap) and the fair clean price on the curve.  **The fit is
+quantcurve's** ("DİBS adil değeri"): the bonds as ``quantcurve.read_engine`` reads DİBS RV (the user's own calculation
+of it), their simple yields, ``quantcurve.BondFit`` / ``dibs_search`` / ``refit`` as ``quantcurve.fam_dibs`` runs them
+on today's quotes - the model (``quantcurve.DIBS_MODEL``, Nelson-Siegel) and its τ searched on the bonds now, then the β
+with them held; a bond's cheap / rich is the fit's residual (its yield − the model yield, bp of the simple yield), the
+model yield the yield − it (the quant page's "Model"), the fair price ``quantcurve.quote_bond``'s clean price; the fit's
+line says its RMSE and its leave-one-out RMSE (``BondFit.loo``).  The τ are searched again when the bonds (or the day)
+change, else only the β follow the yields - as the quant fit does live.
 
 **The charts**: the yield curve (each bond's compound yield at its years, the fitted curve's par yield - the yield of a
 bond priced at 100 clean on it - and zero rate, compounded once a year, and DİBS RV's OIS par rate at each bond's
@@ -63,73 +54,26 @@ MIRRORS = ({"key": "asw_ois", "view": "asw", "panel": "chart0", "title": "ASW ·
            {"key": "switch", "view": "dibs", "panel": "B4", "title": "Switch / pair"},
            {"key": "hist_sel", "view": "asw", "panel": "sel", "title": "ASW geçmişi · seçili kâğıtlar"},
            {"key": "hist", "view": "asw", "panel": "chart1", "title": "ASW geçmişi"})
-#: the settings of DİBS RV the figures here read: shown here, typed in the RV hesap tablosu ("Ayarlar")
-SETTINGS = (("P2", "Sinyal eşiği (bp)"), ("J2", "C+R ufku (ay)"), ("X2", "Fiyat tipi"), ("Z2", "Varsayılan repo (%)"),
-            ("B2", "Kaynak (genel)"))
+#: the settings of DİBS RV the figures here read: shown here, typed in the RV hesap tablosu ("Ayarlar": two panels since
+#: 28.11.2026 - B1 A2:M2, B1b N2:Z2 - the panel each is in)
+SETTINGS = (("P2", "Sinyal eşiği (bp)", "B1b"), ("J2", "C+R ufku (ay)", "B1"), ("X2", "Fiyat tipi", "B1b"),
+            ("Z2", "Varsayılan repo (%)", "B1b"), ("B2", "Kaynak (genel)", "B1"))
 RV_SHEET, RV_SETTINGS_PANEL = "DİBS RV", "B1"
+#: the bond table's one home: DİBS Trading's summary (the page links to it, the RV preset of its columns for the RV view)
+TRADING = {"view": "dibslive", "panel": "L0", "title": "Trading listesi · özet", "preset": "RV"}
 #: the kinds (DİBS RV's types) in their order, as DİBS Trading's summary groups them
 KINDS = (("B", "Bono · kuponsuz"), ("S", "Sabit kuponlu"), ("T", "TLREF'e endeksli"), ("F", "FRN"), ("E", "TÜFE'ye endeksli"))
 #: why a kind of bond is not measured against the zero-coupon curve
 NO_ZERO = {"T": "TLREF'e endeksli: nakit akışları sabit değil, sıfır kupon eğrisine karşı ölçülmez",
            "F": "FRN: değişken kupon, sıfır kupon eğrisine karşı ölçülmez",
            "E": "TÜFE'ye endeksli: reel getiri, nominal sıfır kupon eğrisine karşı ölçülmez"}
-#: the FX swap group's head: the curve named
-FX_GROUP = "FX swap ASW · " + rvfair.FX_CURVE_TEXT
-#: the zero-coupon curve's group: its model named
+#: the zero-coupon curve's group (DİBS Trading's summary): its model named
 ZERO_GROUP = "Sıfır kupon eğrisi (%s)" % qc.MODEL_NAMES[qc.DIBS_MODEL]
-#: the groups' heads' tips
-GROUP_TIPS = {"OIS ASW": "DİBS RV'nin TLREF OIS eğrisine göre hesabı (RV hesap tablosu)",
-              FX_GROUP: "DİBS ASW'nin ASW FX hesabı (ASW hesap tablosu). DİBS RV'nin kendi FX sütunları başka bir eğride: FX swap "
-                        "(offshore ICAP eğrisi), RV hesap tablosunda varsayılan olarak gizli",
-              ZERO_GROUP: "Trading listesinin sabit kuponlularına şimdi uydurulan %s sıfır kupon eğrisi (quant'ın DİBS adil "
+#: the group's head's tip
+GROUP_TIPS = {ZERO_GROUP: "Trading listesinin sabit kuponlularına şimdi uydurulan %s sıfır kupon eğrisi (quant'ın DİBS adil "
                           "değeri hesabı); bonolar eğride fiyatlanır, uydurmaya girmez" % qc.MODEL_TEXT[qc.DIBS_MODEL]}
-#: DİBS RV's columns a quote that is no live one makes soft (worked out of its price)
-SOFT = ("ycomp", "ysimple", "on", "ois_asw", "ois_rc", "ois_sig", "fx_asw", "fx_rc", "fx_sig", "z_rc", "z_model")
 GRID_STEP = 0.1                          # years between the points of the curve's lines
 FIT_KEPT = 8                             # fits kept (users with inputs of their own see their own)
-
-
-def columns() -> List[Tuple[str, List[Tuple[str, str, str]]]]:
-    """The table's columns in their groups: ``[(group, [(key, caption, tip), ...]), ...]``."""
-    fx = "DİBS ASW'nin ASW FX hesabı (%s)" % rvfair.FX_CURVE_TEXT
-    fair = ("Kâğıdın ASW'si %s ASW eğrisinde (a + b·t + c·t²) dursaydı %s: kirli @spot = PV − eğri ASW × annuity / 100, valöre "
-            "fonlama çarpanıyla, temizi − işlemiş faiz; getiri ekrandaki gibi BIST bileşik (DİBS Trading ve kâğıt kartındakiyle aynı)")
-    zero = ("Sıfır kupon eğrisi: trading listesinin sabit kuponlularına şimdi uydurulan %s eğrisi (quant'ın DİBS adil değeri "
-            "hesabı; bonolar eğride fiyatlanır, uydurmaya girmez). " % qc.MODEL_TEXT[qc.DIBS_MODEL])
-    return [
-        ("Kâğıt", [("bond", "Kâğıt", ""), ("isin", "ISIN", ""), ("due", "Vade", "DİBS RV!E"),
-                   ("left", "Kalan (yıl)", "DİBS RV!F: OIS spot'tan vadeye yıl")]),
-        ("Fiyat", [("src", "Valör", "Kâğıdın DİBS RV'de fiyatlandığı Bloomberg kaynağı (ISL0: aynı gün valör, ISL1: ertesi iş günü)"),
-                   ("bid", "Bid", "DİBS RV: Bloomberg alış ('–': o tarafta emir yok)"),
-                   ("ask", "Ask", "DİBS RV: Bloomberg satış ('–': o tarafta emir yok)"),
-                   ("last", "Son işlem", "Son işlem fiyatı (DİBS RV!AS); günü üzerinde"),
-                   ("clean", "Kullanılan temiz", "DİBS RV!O: hesapların kullandığı temiz fiyat (Fiyat tipi, manuel fiyat)")]),
-        ("Getiri", [("ycomp", "Bileşik %", "DİBS RV!T: BIST bileşik getiri"), ("ysimple", "Basit %", "DİBS RV!S: BIST basit getiri"),
-                    ("on", "ON karşılık %", "DİBS RV!BO: getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde "
-                                            "bileşik (ACT/365; hafta sonu / tatilde son iş gününün faizi aradaki günler için tek adımda), "
-                                            "TLREF ve repoyla karşılaştırılır · sabit kuponlu ve bono")]),
-        ("OIS ASW", [("ois_asw", "ASW / DM", "DİBS RV!Z: TLREF OIS eğrisine göre ASW (bp; sabit kuponlu, bono) · TLREF'e endeksli kâğıtta DM"),
-                     ("ois_curve", "Eğri", "DİBS RV'nin OIS ASW eğrisi (a + b·t + c·t², sabit kuponlulara uydurulan) kâğıdın vadesinde "
-                                           "(sabit kuponluda DİBS RV!AA; bono eğriye girmez: eğrinin vadesindeki değeri)"),
-                     ("ois_rc", "Pahalı / ucuz", "DİBS RV!AB: ASW − eğrinin ASW'si (bp; + ucuz) · sabit kuponlu"),
-                     ("ois_sig", "Sinyal", "DİBS RV!AC: pahalı / ucuz eşiği (Eşik bp) aşınca UCUZ / PAHALI"),
-                     ("ois_fy", "Adil getiri %", fair % ("DİBS RV'nin OIS", "getirisi")),
-                     ("ois_fp", "Adil fiyat", fair % ("DİBS RV'nin OIS", "valördeki temiz fiyatı"))]),
-        (FX_GROUP,
-         [("fx_asw", "ASW", fx + ": ASW (bp)"), ("fx_curve", "Eğri", fx + ": uydurulan eğrinin kâğıdın vadesindeki ASW'si (bp)"),
-          ("fx_rc", "Pahalı / ucuz", fx + ": ASW − eğrinin ASW'si (bp; + ucuz)"),
-          ("fx_sig", "Sinyal", "Pahalı / ucuz DİBS RV'nin eşiğini (Eşik bp) aşınca UCUZ / PAHALI"),
-          ("fx_fy", "Adil getiri %", fair % ("DİBS ASW'nin (%s)" % rvfair.FX_CURVE_TEXT, "getirisi")),
-          ("fx_fp", "Adil fiyat", fair % ("DİBS ASW'nin (%s)" % rvfair.FX_CURVE_TEXT, "valördeki temiz fiyatı"))]),
-        (ZERO_GROUP, [("z_model", "Model getiri %", zero + "Model getiri = getiri − pahalı / ucuz (BIST basit getiri kuralıyla)"),
-                      ("z_rc", "Pahalı / ucuz", zero + "Getiri − model getiri (bp, basit getiri; + ucuz: al, − pahalı: sat)"),
-                      ("z_fp", "Adil fiyat", zero + "Nakit akışlarının eğrideki değeri (Σ CF·DF), valördeki temiz fiyat")]),
-        ("Risk", [("dur", "Mod. süre", "DİBS RV!AG: modifiye süre"), ("dv01", "DV01 / 1mn", "DİBS RV!AI: 1 mn nominalin DV01'i (TL; TLREF'te spread DV01'i)"),
-                  ("hedge", "OIS hedge", "DİBS RV!AJ: OIS hedge oranı")]),
-        ("Carry", [("cr", "C+R (bp)", "DİBS RV!AO: carry + roll-down (Ufuk (ay) ayarıyla)")]),
-        ("Broker", [("bk_bid", "Broker bid", ""), ("bk_ask", "Broker ask", ""), ("bk_last", "Son işlem", ""), ("bk_who", "Kimde · yaş", "")]),
-        ("", [("card", "Kart", "Kâğıdın bütün bilgisi tek pencerede"), ("flag", "★", "Trading listesinden çıkar (herkes için; DİBS ASW listesinden de)")]),
-    ]
 
 
 def menu(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -322,20 +266,18 @@ class DibsGenel(object):
         if got is None:
             return {"ok": False, "why": "DİBS RV sayfası yok", "gen": svc.gen}
         res = self.fit(got["quant"], got["live"], got["today"])
-        rows = fit_rows(res) if res.get("ok") else {}
-        table = self._table(got, res, rows, loc)
         lines = curve_lines(res, max([p["t"] for p in got["points"]] + [res["in"].longest if res.get("ok") else 0.0]) + 0.25)
-        out = {"ok": True, "table": table, "fit": fit_summary(res), "chart": yield_chart(got["points"], lines, got["ois"]),
-               "settings": got["settings"], "mirrors": [dict(m) for m in MIRRORS], "fx": got["fx"], "gen": got["gen"],
-               "today": got["today"].isoformat(), "time": _dt.datetime.now().strftime("%H:%M:%S"),
-               "ms": round((time.perf_counter() - t0) * 1000.0, 1), "tabs": [{"id": p, "title": t} for p, t in TABS]}
+        out = {"ok": True, "trading": dict(TRADING, n=got["n"], kinds=got["kinds"]), "fit": fit_summary(res),
+               "chart": yield_chart(got["points"], lines, got["ois"]), "settings": got["settings"],
+               "mirrors": [dict(m) for m in MIRRORS], "fx": got["fx"], "gen": got["gen"], "today": got["today"].isoformat(),
+               "time": _dt.datetime.now().strftime("%H:%M:%S"), "ms": round((time.perf_counter() - t0) * 1000.0, 1),
+               "tabs": [{"id": p, "title": t} for p, t in TABS]}
         return out
 
     def _read(self, user: str, loc) -> Optional[Dict[str, Any]]:
-        """Calculation thread: every bond of the trading list as the sheets have it now (its cells but the fit's), the fit's
-        inputs, the chart's points, the settings."""
+        """Calculation thread: the fit's inputs (the trading list's bonds as the quant fit reads them, this user's
+        calculation), the chart's points, the settings, how many bonds of which kind the summary has."""
         from . import bonds as bd
-        from . import extras as ex
         from .xl.model import COLS, parse_a1
         svc = self.svc
         book = svc.books.get("tto")
@@ -345,24 +287,16 @@ class DibsGenel(object):
         si = index[RV_SHEET]
         calc = svc._calc(user, book)
         R = svc.renderers[book.id]
-        live_sheet = index.get(ex.LIVE_SHEET)
         fx = svc._fx_curve(user)
         fits = rvfair.read_fits(calc, si, fx)
-        threshold = calc.get(si, 2, parse_a1("P1") % COLS)
-        said = svc._board_bonds(user)
 
         def raw(c: str, r: int) -> Any:
             return calc.get(si, r, parse_a1("%s1" % c) % COLS)
 
         def cell(c: str, r: int, s: int = si) -> Dict[str, Any]:
             got = R.cell(calc, s, r, parse_a1("%s1" % c) % COLS, loc)
-            keep = {k: got[k] for k in ("t", "v", "k", "c", "b") if k in got}
-            keep.setdefault("t", "")
-            keep.setdefault("k", "")
-            return keep
+            return {"t": got.get("t", "")}
 
-        # the fit's inputs: DİBS RV's fixed coupon bonds (fitted) and bills (priced on the curve) as the quant fit reads
-        # them (this user's calculation)
         eng: Dict[str, Any] = {}
 
         def reader(sheet: str):
@@ -370,115 +304,55 @@ class DibsGenel(object):
             return lambda ref: calc.get(s, *divmod(parse_a1(ref), COLS))
 
         qc.read_engine(eng, index, reader, lambda v: v if type(v) is float and math.isfinite(v) else None)
-        lines: List[Dict[str, Any]] = []
         points: List[Dict[str, Any]] = []
         ois: List[Tuple[float, float]] = []
+        kinds: Dict[str, int] = {}
+        live_sheet = index.get(ex.LIVE_SHEET)
         for r in range(rvfair.FIRST, rvfair.LAST + 1):
             code = rvfair.isin_of(raw("A", r))
             if not code:
                 continue
             known = bd.by_isin(code)
             kind = {"bill": "B", "zero": "B", "fixed": "S", "float": "T", "frn": "F", "cpi": "E"}.get((known or {}).get("kind")) or raw("D", r)
-            mat = raw("E", r)
-            if type(mat) is not float and known:
-                from .xl.values import date_to_serial
-                mat = date_to_serial(_dt.date.fromisoformat(known["maturity"]))
-            label = cell("B", r, live_sheet) if live_sheet is not None else {"t": code, "k": "s"}
-            if known and label.get("t") in ("", code):
-                label = {"t": bd.short_label(known), "k": "s", "b": 1}
-            q = svc._rv_quote(calc, si, r)
-            f = rvfair.fair(calc, si, r, fits, fx)
-            valor, own = raw("P", r), raw("T", r)
-            src = raw("BS", r)
-            sec = raw("BT", r)
-            seen = svc.trades_seen(sec) if isinstance(sec, str) else None
-            last = dict(cell("AS", r), b=1)
-            when = cell("I", r)
-            if str(last.get("t") or "").strip():
-                last["tip"] = ("Dashboard'un bu kâğıtta işlem gördüğü an: bugün %s · " % seen["time"] if seen else "") + \
-                    "Son işlem günü: " + (when.get("t") or "")
-            ois_curve: Dict[str, Any] = {"t": "", "k": ""}
-            if type(f["ois"].get("asw")) is float:
-                ois_curve = {"t": numfmt.format_value(f["ois"]["asw"], "0", loc), "v": f["ois"]["asw"], "k": "n",
-                             "tip": "DİBS RV'nin OIS ASW eğrisi kâğıdın %s yılında%s" % (numfmt.format_value(f["ois"]["t"], "0.00", loc),
-                                                                                    " (bono eğriye girmez)" if f["ois"].get("bill") else "")}
-                if f["ois"].get("stretched"):
-                    ois_curve["cls"] = "soft"
-            fx_own, fx_curve, fx_rich, fx_signal = svc._fx_cells(f["fx"], threshold, loc)
-            ois_fy, ois_fp = svc._fair_cells(f["ois"], "ois", fits, valor, own, loc)
-            fx_fy, fx_fp = svc._fair_cells(f["fx"], "fx", fits, valor, own, loc)
-            due = cell("E", r)
-            if not str(due.get("t") or "").strip() and type(mat) is float:
-                due = {"t": numfmt.format_value(mat, "dd.mm.yyyy", loc), "v": mat, "k": "n"}
-            by = {"bond": label, "isin": {"t": code, "k": "s", "cls": "soft"}, "due": due, "left": cell("F", r),
-                  "src": {"t": str(src or ""), "k": "s", "cls": "soft"},
-                  "bid": svc._quote_cell(cell("K", r), q["bid"], q["raw_bid"], "bid", loc),
-                  "ask": svc._quote_cell(cell("L", r), q["ask"], q["raw_ask"], "ask", loc), "last": last, "clean": cell("O", r),
-                  "ycomp": cell("T", r), "ysimple": cell("S", r), "on": cell(ex.RV_ON[0][0], r),
-                  "ois_asw": cell("Z", r), "ois_curve": ois_curve, "ois_rc": cell("AB", r), "ois_sig": dict(cell("AC", r), b=1),
-                  "ois_fy": ois_fy, "ois_fp": ois_fp,
-                  "fx_asw": fx_own, "fx_curve": fx_curve, "fx_rc": fx_rich, "fx_sig": fx_signal, "fx_fy": fx_fy, "fx_fp": fx_fp,
-                  "dur": cell("AG", r), "dv01": cell("AI", r), "hedge": cell("AJ", r), "cr": cell("AO", r),
-                  "card": {"t": "▸", "k": "s", "cls": "act cardlink", "tip": "Kâğıt kartı: " + code},
-                  "flag": svc._flag_cell(code, True)}
-            for key, c in zip(("bk_bid", "bk_ask", "bk_last", "bk_who"), svc._bond_cells(said.get(code), loc)):
-                by[key] = c
-            lines.append({"isin": code, "kind": kind if kind in dict(KINDS) else "S", "mat": mat if type(mat) is float else 1e9,
-                          "cells": by, "stale": q["tip"] if q["stale"] else ""})
+            kind = kind if kind in dict(KINDS) else "S"
+            kinds[kind] = kinds.get(kind, 0) + 1
+            label = cell("B", r, live_sheet)["t"] if live_sheet is not None else ""
+            if known and label in ("", code):
+                label = bd.short_label(known)
             years, comp = raw("F", r), raw("T", r)
             if kind in ("S", "B") and type(years) is float and type(comp) is float:
-                points.append({"t": years, "y": comp * 100.0, "label": label.get("t") or code, "isin": code})
+                points.append({"t": years, "y": comp * 100.0, "label": label or code, "isin": code})
             x = raw("X", r)
             if type(years) is float and type(x) is float:
                 ois.append((years, x * 100.0))
         settings = []
-        for ref, name in SETTINGS:
+        for ref, name, panel in SETTINGS:
             c = cell(ref[0], int(ref[1:]))
-            settings.append({"ref": "%s!%s" % (RV_SHEET, ref), "label": name, "t": c.get("t") or "", "view": "dibs",
-                             "panel": RV_SETTINGS_PANEL})
-        return {"lines": lines, "quant": eng.get("dibs") or [], "live": qc.live_values(eng), "today": svc.history.today(),
-                "points": points, "ois": ois, "settings": settings, "gen": svc.gen,
+            settings.append({"ref": "%s!%s" % (RV_SHEET, ref), "label": name, "t": c.get("t") or "", "view": "dibs", "panel": panel})
+        return {"quant": eng.get("dibs") or [], "live": qc.live_values(eng), "today": svc.history.today(), "points": points,
+                "ois": ois, "settings": settings, "gen": svc.gen, "n": sum(kinds.values()),
+                "kinds": [{"kind": k, "title": t, "n": kinds[k]} for k, t in KINDS if kinds.get(k)],
                 "fx": {"curve": rvfair.FX_CURVE_TEXT, "swapped": fx.swapped if fx is not None else 0, "fit": {
                     k: v for k, v in fits["fx"].items() if k in ("coef", "n", "span", "why")}}}
 
-    def _table(self, got: Dict[str, Any], res: Dict[str, Any], rows: Dict[str, Dict[str, Any]], loc) -> Dict[str, Any]:
-        """The table as the grid draws it: the groups of columns over their captions, the bonds kind by kind, by maturity."""
-        groups = columns()
-        cols = [x for _, items in groups for x in items]
-        width = len(cols)
-        top: List[Dict[str, Any]] = []
-        for name, items in groups:
-            top.append(dict({"t": name, "k": "s", "b": 1, "f": "hd", "al": "c"} if name else {"t": "", "k": ""},
-                            **({"cs": len(items)} if len(items) > 1 else {}), **({"tip": GROUP_TIPS[name]} if name in GROUP_TIPS else {}),
-                            **({"cls": "dg-wrap"} if name == FX_GROUP else {})))
-            top.extend({"sk": 1} for _ in items[1:])
-        board = {key: tip for key, (_, tip) in zip(("bk_bid", "bk_ask", "bk_last", "bk_who"), self.svc._BOARD_HEADS)}
-        head = [dict({"t": cap, "k": "s", "b": 1, "f": "hd"}, **({"tip": tip or board.get(key)} if tip or key in board else {}))
-                for key, cap, tip in cols]
-        out_rows: List[List[Dict[str, Any]]] = [top, head]
-        isins: List[Optional[str]] = [None, None]
-        by_kind: Dict[str, List[Dict[str, Any]]] = {k: [] for k, _ in KINDS}
-        for line in got["lines"]:
-            line["cells"].update(self._zero_cells(line, res, rows, got["quant"], loc))
-            if line["stale"]:
-                for k in SOFT:
-                    line["cells"][k] = self.svc._soft(line["cells"][k], line["stale"])
-            by_kind[line["kind"]].append(line)
-        for kind, caption in KINDS:
-            mine = sorted(by_kind[kind], key=lambda x: (x["mat"], x["isin"]))
-            if not mine:
-                continue
-            out_rows.append([{"t": "%s · %d" % (caption, len(mine)), "k": "s", "b": 1, "cls": "grouphead", "cs": width}]
-                            + [{"sk": 1} for _ in range(width - 1)])
-            isins.append(None)
-            for line in mine:
-                out_rows.append([line["cells"][key] for key, _, _ in cols])
-                isins.append(line["isin"])
-        if len(out_rows) == 2:
-            out_rows.append([{"t": "Trading listesi boş: Tüm Kâğıtlar sayfasında ☆ ile ekleyin", "k": "s", "cls": "soft", "cs": width}]
-                            + [{"sk": 1} for _ in range(width - 1)])
-            isins.append(None)
-        return {"sheet": "", "rows": out_rows, "r": list(range(len(out_rows))), "c": [key for key, _, _ in cols], "isin": isins}
+    def zero_for(self, calc, index: Dict[str, int], today: _dt.date, bonds: List[Tuple[str, str]], loc) -> Dict[str, Dict[str, Any]]:
+        """The bonds against the zero-coupon curve fitted now, as DİBS Trading's summary shows them (the bond table's one
+        home, 28.11.2026): ``bonds`` (ISIN, DİBS RV's kind) -> each one's model yield, cheap / rich and fair price cells -
+        or dashes that say why not.  The fit of ``calc``'s bonds (a user's own calculation: their own fit), kept for the
+        same inputs (:meth:`fit`).  On the calculation thread (it reads DİBS RV)."""
+        from .xl.model import COLS, parse_a1
+        eng: Dict[str, Any] = {}
+
+        def reader(sheet: str):
+            s = index[sheet]
+            return lambda ref: calc.get(s, *divmod(parse_a1(ref), COLS))
+
+        qc.read_engine(eng, index, reader, lambda v: v if type(v) is float and math.isfinite(v) else None)
+        quant = eng.get("dibs") or []
+        res = self.fit(quant, qc.live_values(eng), today)
+        rows = fit_rows(res) if res.get("ok") else {}
+        return {isin: self._zero_cells({"isin": isin, "kind": kind if kind in dict(KINDS) else "S"}, res, rows, quant, loc)
+                for isin, kind in bonds}
 
     @staticmethod
     def _zero_cells(line: Dict[str, Any], res: Dict[str, Any], rows: Dict[str, Dict[str, Any]], quant: List[Dict[str, Any]],
@@ -515,5 +389,5 @@ class DibsGenel(object):
                   x["value_date"], n(x["fair"]["dirty"], "0.000"), n(x["accrued"], "0.000"), n(x["fair"]["clean"], "0.000"),
                   n(x["fair"]["yield"] / 100.0, "0.00%")))
         return {"z_model": {"t": n(x["model"] / 100.0, "0.00%"), "v": x["model"] / 100.0, "k": "n", "tip": tip},
-                "z_rc": {"t": n(x["resid"], "0.0"), "v": x["resid"], "k": "n", "tip": tip},
+                "z_rc": {"t": n(x["resid"], "0"), "v": x["resid"], "k": "n", "tip": tip},
                 "z_fp": {"t": n(x["fair"]["clean"], "0.000"), "v": x["fair"]["clean"], "k": "n", "tip": tip}}

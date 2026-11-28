@@ -174,7 +174,20 @@
    "id": "B1",
    "type": "table",
    "title": "Ayarlar",
-   "range": "A2:Z2",
+   "range": "A2:L2",
+   "fit": true,
+   "keep_title": true,
+   "lift": false,
+   "hidden": false
+  },
+  {
+   "id": "B1b",
+   "type": "table",
+   "title": "Ayarlar · BBG eki, sinyal eşiği, fiyat tipi, repo",
+   "range": "M2:Z2",
+   "fit": true,
+   "keep_title": true,
+   "lift": false,
    "hidden": false
   },
   {
@@ -216,11 +229,11 @@
     "extra": 1,
     "last": 54
    },
-   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "BO", "U", "BP", "V", "BQ",
-            "W", "X", "Y", "Z", "AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR",
-            "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH", "BI", "BJ"],
+   "cols": ["Kâğıt", "A", "B", "D", "E", "F", "G", "K", "L", "M", "N", "O", "P", "T", "BO", "Z", "AB", "AC", "S", "U", "BP", "V", "BQ",
+            "Q", "R", "W", "X", "Y", "AA", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL", "AM", "AN", "AO", "AP", "AQ", "AR",
+            "AS", "AT", "AU", "AV", "AW", "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH", "BI", "BJ", "C", "H", "I", "J"],
    "hidden": false,
-   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ. Yardımcı iki sütun da varsayılan olarak gizli: İşlemiş (valör) - kirli ile kullanılan temiz fiyatın farkı, Kirli (valör) yanında - ve Durum (kâğıdın nakit akışının nereden kurulduğu: BBG CF, takvim, iskontolu; hesaplanamıyorsa nedeni); Sütunlar'dan bir tıkla gelir. ON karşılık % (getirinin yanında; Alış / Satış ON % alış / satış getirisinin yanında): getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde bileşik (ACT/365; hafta sonu ya da tatilde son iş gününün faizi aradaki günler için tek adımda), TLREF ve repoyla doğrudan karşılaştırılır. Getiri önce kendi kuralıyla pencerenin büyümesine çevrilir (bono: basit ACT/365, 100 / fiyat; sabit kuponlu: BIST getirisi, yılda kupon sayısı kadar bileşik, vadeye kalan dönem kadar), sonra o büyümeyi veren ON'a. Sabit kuponlu ve bonoda; TLREF'li, FRN ve TÜFE'lide boş.",
+   "note": "BF–BJ (DİBS RV'nin kendi FX swap sütunları, offshore ICAP eğrisinde) varsayılan olarak gizli: masa kâğıdın FX swap tarafını DİBS ASW'nin FX swap ima eğrisinde okur - DİBS RV · Genel'deki \"FX swap ASW\" (DİBS Trading ve kâğıt kartında da o). Göstermek için: Sütunlar → BF–BJ. Yardımcı iki sütun da varsayılan olarak gizli: İşlemiş (valör) - kirli ile kullanılan temiz fiyatın farkı, Kirli (valör) yanında - ve Durum (kâğıdın nakit akışının nereden kurulduğu: BBG CF, takvim, iskontolu; hesaplanamıyorsa nedeni); Sütunlar'dan bir tıkla gelir. ON karşılık % (getirinin yanında; Alış / Satış ON % alış / satış getirisinin yanında): getirinin TLREF'in kuralıyla gecelik karşılığı - valörden vadeye, iş günlerinde bileşik (ACT/365; hafta sonu ya da tatilde son iş gününün faizi aradaki günler için tek adımda), TLREF ve repoyla doğrudan karşılaştırılır. Getiri önce kendi kuralıyla pencerenin büyümesine çevrilir (bono: basit ACT/365, 100 / fiyat; sabit kuponlu: BIST getirisi, yılda kupon sayısı kadar bileşik, vadeye kalan dönem kadar), sonra o büyümeyi veren ON'a. Sabit kuponlu ve bonoda; TLREF'li, FRN ve TÜFE'lide boş. Sütun sırası (28.11.2026, sonuç ilk ekranda): Kâğıt (kısa ad, ISIN'i üzerinde, tıklayınca kâğıt kartı) ve ISIN sabit, Valör'den hemen sonra Bileşik getiri, ON karşılık, ASW / DM, Pahalı / ucuz ve Sinyal; Ad, Bilinen kupon, Son işlem tarihi ve Fiyat durumu sonda. UCUZ yeşil, PAHALI kırmızı. Kota mesajı: Bloomberg'in bid / ask'ı ya da masanın kotası (getiri ± yazdığınız genişliğin yarısı: bid getirisi yukarıda).",
    "action": "add-isin",
    "add": {
     "list": "A5:A54",
@@ -231,10 +244,27 @@
    "card": "bond",
    "quote": {
     "prefix": "DİBS",
-    "label": "A",
+    "label": "Kâğıt",
+    "alt": "A",
     "first": 5,
     "last": 54,
     "sets": [
+     {
+      "id": "desk",
+      "name": "Masanın kotası (bileşik getiri)",
+      "mid": "T",
+      "scale": 100,
+      "digits": 2,
+      "yield": true
+     },
+     {
+      "id": "desk_s",
+      "name": "Masanın kotası (basit getiri)",
+      "mid": "S",
+      "scale": 100,
+      "digits": 2,
+      "yield": true
+     },
      {
       "id": "px",
       "name": "Fiyat (BBG)",

@@ -39,7 +39,9 @@
    "type": "table",
    "title": "Tüm kâğıtlar",
    "range": "A1:S167",
-   "cols": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "S", "O", "P", "Q", "R"],
+   "cols": ["B", "A", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "S", "O", "P", "Q",
+            "Getiri % (piyasa)", "Eğri fiyatı · getiri %", "Eğri fiyatı · temiz", "Piyasa − eğri (bp)", "R"],
+   "freeze": 2,
    "append": "universe",
    "card": "bond",
    "flags": "dibs",
@@ -51,7 +53,7 @@
     "title": "Tüm Kâğıtlar'a kâğıt ekle (ISIN)"
    },
    "trade": {"first": 6, "last": 165, "isin_col": "A", "cells": {"I": "price bid", "J": "price ask", "K": "price"}},
-   "note": "☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar, ✕ kâğıdı listeden çıkarır. + ISIN ekle: kâğıdın türü Bloomberg'den bulunur, kendi grubuna girer. Sağdaki sütunlar bugünün Broker Chat tahtasıdır. RV sütunları DİBS RV sayfasından gelir: sinyal eşiği ve fiyat tipi üstteki satırda, kâğıt bazındaki girdiler (bilinen kupon, elle temiz fiyat) DİBS RV sayfasındaki tabloda. ON karşılık % (RV): getirinin TLREF'in kuralıyla gecelik karşılığı (valörden vadeye, iş günlerinde bileşik, ACT/365) - DİBS RV'deki gibi; sabit kuponlu ve bonoda."
+   "note": "Masanın kâğıt listesi: kâğıt eklenir, çıkarılır, trading listesine konur - kâğıtların fiyat / RV tablosu DİBS Trading'dedir (tek ev). Kâğıt sütunu ilk ve sabit: kısa ad, ISIN'i üzerinde, tıklayınca kâğıt kartı. ☆ tıklayınca kâğıt trading listesine (DİBS RV ve DİBS Trading) girer, ★ tıklayınca çıkar. ▸ kâğıdın kartını açar, ✕ kâğıdı listeden çıkarır. + ISIN ekle: kâğıdın türü Bloomberg'den bulunur, kendi grubuna girer. Getiri % (piyasa), Eğri fiyatı ve Piyasa − eğri: Kâğıt Fiyatlama'nın her kâğıt için hesabı (trading listesinde olmayanlar dahil; sabit kuponlu, bono, kuponsuz): bugünkü piyasa fiyatının getirisi (bid / ask ortası ya da bugünkü son işlem), fiyatı olmayana eğriden fiyat (eğri + son fark, akran farkı ya da eğri; üzerine gelince nasıl) ve piyasanın eğriye farkı - getiriler BIST bileşik, fiyat kâğıdın valöründe temiz. Sağdaki sütunlar bugünün Broker Chat tahtasıdır. RV sütunları DİBS RV sayfasından gelir: sinyal eşiği ve fiyat tipi üstteki satırda, kâğıt bazındaki girdiler (bilinen kupon, elle temiz fiyat) DİBS RV sayfasındaki tabloda. ON karşılık % (RV): getirinin TLREF'in kuralıyla gecelik karşılığı (valörden vadeye, iş günlerinde bileşik, ACT/365) - DİBS RV'deki gibi; sabit kuponlu ve bonoda. ISIN, Tür, Kalan gün ve Kaynak varsayılan olarak gizli: Sütunlar'dan tek tıkla gelir. UCUZ yeşil, PAHALI kırmızı."
   },
   {
    "id": "U2",

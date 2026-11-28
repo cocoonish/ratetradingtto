@@ -141,6 +141,27 @@
    "group": "manuel-18",
    "kind": "text",
    "label": "'ISIN' – kâğıdın koşulları girdilere gelir (yazılan değer önce gelir)"
+  },
+  {
+   "range": "AS5",
+   "scope": "user",
+   "group": "manuel-ticket",
+   "kind": "amount",
+   "label": "Kotasyon fişi: nominal (100m, 2,5mn gibi de yazılır)"
+  },
+  {
+   "range": "AS6",
+   "scope": "user",
+   "group": "manuel-ticket",
+   "kind": "pct",
+   "label": "Kotasyon fişi: merkez bileşik getiri (formül varsayılanı: sayfanın fiyatının getirisi, F8)"
+  },
+  {
+   "range": "AS7",
+   "scope": "user",
+   "group": "manuel-ticket",
+   "kind": "number",
+   "label": "Kotasyon fişi: spread (bp, bid ile ask arası)"
   }
  ],
  "twoway": [
@@ -185,6 +206,40 @@
    "title": "Sonuç",
    "range": "E2:F16",
    "hidden": false
+  },
+  {
+   "id": "B12",
+   "type": "table",
+   "title": "Kotasyon fişi · masanın kotası",
+   "range": "AR2:AU17",
+   "fit": true,
+   "keep_title": true,
+   "hidden": false,
+   "quote": {
+    "prefix": "DİBS",
+    "label": "AR",
+    "first": 10,
+    "last": 13,
+    "date": "AS3",
+    "sets": [
+     {
+      "id": "desk",
+      "name": "Masanın kotası",
+      "bid": "AS",
+      "ask": "AT"
+     }
+    ]
+   },
+   "trade": {
+    "first": 12,
+    "last": 12,
+    "isin_col": "AU",
+    "cells": {
+     "AS": "price bid",
+     "AT": "price ask"
+    }
+   },
+   "note": "Kâğıdı sayfanın valöründe (Girdiler B3: bugün, ON, TN ya da tarih) bir merkez getirinin iki yanında kote edin: bid = merkez + spread / 2 (masa yüksek getiriden alır), ask = merkez − spread / 2 - BIST bileşik ve basit getiri, valörde temiz ve kirli fiyat (sayfanın kendi hesabı: Hedef → temiz fiyat'ın tersi), nominalin tutarı, DV01'i ve OIS hedge nominali (hedge oranı × nominal, OIS sayfasının yuvarlamasıyla). Merkez varsayılan olarak sayfanın fiyatının bileşik getirisi (ISIN'in fiyatı ya da sayfaya yazdığınız fiyat / getiri); Kâğıt Fiyatlama'nın adil getirisini ya da kendi seviyenizi yazabilirsiniz. Kota mesajı fişi sohbete hazır kopyalar; bid / ask temiz fiyata sağ tık → İşlem gir (Günlük İşlemler: kâğıt, yön ve fiyat dolu). Aynı fiş kâğıt kartının Kâğıt Fiyatlama bölümünde de (T0 / T1 / T2 seçilerek)."
   },
   {
    "id": "B4",

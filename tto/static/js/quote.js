@@ -5,7 +5,8 @@
 //   {"prefix": "USDTRY", "label": "A", "alt": "B", "alt_when": "serbest", "first": 5, "last": 14, "date": "B45",
 //    "sets": [{"id": "pts", "name": "Puan", "bid": "H", "ask": "I"},
 //             {"id": "mid", "name": "Par", "mid": "B", "scale": 100, "digits": 2}]}
-// A set with "mid" quotes mid ± half a width typed in bp (or the mid alone when no width is given).
+// A set with "mid" quotes mid ± half a width typed in bp (or the mid alone when no width is given); "yield": true quotes a
+// bond's yield - its bid the higher one (the desk buys at a higher yield: DİBS RV's "masanın kotası").
 import { h, clear, modal, copyText } from './ui.js';
 import { num, parseNumber } from './format.js';
 import { logQuoteMessage } from './quotelog.js';
@@ -51,7 +52,9 @@ export function quoteOf(data, row, set, width) {
     const digits = set.digits === undefined ? 2 : set.digits;
     const w = typeof width === 'number' && width > 0 ? width / 100 : null;       // bp -> per cent
     if (w === null) return { bid: num(v, digits, false), ask: '' };
-    return { bid: num(v - w / 2, digits, false), ask: num(v + w / 2, digits, false) };
+    // a bond's yield (``"yield": true`` - DİBS RV's "masanın kotası", 28.11.2026): the desk buys at the higher yield
+    const s = set.yield ? -1 : 1;
+    return { bid: num(v - s * w / 2, digits, false), ask: num(v + s * w / 2, digits, false) };
   }
   return { bid: textOf(data, row.i, set.bid), ask: set.ask ? textOf(data, row.i, set.ask) : '' };
 }

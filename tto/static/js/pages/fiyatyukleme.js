@@ -7,8 +7,9 @@
 // other two 0), downloaded and kept for a second download today.  An auction line the page cannot read is named once
 // (desk-wide) and known from then on.
 import { api } from '../api.js';
-import { h, clear, toast, errorToast } from '../ui.js';
+import { h, clear, toast, errorToast, foldNote } from '../ui.js';
 import { num, parseNumber } from '../format.js';
+import { bondCardLinks } from '../bonds.js';
 
 const isNum = (v) => typeof v === 'number' && isFinite(v);
 const n3 = (v) => (isNum(v) ? num(v, 3, false) : '');
@@ -27,10 +28,13 @@ const BASE_TIP = 'Mid (varsayılan): iki taraf da mid\'den, spread\'ler iki yan�
 
 /** A panel of the page: the page's whole width, or (``fit``) as wide as what it holds - the list, the fixed prices, the
  *  file and the labels are narrow tables, side by side when they fit (27.11.2026, "Düzen"). */
-function panel(id, title, note, fit) {
-  const body = h('div', { class: 'body' });
-  const el = h('section', { class: 'panel fy-panel' + (fit ? ' fit' : ' wide'), id }, h('header', null, h('h2', null, title)), body,
-    note ? h('div', { class: 'note' }, note) : null);
+function panel(id, title, note, fit, wait) {
+  // (a panel drawn from the server's answer says "hesaplanıyor" until it comes - B7; a note two lines, "devamı" the rest -
+  // B2, the desk's 28.11.2026)
+  const body = h('div', { class: 'body' }, wait ? h('div', { class: 'empty fy-wait' }, 'hesaplanıyor…') : null);
+  const noteEl = note ? h('div', { class: 'note' }, note) : null;
+  if (noteEl) foldNote(noteEl);
+  const el = h('section', { class: 'panel fy-panel' + (fit ? ' fit' : ' wide'), id }, h('header', null, h('h2', null, title)), body, noteEl);
   return { el, body };
 }
 
@@ -119,10 +123,11 @@ export class FiyatYuklemePage {
     this.result_ = panel('fy-result', 'Fiyatlar · t0', 'Getiriler BIST basit getiri (%), fiyatlar t0 valöründe temiz. Her hücre düzenlenebilir: getiri değişince fiyatı, '
       + 'fiyat değişince getirisi aynı kurallarla yeniden hesaplanır. Dosyaya: bono / kuponsuz getiriyle, diğerleri fiyatla yazılır. Sabit fiyatlı satırdaki '
       + 'değişiklik yalnız bu Hesapla içindir.');
+    bondCardLinks(this.ctx, this.result_.body);                  // (a bond's name opens its card)
     this.buildList();
     this.buildSabit();
-    this.file = panel('fy-file', 'Dosya (Kaydet\'te yazılacak satırlar)', null, true);
-    this.labels = panel('fy-labels', 'Tanıtılan ihale etiketleri (masanın)', null, true);
+    this.file = panel('fy-file', 'Dosya (Kaydet\'te yazılacak satırlar)', null, true, true);
+    this.labels = panel('fy-labels', 'Tanıtılan ihale etiketleri (masanın)', null, true, true);
     // what the morning's work is done in first - the auction text, the prices at t0 and the file -, the desk's list and its
     // set-up after them (27.11.2026, "Düzen": Fiyatlar · t0 was the fourth of six panels)
     panels.append(this.ihale.el, this.result_.el, this.file.el, this.list.el, this.sabit.el, this.labels.el);
@@ -149,6 +154,7 @@ export class FiyatYuklemePage {
     this.deskLine = h('div', { class: 'muted fy-desk', id: 'fy-desk' });
     this.listBox = h('div', { class: 'fy-list-box' });
     this.list.body.append(h('div', { class: 'fy-add' }, this.addText, addBtn), defs, this.deskLine, this.listBox);
+    bondCardLinks(this.ctx, this.list.body);
     this.waitForFocus(this.listBox, () => this.drawList());
   }
 
@@ -267,7 +273,9 @@ export class FiyatYuklemePage {
       const base = h('select', { class: 'inp fy-base', title: BASE_TIP },
         ...BASES.map(([v, x]) => h('option', { value: v, selected: (r.base || 'mid') === v }, x)));
       base.addEventListener('change', () => this.saveBase(r.isin, base.value));
-      tr.append(h('td', { class: 'l' }, r.isin), h('td', { class: 'l b' }, r.label || ''), h('td', { class: 'l fy-name' }, r.name || ''),
+      // (the bond's name opens its card, its ISIN in the tip - the same on every bond table, 28.11.2026)
+      tr.append(h('td', { class: 'l' }, r.isin), h('td', { class: 'l b' + (r.kind === 'euro' ? '' : ' bondlink'), title: r.kind === 'euro' ? null : r.isin + ' · tıklayınca kâğıt kartı' }, r.label || ''),
+        h('td', { class: 'l fy-name' }, r.name || ''),
         h('td', null, day(r.maturity)), h('td', { class: 'l fy-kind' }, (r.kind_text || '') + (r.kind === 'euro' ? ' · ' + (r.ccy || '') : '')),
         spIn('bid'), spIn('ask'), h('td', { class: 'l muted' }, sp.unit === 'bp' ? (r.kind === 'euro' ? 'bp (BBG getirisi)' : 'bp (getiri)') : 'fiyat'),
         h('td', { class: 'l' }, base), del);
@@ -564,7 +572,8 @@ export class FiyatYuklemePage {
     const how = [r.how || '', r.why ? (r.how ? ' · ' : '') + r.why : '', r.note ? ' · ' + r.note : ''].join('');
     const midTip = r.kind === 'euro' && !r.fixed ? 'Bloomberg\'in mid\'i (valör ' + day(r.settle) + '); çapa farkı ' + (isNum(r.anchor) ? num(r.anchor, 3, false) : '–')
       : 't0 (' + day(r.value_date) + ')';
-    tr.append(h('td', { class: 'l b' }, r.label || ''), h('td', { class: 'l' }, r.isin), h('td', { class: 'l fy-name' }, r.name || ''), h('td', null, day(r.maturity)),
+    tr.append(h('td', { class: 'l b' + (r.kind === 'euro' ? '' : ' bondlink'), title: r.kind === 'euro' ? null : r.isin + ' · tıklayınca kâğıt kartı' }, r.label || ''),
+      h('td', { class: 'l' }, r.isin), h('td', { class: 'l fy-name' }, r.name || ''), h('td', null, day(r.maturity)),
       h('td', { class: 'fy-t0-y', title: midTip }, n3(t0.yield)), h('td', { class: 'fy-t0-p', title: midTip }, n3(t0.price)), ...cells,
       h('td', { class: 'l fy-write' }, r.write === 'yield' ? 'getiri' : 'fiyat'), act,
       // a bond priced off the curve (no trade, no auction): said first, so the desk sees it before saving

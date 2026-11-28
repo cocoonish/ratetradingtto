@@ -377,14 +377,16 @@ def test_the_dibs_rv_table_shows_the_days_broker_chat(tmp_path):
         panel = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")
         data = panel["data"]
         assert data["c"][-7:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Broker getiri %", "Broker − ekran (bp)", "Kart"]
-        assert data["added"] == 7 and panel["action"] == "add-isin" and panel["add"]["ref"] == "DİBS RV!A5:A54" and panel["card"] == "bond"
-        rows = {row[0]["t"]: [c.get("t") for c in row[-7:-1]] for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t")}
-        assert all(row[-1]["t"] == "▸" and row[-1]["tip"] == "Kâğıt kartı: " + row[0]["t"]
-                   for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[0].get("t"))
+        # (+ the bond column, first: its short name, the ISIN in the tip - test_toplu_tahvil.py)
+        assert data["added"] == 8 and panel["action"] == "add-isin" and panel["add"]["ref"] == "DİBS RV!A5:A54" and panel["card"] == "bond"
+        a = data["c"].index("A")
+        rows = {row[a]["t"]: [c.get("t") for c in row[-7:-1]] for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[a].get("t")}
+        assert all(row[-1]["t"] == "▸" and row[-1]["tip"] == "Kâğıt kartı: " + row[a]["t"]
+                   for row, r in zip(data["rows"], data["r"]) if 5 <= r <= 54 and row[a].get("t"))
         assert rows["TRT150328T24"][:3] == ["", "100,475", "100,400"] and re.fullmatch("ICAP · " + AGE, rows["TRT150328T24"][3])
         assert rows["TRT160431T35"][:3] == ["", "94,200", "94,100"]               # "16/4/31 100 given": the bid went with the trade
         assert rows["TRB100227T13"][2:4] == ["31,40", "09:14"]                    # an auction level, not a trade: no quote, its time
-        gap = next(c for row, r in zip(data["rows"], data["r"]) if row[0].get("t") == "TRT150328T24" for c in row[-2:-1])
+        gap = next(c for row, r in zip(data["rows"], data["r"]) if row[a].get("t") == "TRT150328T24" for c in row[-2:-1])
         imp = board["TRT150328T24"]["implied"]
         assert gap["v"] == pytest.approx((imp["best_ask"] - imp["screen_yield"]) * 100.0)          # of the fresh offer alone
         assert all(not any(v) for k, v in rows.items() if k not in {b for b in board})   # bonds nobody spoke of: empty
@@ -683,7 +685,7 @@ def test_the_bond_pages_show_the_broker_board_by_its_rules(tmp_path):
         def rv(isin):
             """DİBS RV's broker columns of a bond: bid, ask, last trade, whose and how old, yield, broker − screen."""
             data = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")["data"]
-            return next(r for r in data["rows"] if r[0].get("t") == isin)[-7:-1]
+            return next(r for r in data["rows"] if r[data["c"].index("A")].get("t") == isin)[-7:-1]
 
         def board_cells(view, panel, isin):
             """The four board columns of a bond on another page."""
@@ -742,9 +744,12 @@ def _answers(s, values):
 
 
 def _summary(s, u, isin):
-    """The trading summary's header and the line of a bond."""
-    rows = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
-    return [c["t"] for c in rows[1]], next(row for row in rows if any(c.get("t") == isin for c in row))
+    """The trading summary's columns by their names (``Service._trading_keys``: the captions repeat under the groups of
+    columns - "OIS" / "FX") and the line of a bond."""
+    from tto.service import Service
+    data = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]
+    name = {key: n for n, key in Service._trading_keys().items()}
+    return [name[c] for c in data["c"]], next(row for row in data["rows"] if any(c.get("t") == isin for c in row))
 
 
 def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
@@ -776,16 +781,16 @@ def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
         assert (cell(s, "DİBS RV!J8"), cell(s, "DİBS RV!J23")) == ("Kota yok · işlem bugün", "Kota yok · son fiyat (26.10.2026)")
         # the trading summary
         heads, line = _summary(s, u, "TRT150328T24")
-        bid, ask = line[heads.index("Bid")], line[heads.index("Ask")]
+        bid, ask = line[heads.index("bid")], line[heads.index("ask")]
         assert (bid["t"], bid["cls"], ask["t"], ask["cls"]) == ("–", "soft", "–", "soft")
         assert bid["tip"] == "Kota yok: bid tarafında emir yok (BID_SIZE boş) · Bloomberg'in tekrar ettiği fiyat 100,100, canlı değil"
         assert "ASK_SIZE" in ask["tip"] and "100,125" in ask["tip"]
-        for h in ("Getiri %", "ASW / DM", "Pahalı / ucuz", "Sinyal"):
+        for h in ("ycomp", "ois_asw", "ois_rc", "ois_sig"):
             got = line[heads.index(h)]
             assert "soft" in got["cls"] and got["tip"] == "Fiyat durumu: Kota yok · işlem bugün · iki taraflı canlı kota yok, değer bu fiyattan", h
-        assert "soft" not in (line[heads.index("Mod. süre")].get("cls") or "")
+        assert "soft" not in (line[heads.index("dur")].get("cls") or "")
         heads, other = _summary(s, u, "TRT160431T35")             # a bond whose sizes are not known: as before
-        assert other[heads.index("Bid")]["t"] == "94,380" and "soft" not in (other[heads.index("Getiri %")].get("cls") or "")
+        assert other[heads.index("bid")]["t"] == "94,380" and "soft" not in (other[heads.index("ycomp")].get("cls") or "")
         # the DİBS RV page: its bid / ask, the values of the price in use, the broker's distance from the screen
         d = next(p for p in s.view(u, "dibs")["panels"] if p["id"] == "B3")["data"]
         row = next(r for r, n in zip(d["rows"], d["r"]) if n == 8)
@@ -810,11 +815,11 @@ def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
         assert t1["bid_tip"] == bid["tip"] and "100,125" in t1["ask_tip"]
         rv = {x["name"]: x for x in card["rv"]}
         assert rv["Fiyat durumu"]["t"] == "Kota yok · işlem bugün" and not rv["Fiyat durumu"].get("soft")
-        assert rv["BIST bileşik getiri"]["soft"] and rv["Sinyal"]["soft"] and rv["BIST bileşik getiri"]["tip"] == line[heads.index("Getiri %")]["tip"]
+        assert rv["BIST bileşik getiri"]["soft"] and rv["Sinyal"]["soft"] and rv["BIST bileşik getiri"]["tip"] == line[heads.index("ycomp")]["tip"]
         assert not rv["Kupon"].get("soft") and not any(name.startswith("Alış−satış") for name in rv)
         # Tüm Kâğıtlar
         d = next(p for p in s.view(u, "kagitlar")["panels"] if p["id"] == "U1")["data"]
-        row = next(r for r in d["rows"] if r[0].get("t") == "TRT150328T24")
+        row = next(r for r in d["rows"] if r[d["c"].index("A")].get("t") == "TRT150328T24")
         at = {c: d["c"].index(c) for c in "IJNOPQ"}
         assert (row[at["I"]]["t"], row[at["I"]]["cls"], row[at["J"]]["t"]) == ("–", "soft", "–") and "100,100" in row[at["I"]]["tip"]
         assert all("soft" in row[at[c]]["cls"] for c in "NOP") and "soft" not in (row[at["Q"]].get("cls") or "")        # (DV01)
@@ -828,9 +833,9 @@ def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
         assert {c: cell(s, "DİBS RV!%s8" % c) for c in cols} == before and cell(s, "DİBS RV!J8") == "Canlı kota"
         assert cell(s, "DİBS RV!O8", user=user_key(w)) == 100.1                             # ALIŞ: the live bid
         heads, line = _summary(s, u, "TRT150328T24")
-        bid = line[heads.index("Bid")]
+        bid = line[heads.index("bid")]
         assert (bid["t"], bid.get("cls"), bid["tip"]) == ("100,100", None, "Bid boyutu: 5.000.000")
-        assert line[heads.index("Ask")]["tip"] == "Ask boyutu: 2.500.000" and "soft" not in (line[heads.index("Sinyal")].get("cls") or "")
+        assert line[heads.index("ask")]["tip"] == "Ask boyutu: 2.500.000" and "soft" not in (line[heads.index("ois_sig")].get("cls") or "")
         t1 = s.bond_card(u, "TRT150328T24")["live"][1]
         assert (t1["bid"], t1["ask"], t1["bid_size"], t1["ask_size"], t1["bid_tip"]) == ("100,100", "100,125", "5.000.000", "2.500.000", "")
 
@@ -839,7 +844,7 @@ def test_a_bid_or_ask_without_an_order_is_no_live_quote(tmp_path):
         assert [cell(s, "DİBS RV!%s8" % c) for c in ("K", "L", "V", "W", "AE", "J")] == [100.1, "–", "", "", "", "Canlı: yalnız bid"]
         assert (cell(s, "DİBS RV!U8"), cell(s, "DİBS RV!AD8")) == (before["U"], before["AD"])
         heads, line = _summary(s, u, "TRT150328T24")
-        assert "Canlı: yalnız bid" in line[heads.index("Getiri %")]["tip"] and line[heads.index("Bid")]["t"] == "100,100"
+        assert "Canlı: yalnız bid" in line[heads.index("ycomp")]["tip"] and line[heads.index("bid")]["t"] == "100,100"
 
         # another source without sizes (BGN): its quote as it is
         bgn = "TRT150328T24 @BGN ISIN"
@@ -889,8 +894,8 @@ def test_on_a_closed_market_no_bid_or_ask_is_shown_as_a_quote(tmp_path):
         rows = next(p for p in s.view(u, "dibslive")["panels"] if p["id"] == "L0")["data"]["rows"]
         bonds = [row for row in rows[1:] if row[-1].get("t") == "▸"]
         assert len(bonds) == len(listed)
-        assert all(row[heads.index(h)]["t"] in ("–", "") for row in bonds for h in ("Bid", "Ask"))
-        priced = [row[heads.index("Getiri %")] for row in bonds if row[heads.index("Getiri %")]["t"]]
+        assert all(row[heads.index(h)]["t"] in ("–", "") for row in bonds for h in ("bid", "ask"))
+        priced = [row[heads.index("ycomp")] for row in bonds if row[heads.index("ycomp")]["t"]]
         assert len(priced) >= 15 and all("soft" in c["cls"] for c in priced)
         quotes = [g[side] for g in L["groups"] for side in ("bid", "ask")]
         assert not any(type(cell(s, "EK_DIBS!%s%d" % (c, r))) is float for r in listed for c in quotes)
@@ -932,24 +937,27 @@ def test_every_bond_is_in_one_place_kind_by_kind(svc):
     captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
     assert captions == ["Bono · 2 kâğıt", "Kuponsuz · 2 kâğıt", "Sabit kuponlu · 26 kâğıt", "TLREF'e endeksli · 14 kâğıt",
                         "FRN · 9 kâğıt", "TÜFE'ye endeksli · 24 kâğıt"]
+    a = d["c"].index("A")                    # (the ISIN: second - the bond's short name first, its ISIN in the tip)
+    assert d["c"][:2] == ["B", "A"] and d.get("fz") == 2
     groups: list = []
     for row, n in zip(d["rows"], d["r"]):
         if n == 0:
             groups.append([])
-        elif groups and len(row[0].get("t") or "") == 12:
-            groups[-1].append(bd.by_isin(row[0]["t"]))
+        elif groups and len(row[a].get("t") or "") == 12:
+            groups[-1].append(bd.by_isin(row[a]["t"]))
     assert [len(g) for g in groups] == [2, 2, 26, 14, 9, 24]
     assert [{b["kind"] for b in g} for g in groups] == [{"bill"}, {"zero"}, {"fixed"}, {"float"}, {"frn"}, {"cpi"}]
     for g in groups:
         assert [b["maturity"] for b in g] == sorted(b["maturity"] for b in g)            # by maturity, not as added
     j = d["c"].index("H")
-    marks = {row[0]["t"]: row[j] for row, n in zip(d["rows"], d["r"]) if n >= ex.UNI_FIRST and len(row[0].get("t") or "") == 12}
+    marks = {row[a]["t"]: row[j] for row, n in zip(d["rows"], d["r"]) if n >= ex.UNI_FIRST and len(row[a].get("t") or "") == 12}
     assert len(marks) == 77
     assert marks["TRT150328T24"]["t"] == "★" and "on" in marks["TRT150328T24"]["cls"] and marks["TRT150328T24"]["tip"].endswith("TRT150328T24")
     assert marks["TRT130127T11"]["t"] == "☆" and "on" not in marks["TRT130127T11"]["cls"]
     assert d["c"][-6:] == ["Broker bid", "Broker ask", "Son işlem", "Kimde · yaş", "Kart", "Çıkar"]
-    row = next(row for row in d["rows"] if row[0].get("t") == "TRT130127T11")
+    row = next(row for row in d["rows"] if row[a].get("t") == "TRT130127T11")
     assert (row[-1]["t"], row[-1]["cls"], row[-1]["tip"].endswith("TRT130127T11")) == ("✕", "act unlist", True)
+    assert (row[0]["t"], row[0]["cls"]) == ("13.01.27 TLREF", "bondlink") and row[0]["tip"].startswith("TRT130127T11")
     # the list's cells are the service's: not a list a page types into
     with pytest.raises(ServiceError):
         svc.list_add(u, "tto", "EK_EVREN!A6:A165", ["TRT280432T14"])
@@ -1030,10 +1038,11 @@ def test_the_desk_adds_bonds_and_bloomberg_says_what_they_are(tmp_path, module_s
         captions = [row[0]["t"] for row, n in zip(d["rows"], d["r"]) if n == 0]
         assert captions[2:] == ["Sabit kuponlu · 27 kâğıt", "TLREF'e endeksli · 15 kâğıt", "FRN · 10 kâğıt", "TÜFE'ye endeksli · 24 kâğıt",
                                 "Türü bekleniyor (Bloomberg) · 1 kâğıt"]
-        order = [row[0]["t"] for row in d["rows"] if len(row[0].get("t") or "") == 12]
+        a = d["c"].index("A")
+        order = [row[a]["t"] for row in d["rows"] if len(row[a].get("t") or "") == 12]
         assert order.index(NEW_FRN) == order.index("TRT100332T15") + 1                             # by maturity among the FRNs
         assert order.index(NEW_FIXED) > order.index("TRT150328T24") and order[-1] == NEW_LATER
-        tip = next(row[0]["tip"] for row in d["rows"] if row[0].get("t") == NEW_FIXED)
+        tip = next(row[a]["tip"] for row in d["rows"] if row[a].get("t") == NEW_FIXED)
         assert tip.startswith("Listeye ekleyen: " + user_key("Liste Ekleyen"))
         # what Bloomberg had not said, it says later: the bond takes its place
         provider.snapshot.update(_facts_of(NEW_LATER, "17.11.2034"))
@@ -1244,7 +1253,8 @@ def test_a_star_puts_a_bond_on_the_trading_list_and_takes_it_off(tmp_path):
         floaters = [x for x in lines if x[2] in ("TRT190128T14", "TRT090130T12", "TRT030730T12", "TRT110930T36")]
         assert [x[1] for x in floaters] == ["19.01.28 TLREF", "09.01.30 TLREF", "03.07.30 TLREF", "11.09.30 TLREF"]   # by maturity
         t8 = next(x for x in lines if x[2] == "TRT150328T24")
-        assert t8[5:10] == ["ISL1", "100,100", "100,125", "100,200", "03.11.2026"] and t8[lines[1].index("Sinyal")] in ("UCUZ", "PAHALI", "–")
+        heads, _ = _summary(s, u, "TRT150328T24")
+        assert t8[5:10] == ["T1 · 04.11", "100,100", "100,125", "100,200", "03.11.2026"] and t8[heads.index("ois_sig")] in ("UCUZ", "PAHALI", "–")
         # what goes with a row: the desk's source and everyone's own values for it
         s.set_inputs(u, "tto", [{"ref": "DİBS RV!B%d" % r, "value": "ISL0"}, {"ref": "DİBS RV!N%d" % r, "value": 100.5}])
         s.set_inputs(other, "tto", [{"ref": "DİBS RV!AL%d" % r, "value": 40.0}])

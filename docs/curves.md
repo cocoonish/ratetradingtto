@@ -48,7 +48,10 @@ Notes on the offshore curve:
   - Swaption: Fiyatlama's forward-start OIS on the viewer's setting, the other curve's forward beside it; its realized
     vol from the history's closes, each past day on its own Motor bootstrap (Bootstrap);
   - RET's "OIS" base;
-  - Kâğıt Fiyatlama's "OIS" base (below).
+  - Kâğıt Fiyatlama's "OIS" base (below);
+  - the bond quote ticket's OIS hedge (28.11.2026; the bond card: a TRY OIS to the bond's maturity on the workbook's
+    Bootstrap - quarterly, counted back from maturity, the short period first, ACT/365 - with the bond's DV01:
+    `kagitfiyat.ois_annuity`) and Manuel Tahvil's ticket (its own hedge ratio, I6: the sheet's 3-month OIS annuity).
 - **Offshore TRY:**
   - MASA's broken-date block (FX forward, XCCY and O/N rows);
   - DİBS RV's own FX swap ASW (`BF:BJ`, "offshore ICAP");
@@ -432,7 +435,7 @@ position, unchanged). Not a meeting point: as DV01 Risk → VaR, each curve's DV
 |---|---|
 | `rvfair` OIS side | DİBS RV's OIS curve. Bond ASW is fitted `a + b·t + c·t²` against years from the OIS spot (`CA3:CC3`). |
 | `rvfair` FX side | ASW FX, the ASW sheet on EK_FX's quotes. Fitted the same way at `ASW!AW3:AY3`. The dirty price at spot is carried with TLREF (`(L + N)·(1 + TLREF·days/365)`), as the sheet's formula does. |
-| `dibsgenel` | OIS ASW and FX ASW through `rvfair`, plus an independent Nelson–Siegel zero curve of the bonds (`quantcurve`, `FIT_KINDS = ("fixed",)`). |
+| `dibsgenel` | OIS ASW and FX ASW through `rvfair`, plus an independent Nelson–Siegel zero curve of the bonds (`quantcurve`, `FIT_KINDS = ("fixed",)`). Since 28.11.2026 its per-bond figures are DİBS Trading's summary's (`DibsGenel.zero_for`, the same fit); Genel shows the fit and the charts. |
 | `retfair` | Base OIS mid, VİOP mid, offshore mid or a blend; the default is OIS. Desk calculation, so no PPK. In a scenario view, the offshore and VİOP bases move by the OIS scenario's change. |
 | `kagitfiyat` | Kâğıt Fiyatlama: two bases, each plus the bond's spread to it at the last close, weighted by maturity - the **neighbours' curve** (`quantcurve`'s Nelson-Siegel of the trading list's other fixed coupon bonds, leave one out) and **TRY OIS**: the Bootstrap's zero rate at the bond's maturity from the OIS spot, compounded once a year. Now: the workbook's Bootstrap (`Service._try_curves`' `boot`, the true one whatever the viewer's setting); a past day: Motor's bootstrap of that day's closes (`swaption.day_curve`). Desk calculation: Bootstrap only, no PPK. |
 

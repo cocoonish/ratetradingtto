@@ -44,14 +44,16 @@ def test_the_panel_the_desk_acts_on_comes_first():
     assert shown("dibslive") == ["L0", "L3", "L1"]
     # Manuel Tahvil: the ISIN (the page's first input, a strip of its own) and the target → clean price first; the results;
     # the other inputs (filled from the ISIN), the period table and the notes after them
-    assert shown("manuel") == ["B2i", "B5", "B3", "B4", "B4D", "B2", "B7", "B8", "B1"]
+    # (the quote ticket, B12, right after Sonuç - toplu tahvil, 28.11.2026: C10)
+    assert shown("manuel") == ["B2i", "B5", "B3", "B12", "B4", "B4D", "B2", "B7", "B8", "B1"]
     isin, inputs = panel("manuel", "B2i"), panel("manuel", "B2")
     assert (isin["range"], isin["title"], inputs["range"]) == ("A17:C17", "ISIN", "A2:C16")
     assert "DİBS RV" in isin["note"] and "Tüm Kâğıtlar" in isin["note"] and "Hedef → temiz fiyat" in isin["note"]
     assert {i["range"] for i in VIEWS["manuel"]["inputs"]} >= {"B17", "B14", "I10", "I11", "I12"}
     # DİBS RV: the strip of inputs (DV01 per leg) beside the curve read-outs, each at its natural width
-    assert shown("dibs")[:5] == ["B1", "B3D", "B2", "B2b", "B3"]
-    assert all(panel("dibs", pid).get("fit") for pid in ("B3D", "B2", "B2b"))
+    # (Ayarlar in two since 28.11.2026 - B16: B1 A2:L2, B1b M2:Z2 -, each at its natural width)
+    assert shown("dibs")[:6] == ["B1", "B1b", "B3D", "B2", "B2b", "B3"]
+    assert all(panel("dibs", pid).get("fit") for pid in ("B1", "B1b", "B3D", "B2", "B2b"))
     assert panel("kagitlar", "U1D").get("fit") and panel("manuel", "B4D").get("fit")
 
 
@@ -74,8 +76,9 @@ def test_manuels_isin_strip_takes_the_isin_as_before(service):
 
 # ------------------------------------------------------------------------------------------------ frozen identifier columns
 @pytest.mark.parametrize("view, pid, n, first", [
-    ("dibs", "B3", 2, ["ISIN", "Kaynak (boş = genel)"]),             # the name ("TURKIYE GOVERNMENT BOND") scrolls
-    ("asw", "tbl", 1, ["ISIN"]),
+    # (the bond's short name first on every bond table since 28.11.2026, its ISIN beside it: both in view)
+    ("dibs", "B3", 2, ["Kâğıt", "ISIN"]),                          # the name ("TURKIYE GOVERNMENT BOND") scrolls
+    ("asw", "tbl", 2, ["Kâğıt", "ISIN"]),
     ("bulk", "B1", 2, ["ISIN", "Description"]),
     ("dibslive", "L0", 2, ["★", "Kâğıt"]),
 ])
@@ -112,14 +115,23 @@ def test_the_page_sends_every_row_and_how_to_fold_them(service):
 
 # ------------------------------------------------------------------------------------------------ Hazine İhalesi
 def test_the_auctions_typed_realized_nominal_is_beside_the_bids_result(service):
+    """The inputs first (28.11.2026, B17: "1366'da girdiler önce"): the realized nominal typed after the auction (P) right of
+    the bids' inputs; the bid's result (L) and the nominal used (Q) after the bids' figures.  (A block shows its rows once
+    its ISIN is typed - Kâğıt 2 / 3 folded to their ISIN row before, test_toplu_tahvil.)"""
     for pid in ("H1", "H2", "H3"):
-        assert panel("ihale", pid)["cols"] == ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "P", "Q", "M", "N", "O"]
-    data = page_panel(service, None, "ihale", "H1")["data"]
-    assert data["c"][11:14] == ["L", "P", "Q"] and data.get("fz") == 1
-    head = next(row for row in data["rows"] if row[0].get("t") == "#")
-    assert [c.get("t") for c in head[11:14]] == ["Sonuç", "Gerçekleşen nom. (yaz)", "Gerçekleşen nominal"]
-    typed = {r for r, row in zip(data["r"], data["rows"]) if row[12].get("i")}
-    assert typed == set(range(10, 15))                       # P10:P14, the column typed after the auction
+        assert panel("ihale", pid)["cols"] == ["A", "B", "C", "D", "E", "P", "F", "G", "H", "I", "J", "K", "L", "Q", "M", "N", "O"]
+    u = service.login("Düzen İhale")["user"]
+    service.set_inputs(u, "tto", [{"ref": "EK_IHALE!A7", "value": "TRT150328T24"}])
+    try:
+        data = page_panel(service, u, "ihale", "H1")["data"]
+        assert data["c"][4:7] == ["E", "P", "F"] and data["c"][12:14] == ["L", "Q"] and data.get("fz") == 1
+        head = next(row for row in data["rows"] if row[0].get("t") == "#")
+        assert [c.get("t") for c in head[4:7]] == ["Bileşik % (yaz)", "Gerçekleşen nom. (yaz)", "Girdi"]
+        assert [c.get("t") for c in head[12:14]] == ["Sonuç", "Gerçekleşen nominal"]
+        typed = {r for r, row in zip(data["r"], data["rows"]) if row[5].get("i")}
+        assert typed == set(range(10, 15))                       # P10:P14, the column typed after the auction
+    finally:
+        service.set_inputs(u, "tto", [{"ref": "EK_IHALE!A7", "value": ""}])
 
 
 # ------------------------------------------------------------------------------------------------ Eurobond Kotaları
@@ -187,6 +199,6 @@ def test_dibs_rvs_default_hidden_columns_are_helpers_only(service):
     hidden = service.DEFAULT_HIDDEN_COLUMNS["v/dibs/B3"]
     assert hidden == ("Q", "BE", "BF", "BG", "BH", "BI", "BJ")
     b3 = page_panel(service, None, "dibs", "B3")["data"]
-    head = dict(zip(b3["c"], (c.get("t") for c in next(row for row in b3["rows"] if row[0].get("t") == "ISIN"))))
+    head = dict(zip(b3["c"], (c.get("t") for c in next(row for row in b3["rows"] if row[b3["c"].index("A")].get("t") == "ISIN"))))
     assert (head["Q"], head["BE"]) == ("İşlemiş (valör)", "Durum")
     assert all(col in b3["c"] for col in hidden)                   # sent with the table: hidden in the browser only

@@ -173,7 +173,8 @@
    "type": "table",
    "title": "DİBS ASW tablosu  ·  + = OIS'e göre ucuz  ·  sağda FX swap ima eğrisi (TRYI 1–9A FX swap ima, TRYSAQ 1–10Y XCCY, 18A XCCY eğrisinden; fiyatı yoksa OIS)'ne göre ASW",
    "range": "B6:U56",
-   "freeze": 1,
+   "cols": ["Kâğıt", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U"],
+   "freeze": 2,
    "keep_title": true,
    "append": "asw_fx",
    "bonds": {
@@ -233,15 +234,13 @@
   {
    "id": "chart0",
    "type": "chart",
-   "chart": 0,
-   "wide": true
+   "chart": 0
   },
   {
    "id": "chartfx",
    "type": "chart",
    "chart": 0,
    "curve": "fx",
-   "wide": true,
    "title": "FX swap ima eğrisine göre ASW — kalan vade",
    "as": {
     "title": "FX swap ima eğrisine göre ASW — kalan vade",
@@ -359,6 +358,7 @@
    "title": "Geçmiş · OIS kotaları, TLREF, fiyat ve ASW (son satır canlı) · sağda offshore eğrisine göre ASW",
    "range": "A62:Z326",
    "collapsed": true,
+   "wide": true,
    "keep_title": true,
    "append": "asw_hist_fx",
    "note": "Sağdaki sütunlar aynı ASW'ler offshore eğrisiyle: her gün o günün offshore faizleri (panonun günlük geçmişi: 1–9A TRYI FX swap ima, 1Y ve 2–10Y TRYSAQ XCCY; önce ICPL, yoksa BGN) OIS kotalarının yerine, bugünkü ASW FX'teki kuralla; 18A o günün TRYSAQ1 ve TRYSAQ2 kapanışlarından hesaplanır (Bootstrap: geçmiş günün PPK eğrisi yok); o gün kapanışı olmayan vade o günün OIS kotasıyla; o gün hiç offshore kapanış yoksa offshore ASW boş (Offshore vade 0 / 16). Offshore vade: o gün eğrinin 16 vadesinden kaçı offshore faizden (üzerine gelince hangileri). Son satır canlı: offshore sütunlarında ASW tablosunun ASW FX ima değeri."

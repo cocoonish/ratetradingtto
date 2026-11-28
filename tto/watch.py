@@ -92,6 +92,10 @@ BOND_METRICS = {"yield": ("getiri", RV, "T", "pct", 100.0), "asw": ("ASW", RV, "
                 "t1_bid": ("T1 bid", "EK_DIBS", "K", "px", 1.0), "t1_ask": ("T1 ask", "EK_DIBS", "L", "px", 1.0),
                 "t2_bid": ("T2 bid", "EK_DIBS", "P", "px", 1.0), "t2_ask": ("T2 ask", "EK_DIBS", "Q", "px", 1.0),
                 "repo01": ("T0→T1 repo", "EK_DIBS", "W", "pct", 1.0), "repo01_tlref": ("repo − TLREF", "EK_DIBS", "Y", "bp", 1.0)}
+#: a bond's levels of the desk's Kâğıt Fiyatlama (the desk, 28.11.2026: "Kâğıt Fiyatlama seviyeleri alarm olsun" - names
+#: "[12.09.29 adil]", "[12.09.29 AL]", "[12.09.29 SAT]"): (caption, the level's key) - a compound yield in per cent, the
+#: desk's calculation now (``KagitFiyat.level``: its snapshot, never made on the calculation thread)
+KF_METRICS = {"kf_fair": ("adil", "fair"), "kf_buy": ("AL", "buy"), "kf_sell": ("SAT", "sell")}
 #: the tables whose rows are bonds: every cell of a bond's row is the bond's - watched as that, found by its ISIN wherever
 #: it stands (a list edited, Tüm Kâğıtlar laid out).  Sheet -> (book, the sheet listing the bonds, its ISIN column, first
 #: and last row, first and last column of a row, the row of the captions, the table's name after a caption)
@@ -544,6 +548,9 @@ class Watch(object):
                 return num(v, scale), show, ""
             if k == "bond":
                 isin = "".join(str(subject.get("isin") or "").split()).upper()
+                if subject["metric"] in KF_METRICS:
+                    kf = getattr(self.svc, "kagitfiyat", None)
+                    return (kf.level(isin, KF_METRICS[subject["metric"]][1]) if kf is not None else None), "pct", ""
                 _, sheet, col, show, scale = BOND_METRICS[subject["metric"]]
                 r = rd.rows().get(isin)
                 if r is None and subject["metric"] in ("bid", "ask", "last"):
@@ -685,6 +692,12 @@ class Watch(object):
                 out[fold("%s %s" % (isin, label))] = {"kind": "bond", "isin": isin, "metric": m}
                 if b:
                     out[fold("%s %s" % (bd.short_label(b), label))] = {"kind": "bond", "isin": isin, "metric": m}
+        for isin in listed:                                  # (Kâğıt Fiyatlama prices the trading list's: adil, AL, SAT)
+            b = bd.by_isin(isin)
+            for m, (label, _) in KF_METRICS.items():
+                out[fold("%s %s" % (isin, label))] = {"kind": "bond", "isin": isin, "metric": m}
+                if b:
+                    out[fold("%s %s" % (bd.short_label(b), label))] = {"kind": "bond", "isin": isin, "metric": m}
         return out
 
     def label(self, subject: Dict[str, Any]) -> str:
@@ -706,7 +719,9 @@ class Watch(object):
             return "VİOP %s %s" % (who, VIOP_METRICS[subject["metric"]][0])
         if k == "bond":
             b = bd.by_isin(subject.get("isin") or "")
-            what = self._caption(subject) if subject.get("col") else BOND_METRICS[subject["metric"]][0]
+            what = self._caption(subject) if subject.get("col") else (
+                "%s (Kâğıt Fiyatlama)" % KF_METRICS[subject["metric"]][0] if subject.get("metric") in KF_METRICS
+                else BOND_METRICS[subject["metric"]][0])
             return "%s %s" % (bd.short_label(b) if b else subject.get("isin"), what)
         if k == "expr":
             return " ".join(str(subject.get("text") or "").split())[:60]
@@ -898,7 +913,7 @@ class Watch(object):
             isin = "".join(str(subject.get("isin") or "").split()).upper()
             if not bd.isin_valid(isin):
                 raise ValueError("ISIN değil: %s" % isin)
-            if subject.get("metric") not in BOND_METRICS:
+            if subject.get("metric") not in BOND_METRICS and subject.get("metric") not in KF_METRICS:
                 raise ValueError("kâğıt ölçüsü yok: %s" % subject.get("metric"))
             out.update(isin=isin, metric=subject["metric"])
         elif k == "expr":
@@ -1013,7 +1028,8 @@ class Watch(object):
                 "masa": [{"key": k, "label": v[0]} for k, v in MASA.items()], "viop": contracts,
                 "viop_metrics": [{"id": k, "label": v[0], "show": v[2]} for k, v in VIOP_METRICS.items()],
                 "bonds": bonds, "bond_metrics": [{"id": k, "label": v[0], "show": v[3], "listed_only": k not in ("bid", "ask", "last")}
-                                                 for k, v in BOND_METRICS.items()],
+                                                 for k, v in BOND_METRICS.items()]
+                + [{"id": k, "label": "%s (Kâğıt Fiyatlama)" % v[0], "show": "pct", "listed_only": True} for k, v in KF_METRICS.items()],
                 "presets": [{"group": g, "items": [self.label(s) for s in p]} for g, p in PRESETS],
                 "shows": {k: v[0] for k, v in SHOWS.items()}, "ops": OPS}
 
@@ -1021,7 +1037,8 @@ class Watch(object):
         s = self.check(subject)
         rd = self._Reader(self, user)
         v, show, text = self.resolve(s, rd)
-        name = "%s %s" % (s["isin"], BOND_METRICS[s["metric"]][0]) if s["kind"] == "bond" and s.get("metric") else self.label(s)
+        name = "%s %s" % (s["isin"], BOND_METRICS[s["metric"]][0] if s["metric"] in BOND_METRICS else KF_METRICS[s["metric"]][0]) \
+            if s["kind"] == "bond" and s.get("metric") else self.label(s)
         unit_name, k = SHOWS.get(show, SHOWS["raw"])
         zs = {}
         for n in Z_DAYS:

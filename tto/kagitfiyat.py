@@ -73,10 +73,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
+import re
 import statistics
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from . import quantcurve as qc
 from . import rvfair
@@ -202,8 +203,107 @@ DEFAULT_H = 20
 RECORD_TEXT = "masanın geçmişi 10.11.2025–16.11.2026, 16 kâğıt, örnek dışı"
 
 
+#: the desk's Kâğıt Fiyatlama without its page (``KagitFiyat.snapshot``, 28.11.2026): what Tüm Kâğıtlar shows of every bond
+#: (C12: "Tüm Kâğıtlar'da her kâğıda getiri") and what the alarms read of the fair and the good levels (C13: "Kâğıt Fiyatlama
+#: seviyeleri alarm olsun") - kept this long (seconds) before a newer one is made, at the next look
+SNAP_EVERY = 60.0
+#: how long the pages' warm-up round waits for the first one (``first_snapshot``), seconds: it starts anyway after that
+SNAP_FIRST_WAIT = 90.0
+#: the quote ticket (C10, 28.11.2026: "Her valörde tahvil kotasyon fişi"): its centres - the market's yield, Kâğıt Fiyatlama's
+#: price (its answer: the market's, else the curve's), the fair (the trading list), a yield typed - and their names
+CENTERS = (("piyasa", "Piyasa"), ("fiyat", "Kâğıt Fiyatlama fiyatı"), ("adil", "Adil"), ("yazilan", "Yazılan getiri"))
+TICKET_NOMINAL = 10e6                 # the nominal a ticket opens with (TL)
+TICKET_VALORS = (0, 1, 2)             # T0 / T1 / T2 offered as buttons; any date typed besides
+OIS_PERIOD_MONTHS = 3                 # TRY OIS: quarterly payments counted back from maturity, the short period first
+
+
 class KagitError(ValueError):
     """A request the page cannot answer: the reason, in Turkish (the service's 400)."""
+
+
+# ---------------------------------------------------------------------------------------------- the quote ticket's sums
+def compound_of(ys: float, kind: str, freq: float, days: Optional[float]) -> Optional[float]:
+    """BIST's compound yield of a simple one (``Pricer.simple``'s inverse): a coupon bond's ``(1 + y/f)^f − 1``, a bill's
+    ``(1 + y·t)^(1/t) − 1`` (t: days to maturity / 365)."""
+    if kind == "bill":
+        t = (days or 0.0) / 365.0
+        if t <= 0 or 1.0 + ys * t <= 0:
+            return None
+        return (1.0 + ys * t) ** (1.0 / t) - 1.0
+    f = float(freq or 2.0)
+    if 1.0 + ys / f <= 0:
+        return None
+    return (1.0 + ys / f) ** f - 1.0
+
+
+def dv01_of(pricer: "Pricer", yc: float) -> Optional[float]:
+    """A bond's DV01 per 100 of nominal at the compound yield ``yc``: the dirty price's change for one bp of its BIST simple
+    yield (DİBS RV's and Manuel Tahvil's DV01: the modified duration on the simple yield × the dirty price)."""
+    ys = pricer.simple(yc)
+    if ys is None:
+        return None
+    up, down = (compound_of(ys + d, pricer.kind, pricer.freq, pricer.days) for d in (1.0 / BP, -1.0 / BP))
+    if up is None or down is None:
+        return None
+    hi, lo = pricer.dirty(down), pricer.dirty(up)
+    return (hi - lo) / 2.0 if hi is not None and lo is not None else None
+
+
+def add_months(day: _dt.date, months: int) -> _dt.date:
+    """Excel's EDATE: the same day ``months`` on (the month's last day when it has no such day)."""
+    y, m = divmod(day.month - 1 + months, 12)
+    y, m = day.year + y, m + 1
+    last = (_dt.date(y + m // 12, m % 12 + 1, 1) - _dt.timedelta(days=1)).day
+    return _dt.date(y, m, min(day.day, last))
+
+
+def ois_annuity(curve: Any, spot: _dt.date, maturity: _dt.date) -> Optional[float]:
+    """A TRY OIS's fixed leg to ``maturity`` per 1 of notional: Σ τ · DF over its periods - quarterly, counted back from
+    maturity, the short period first (the desk's rule for a broken date; ACT/365) - on ``curve`` (the OIS Bootstrap, its
+    day 0 ``spot``).  An OIS with the same DV01 as a bond has its notional = the bond's DV01 ÷ (annuity × 1 bp)."""
+    if curve is None or maturity <= spot:
+        return None
+    ends, k = [maturity], 1
+    while True:
+        d = add_months(maturity, -OIS_PERIOD_MONTHS * k)
+        if d <= spot:
+            break
+        ends.append(d)
+        k += 1
+    ends.sort()
+    out, prev = 0.0, spot
+    for d in ends:
+        t = float((d - spot).days)
+        df = curve.df(t)
+        if not (df > 0):
+            return None
+        out += (d - prev).days / 365.0 * df
+        prev = d
+    return out
+
+
+def ticket_text(t: Dict[str, Any], lang: str = "tr") -> str:
+    """A quote ticket as text to send (Kopyala): the bond, its value date and the nominal on the first line, then bid / ask
+    of the compound and the simple yield and the clean price - lined up as Kotasyon kopyala lines up its quotes."""
+    en = lang == "en"
+
+    def n(v: Optional[float], d: int) -> str:
+        if v is None:
+            return "–"
+        text = "{:,.{d}f}".format(v, d=d)
+        return text if en else text.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+    day = _dt.date.fromisoformat(t["valor"]["date"])
+    when = day.strftime("%d %b %Y") if en else day.strftime("%d.%m.%Y")
+    head = ("TRY govt bond %s (%s) · value %s (%s) · nominal %s" if en else "DİBS %s (%s) · valör %s (%s) · nominal %s") % (
+        t["label"], t["isin"], when, t["valor"]["t"], n(t["nominal"], 0))
+    rows = (("Getiri % (bileşik)", "Yield % (compound)", "yield", 2), ("Getiri % (basit)", "Yield % (simple)", "simple", 2),
+            ("Temiz fiyat", "Clean price", "clean", 3))
+    w = max(len(r[1] if en else r[0]) for r in rows)
+    lines = [head, ("bid / ask" if en else "bid / ask (masanın kotası)")]
+    for tr, en_label, key, d in rows:
+        lines.append((en_label if en else tr).ljust(w + 2) + n(t["bid"].get(key), d) + " / " + n(t["ask"].get(key), d))
+    return "\n".join(lines)
 
 
 def menu(pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -880,6 +980,11 @@ class KagitFiyat(object):
         self._now: List[Tuple[Any, Dict[str, Any]]] = []                   # fits of the quotes now (the latest last)
         self._now_tau: Optional[Tuple[Any, Optional[qc.Nss]]] = None        # (the bonds and day, the τ) without a history
         self._rec_seen: Optional[_dt.date] = None                          # the workbook's day the close recorder last saw
+        self._snap_lock = threading.Lock()
+        self._snap: Optional[Dict[str, Any]] = None                        # the desk's levels now (``snapshot``)
+        self._snap_busy = False                                            # a newer one being made (in a thread)
+        self._snap_first = threading.Event()                               # the first one made (the pages told) or failed
+        self._snap_missed = False                                          # a page was drawn before the first one
 
     # ------------------------------------------------------------------ the widths (administrators)
     def widths(self) -> Dict[str, Any]:
@@ -989,6 +1094,12 @@ class KagitFiyat(object):
         for r in curve_rows:
             if r["isin"] not in have:
                 r["cols_why"] = COLS_WHY
+        # each bond's value date as the bond pages write it (the desk, 28.11.2026: "T1 · 04.11" - the TRY business days after
+        # today, then the day): the page's headings say it
+        hol = svc.et.call(svc.watch.holidays) if getattr(svc, "watch", None) is not None else frozenset()
+        for r in curve_rows + rows:
+            if r.get("value_date"):
+                r["valor"] = bd.valor_label(_dt.date.fromisoformat(r["value_date"]), got["today"], hol)[0]
         hist = {k: panel.get(k) for k in ("first", "last", "days", "tau", "tau_day", "ms", "ois_days", "why", "built")}
         listed = bd.listed(got["today"])
         others = [{"kind": k, "text": t, "n": sum(1 for b in listed if b.get("kind") == k)} for k, t in OTHER_KINDS]
@@ -2021,4 +2132,243 @@ class KagitFiyat(object):
         for row in self._curve_rows(self._universe(got, self._bonds(got), sorted(want)), got, panel, now):
             if row["isin"] in want and row.get("alt") is not None:
                 out[row["isin"]] = dict(row["alt"], value_date=row["value_date"])
+        return out
+
+    # ------------------------------------------------------------------ the desk's levels without the page (C12, C13)
+    def snapshot(self, wait: bool = False) -> Dict[str, Any]:
+        """The desk's Kâğıt Fiyatlama now, for what reads it without its page (28.11.2026): every bond of the desk's list
+        as the main table prices it (``curves``: Tüm Kâğıtlar' yields of every bond - C12) and the trading list's fair and
+        good levels (``levels``: the alarms' "[12.09.29 adil / AL / SAT]" - C13), everybody's calculation (no one's inputs).
+        Cheap - the calculation thread asks for it: the last one made; one older than ``SNAP_EVERY`` (or of another day, or
+        none) is made again in a thread of its own - the first tells the pages (a new generation) when one was drawn without
+        it (``missed``).  ``wait``: made here when there is none yet (the tests; a request that must have it)."""
+        svc = self.svc
+        today = svc.history.today().isoformat()             # (the calculation's day: the recorded file's in replay)
+        with self._snap_lock:
+            snap = self._snap
+            stale = snap is None or snap.get("day") != today or time.time() - snap["at"] >= SNAP_EVERY
+            start = stale and not self._snap_busy and not (snap is None and wait) and not svc._stop.is_set()
+            if start:
+                self._snap_busy = True
+        if snap is None and wait:
+            snap = self._keep_snapshot(self.make_snapshot())
+            svc.bump()                                        # (a page drawn without it is drawn again)
+            self._snap_first.set()
+        if start:
+            threading.Thread(target=self._snap_thread, name="tto-kagitfiyat-seviye", daemon=True).start()
+        return snap or {}
+
+    def _keep_snapshot(self, snap: Dict[str, Any]) -> Dict[str, Any]:
+        with self._snap_lock:
+            self._snap = snap
+        return snap
+
+    def _snap_thread(self) -> None:
+        try:
+            before = self._snap
+            self._keep_snapshot(self.make_snapshot(background=True))
+            if before is None and self._snap_missed:
+                # (the first, and a page said "hesaplanıyor" - drawn again; a newer one shows with the page's next answer,
+                # the market's next tick live)
+                self.svc.bump()
+        except Exception:  # noqa: BLE001 - kept as it was: the next look tries again
+            pass
+        finally:
+            with self._snap_lock:
+                self._snap_busy = False
+            self._snap_first.set()                   # (after the new generation: what waits for it comes after that)
+
+    def missed(self) -> None:
+        """A page was drawn without the first snapshot ("hesaplanıyor"): its arrival draws the pages again."""
+        self._snap_missed = True
+
+    def first_snapshot(self, then: Callable[[], None]) -> bool:
+        """``then()`` once the first snapshot is there (made now, in a thread of its own; at most ``SNAP_FIRST_WAIT``
+        seconds) - the start's warm-up round of the pages: the pages it makes ahead show Tüm Kâğıtlar' yields at once, and
+        the first snapshot's new generation comes before them, not after (it would make them all again).  False: there is
+        one already - ``then`` is the caller's to run."""
+        if self._snap is not None:
+            return False
+
+        def run() -> None:
+            try:
+                self.snapshot()                      # (made by the one thread that makes it, this or a page's)
+                self._snap_first.wait(SNAP_FIRST_WAIT)
+            except Exception:  # noqa: BLE001 - the round starts anyway
+                pass
+            if not self.svc._stop.is_set():
+                then()
+
+        threading.Thread(target=run, name="tto-kagitfiyat-ilk", daemon=True).start()
+        return True
+
+    def make_snapshot(self, background: bool = False) -> Dict[str, Any]:
+        """Kâğıt Fiyatlama of everybody's calculation now (``snapshot``'s): ``{"at", "day", "curves": {isin: the main table's
+        row}, "levels": {isin: {"label", "fair", "buy", "sell", "sigma", "value_date"}}}`` (yields per cent, compound) -
+        the page's own steps: the sheets read on the calculation thread, the closes' part and the fit kept there."""
+        svc = self.svc
+        et = svc.et
+        got = et.call_at(et.BACKGROUND, self._read, None) if background else et.call(self._read, None)
+        if got is None:
+            return {"at": time.time(), "day": svc.today_iso(), "curves": {}, "levels": {}}
+        bonds = self._bonds(got)
+        panel = self.closes(got)
+        now = self.now_fit(got, panel, self.horizon_days(got))
+        widths = self.widths()
+        keep: Dict[str, Any] = {}
+        curves = {r["isin"]: r for r in self._curve_rows(self._universe(got, bonds), got, panel, now, keep=keep)}
+        levels: Dict[str, Dict[str, Any]] = {}
+        for line in got["lines"]:
+            row = self._row(line, got, panel, now, widths, bonds, keep.get(line["isin"]))
+            if row.get("priced"):
+                lv = row["levels"]
+                levels[line["isin"]] = {"label": row["label"], "fair": row["fair"]["yield"], "buy": lv["buy"]["yield"],
+                                        "sell": lv["sell"]["yield"], "sigma": row["sigma"]["sigma"], "value_date": row.get("value_date")}
+        return {"at": time.time(), "day": got["today"].isoformat(), "curves": curves, "levels": levels}
+
+    def level(self, isin: str, which: str) -> Optional[float]:
+        """A bond's level of the desk's Kâğıt Fiyatlama now (the alarms' names: "adil", "AL", "SAT" - ``fair`` / ``buy`` /
+        ``sell``, a compound yield in per cent) - ``None`` while there is none (a bond off the trading list, not priced, or
+        the first snapshot still being made)."""
+        x = (self.snapshot().get("levels") or {}).get(isin)
+        v = (x or {}).get(which)
+        return v if type(v) is float else None
+
+    # ------------------------------------------------------------------ the quote ticket (C10)
+    def ticket(self, user: Optional[str], q: Dict[str, Any]) -> Dict[str, Any]:
+        """A bond quoted at any value date (the desk, 28.11.2026: "Her valörde tahvil kotasyon fişi" - the bond card's Kâğıt
+        Fiyatlama block): ``q`` - ``isin``, ``valor`` (T0 / T1 / T2 - TRY business days after today - or a date), ``nominal``
+        (TL; "10m" too), ``center`` ("piyasa": today's market price's yield; "fiyat": Kâğıt Fiyatlama's price - the market's,
+        else the curve's -; "adil": the fair of a bond of the trading list; "yazilan": ``level``, a compound yield typed, per
+        cent) and ``spread`` (bp, bid to ask; the bond's bucket's quote width when none) → bid = centre + spread / 2, ask =
+        centre − spread / 2, each BIST's compound and simple yield, its clean and dirty price at the value date (the same
+        yield priced at the new value date: Kâğıt Fiyat Yükleme's rule) and the nominal's amount; the nominal's DV01 and the
+        nominal of a TRY OIS (Bootstrap) to the bond's maturity with the same DV01 - the OIS hedge; the text to send
+        (``text``, in ``language``).  A bond Kâğıt Fiyatlama does not price (a floater, a CPI linker) is refused with why."""
+        from . import bonds as bd
+        from .inputs import parse_amount, parse_date, parse_number
+        svc = self.svc
+        key = svc.require_user(user)
+        code = rvfair.isin_of(q.get("isin"))
+        if not code:
+            raise KagitError("ISIN gerekli")
+        got = svc.et.call(self._read, key)
+        if got is None:
+            raise KagitError("DİBS RV sayfası yok")
+        today = got["today"]
+        bonds = self._bonds(got)
+        line = next((x for x in got["lines"] if x["isin"] == code), None)
+        rec = bd.by_isin(code)
+        if line is not None and line["kind"] in NOT_PRICED:
+            raise KagitError(NOT_PRICED[line["kind"]])
+        if line is None and (rec is None or rec.get("kind") not in CURVE_KINDS):
+            raise KagitError("%s: %s" % (bd.KINDS.get((rec or {}).get("kind"), "kâğıt masanın listesinde yok"), OTHERS_WHY)
+                             if rec is not None else "kâğıt masanın listesinde yok: %s" % code)
+        bond = bonds.get(code) if line is not None else qc._bond_of(code, {}, None)
+        if bond is None or bond.maturity <= today:
+            raise KagitError("kâğıdın vadesi / kuponu bilinmiyor ya da vadesi geçmiş")
+        kind = line["kind"] if line is not None else ("B" if rec.get("kind") in ("bill", "zero") else "S")
+        # (the desk's TRY holidays: read on the calculation thread, kept there for the day)
+        hol = svc.et.call(svc.watch.holidays) if getattr(svc, "watch", None) is not None else frozenset()
+        # the value date: T0 / T1 / T2 (TRY business days after today) or a date typed
+        raw = str(q.get("valor") or "T1").strip().upper().replace("+", "")
+        if re.match(r"^T\d$", raw):
+            value = bd.value_day(today, int(raw[1:]), hol)
+        else:
+            value = parse_date(str(q.get("valor") or ""))
+            if value is None:
+                raise KagitError("valör anlaşılamadı: %s (T0, T1, T2 ya da tarih)" % q.get("valor"))
+            value = _dt.date.fromisoformat(value) if isinstance(value, str) else value
+            if not isinstance(value, _dt.date):
+                from .xl.values import serial_to_date
+                value = serial_to_date(float(value))
+        if value < today:
+            raise KagitError("valör bugünden önce olamaz: %s" % value.strftime("%d.%m.%Y"))
+        if value >= bond.maturity:
+            raise KagitError("valör kâğıdın vadesinde ya da sonra: %s" % value.strftime("%d.%m.%Y"))
+        text, n_days = bd.valor_label(value, today, hol)
+        nominal = q.get("nominal")
+        if nominal in (None, ""):
+            nominal = TICKET_NOMINAL
+        elif not isinstance(nominal, (int, float)):
+            nominal = parse_amount(str(nominal)) or parse_number(str(nominal))
+        if type(nominal) not in (int, float) or not nominal > 0:
+            raise KagitError("nominal anlaşılamadı: %s (örn. 10m, 2,5mn, 10.000.000)" % q.get("nominal"))
+        nominal = float(nominal)
+        # the centres: the market's yield today, Kâğıt Fiyatlama's price and - on the trading list - the fair (compound, %)
+        panel = self.closes(got)
+        now = self.now_fit(got, panel, self.horizon_days(got))
+        keep: Dict[str, Any] = {}
+        curve = next((r for r in self._curve_rows(self._universe(got, bonds, [code]), got, panel, now, keep=keep) if r["isin"] == code), None)
+        widths = self.widths()
+        years = (bond.maturity - today).days / qc.YEAR
+        bucket = bucket_of(years)
+        fair_row = self._row(line, got, panel, now, widths, bonds, keep.get(code)) if line is not None else None
+        centers: Dict[str, Dict[str, Any]] = {}
+        if curve is not None and curve.get("market"):
+            m = curve["market"]
+            centers["piyasa"] = {"yield": m["yield"], "how": "%s: temiz %s, valör %s" % (m.get("source") or "piyasa", _n(m["clean"], 3),
+                                                                                       _day(curve["value_date"]) if curve.get("value_date") else "—")}
+        if curve is not None and curve.get("price"):
+            p = curve["price"]
+            centers["fiyat"] = {"yield": p["yield"], "how": "Kâğıt Fiyatlama: %s%s" % (p.get("label") or "", " · " + p["how"] if p.get("how") else "")}
+        if fair_row is not None and fair_row.get("priced"):
+            centers["adil"] = {"yield": fair_row["fair"]["yield"], "how": "Kâğıt Fiyatlama adil getirisi: " + (fair_row.get("line") or "")}
+        which = str(q.get("center") or "").strip().lower() or next((c for c, _ in CENTERS if c in centers), "yazilan")
+        if which not in dict(CENTERS):
+            raise KagitError("merkez anlaşılamadı: %s (%s)" % (which, ", ".join(c for c, _ in CENTERS)))
+        if which == "yazilan":
+            lvl = q.get("level")
+            lvl = lvl if isinstance(lvl, (int, float)) else parse_number(str(lvl or "").replace("%", ""))
+            if lvl is None:
+                raise KagitError("merkez getiri yazılmadı (bileşik %, örn. 39,50)")
+            center = {"yield": float(lvl), "how": "yazılan bileşik getiri"}
+        elif which in centers:
+            center = centers[which]
+        else:
+            raise KagitError({"piyasa": "kâğıdın bugün piyasa fiyatı yok (iki taraflı kota da bugünkü işlem de yok)",
+                              "fiyat": "Kâğıt Fiyatlama bu kâğıda fiyat bulamadı: " + ((curve or {}).get("why") or "—"),
+                              "adil": "adil yalnız trading listesindeki ve fiyatlanan kâğıtlar için"}[which])
+        spread = q.get("spread")
+        spread = spread if isinstance(spread, (int, float)) else (parse_number(str(spread)) if spread not in (None, "") else None)
+        if spread is None:
+            spread = float(widths.get(bucket, WIDTH_DEFAULT[bucket]))
+        if not (math.isfinite(spread) and 0.0 <= spread <= WIDTH_MAX * 5):
+            raise KagitError("spread 0 – %g bp arasında olmalı" % (WIDTH_MAX * 5))
+        lk = {"kind": kind, "freq": float(bond.freq), "guess": (line or {}).get("guess", 0.3)}
+        pricer = self.pricer_at(lk, bond, value)
+        yc0 = center["yield"] / 100.0
+
+        def side(yc: float) -> Dict[str, Any]:
+            s, c = pricer.simple(yc), pricer.clean(yc)
+            d = c + pricer.acc if c is not None else None
+            return {"yield": yc * 100.0, "simple": s * 100.0 if s is not None else None, "clean": c, "dirty": d,
+                    "amount": nominal * d / 100.0 if d is not None else None}
+
+        bid, ask, mid = side(yc0 + spread / 2.0 / BP), side(yc0 - spread / 2.0 / BP), side(yc0)
+        if mid["clean"] is None:
+            raise KagitError("bu valörde fiyatlanamadı")
+        dv01 = dv01_of(pricer, yc0)
+        dv01_tl = dv01 * nominal / 100.0 if dv01 is not None else None
+        hedge: Dict[str, Any] = {}
+        mk, boot = got.get("mk"), got.get("boot")
+        if mk is not None and boot is not None and dv01_tl is not None:
+            from .xl.values import serial_to_date
+            spot = serial_to_date(mk.ois_spot)
+            ann = ois_annuity(boot, spot, bond.maturity)
+            if ann:
+                hedge = {"annuity": ann, "nominal": dv01_tl / (ann / BP), "ratio": dv01_tl / (ann / BP) / nominal,
+                         "how": "OIS (Bootstrap) %s → %s, 3 ayda bir (kısa dönem önce): annuity %s · DV01 %s TL ÷ (annuity × 1 bp)"
+                                % (spot.strftime("%d.%m.%Y"), bond.maturity.strftime("%d.%m.%Y"), _n(ann, 4), _n(dv01_tl, 0))}
+        label = line["label"] if line is not None else bd.short_label(rec)
+        out = {"ok": True, "isin": code, "label": label, "kind": kind, "maturity": bond.maturity.isoformat(),
+               "bucket": bucket, "bucket_text": BUCKET_TEXT[bucket], "width": float(widths.get(bucket, WIDTH_DEFAULT[bucket])),
+               "valor": {"date": value.isoformat(), "t": text.split(" · ")[0], "text": text, "n": n_days},
+               "valors": [{"key": "T%d" % k, "date": bd.value_day(today, k, hol).isoformat(),
+                           "text": bd.valor_label(bd.value_day(today, k, hol), today, hol)[0]} for k in TICKET_VALORS],
+               "nominal": nominal, "center": dict(center, kind=which, name=dict(CENTERS)[which]),
+               "centers": {k: dict(v, name=dict(CENTERS)[k]) for k, v in centers.items()}, "spread": spread,
+               "bid": bid, "ask": ask, "mid": mid, "accrued": pricer.acc, "dv01": dv01_tl, "hedge": hedge,
+               "today": today.isoformat()}
+        out["text"] = ticket_text(out, "en" if str(q.get("language") or "").lower() == "en" else "tr")
         return out

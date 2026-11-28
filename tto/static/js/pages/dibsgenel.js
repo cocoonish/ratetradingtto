@@ -1,19 +1,16 @@
-// DİBS RV · Genel: the trading list's bonds on one page (tto/dibsgenel.py) - per bond what DİBS RV makes of it against OIS,
-// what DİBS ASW makes of it against the FX swap implied TRY curve, and where it stands against a zero-coupon curve
-// (Nelson-Siegel) fitted to the fixed coupon bonds now (the bills priced on it, not fitted); the yield curve; DİBS ASW's
-// two ASW charts, DİBS RV's switch / pair table and DİBS ASW's history as their own pages draw them (/api/panels).
-// Nothing is typed here: the inputs are the hesap tablosu tabs' - a click on one shown here (a setting, a cell of the
-// switch table) opens it there, selected.
+// DİBS RV · Genel (tto/dibsgenel.py): the trading list's bonds at a glance - the zero-coupon curve (Nelson-Siegel) fitted
+// to the fixed coupon bonds now, the yield curve, DİBS ASW's two ASW charts, DİBS RV's switch / pair table and DİBS ASW's
+// history as their own pages draw them (/api/panels) - and a link to the bond table's one home, DİBS Trading's summary
+// (the desk, 28.11.2026: "kagit kismi cok duzensiz ve her sey her yerde gibi"; Genel's table moved there, its columns
+// under "Sütunlar" → RV).  Nothing is typed here: the inputs are the hesap tablosu tabs' - a click on one shown here (a
+// setting, a cell of the switch table) opens it there, selected.
 import { api } from '../api.js';
-import { h, clear } from '../ui.js';
+import { h, clear, foldNote } from '../ui.js';
 import { Grid } from '../grid.js';
 import { Chart } from '../chart.js';
-import { bondCardLinks, bondFlags } from '../bonds.js';
 import { num } from '../format.js';
-import { toolsOf } from '../columns.js';
 
 const TAB_TITLE = { dibs: 'RV hesap tablosu', asw: 'ASW hesap tablosu' };
-const FROZEN = 1;                                          // the trading list's columns kept in view: Kâğıt
 
 /** An input of another tab opened there: the page, the panel in view, then the cell selected once the page is ready. */
 export function openInput(ctx, view, panel, ref) {
@@ -35,19 +32,22 @@ export function openInput(ctx, view, panel, ref) {
   setTimeout(tick, 60);
 }
 
+/** A panel of the page: its note two lines, "devamı" the rest (B2, 28.11.2026; ``setNote`` keeps the fold's button). */
 function panel(id, title, opts = {}) {
-  const body = h('div', { class: 'body' });
-  const note = h('div', { class: 'note' + (opts.note ? '' : ' hidden') }, opts.note || '');
+  const body = h('div', { class: 'body' }, h('div', { class: 'empty dg-wait' }, 'hesaplanıyor…'));
+  const text = h('span', { class: 'dg-note-text' }, opts.note || '');
+  const note = h('div', { class: 'note' + (opts.note ? '' : ' hidden') }, text);
+  foldNote(note);
   const el = h('section', { class: 'panel' + (opts.wide ? ' wide' : '') + (opts.chart ? ' chart' : ''), id },
     h('header', null, h('h2', null, title), opts.link || null), body, note);
-  return { el, body, note, title: el.querySelector('h2') };
+  const setNote = (t) => { text.textContent = t || ''; note.classList.toggle('hidden', !t); };
+  return { el, body, note, setNote, title: el.querySelector('h2') };
 }
 
 export class DibsGenelPage {
   constructor(host, ctx) {
     this.host = host;
     this.ctx = ctx;
-    this.grid = null;
     this.charts = {};
     this.mirrorGrids = {};
     this.mirrorHave = {};                                  // key -> {gen, as}: what the browser has of a mirrored panel
@@ -57,26 +57,23 @@ export class DibsGenelPage {
 
   build() {
     const tools = h('div', { class: 'page-tools dg-tools' });
-    this.fitLine = h('span', { class: 'dg-fit', id: 'dg-fit' });
+    this.fitLine = h('span', { class: 'dg-fit', id: 'dg-fit' }, h('span', { class: 'muted' }, 'Sıfır kupon eğrisi hesaplanıyor…'));
     this.info = h('span', { class: 'muted', id: 'dg-info' });
     tools.append(this.fitLine, h('span', { class: 'grow' }), this.info);
     this.host.appendChild(tools);
     this.settings = h('div', { class: 'chips dg-settings', id: 'dg-settings' });
     this.host.appendChild(this.settings);
+    // the bond table's one home: DİBS Trading's summary (Genel's table moved there - its columns under Sütunlar → RV)
+    this.trading = h('div', { class: 'dg-trading', id: 'dg-trading' }, h('span', { class: 'muted' }, 'hesaplanıyor…'));
+    this.host.appendChild(this.trading);
     const panels = h('div', { class: 'panels' });
-    this.table = panel('dg-table', 'Trading listesi · OIS ASW, FX swap ASW ve sıfır kupon eğrisi', { wide: true,
-      note: 'Kâğıtlar türüne ve vadesine göre. OIS ASW: DİBS RV (RV hesap tablosu). FX swap ASW: DİBS ASW\'nin ASW FX hesabı '
-        + '(ASW hesap tablosu; eğrisi grup başlığında). Adil getiri / fiyat: kâğıdın ASW\'si uydurulan ASW eğrisinde dursaydı (DİBS '
-        + 'Trading ve kâğıt kartındakiyle aynı). Sıfır kupon eğrisi: sabit kuponlulara şimdi uydurulan Nelson-Siegel eğrisi; '
-        + 'bonolar eğride fiyatlanır, uydurmaya girmez (pahalı / ucuzları kuponluların eğrisinin kısa ucuna göre). Hücrenin '
-        + 'üzerine gelince hesabı. ▸ kâğıt kartı, ★ trading listesinden çıkarır.' });
     this.yield = panel('dg-yield', 'Getiri eğrisi', { wide: true, chart: true });
     this.aswOis = panel('dg-asw-ois', 'ASW · OIS', { chart: true });
     this.aswFx = panel('dg-asw-fx', 'ASW · FX swap', { chart: true });
     this.sw = panel('dg-switch', 'Switch / pair', { wide: true, link: this.tabLink('dibs', 'B4') });
     this.histSel = panel('dg-hist-sel', 'ASW geçmişi · seçili kâğıtlar', { link: this.tabLink('asw', 'sel') });
     this.hist = panel('dg-hist', 'ASW geçmişi', { chart: true, link: this.tabLink('asw', 'chart1') });
-    for (const p of [this.table, this.yield, this.aswOis, this.aswFx, this.sw, this.histSel, this.hist]) panels.appendChild(p.el);
+    for (const p of [this.yield, this.aswOis, this.aswFx, this.sw, this.histSel, this.hist]) panels.appendChild(p.el);
     this.host.appendChild(panels);
     this.mirrorPanels = { asw_ois: this.aswOis, asw_fx: this.aswFx, switch: this.sw, hist_sel: this.histSel, hist: this.hist };
   }
@@ -93,19 +90,33 @@ export class DibsGenelPage {
     const d = await api.get('/api/dibs/genel');
     this.data = d;
     if (!d.ok) {
-      clear(this.table.body).appendChild(h('div', { class: 'empty' }, d.why || 'Veri yok'));
+      clear(this.trading).appendChild(h('div', { class: 'empty' }, d.why || 'Veri yok'));
       return;
     }
     this.drawFit(d);
     this.drawSettings(d.settings || []);
-    this.drawTable(d.table);
+    this.drawTrading(d.trading || {});
     this.drawChart('yield', this.yield, d.chart);
     this.yield.title.textContent = d.chart.title || 'Getiri eğrisi';
-    this.yield.note.textContent = 'Her kâğıt kalan vadesinde bileşik getirisiyle (DİBS RV!T); kırmızı çizgi uydurulan sıfır kupon eğrisinin par '
+    this.yield.setNote('Her kâğıt kalan vadesinde bileşik getirisiyle (DİBS RV!T); kırmızı çizgi uydurulan sıfır kupon eğrisinin par '
       + 'getirisi (eğride temiz fiyatı 100 olan kâğıdın getirisi), kesik çizgi zero faizi (ikisi de yıllık bileşik); yeşil DİBS RV\'nin '
-      + 'kâğıdın vadesindeki OIS par faizi (X).';
-    this.yield.note.classList.remove('hidden');
+      + 'kâğıdın vadesindeki OIS par faizi (X). Kâğıtların bu eğriye göre model getirisi, ucuz / pahalısı ve adil fiyatı DİBS Trading\'in '
+      + 'özetinde (Sıfır kupon eğrisi sütunları).');
     await this.loadMirrors(d.mirrors || []);
+  }
+
+  /** The link to the bond table's one home: DİBS Trading's summary, how many bonds of which kind it lists, the RV view. */
+  drawTrading(t) {
+    clear(this.trading);
+    const kinds = (t.kinds || []).map((k) => k.title + ' ' + k.n).join(' · ');
+    const go = h('a', { href: '#/' + (t.view || 'dibslive') + '?p=' + encodeURIComponent(t.panel || 'L0'), class: 'btn sm', id: 'dg-trading-link',
+      title: 'Kâğıt tablosunun tek evi: DİBS Trading → Trading listesi · özet. Sütunlar → Görünüm: Trading / RV / Risk / Tümü' },
+    (t.title || 'Trading listesi · özet') + ' →');
+    go.addEventListener('click', (e) => { e.preventDefault(); this.ctx.goto(t.view || 'dibslive', t.panel || 'L0'); });
+    this.trading.append(h('b', null, 'Kâğıt tablosu: '), go,
+      h('span', { class: 'muted' }, ' DİBS Trading\'de, ' + (t.n || 0) + ' kâğıt' + (kinds ? ' (' + kinds + ')' : '')
+        + ' · OIS ve FX swap ASW\'si, eğriler, adil getiri / fiyat, ucuz / pahalı, sinyal ve sıfır kupon eğrisi orada: Sütunlar → Görünüm: '
+        + (t.preset || 'RV')));
   }
 
   drawFit(d) {
@@ -144,21 +155,6 @@ export class DibsGenelPage {
     }
   }
 
-  drawTable(table) {
-    // (27.11.2026, "Düzen": the bond's name stays in view when the table scrolls sideways - its first column frozen)
-    const data = table && table.rows && !table.fz ? Object.assign({}, table, { fz: FROZEN }) : table;
-    if (this.grid) {
-      if (!this.grid.update(data)) this.grid.replace(data);
-      return;
-    }
-    clear(this.table.body);
-    this.grid = new Grid({ data, editable: false, name: 'dibs-genel', tools: toolsOf(this.table.body, true) });
-    this.grid.el.id = 'dg-grid';
-    bondCardLinks(this.ctx, this.grid.el);                 // ▸ opens the bond's card
-    bondFlags(this.ctx, this.grid.el);                     // ★ takes it off the trading list
-    this.table.body.appendChild(this.grid.el);
-  }
-
   drawChart(key, p, data) {
     if (!data) return;
     if (this.charts[key]) { this.charts[key].update(data); return; }
@@ -189,7 +185,7 @@ export class DibsGenelPage {
       if (!e) continue;
       if (typeof ans.gen === 'number' && ans.as) this.mirrorHave[m.key] = { gen: ans.gen, as: ans.as };
       p.title.textContent = e.title || m.title;
-      if (e.note) { p.note.textContent = e.note; p.note.classList.remove('hidden'); }
+      if (e.note) p.setNote(e.note);
       if (e.type === 'chart') this.drawChart(m.key, p, e.data);
       else this.drawMirror(m, p, e, ans.book);
     }
@@ -212,6 +208,10 @@ export class DibsGenelPage {
     });
     this.mirrorGrids[m.key] = grid;
     p.body.appendChild(grid.el);
+    // (no row in use: one line instead of the empty table - "Genel'de switch yokken 1676×227 boş tablo yerine tek satır",
+    // the desk's 28.11.2026; "Tümü (N)" shows the table, a click on one of its inputs opens it in its tab)
+    const none = h('div', { class: 'muted dg-none hidden', id: 'dg-none-' + m.key });
+    p.body.appendChild(none);
     const hint = h('div', { class: 'muted dg-hint' }, 'Salt okunur: girdiler (altı çizili hücreler) ' + TAB_TITLE[m.view]
       + ' sekmesinde yazılır - tıklayınca orada açılır.');
     p.body.appendChild(hint);
@@ -221,7 +221,7 @@ export class DibsGenelPage {
   /**
    * A mirrored list's rows as its own tab shows them (27.11.2026, "Düzen"): the table's ``grow`` - the switch / pair
    * rows in use and one empty one (a pair is typed there, in its tab); "Tümü (N)" shows every row, "Dolu satırlar" folds
-   * them again.  Display only: the rows are all there.
+   * them again.  With no row in use the table is one line saying so (28.11.2026).  Display only: the rows are all there.
    */
   foldRows(m, p, grid, spec) {
     const d = grid.data;
@@ -248,6 +248,17 @@ export class DibsGenelPage {
       tr.classList.toggle('grow-hidden', !k.all && typeof r === 'number' && r > upto && r <= last);
     });
     k.btn.textContent = k.all ? 'Dolu satırlar' : 'Tümü (' + trs.length + ')';
+    const empty = filled < first && !k.all;
+    const none = p.body.querySelector('.dg-none');
+    grid.el.classList.toggle('hidden', empty);
+    if (none) {
+      none.classList.toggle('hidden', !empty);
+      clear(none);
+      if (empty) {
+        none.append(m.title + ' yok: ' + TAB_TITLE[m.view] + ' sekmesinde yazılır ', this.tabLink(m.view, m.panel),
+          ' · Tümü (' + trs.length + ') boş tabloyu gösterir');
+      }
+    }
   }
 
   destroy() {

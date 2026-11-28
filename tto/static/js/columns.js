@@ -9,6 +9,7 @@ export const NO_COLUMNS = new Set();
 
 const kept = new Map();           // table -> Set of the keys of the columns this user hid
 const orders = new Map();         // table -> the keys of its columns in the order this user put them
+const presets = new Map();        // table -> [{name, hide}]: ready views of it (the server's: DİBS Trading's Trading / RV / Risk)
 const saving = new Map();         // table -> its last save: the saves of one table go one after the other
 const listeners = new Set();      // fn(table) after this user hides or shows a column (false: no longer)
 
@@ -27,12 +28,19 @@ export function onHiddenChange(fn) {
 export async function loadHiddenColumns() {
   kept.clear();
   orders.clear();
+  presets.clear();
   try {
     const res = await api.get('/api/columns');
     for (const name of Object.keys(res.tables || {})) kept.set(name, new Set(res.tables[name]));
     for (const name of Object.keys(res.defaults || {})) if (!kept.has(name)) kept.set(name, new Set(res.defaults[name]));
     for (const name of Object.keys(res.order || {})) orders.set(name, res.order[name].slice());
+    for (const name of Object.keys(res.presets || {})) presets.set(name, (res.presets[name] || []).slice());
   } catch (e) { /* every column on screen; a change says what is wrong */ }
+}
+
+/** The ready views of a table (``[{name, hide}]``, the server's) - [] for a table without any. */
+export function columnPresets(name) {
+  return presets.get(name) || [];
 }
 
 /** The keys of a table's columns in this user's order (null: the sheet's own). */
@@ -155,6 +163,25 @@ export class Columns {
     this.update();
   }
 
+  /** A ready view of the table (the desk, 28.11.2026: DİBS Trading's "Trading / RV / Risk"): its hidden columns, as a
+   *  choice of the user's own (kept with the account; changed column by column afterwards like any other). */
+  applyPreset(p) {
+    const keys = new Set((p.hide || []).filter((k) => this.cols.some((c) => c.key === k)));
+    if (this.cols.length && this.cols.every((c) => keys.has(c.key))) return false;
+    save(this.name, keys);
+    this.update();
+    return true;
+  }
+
+  /** The preset the hidden columns are now (null: a choice of the user's own). */
+  presetNow() {
+    const hid = new Set(this.cols.filter((c) => this.hid.has(c.j)).map((c) => c.key));
+    return columnPresets(this.name).find((p) => {
+      const want = new Set((p.hide || []).filter((k) => this.cols.some((c) => c.key === k)));
+      return want.size === hid.size && [...want].every((k) => hid.has(k));
+    }) || null;
+  }
+
   /** The columns in this order (keys; [] - the sheet's own order again): kept, and the table drawn in it. */
   setOrder(keys) {
     saveOrder(this.name, keys);
@@ -230,7 +257,17 @@ export class Columns {
 
   /** The list of the columns, each with its tick (ticked: on screen), and "Tümünü göster". */
   openMenu(x, y) {
-    const items = [{ header: 'Gösterilen sütunlar · yalnız sizin görünümünüz' }];
+    const items = [];
+    const ready = columnPresets(this.name);
+    if (ready.length) {
+      // the table's ready views first: one click hides what that way of reading it does not need
+      const now = this.presetNow();
+      items.push({ label: 'Görünüm', id: 'colpresets', title: 'Tablonun hazır görünümleri - tek tıkla; sonra sütun sütun değiştirebilirsiniz',
+        choices: ready.map((p) => ({ label: p.name, on: now === p, value: p.name,
+          title: p.name + ' görünümü: ' + (p.hide.length ? p.hide.length + ' sütun gizli' : 'bütün sütunlar'), action: () => this.applyPreset(p) })) });
+      items.push({ sep: true });
+    }
+    items.push({ header: 'Gösterilen sütunlar · yalnız sizin görünümünüz' });
     for (const c of this.cols) {
       items.push({ check: true, on: !this.hid.has(c.j), label: short(c.name, 46), sub: c.sub, title: c.name,
         action: (on) => this.change([c.key], on) });
@@ -290,8 +327,9 @@ export class Columns {
     if (!ui || ui.owner !== this) return;
     if (!ui.chip.parentNode && ui.tools.parentNode) ui.tools.parentNode.insertBefore(ui.chip, ui.tools);
     const off = this.cols.filter((c) => this.hid.has(c.j));
+    const view = off.length && columnPresets(this.name).length ? this.presetNow() : null;
     ui.chip.classList.toggle('hidden', !off.length);
-    ui.chip.textContent = off.length ? 'Gizlediğiniz ' + off.length + ' sütun' : '';
+    ui.chip.textContent = off.length ? (view ? 'Görünüm: ' + view.name + ' · ' + off.length + ' sütun gizli' : 'Gizlediğiniz ' + off.length + ' sütun') : '';
     ui.chip.title = off.length ? 'Bu tabloda gizlediğiniz sütunlar: ' + off.map((c) => c.name).join(', ') + '\nTıklayın: sütun listesi' : '';
     ui.btn.classList.toggle('on', off.length > 0);
   }

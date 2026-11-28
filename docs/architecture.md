@@ -525,7 +525,7 @@ file is shared memory) and does not work over a network filesystem.
 | 55_tmois | tmois | OIS · Nakit Akışı | tto / TM_OIS |
 | 58_kagitlar | kagitlar | Tüm Kâğıtlar | tto / EK_EVREN |
 | 60_dibs | dibs | DİBS RV | tto / DİBS RV |
-| 60_dibslive | dibslive | DİBS Trading | tto / EK_DIBS |
+| 60_dibslive | dibslive | DİBS Trading (L0: the bond table's one home - `Service._trading_table`, its columns' keys `_trading_keys`, presets `column_presets`) | tto / EK_DIBS |
 | 61_asw | asw | DİBS ASW | asw / ASW |
 | 62_manuel | manuel | Manuel Tahvil | tto / Manuel Tahvil |
 | 63_ihale | ihale | Hazine İhalesi | tto / EK_IHALE |
@@ -564,6 +564,15 @@ an entry is chosen or Esc is pressed.
 Two kinds of panel key add the dashboard's own columns:
 - the `ppk` key: PPK columns beside Bootstrap (`_fra_ppk_columns`, `_broken_ppk_columns`);
 - the `append` keys (aswfx, rvfair, borsaspread, dibs_live, universe …): see `Service._panel`.
+
+**Column presets** (28.11.2026): `GET /api/columns` carries `presets` (`Service.column_presets`: a table's ready views,
+`{name, hide}` - DİBS Trading's summary: Trading / RV / Risk / Tümü, `TRADING_PRESETS`); `columns.js` lists them first under
+"Sütunlar" (`#colpresets`) and a click saves that hidden set as the user's own choice; a table with presets hides its first
+preset's set for a user who never chose (`_hidden_defaults`, beside `DEFAULT_HIDDEN_COLUMNS`). **The bond column**: every
+bond table shows the bond's short name first (`Service._bond_label_cell`: `bondlink`, the ISIN in the tip - a click opens
+the card, `bonds.js bondCardLinks`), the ISIN beside it, both frozen; DİBS RV and DİBS ASW add it as a column of the
+dashboard's own ("Kâğıt", placed by `"cols"`). A block of one bond folded while it has none: `"bonds": {"unless": "A27"}`
+(`_bond_rows`, Hazine İhalesi).
 
 A table's `"cols"` shows only the columns it names, in its order (`Service._pick_columns`; every cell keeps its column
 letter): Masa's forward summaries, TOPLU TARİH ARASI FAİZ and USD's FOMC table (their inputs moved into view, the layout
@@ -783,7 +792,20 @@ ratiosunu takip edebilmeliyim" (and C2 of the day's list).
     out (its curve the fit without it, out of its peers), errors per rule, bucket and kind group - the curve alone, the
     rule in use without history, its own last spread; no route (a check run on a database copy, numbers in
     desk-decisions);
-  - `POST /api/kagit-fiyat/genislik` `{"widths": {"1y": 10, "3y": …}}` - administrators only (403 otherwise).
+  - `POST /api/kagit-fiyat/genislik` `{"widths": {"1y": 10, "3y": …}}` - administrators only (403 otherwise);
+  - `GET /api/kagit-fiyat?ticket=1&isin=&valor=&nominal=&center=&level=&spread=&language=` - the quote ticket at any
+    value date (`KagitFiyat.ticket`, 28.11.2026; the bond card's block): T0 / T1 / T2 (`bonds.value_day`, the TRY list) or a
+    date; the centre the market's yield (`curve_rows`' `market`), Kâğıt Fiyatlama's price (`price`), the fair (`_row`) or a
+    yield typed; bid = centre + spread / 2, ask = centre − spread / 2 (compound); each priced at the value date by BIST's
+    rules (`pricer_at`: the same yield, the new date's price), the amount, the DV01 (`dv01_of`: one bp of the simple yield)
+    and the OIS hedge (`ois_annuity` on the Bootstrap); ``text`` (`ticket_text`, TR / EN);
+  - `KagitFiyat.snapshot()` - the desk's Kâğıt Fiyatlama without its page (28.11.2026): everybody's calculation's main
+    table (`curves`) and the trading list's fair / AL / SAT (`levels`), kept `SNAP_EVERY` (60 s); never made on the
+    calculation thread - a look at an old one (Tüm Kâğıtlar' rows, `Service._universe_kf_cells`; an alarm's name,
+    `watch.KF_METRICS` → `KagitFiyat.level`) starts a thread that makes it (`make_snapshot`: its `_read` at BACKGROUND);
+    Tüm Kâğıtlar says "hesaplanıyor" until the first. The start's warm-up round of the pages (`Service.warm`) waits for
+    the first (`first_snapshot`, at most `SNAP_FIRST_WAIT` = 90 s) so that the pages it makes ahead have it; its arrival
+    bumps the generation only when a page was drawn without it (`missed`) - else it would make every page again.
 - **Threads.** `_read` (engine thread, short): DİBS RV's rows, the yields now (`quantcurve.read_engine`), each row's
   price ↔ yield inputs (P, CU, CW, DR, the cash flows), Bloomberg's bid / ask, the Broker Chat board, the TRY OIS
   Bootstrap, and each row's fair values on the two ASW curves (`rvfair.fair` + `Service._fair_cells`, as DİBS Trading).
