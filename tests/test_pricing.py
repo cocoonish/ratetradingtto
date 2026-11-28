@@ -540,7 +540,8 @@ def test_the_page_s_inputs_are_each_user_s_own_per_asset(svc):
     b = svc.login("Fiyatlama Bora")["user"]
     first = svc.pricing(a)
     assert first["inputs"]["asset"] == "ois" and first["label"] == "TRY OIS 1Y" and first["method"] == "boot"
-    assert [p["id"] for p in svc.nav() if p["group"] == "TRY Faiz"][:2] == ["ois", "fiyatlama"]
+    # (TRY Faiz → Fiyatlama: the entry of Fiyatlama, Swaption and the OIS cash flows since 28.11.2026 - tto/navmenu.py)
+    assert [p["id"] for p in svc.nav() if p.get("menu") == "faiz.fiyatlama"] == ["fiyatlama", "swaption", "tmois"]
     svc.pricing(a, {"asset": "xccy", "end": "2Y3M", "side": "PAY"})
     svc.pricing(a, {"asset": "fra", "start": "1Yx18M"})
     again = svc.pricing(a)

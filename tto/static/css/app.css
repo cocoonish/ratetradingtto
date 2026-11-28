@@ -147,9 +147,15 @@ a { color: var(--accent-ink); }
 @media (min-width: 1100px) {
   #top { flex-wrap: nowrap; }
   #top > * { flex-shrink: 0; }
-  #top h1 { flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; }
+  /* the page's title is never cut (the desk, 28.11.2026 - B9: "Ayarlar · Toplantı tak…" while "Hesap" ran): the
+     favourites, "Hesap", the personal badge's words and the user's name give way to it */
+  #top h1 { flex: 0 0 auto; }
   #top #favs { flex: 0 1 auto; min-width: 0; }
   #top #hesap-ind { flex: 0 1 auto; min-width: 60px; }
+  #top #mine-badge { flex: 0 1 auto; min-width: 26px; overflow: hidden; }
+  #top #mine-badge #mine-text { overflow: hidden; text-overflow: ellipsis; }
+  #top #btn-user { flex: 0 1 auto; min-width: 34px; overflow: hidden; }
+  #top #btn-user #user-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 #top .favs { flex-wrap: nowrap; overflow: hidden; align-items: center; }
 #top .favs .fav.ovfl { display: none; }
@@ -176,6 +182,10 @@ a { color: var(--accent-ink); }
 .badge.interp .led { background: var(--accent, #3987e5); }
 .badge.interp.warn { border-color: rgba(250, 178, 25, .6); color: var(--warn); }
 .badge.interp.warn .led { background: var(--warn); }
+/* what makes this user's numbers differ from the desk's (mine.js; the desk, 28.11.2026 - A6): the normalization on, the
+   values typed over formulas - in the colour of "Elle değer" */
+.badge.mine { border-color: var(--hand-line); background: var(--hand-bg); color: var(--ink); cursor: pointer; }
+.badge.mine .led { background: var(--hand-line); }
 /* "Tablo bul": the tables of every page by name */
 .findbox { position: relative; display: inline-block; }
 .findbox input { width: 250px; }
@@ -332,7 +342,25 @@ a { color: var(--accent-ink); }
 .viewtabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
 .viewtabs button .n { margin-left: 6px; font-size: 10.5px; color: var(--ink-3); font-weight: 500; }
 .viewtabs.searching button { opacity: .55; }
+/* a page in tabs: its tools (Tablo ara · Yardımcı tablolar · Elle değer · Girdilerimi sıfırla · ?) at the tab bar's right
+   end - one line, in sight with the bar while the page scrolls (the desk, 28.11.2026 - B3; view.js).  The line takes the
+   bar's place (sticky, its bottom border); when both do not fit, the tools go above the tabs (wrap-reverse), the tabs keep
+   their underline on the border */
+.tabline { display: flex; flex-wrap: wrap-reverse; align-items: flex-end; gap: 4px 12px; border-bottom: 1px solid var(--line);
+  margin: 0 -14px 12px; padding: 2px 14px 0; position: sticky; top: -14px; z-index: 6; background: var(--plane); }
+.tabline > .viewtabs { position: static; margin: 0; padding: 0; border: 0; background: none; flex: 0 1 auto; min-width: 0; }
+.tabline > .page-tools { margin: 0 0 5px auto; flex: 0 1 auto; }
+.tabline > .page-tools input[type=search] { width: 150px; transition: width .15s; }
+.tabline > .page-tools input[type=search]:focus, .tabline > .page-tools input[type=search]:not(:placeholder-shown) { width: 220px; }
+/* a tab's note: one line, "devamı" the rest (the desk, 28.11.2026 - B2; ui.js foldNote) */
 .secnote { color: var(--ink-3); font-size: 11.5px; margin: -4px 2px 10px; }
+.secnote.clamp { position: relative; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; line-height: 1.45; }
+.secnote.clamp.open { display: block; -webkit-line-clamp: none; overflow: visible; }
+.secnote .note-more { display: none; position: absolute; right: 0; bottom: 0; border: 0; padding: 0 2px 0 14px; font: inherit; line-height: inherit;
+  color: var(--accent-ink); cursor: pointer; background: linear-gradient(90deg, transparent, var(--plane) 12px); }
+.secnote .note-more:hover { text-decoration: underline; }
+.secnote.clamp.long .note-more, .secnote.clamp.open .note-more { display: inline; }
+.secnote.clamp.open .note-more { position: static; padding-left: 6px; background: none; }
 .secthead { flex: 1 1 100%; color: var(--ink-3); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   margin: 10px 2px -2px; }
 .secthead:first-child { margin-top: 0; }
@@ -575,8 +603,14 @@ table.grid td.ov { color: var(--ink-2); }
 /* a long note inside a sheet's range (a text run over the empty cells of its row, grid.js prepare): it wraps in the width
    the table's other cells give it - its box gives the table none of its own (at most 440 px of it: a narrow table's note
    is still readable) - instead of making every column under it wider (the desk, 27.11.2026: 7 531 px from one note) */
-table.grid td.ovw { white-space: normal; height: auto; line-height: 1.4; }
+table.grid td.ovw { white-space: normal; height: auto; line-height: 1.4; overflow: visible; }
 table.grid td.ovw > .ovt { width: 440px; min-width: 100%; overflow-wrap: anywhere; }      /* (no % in width: it would count) */
+/* ... never wider than the part of the table on screen (the desk, 28.11.2026 - B2): in a table wider than its panel each
+   note wraps in the width on screen right of where it starts (--note-w: grid.js _noteWidth) and stays at the left while
+   the table scrolls sideways - it was cut at the panel's edge.  (The cell does not clip: a clipping cell would hold the
+   sticky note.) */
+table.grid.notevis td.ovw > .ovt { width: min(440px, var(--note-w, 440px)); min-width: min(100%, var(--note-w, 100%));
+  position: sticky; left: 8px; }
 /* the rows a long table keeps out of view until "Tümü (N)" (a view's "limit") */
 table.grid tr.limit-hidden { display: none; }
 table.grid td.editing { padding: 0; overflow: visible; background: var(--surface) !important; box-shadow: none; }
@@ -1171,7 +1205,7 @@ svg.spark line.base { stroke: var(--ink-3); stroke-dasharray: 2 3; stroke-width:
 .btn.desk-alarm { border-color: rgba(230, 103, 103, .7); color: var(--neg); font-weight: 650; animation: desk-pulse 2s ease-in-out infinite; }
 @keyframes desk-pulse { 50% { box-shadow: 0 0 0 4px rgba(230, 103, 103, .18); } }
 /* "Hesap": a long calculation under way (progress.py) - only while one runs */
-.btn.hesap { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); max-width: 46vw; overflow: hidden; }
+.btn.hesap { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); max-width: 260px; overflow: hidden; }
 .btn.hesap .hs-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: hs-blink 1.4s ease-in-out infinite; }
 .btn.hesap .hs-lbl { font-weight: 650; color: var(--ink); }
 .btn.hesap .hs-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
@@ -1938,6 +1972,44 @@ a.golink { text-decoration: none; white-space: nowrap; }
 .hol-fold > summary .muted { font-weight: 400; }
 /* the status bar's "Ctrl+C kopyala · …" only where a table takes it (a grid on the page or in the side drawer) */
 #app:not(:has(table.grid, table.calc-grid)) #sb-hint { display: none; }
+/* ================================================================ Kabuk (K1, 28.11.2026)
+   The desk's batch of 28.11.2026 ("B - Hepsini yap", "Digerlerini de onayliyorum"): the menu below 1500 px (B10), the
+   menu's entries with tabs (R), the "hesaplanıyor" mark (B7), the personal badge's list (A6), the typed values of an
+   earlier day (A7).  The shell's global rules stay in their sections above. */
+/* the menu below 1500 px (main.js setupNavPeek): a 52 px strip that opens over the page - labels, groups, counts - while
+   the mouse rests on it or the keyboard is in it; the page keeps its width (at 1366 px the menu's 162 px were what twenty
+   tables scrolled sideways by).  A folded group folds there as in the open menu. */
+#side { position: relative; z-index: 30; }
+#side.peek { width: 214px; box-shadow: 10px 0 28px rgba(0, 0, 0, .35); }
+#side.peek .brand .txt { display: block; }
+#side.peek .nav-group > .gt { display: flex; }
+#side.peek .nav-item .lbl, #side.peek .nav-foot .lbl { display: inline; }
+#side.peek .nav-item { justify-content: flex-start; }
+#app.nav-collapsed #side.peek #nav .nav-group.folded > .nav-item:not(.active) { display: none; }
+#app.nav-collapsed #side.peek #nav .nav-group.folded > .nav-item:has(.nav-count) { display: flex; }
+#side.peek .nav-item .nav-count.chat .txt { display: inline; }
+/* two counts on one entry (Sosyal's and Ajanda's on "Masa iletişim") */
+.nav-item .nav-count + .nav-count { margin-left: 4px; }
+/* the tabs of a menu entry's page scroll away with it when the page has a tab bar of its own: that one stays (both stuck
+   at the top, the one would hide the other) */
+#content:has(.tabline) > .pagetabs { position: static; }
+/* a page, a panel or a box waiting for its first answer (ui.js waiting) */
+.loading.waiting { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.waiting .spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--accent);
+  animation: wait-spin .9s linear infinite; flex: none; }
+@keyframes wait-spin { to { transform: rotate(360deg); } }
+/* the personal badge's list (mine.js) */
+.mine-sec { margin: 0 0 14px; }
+.mine-sec > b { display: block; margin-bottom: 6px; }
+.mine-sec > p { margin: 0 0 8px; }
+.mine-scroll { max-height: 46vh; overflow: auto; margin-bottom: 8px; }
+table.plain.mine-table td.mono { font-family: var(--mono); font-size: 11.5px; }
+/* "Girdilerim" (scenarios.js): when each value was typed; a market level of an earlier day marked */
+table.plain tr.old-input td { color: var(--warn); }
+table.plain tr.old-input td.l .mk { font-size: 10.5px; border: 1px solid var(--warn); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
+.mine-filter { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; flex-wrap: wrap; }
+/* the heat maps' tiles smaller below 1500 px (B10) */
+@media (max-width: 1500px) { table.heat td, table.fxheat td { height: 30px; } }
 /* ------------------------------------------------------------------------------------------------- Tahvil düzen
    (27.11.2026, "Düzen", duzen-tahvil): the bond pages' own rules - Kâğıt Fiyatlama's explanation folded and its quote
    widths a chip of the rules line, Kâğıt Fiyat Yükleme's narrow tables at their natural width, DİBS RV · Genel's folded

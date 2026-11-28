@@ -143,18 +143,22 @@ PAGES += qs.PAGES                                                               
 PAGES += qml.PAGES                                                                                         # quantml.py
 PAGES += qos.PAGES                                                                                         # quantoptspot.py
 PAGES += qsw.PAGES                                                                                         # quantdibssw.py
-#: the menu: four entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
-#: A page keeps its own address (#/quant-pca opens "Faiz" on "PCA / RV"); an entry of one page is that page itself.
+#: the menu: three entries, each one page whose tabs are the pages above - (entry, its name, ((page, tab's name) ...)).
+#: A page keeps its own address (#/quant-pca opens "Faiz analizleri" on "PCA / RV"); an entry of one page is that page
+#: itself.  The menu's other groups: tto/navmenu.py (the desk's reorganization of 28.11.2026: VİOP, an entry of its own
+#: before, is a tab of Sinyaller; the entries' names are the menu's only "Faiz" / "FX" no more - "TRY Faiz" and "FX · USD"
+#: are groups of it)
 MENU = (("quant.sinyal", "Sinyaller", (("quant", "Sinyaller"), ("quant-intraday", "Gün içi"), ("quant-model", "Model"),
                                        ("quant-trend", "Trend"), ("quant-sira", "Carry + momentum"))),
-        ("quant.faiz", "Faiz", (("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"), ("quant-corr", "Korelasyon"),
-                                ("quant-regime", "Rejim"), ("quant-curve", "Eğri Adil Değeri"), ("quant-path", "İma Patikası"),
-                                ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
-        ("quant.fx", "FX", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))),
-        ("quant-viop", "VİOP", (("quant-viop", "VİOP"),)))
-# Makine öğrenmesi (quantml.py): a tab of Sinyaller; Opsiyon → spot (quantoptspot.py): a tab of FX, after Opsiyon; DİBS
-# switch (quantdibssw.py): a tab of Faiz, after Eğri Adil Değeri (where DİBS adil değeri's lines live)
-MENU = tuple((mid, name, tabs + ((qml.TAB,) if mid == "quant.sinyal" else ()) + ((qos.TAB,) if mid == "quant.fx" else ()))
+        ("quant.faiz", "Faiz analizleri", (("quant-pca", "PCA / RV"), ("quant-pairs", "Çiftler"), ("quant-corr", "Korelasyon"),
+                                           ("quant-regime", "Rejim"), ("quant-curve", "Eğri Adil Değeri"),
+                                           ("quant-path", "İma Patikası"), ("quant-wirp", "TCMB WIRP"), ("quant-lead", "Öncü-Takipçi"))),
+        ("quant.fx", "FX analizleri", (("quant-fx", "FX"), ("quant-macro", "Makro"), ("quant-opt", "Opsiyon"))))
+#: VİOP's signals: the last tab of Sinyaller (the desk, 28.11.2026)
+VIOP_TAB = ("quant-viop", "VİOP")
+# Makine öğrenmesi (quantml.py), then VİOP: tabs of Sinyaller; Opsiyon → spot (quantoptspot.py): a tab of FX, after
+# Opsiyon; DİBS switch (quantdibssw.py): a tab of Faiz, after Eğri Adil Değeri (where DİBS adil değeri's lines live)
+MENU = tuple((mid, name, tabs + ((qml.TAB, VIOP_TAB) if mid == "quant.sinyal" else ()) + ((qos.TAB,) if mid == "quant.fx" else ()))
              for mid, name, tabs in MENU)
 MENU = tuple((mid, name, tuple(t for tab in tabs for t in ((tab, qsw.TAB) if tab[0] == qsw.AFTER else (tab,)))) for mid, name, tabs in MENU)
 

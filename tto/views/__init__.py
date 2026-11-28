@@ -107,6 +107,12 @@ Layout options of a panel (the desk, 27.11.2026: "Düzen: sayfalar tek tek", ``d
   the rest (each browser remembers it, as the tabs and the folded panels).
 * ``"fit": true``  the panel is as wide as its table, never stretched (``.panel.fit``; in a column of ``sections``, not
   as wide as the column's widest panel).
+* ``"rows": [19, 25, 26]`` (a table)  the twin of ``"cols"`` (the desk, 28.11.2026: B15): only these rows of the panel's
+  range, by the sheet's row number, in this order - a row not named is not shown (one the table does not have, left out
+  as empty, is skipped).  Every cell keeps its row number (an input is typed into its own cell); a cell merged down over
+  rows keeps the rows that still follow it; the answer's ``ar`` names every row of the range, so that a block pasted
+  lands on the rows on screen.  VİOP's Kontratlar: the rows its four tables repeat (1st / 2nd Date, VKGS, Spot, USD)
+  shown once, in VIOP BID.
 * ``admin`` (optional)  ``true``: a page for administrators only (the Motor sheet: the workbook's engine) - not in
   anyone else's menu, search or shortcuts, and refused to them
 
@@ -142,6 +148,8 @@ from __future__ import annotations
 import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
+
+from ..xl.model import parse_range
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -195,9 +203,9 @@ def load_views() -> List[Dict[str, Any]]:
 
 
 def check_view(view: Dict[str, Any], raw: Optional[Dict[str, Any]] = None) -> List[str]:
-    """What is wrong with a page's layout options (empty: nothing) - ``freeze``, ``limit``, ``fit`` and the columns of
-    panels in its tabs; ``raw``: the page's JSON as written (the lists in its tabs before :func:`load_views` flattened
-    them).  The loader takes what it can; the views' test fails on any of these."""
+    """What is wrong with a page's layout options (empty: nothing) - ``freeze``, ``limit``, ``fit``, ``rows`` and the
+    columns of panels in its tabs; ``raw``: the page's JSON as written (the lists in its tabs before :func:`load_views`
+    flattened them).  The loader takes what it can; the views' test fails on any of these."""
     out: List[str] = []
     vid = view.get("id")
     ids = {p.get("id") for p in view.get("panels", [])}
@@ -219,6 +227,8 @@ def check_view(view: Dict[str, Any], raw: Optional[Dict[str, Any]] = None) -> Li
                 out.append("%s: limit yalnız tabloda" % pid)
         if "fit" in p and not isinstance(p["fit"], bool):
             out.append("%s: fit true ya da false olur: %r" % (pid, p["fit"]))
+        if "rows" in p:
+            out.extend("%s: %s" % (pid, x) for x in _check_rows(p))
     src = raw if raw is not None else view
     tabs = [("sekme %s" % s.get("id"), s.get("panels") or []) for s in src.get("sections") or [] if isinstance(s, dict)]
     tabs.append(("pinned", src.get("pinned") or []))
@@ -237,6 +247,31 @@ def check_view(view: Dict[str, Any], raw: Optional[Dict[str, Any]] = None) -> Li
                 if q in seen:
                     out.append("%s/%s: %s iki kez" % (vid, where, q))
                 seen.add(q)
+    return out
+
+
+def _check_rows(p: Dict[str, Any]) -> List[str]:
+    """What is wrong with a panel's ``"rows"``: a list of the sheet's row numbers inside its range, each once, on a table."""
+    rows = p["rows"]
+    if p.get("type") != "table":
+        return ["rows yalnız tabloda"]
+    if not isinstance(rows, list) or not rows:
+        return ["rows satır numaralarının listesi olur: %r" % (rows,)]
+    out = []
+    try:
+        r1, _, r2, _ = parse_range(p.get("range") or "")
+    except (ValueError, KeyError, IndexError):
+        r1, r2 = None, None
+    seen = set()
+    for r in rows:
+        if isinstance(r, bool) or not isinstance(r, int) or r < 1:
+            out.append("rows bir satır numarası olur: %r" % (r,))
+            continue
+        if r1 is not None and not r1 <= r <= r2:
+            out.append("rows %d tablonun aralığında değil (%s)" % (r, p.get("range")))
+        if r in seen:
+            out.append("rows %d iki kez" % r)
+        seen.add(r)
     return out
 
 

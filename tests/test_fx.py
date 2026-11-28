@@ -448,8 +448,10 @@ def test_http(svc):
     u = user(svc, "FX HTTP")
     h = auth(svc, u)                                   # a signed-in session (the old user header signs nobody in)
     nav = client.get("/api/nav", headers=h).json()["pages"]
-    fxp = [p for p in nav if p["group"] == "FX"]
-    assert [p["id"] for p in fxp] == ["fx", "fxvol"] and fxp[0]["title"] == "Spot / FX"
+    # (the group "FX · USD" since 28.11.2026: Spot / FX - its tabs Spot / FX and FX Vol - and USD · FOMC; tto/navmenu.py)
+    fxp = [p for p in nav if p["group"] == "FX · USD"]
+    assert [p["id"] for p in fxp] == ["fx", "fxvol", "usd"] and fxp[0]["title"] == "Spot / FX"
+    assert [(p.get("menu"), p.get("tab")) for p in fxp[:2]] == [("fx.spot", "Spot / FX"), ("fx.spot", "FX Vol")]
     r = client.post("/api/fx/surface", json={"pair": "USDTRY", "model": "svi", "levels": [50, 60]}, headers=h)
     assert r.status_code == 200 and r.json()["levels"] == [50.0, 60.0] and len(r.json()["rows"]) == len(fx.TENORS)
     assert client.post("/api/fx/surface", json={"pair": "ABCDEF"}, headers=h).status_code == 400

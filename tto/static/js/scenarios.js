@@ -2,6 +2,7 @@
 import { api, session } from './api.js';
 import { h, clear, modal, toast, errorToast, confirmDialog } from './ui.js';
 import { pendingWrites, trackWrite } from './grid.js';
+import { dayTime } from './mine.js';
 
 /** Load a saved scenario after every input write still in flight (a cell just typed - its editor committed first -, a
  *  block pasted, a reset): the server applies the load after the writes it has (in their queue's order), and waiting
@@ -55,18 +56,48 @@ export async function openScenarios(ctx) {
     const head = h('div', { class: 'field' }, h('label', null, 'Şu anki kişisel girdilerim (' + n + ' hücre)'));
     mine.appendChild(head);
     if (n) {
+      // each value's day (the desk, 28.11.2026 - A7: "Dünden kalan yazılmış değerler işaretli"): "Yalnız bugünden
+      // eskiler" the ones typed before today; a market level of an earlier day marked - "temizle" takes those back
+      const earlier = (x) => !!x.at && !!inp.today && x.at.slice(0, 10) < inp.today;
+      const old = inp.inputs.filter(earlier);
+      const stale = inp.inputs.filter((x) => x.old && x.market);
+      const onlyOld = h('input', { type: 'checkbox', id: 'mine-old' });
+      const clean = h('button', { class: 'btn sm', type: 'button', id: 'mine-old-clear', disabled: !stale.length,
+        title: 'Bugünden önce yazılmış piyasa girdileriniz (spot, spread, kota, yapıştırılan DV01 …; ayarlar değil) silinir' },
+      'Eski piyasa girdilerimi temizle (' + stale.length + ')');
+      clean.addEventListener('click', async () => {
+        if (!(await confirmDialog('Eski piyasa girdileri', stale.length + ' piyasa girdiniz bugünden önce yazılmış; silinir, hücreler '
+          + 'varsayılanına (formülüne / piyasaya) döner. Ayarlarınız ve diğer girdileriniz kalır.', 'Temizle'))) return;
+        try {
+          const books = new Map();
+          for (const x of stale) { if (!books.has(x.book)) books.set(x.book, []); books.get(x.book).push(x.ref); }
+          for (const [book, refs] of books) await trackWrite(api.post('/api/reset', { book, refs }));
+          toast('Eski piyasa girdileri temizlendi', 'ok');
+          ctx.refreshNow();
+          await reload();
+        } catch (err) { errorToast(err); }
+      });
+      mine.appendChild(h('div', { class: 'mine-filter' }, h('label', { class: 'check' }, onlyOld, ' Yalnız bugünden eskiler (' + old.length + ')'), clean));
       const box = h('div', { class: 'mine-list' });
-      const table = h('table', { class: 'plain' });
-      const body = h('tbody');
-      for (const x of inp.inputs.slice(0, 400)) {
-        // (an input typed as a formula: the formula, then the value it gives now)
-        const value = x.value === null ? '(boş)' : String(x.value);
-        body.appendChild(h('tr', null, h('td', { class: 'l' }, x.ref),
-          h('td', x.formula ? { title: 'Formül: ' + x.formula } : null, x.formula ? h('span', { class: 'mono' }, x.formula + '  →  ') : null, value),
-          h('td', { class: 'l muted' }, x.label || '')));
-      }
-      table.appendChild(body);
-      box.appendChild(table);
+      const draw = () => {
+        clear(box);
+        const table = h('table', { class: 'plain', id: 'mine-inputs' });
+        table.appendChild(h('thead', null, h('tr', null, h('th', { class: 'l' }, 'Hücre'), h('th', null, 'Değer'), h('th', { class: 'l' }, ''),
+          h('th', { class: 'l' }, 'Yazıldı'))));
+        const body = h('tbody');
+        for (const x of (onlyOld.checked ? old : inp.inputs).slice(0, 400)) {
+          // (an input typed as a formula: the formula, then the value it gives now)
+          const value = x.value === null ? '(boş)' : String(x.value);
+          body.appendChild(h('tr', { class: x.old && x.market ? 'old-input' : null, title: x.old && x.market ? x.market + ' - bugünden önce yazıldı' : null },
+            h('td', { class: 'l' }, x.ref, x.old && x.market ? h('span', { class: 'mk' }, 'dünden') : null),
+            h('td', x.formula ? { title: 'Formül: ' + x.formula } : null, x.formula ? h('span', { class: 'mono' }, x.formula + '  →  ') : null, value),
+            h('td', { class: 'l muted' }, x.market || x.label || ''), h('td', { class: 'l muted' }, dayTime(x.at))));
+        }
+        table.appendChild(body);
+        box.appendChild(table);
+      };
+      onlyOld.addEventListener('change', draw);
+      draw();
       mine.appendChild(box);
       const reset = h('button', { class: 'btn sm danger', type: 'button', style: { marginTop: '8px' } }, 'Tüm kişisel girdilerimi sıfırla');
       reset.addEventListener('click', async () => {

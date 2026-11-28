@@ -55,11 +55,13 @@ Line numbers are as of commit a5e7ea7. Search for the name if a line has moved.
    `_render` loops the view JSON's panels → `_panel` → `Renderer.table`.
 3. The browser: `main.js` maps page ids to JS page classes. Any other id is a `ViewPage`, which calls
    `/api/view/<id>`.
-4. Custom pages (no view JSON) are listed in `Service.nav`:
+4. Custom pages (no view JSON) are listed in `Service.nav` (`_nav_pages`):
    - bugun, watch / heat, blotter, broker, trades;
    - eod, mpc, vol, spreads, settings;
    - fiyatlama, swaption, fx, fxvol, social, agenda, dibs-genel, kagit-fiyat, fiyat-yukleme;
    - the quant pages.
+
+   `tto/navmenu.py` then puts every page in the menu's order and names its group, entry and tab (*The menu*, below).
 
 **A cell's text is the server's.** `Renderer.cell` formats each value with its cell's own number format
 (`Renderer.xf_of` / `format_of`, the model's style - the one place it is read; `numfmt.render`) and sends the text (`t`)
@@ -383,7 +385,7 @@ figures' number format and Masa chart 2's RET ask colour.
 
 | Group | Modules |
 |---|---|
-| Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `store` (SQLite), `inputs`, `inputformula`, `twoway` (two-way tables), `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `decimals` (each user's own decimals, on the answers), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
+| Core | `config`, `__main__`, `server` (HTTP), `service` (about 9 300 lines: the application), `books`, `render`, `views/__init__`, `navmenu` (the menu), `myinputs` (what a user typed: pages, market levels), `store` (SQLite), `inputs`, `inputformula`, `twoway` (two-way tables), `shortcuts`, `datecells`, `extras`, `meetings`, `rowkeys`, `calc` (personal calc sheets), `copies` (temporary table copies), `decimals` (each user's own decimals, on the answers), `layout`, `auth`, `presence`, `bundled`, `xlsx` |
 | Market data | `marketdata/{base,bloomberg,bbg_process,replay,age}` (`age`: a quote's age - when the price a market cell shows last changed, the old ones), `history` (daily closes, MPC history), `fx` (Spot / FX board, its own history rule), `fxvol` |
 | Curves and pricing | `ppkcurve` (also "TLREF over a window": a meeting window's rate ↔ its O/N on business days, the PPK step's one conversion - EK_PPK, Broker Chat), `interp`, `interpchart`, `curvepoints`, `aswfx`, `rvfair`, `borsaspread`, `pricing` (Fiyatlama), `swaption` (Swaption: TRY OIS swaptions on Fiyatlama's forward-start OIS, realized vol from the history; view only, `GET /api/swaption` - `vol_unit` also a premium or breakeven, `<kind>:<measure>`, two-way), `bonds` (catalog) |
 | Pages and features | `varrisk` (DV01 Risk → VaR: the realized covariances of the OIS and offshore DV01 buckets from the history, written into EK_VAR), `blotter` (Günlük İşlemler), `entry`, `brokerchat`, `tradehint`, `quotes`, `quotelog` (the quotes given to clients and the hit ratio; below), `retfair`, `retflow`, `dibsgenel`, `kagitfiyat` (Kâğıt Fiyatlama, below), `fiyatyukleme` (Kâğıt Fiyat Yükleme, below), `bugun`, `watch`, `desk`, `deskalarms`, `tradebook` + `tradevalue` + `tradequant` (Trades), `prop` (the top bar's Prop panel, below), `volcarry` |
@@ -420,7 +422,8 @@ A second file, `data/quant_bars.sqlite3`, holds intraday bars (`quantintraday`, 
 | `quant.*` | quant modules |
 | `watch.items`, `watch.alarms`, `watch.open:<day>`, `watch.fired:<day>` | `watch` (`meetings` also moves them) |
 | `migrated.*` | one-time migrations |
-| `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state |
+| `layout.<user>`, `calc.<user>`, `copies.<user>`, `pricing.<key>` | per-user state (`layout.<user>`'s `favs_own`: the favourites are the user's own) |
+| `layout.desk` | `layout` (the desk's default favourites: `{favs, by, at}`, set by an administrator; 28.11.2026) |
 | `cols.<user>`, `colorder.<user>` | the columns a user hides, their order (`Service.columns`) |
 | `decimals.<user>` | `decimals` (a user's own decimals: `{"books": {book: {sheet: {"A1": n}}}, "copies": {copy id: {...}}}`; read once at the start, by place - rows that move leave it where it is) |
 | `prop.limit:<user>` | `prop` (a user's daily loss limit: `{amount, ccy, at}`, `null` for none; only its owner reads or sets it) |
@@ -531,6 +534,32 @@ file is shared memory) and does not work over a network filesystem.
 | 90_calc | calc | Hesaplayıcılar | tto / Calculators |
 | 98_motor | motor | Motor (administrators only) | tto / Motor |
 
+### The menu
+
+`tto/navmenu.py` (the desk's reorganization of 28.11.2026, R; [desk-decisions.md](desk-decisions.md), *Toplu iş*) is the
+whole menu in one table: groups in their order (Masa, TRY Faiz, Tahvil, FX · USD, Quant, Araçlar last), each entry
+`(id, title, hint, ((page id, tab title, tab hint), …))` - one page: the page itself; several: one entry, the pages its
+tabs. `arrange(pages)` (`Service.nav`) returns the nav's pages in that order with `group`, `hint` and - in an entry of
+several pages - `menu`, `menu_title`, `menu_hint`, `tab`; a page the table does not name stays at its group's end, a
+group it does not know before Araçlar, an old group's name (`Risk`, `USD Faiz`, `FX`) is its group of today; an entry
+left with one of its pages (Motor for a user, a dashboard without the TRY workbook) is that page alone; `TITLES` names
+the one page whose title another page had ("Quant · VİOP"). Quant's entries and tabs are `quant.MENU` (VİOP the last tab
+of Sinyaller), DİBS RV's `dibsgenel.MENU_ID` / `MENU_TITLE` / `TABS`.
+
+The browser (`menu.js`): `menuModel` builds the groups from the nav's order (the administrators' pages at Araçlar's end),
+`entries` the entries with their tabs and hints; `pageTabs` the strip over a page of an entry (`#page-tabs`, each tab's
+hint its tooltip); `navItemOf(id)` the line that leads to a page - its own or the entry's whose tab it is
+(`[data-tabs~=id]`): the counts of the menu (`desk.js` Sosyal / Ajanda, `nav-count[data-for]`, each its own on
+"Masa iletişim"; `main.js` Broker Chat's trades not entered, the accounts waiting) go there. `groupFolded`: a group's
+fold per user in the browser (`'1'` / `'0'`), Araçlar folded until opened (`FOLD_DEFAULT`). `entryHidden`: an entry is out
+of a user's menu when its id is in `hidden_pages` - or every one of its tabs is (pages that were entries before).
+
+Below 1500 px (`main.js` `applyNav` / `setupNavPeek`, B10) the menu is the collapsed strip (`#app.nav-collapsed`, 52 px)
+unless the user pinned it open (`tto.nav.narrow`; wider: `tto.nav`, as before); the mouse resting on it (140 ms) or the
+keyboard in it puts `peek` on `#side` - 214 px wide over the page (`#side` `position: relative; z-index: 30` in its
+52 px track: the grid does not move), labels and folded groups as in the open menu; it goes when the mouse leaves,
+an entry is chosen or Esc is pressed.
+
 Two kinds of panel key add the dashboard's own columns:
 - the `ppk` key: PPK columns beside Bootstrap (`_fra_ppk_columns`, `_broken_ppk_columns`);
 - the `append` keys (aswfx, rvfair, borsaspread, dibs_live, universe …): see `Service._panel`.
@@ -560,6 +589,13 @@ put these in one place for every page; the pages' own JSON and modules use them.
     captions (`tr.limit-hidden`), "Tümü (N)" / "İlk n" in the header, kept per browser (`tto.limit.<view>.<panel>`, as
     `tto.grow.*`).
   - `"fit": true`: the entry's `fit` → `section.panel.fit`.
+  - `"rows": [19, 25, 26]` (a table; the desk, 28.11.2026: B15): the twin of `"cols"` - only these rows of the panel's
+    range, by the sheet's row number, in their order (`Service._pick_rows`, right after `cols`); every cell keeps its row
+    number, a cell merged down keeps the rows of it that still follow it, and the answer's `ar` names every row of the
+    range (grid.js `ownLayout`: a block pasted lands on the rows on screen, as on a launchpad's part of a table -
+    `_pick_part` keeps that `ar`). `check_view` says what is wrong with one (not a list, not a row number, outside the
+    range, twice, not on a table). VİOP's Kontratlar: VIOP ASK, OIS and ICAP show their own rows under the contracts'
+    dates, the rows the four share once in VIOP BID.
   - **A column of panels in a tab**: an element of `sections[].panels` (or of `pinned`) may be a list of panel ids. The
     loader (`normalize`) flattens it - `panels` is the ids in order, as every reader of a tab knows them (the menu's
     search, a launchpad item's tab, the tests) - and keeps the columns in `stacks` / `pinned_stacks`; `layout()` sends
@@ -577,13 +613,26 @@ put these in one place for every page; the pages' own JSON and modules use them.
   in a `.stack` is at least `min(320px, 100%)`; a folded one is as wide as its header. The columns' "Gizlediğiniz N sütun" chip is moved onto the header's line (columns.js puts it
   before the tools). The Kopyala button stays the first `.tools .iconbtn`.
 - **Notes**: `ui.js` `foldNote` (two lines, "devamı" / "kısalt", `.note.clamp` / `.long` / `.open`; a folded panel hides
-  its note). A two-way group's note: `Service._panel` sends the note whole and `tw` (the groups' notes in it, one by one -
+  its note; a tab's note - `view.js` `secNote` - one line, `.secnote.clamp`). A long note inside a table (`ovw`) in a
+  table wider than its panel wraps in what is on screen (28.11.2026): the Grid's `_noteWidth` (its ResizeObserver, on
+  the table and the panel it scrolls in) puts `notevis` on the table and on each such cell `--note-w` - the scroller's
+  width right of where the note starts, at least 200 px; app.css makes the note's box that wide and sticky at the left
+  (the cell does not clip: `overflow: visible`, else it would hold the sticky box). A two-way group's note: `Service._panel` sends the note whole and `tw` (the groups' notes in it, one by one -
   `TwoWay.notes_for`); `view.js` `setNote` puts each in a `span.tw` and `dedupeNotes` (after every layout and fold) hides
   one an earlier panel on screen says (`.tw.dup`; a note left with nothing is `.empty`). A launchpad box shows a table
   alone: its note whole.
 - **One body height**: `--body-max` (`max(72vh, calc(100vh - 210px))`) for every `.panel .body` and the pages' own
   (Günlük İşlemler, Broker Chat, Realized Vol, Bugün); a chart's body is never capped (its "Tablo" view is, `.body.tbl`).
-- **The top bar**: one row from 1100 px (`flex-wrap: nowrap`; the title, the favourites and "Hesap" shrink); the number
+- **The page's tools in its tab bar** (28.11.2026, B3): on a page in tabs `view.js` puts the tools (`.page-tools`: the
+  search, "Yardımcı tablolar", "Elle değer", "Girdilerimi sıfırla", the overridden-formulas and stale-inputs chips, "?")
+  beside the tabs in one `div.tabline` - the sticky bar (the old `.viewtabs` keeps its buttons only, so a `.viewtabs
+  button` is a tab); `flex-wrap: wrap-reverse` puts the tools above the tabs when both do not fit. A page without tabs
+  keeps the tools on a row of their own. A menu entry's strip (`#page-tabs`) scrolls away when the page has a tab line
+  (`#content:has(.tabline) > .pagetabs`).
+- **Waiting for a first answer** (B7): `ui.js` `waiting(text?)` - "Hesaplanıyor…" with a turning mark (`.loading.waiting`);
+  the view pages, the launchpad's and the drawer's boxes (`boxes.js`, `pagebox.js`) use it, and the pages' own panels.
+- **The top bar**: one row from 1100 px (`flex-wrap: nowrap`; the favourites and "Hesap" shrink - the title never: B9,
+  28.11.2026; "Hesap" short, `hesap.js` `shortText`); the number
   format, the flashing and the theme are check items of the user's menu (`main.js`: ids `btn-lang`, `btn-flash`,
   `btn-theme` while it is open); below 1500 px the search is an icon (`.findbox`, widened on focus / Ctrl+K) and the
   valuation date's word goes (`#asof .lbl`). A row of chips on one line: `ui.js` `fitOneLine` ("+N"; the favourites,
@@ -594,7 +643,14 @@ put these in one place for every page; the pages' own JSON and modules use them.
 
 The top bar (`#top` in `tto/static/index.html`) is the same on every page; besides the page's title it carries popovers
 that do not belong to a page: "● N çevrimiçi" (`presence.js`), "Hesap" (`hesap.js`), the curve mark (`paintInterp` in
-`main.js`) and **Prop**.
+`main.js`), the personal badge (`mine.js`) and **Prop**.
+
+- **The personal badge** (28.11.2026, A6; `#mine-badge`): what makes this user's numbers differ from the desk's.
+  `/api/header` carries `hand` with every answer while there is one - an unchanged answer too; none said: none
+  (`Service._with_hand`: the user's inputs in memory whose declaration is "Elle değer", group `adhoc`, on a formula
+  cell; the books loaded for them) - and, inside the header kept by generation, `mine: {norm: true}` while their TLREF
+  normalization is on (`_norm_on`: `OIS_MAIN!M2`, the calculation's read - a change of the switch makes the header
+  again). The click lists `/api/my-inputs`' `hand` items.
 
 - **Prop** (`tto/prop.py`, `tto/static/js/prop.js`; the desk's decision in
   [desk-decisions.md](desk-decisions.md#prop-panel-19112026)): a position-size calculator and the prop risk of a Trades

@@ -1,6 +1,6 @@
 """The desk tools' layout (27.11.2026, the desk's "Hepsini yap" to the layout proposals; docs/desk-decisions.md,
-"Düzen: masa araçları, FX, menü, Ayarlar"): the pure parts of the pages read under Node - the menu's one-entry groups
-joining their neighbour (menu.js), Bugün's columns and the empty columns it drops (bugun.js), Günlük İşlemler's CPT × VADE
+"Düzen: masa araçları, FX, menü, Ayarlar"): the pure parts of the pages read under Node - the menu's groups in the
+server's order, Araçlar last and folded (menu.js; the reorganization of 28.11.2026), Bugün's columns and the empty columns it drops (bugun.js), Günlük İşlemler's CPT × VADE
 with the counterparties that hold a DV01 (blotter.js, also on the service's own table), Gün Sonu Matrisi's bond names and
 the one heat scale (history.js), the panels folded until opened (fx.js, history.js).  Each module is copied as an .mjs
 with its imports stubbed (none of these functions uses them).  What the pages do on screen is the browser test's
@@ -84,23 +84,27 @@ def _source(rel):
 
 
 # ------------------------------------------------------------------ the menu
-def test_one_entry_groups_join_their_neighbour_and_nothing_leaves_the_menu(node_run, service):
-    """DV01 Risk (a group of its own) closes TRY Faiz; USD · FOMC closes FX, the group then "FX · USD"; every page of the
-    nav is still in the menu once, in its group's order; a group of two keeps its own title."""
+def test_the_menu_keeps_the_servers_groups_araclar_last_and_nothing_leaves_it(node_run, service):
+    """The groups in the server's order (tto/navmenu.py, the desk's reorganization of 28.11.2026 - before it one-entry
+    groups joined their neighbour here: DV01 Risk is TRY Faiz's, USD · FOMC FX · USD's now on the server), Araçlar last
+    with the administrators' pages and folded until opened; every page of the nav is in the menu once - a page of an entry
+    with tabs as one of its tabs."""
     pages = service.nav()
-    (model,) = node_run(["menu", "menuModel", [pages, True]])
+    model, tools_folded, masa_folded = node_run(["menu", "menuModel", [pages, True]], ["menu", "groupFolded", ["Araçlar"]],
+                                                ["menu", "groupFolded", ["Masa"]])
     groups = [g["group"] for g in model]
-    assert groups[0] is None and "Risk" not in groups and "USD Faiz" not in groups
+    assert groups == [None, "Masa", "TRY Faiz", "Tahvil", "FX · USD", "Quant", "Araçlar"]
     by = {g["group"]: [e["id"] for e in g["entries"]] for g in model}
-    assert by["TRY Faiz"][-1] == "dv01" and by["FX · USD"][-1] == "usd" and by["FX · USD"][:2] == ["fx", "fxvol"]
+    assert by["TRY Faiz"][-1] == "dv01" and by["FX · USD"] == ["fx.spot", "usd"]
+    assert by["Araçlar"] == ["calc", "motor", "settings", "explorer", "users", "backup"]
     listed = [x for g in model for e in g["entries"] for x in ([t["id"] for t in e["tabs"]] if e.get("tabs") else [e["id"]])]
     navs = [p["id"] for p in pages]
     assert sorted(listed) == sorted(navs + ["launchpad", "explorer", "users", "backup"]) and len(listed) == len(set(listed))
-    # (a group of two entries is a group of its own)
-    two = pages + [{"id": "risk2", "title": "Risk 2", "group": "Risk"}]
-    (model2,) = node_run(["menu", "menuModel", [two, False]])
-    assert [e["id"] for g in model2 if g["group"] == "Risk" for e in g["entries"]] == ["dv01", "risk2"]
-    assert "FX · USD" in [g["group"] for g in model2]
+    assert all(e.get("hint") for g in model for e in g["entries"])                       # (B8: every entry says what it is)
+    assert tools_folded is True and masa_folded is False
+    # (a group a page of another version names keeps its place, before Araçlar)
+    (model2,) = node_run(["menu", "menuModel", [pages + [{"id": "yeni", "title": "Yeni", "group": "Yeni grup"}], False]])
+    assert [g["group"] for g in model2][-2:] == ["Yeni grup", "Araçlar"]
 
 
 # ------------------------------------------------------------------ Bugün

@@ -279,10 +279,13 @@ def test_a_bills_last_trade_is_read_as_a_price_or_a_yield():
     assert fy.bill_last(250.0, 99.0) == (None, "son işlem okunamadı: 250,000")          # neither a bill's price nor a yield
 
 
-def test_the_page_comes_right_after_kagit_fiyatlama_in_the_tahvil_menu(module_service):
+def test_the_page_is_a_tab_of_dibs_fiyatlama_in_the_tahvil_menu(module_service):
+    # (the menu's reorganization of 28.11.2026, tto/navmenu.py: "Sabah fiyat dosyası", a tab of DİBS Fiyatlama)
     nav = module_service.nav(module_service.login("Yükleme Menü")["user"])
-    tahvil = [p["id"] for p in nav if p["group"] == "Tahvil"]
-    assert tahvil[:3] == ["kagit-fiyat", "fiyat-yukleme", "kagitlar"]
+    entry = [(p["id"], p["tab"]) for p in nav if p.get("menu") == "tahvil.fiyatlama"]
+    assert entry == [("kagit-fiyat", "Adil fiyat · AL/SAT"), ("manuel", "Tek kâğıt"), ("fiyat-yukleme", "Sabah fiyat dosyası"),
+                     ("ihale", "İhale")]
+    assert {p["group"] for p in nav if p.get("menu") == "tahvil.fiyatlama"} == {"Tahvil"}
     page = next(p for p in nav if p["id"] == "fiyat-yukleme")
     assert page["title"] == "Kâğıt Fiyat Yükleme" and page["custom"]
     assert fy.menu([{"id": "usd", "title": "USD", "group": "USD"}]) == [{"id": "usd", "title": "USD", "group": "USD"}]

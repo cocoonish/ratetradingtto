@@ -384,8 +384,10 @@ def test_a_formula_that_may_not_stand_goes_its_value_stays_and_girdilerim_says_n
         caplog.clear()
         assert svc.load_scenario(u, "eski")["cells"] == 2
         assert svc.store.user_formulas(u) == {("tto", "MASA!J171"): "=1+1"}
-        assert [x for x in svc.my_inputs(u)["inputs"] if x["ref"] == "EK_FWD!F50"] == [
+        # (its fields of before; since 28.11.2026 the list says too when it was typed, where it is, what it is)
+        assert [{k: x[k] for k in ("book", "ref", "value", "label")} for x in svc.my_inputs(u)["inputs"] if x["ref"] == "EK_FWD!F50"] == [
             {"book": "tto", "ref": "EK_FWD!F50", "value": 3.0, "label": ""}]
+        assert all("formula" not in x for x in svc.my_inputs(u)["inputs"] if x["ref"] == "EK_FWD!F50")
         assert [r.getMessage() for r in caplog.records if "EK_FWD!F50" in r.getMessage()] == [
             "girdi formülü kaldırıldı (hücre artık bir girdi değil; değeri kaldı): formül eski tto!EK_FWD!F50 =1+2"]
         # the TRY list's copy in DİBS ASW takes none either (the list's save writes it too)

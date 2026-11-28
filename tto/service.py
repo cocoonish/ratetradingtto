@@ -1736,7 +1736,13 @@ class Service(object):
         return {v["id"] for v in self.views if v.get("admin")}
 
     def nav(self, user: Optional[str] = None) -> List[Dict[str, Any]]:
-        """The pages of the menu (and of the search box) - an administrators' page only for them."""
+        """The pages of the menu (and of the search box) - an administrators' page only for them - in the menu's order,
+        each naming its group, its entry and tab (tto/navmenu.py: the desk's reorganization of 28.11.2026) and its hint."""
+        from . import navmenu
+        return navmenu.arrange(self._nav_pages(user))
+
+    def _nav_pages(self, user: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Every page the user gets, as each module adds its own (``navmenu.arrange`` puts them in the menu's order)."""
         hidden = self._hidden_pages(user)
         pages = []
         for v in self.views:
@@ -2321,6 +2327,8 @@ class Service(object):
                         entry["title"] = own
                 if p.get("cols"):
                     _pick_columns(entry["data"], p["cols"])
+                if p.get("rows"):
+                    _pick_rows(entry["data"], p["rows"])      # (the twin of "cols": these rows, in this order - B15)
                 if p.get("header"):
                     _column_captions(entry["data"], p["header"])
                 if p.get("ppk") == "fra":
@@ -2552,7 +2560,7 @@ class Service(object):
                as_: Optional[str] = None) -> Dict[str, Any]:
         """Top strip: spot / TLREF / spot date ... read from MASA row 1-2 (labels) and its status row."""
         if self.et.here():
-            return self._header(user, locale)
+            return self._with_hand(self._header(user, locale), user)
         return self.header_future(user, locale, since, None, as_).result()
 
     def header_future(self, user: Optional[str], locale: Optional[str] = None, since: Optional[int] = None,
@@ -2564,13 +2572,13 @@ class Service(object):
         with self._render_lock:
             rec = self._renders.get(key)
             if rec is not None and self._fresh(rec, gen, None, key):
-                return _done(self._header_answer(rec, since, as_))
+                return _done(self._with_hand(self._header_answer(rec, since, as_), user))
             jk = (key, user, gen)
             job = self._inflight.get(jk)
             if job is None:
                 job = self.et.submit_at(EngineThread.HEADER, self._header_job, jk, key, user, locale)
                 self._inflight[jk] = job
-        return _then(job, lambda rec: self._header_answer(rec, since, as_))
+        return _then(job, lambda rec: self._with_hand(self._header_answer(rec, since, as_), user))
 
     def _header_job(self, jk, key, user, locale) -> Dict[str, Any]:
         try:
@@ -2630,7 +2638,44 @@ class Service(object):
         badge = self.interp.badge(user, calc)
         if badge is not None:
             out["interp"] = badge                   # (a user on PPK basamak: every page says so in the top bar)
+        if self._norm_on(calc):
+            # the user's TLREF normalization on (OIS · PPK): their numbers are not the desk's - the top bar's personal
+            # badge says so (the desk, 28.11.2026: A6); the values typed over formulas come with every answer ("hand")
+            out["mine"] = {"norm": True}
         return out
+
+    def _norm_on(self, calc: Any) -> bool:
+        """Whether TLREF's normalization is on in this calculation (OIS_MAIN!M2, its ON cell: the switch on, with a date
+        and a normal TLREF - tto/interp.py's ``norm_cell``)."""
+        cell = getattr(getattr(self, "interp", None), "norm_cell", None)
+        if cell is None or calc is None:
+            return False
+        try:
+            return calc.get(cell[0], *divmod(cell[1], COLS)) == 1.0
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _hand_count(self, user: Optional[str]) -> int:
+        """How many values this user typed over a workbook formula ("Elle değer") in the books loaded for them - read from
+        the inputs in memory (no database read: the header is asked on every refresh)."""
+        if not user:
+            return 0
+        n = 0
+        for (who, bid), ov in list(self._overlays.items()):
+            book = self.books.get(bid)
+            if who != user or book is None:
+                continue
+            for cell in list(ov):
+                d = book.inputs.get(cell)
+                if d is not None and d.group == "adhoc" and cell[1] in book.model.sheets[cell[0]].fml:
+                    n += 1
+        return n
+
+    def _with_hand(self, ans: Dict[str, Any], user: Optional[str]) -> Dict[str, Any]:
+        """A header's answer with the user's count of values typed over formulas (``hand``, while there is one - also
+        when the strip is unchanged: an answer without it says there is none)."""
+        n = self._hand_count(user)
+        return dict(ans, hand=n) if n else ans
 
     def manual_spot(self, user: Optional[str]) -> Dict[str, Any]:
         """The manual USDTRY spot: what is typed (``None``: nothing, Bloomberg is used) and what the sheet says
@@ -3445,15 +3490,26 @@ class Service(object):
         return res
 
     def my_inputs(self, user: str) -> Dict[str, Any]:
-        """The user's personal inputs: ``{"inputs": [{"book", "ref", "value", "label", "formula"?}]}`` - an input typed as
-        a formula with its text and the value it has now."""
+        """The user's personal inputs: ``{"inputs": [{"book", "ref", "value", "label", "formula"?, "store"?, "at",
+        "pages", "market"?, "old"?, "hand"?}], "desk": [...], "today"}`` - an input typed as a formula with its text and
+        the value it has now; ``at`` when it was typed (the store's time); ``pages`` the pages (and tables) that show it;
+        ``market`` what it is when it is a market level (tto/myinputs.py) and ``old`` when such a level was typed before
+        today (the desk, 28.11.2026: "Dünden kalan yazılmış değerler işaretli"); ``hand`` a value typed over a formula
+        ("Elle değer").  ``desk``: the desk's own market levels (shared inputs - the manual spot) the same way, with who
+        typed them (``by``)."""
+        from . import myinputs as mi
         user = self.require_user(user)
         out = []
         formulas = self.store.user_formulas(user)
+        times = self.store.input_times(user)
+        today = _dt.date.today().isoformat()
+        index = self._page_index()
+        skip = self._hidden_pages(user)
         for (bid, ref), val in sorted(self.store.user_inputs(user).items()):
             book = self.books.get(bid)
             label = ""
-            item: Dict[str, Any] = {"book": bid, "ref": ref, "value": val, "label": label}
+            at = (times.get((bid, ref)) or ("", None))[0]
+            item: Dict[str, Any] = {"book": bid, "ref": ref, "value": val, "label": label, "at": at}
             if book is not None:
                 try:
                     cell = book.cell(ref)
@@ -3470,10 +3526,55 @@ class Service(object):
                         now = self._overlays.get((user, bid), {}).get(cell, _NOT_SET)
                         if now is not _NOT_SET:
                             item["value"] = _to_json(now)
+                    si, rc = cell
+                    if d is not None and d.group == "adhoc" and rc in book.model.sheets[si].fml:
+                        item["hand"] = True             # ("Elle değer": typed over the workbook's formula)
+                    self._mark_market(mi, book, item, d, cell, today)
                 except (KeyError, ValueError):
                     pass
+            item["pages"] = index.pages(bid, item["ref"], skip)
             out.append(item)
-        return {"inputs": out}
+        desk = []
+        shared = self.store.shared_inputs()
+        for (bid, ref), (at, by) in sorted(self.store.input_times(None).items()):
+            book = self.books.get(bid)
+            val = shared.get((bid, ref))
+            if book is None or val is None or mi.market_label(bid, ref) is None:
+                continue
+            try:
+                cell = book.cell(ref)
+            except (KeyError, ValueError):
+                continue
+            d = book.inputs.get(cell)
+            if d is None or d.scope != "shared":
+                continue
+            item = {"book": bid, "ref": ref, "value": val, "label": d.label, "at": at or "", "by": by, "shared": True}
+            self._mark_market(mi, book, item, d, cell, today)
+            if item.get("market"):
+                item["pages"] = index.pages(bid, ref, skip)
+                desk.append(item)
+        return {"inputs": out, "desk": desk, "today": today}
+
+    def _mark_market(self, mi: Any, book: Book, item: Dict[str, Any], d: Any, cell: Tuple[int, int], today: str) -> None:
+        """``market`` (what it is) and ``old`` (typed before ``today``) on a typed value that is a market level - a
+        number, not a setting (tto/myinputs.py); one typed as a formula reads its cells live: never old."""
+        label = mi.market_label(book.id, item["ref"])
+        if label is None:
+            return
+        si, rc = cell
+        fmt = self.renderers[book.id].format_of(si, rc) if book.id in self.renderers else None
+        if not mi.is_level(item["value"], d.kind if d is not None else None, fmt):
+            return
+        item["market"] = label
+        item["old"] = bool(item.get("at")) and item["at"][:10] < today and not item.get("formula")
+
+    def _page_index(self) -> Any:
+        """Which pages show a cell (tto/myinputs.py) - made once: the views do not change while the dashboard runs."""
+        idx = getattr(self, "_pages_of_cells", None)
+        if idx is None:
+            from .myinputs import PageIndex
+            idx = self._pages_of_cells = PageIndex(self.views)
+        return idx
 
     # ================================================================== scenarios
     def scenarios(self, user: str) -> List[Dict[str, Any]]:
@@ -3653,13 +3754,40 @@ class Service(object):
 
     def layout(self, user: Optional[str]) -> Dict[str, Any]:
         """``{"launchpads": [{"name", "items": [...]}, ...], "drawer": [...], "favs": [...], "landing": "",
-        "hidden_pages": [...], "compact": false, "rev": n}``."""
-        return lay.stored(self.store.get("layout." + self.require_user(user)))
+        "hidden_pages": [...], "compact": false, "rev": n}`` - and, while the desk has default favourites (an
+        administrator sets them), ``desk_favs``: a user who never chose favourites of their own gets those as ``favs``
+        (``favs_desk``: true)."""
+        return self._desk_favs(lay.stored(self.store.get("layout." + self.require_user(user))))
+
+    def _desk_favs(self, cur: Dict[str, Any]) -> Dict[str, Any]:
+        """A layout as the browser gets it: the desk's default favourites with it, in place of the user's own while they
+        have none (the desk, 28.11.2026: "yöneticinin varsayılan favorileri"); whether the user's are their own is kept,
+        not sent."""
+        out = {k: v for k, v in cur.items() if k != "favs_own"}
+        desk = lay.desk_favs(self.store.get(lay.DESK_KEY))
+        if desk:
+            out["desk_favs"] = desk
+            if not cur.get("favs_own"):
+                out["favs"] = desk
+                out["favs_desk"] = True
+        return out
 
     def set_layout(self, user: Optional[str], data: Any) -> Dict[str, Any]:
         """Replace the parts of this user's layout that ``data`` sends (``launchpads``, ``drawer``, ``favs``,
-        ``landing``, ``hidden_pages``, ``compact``); the others stay.  Returns the whole layout as kept."""
+        ``landing``, ``hidden_pages``, ``compact``); the others stay.  Returns the whole layout as kept.
+        ``desk_favs`` (administrators only): the desk's default favourites - the top bar of everybody who has no
+        favourites of their own."""
         key = self.require_user(user)
+        if isinstance(data, dict) and "desk_favs" in data:
+            self.require_admin(user)
+            try:
+                favs = lay.favs(data["desk_favs"])
+            except lay.LayoutError as exc:
+                raise ServiceError(str(exc))
+            self.store.put(lay.DESK_KEY, {"favs": favs, "by": key, "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+            data = {k: v for k, v in data.items() if k != "desk_favs"}
+            if not data:
+                return self.layout(user)
         with self._layout_lock:
             cur = lay.stored(self.store.get("layout." + key))
             try:
@@ -3667,7 +3795,7 @@ class Service(object):
             except lay.LayoutError as exc:
                 raise ServiceError(str(exc))
             self._put_layout(key, new)
-        return new
+        return self._desk_favs(new)
 
     def _put_layout(self, key: str, value: Dict[str, Any]) -> None:
         if len(json.dumps(value, ensure_ascii=False)) > self.MAX_LAYOUT_BYTES:
@@ -3706,7 +3834,7 @@ class Service(object):
             except lay.LayoutError as exc:
                 raise ServiceError(str(exc))
             self._put_layout(key, new)
-        return {"name": lp["name"], "layout": new}
+        return {"name": lp["name"], "layout": self._desk_favs(new)}
 
     # ================================================================== RET curve
     #: where the RET table's tenor labels are looked for (Forward!V): a tenor is found by its label, not by its row
@@ -10191,6 +10319,43 @@ def _pick_columns(data: Dict[str, Any], cols: Sequence[str]) -> None:
         data["fz"] = fz
 
 
+def _pick_rows(data: Dict[str, Any], rows: Sequence[int]) -> None:
+    """A table's rows in the order a page wants them (``[19, 25, 26]`` by the sheet's row number; one the table does not
+    have - left out as empty - is skipped, one not named is not shown): the twin of :func:`_pick_columns` (the desk,
+    28.11.2026: B15 - VİOP's four contract tables repeated five rows each).  Every cell keeps its row number, so an input
+    is still typed into its own cell.  A cell merged down over rows keeps the rows of it that still follow it, in order;
+    a cell it covered that it no longer reaches is a cell of its own again (empty).  ``ar``: every row the range has, so
+    that a block pasted lands on the rows on screen (grid.js ``ownLayout``)."""
+    have = data.get("r") or []
+    src = data.get("rows") or []
+    order = []
+    for r in rows:
+        if r in have and have.index(r) not in order:
+            order.append(have.index(r))
+    if not order or order == list(range(len(have))):
+        return
+    at = {i: k for k, i in enumerate(order)}            # a row of the table -> its place in the order asked for
+    for i, row in enumerate(src):
+        for j, cell in enumerate(row):
+            rs = cell.get("rs", 1) if isinstance(cell, dict) else 1
+            if rs <= 1 or cell.get("sk"):
+                continue
+            n = 1                                         # the rows of the span that still follow the cell, itself first
+            while i in at and n < rs and at.get(i + n) == at[i] + n:
+                n += 1
+            if n > 1:
+                cell["rs"] = n
+            else:
+                cell.pop("rs", None)
+            for ii in range(i + n, min(i + rs, len(src))):
+                for jj in range(j, min(j + cell.get("cs", 1), len(src[ii]))):
+                    if isinstance(src[ii][jj], dict):
+                        src[ii][jj].pop("sk", None)
+    data["ar"] = data.get("ar") or list(have)
+    data["rows"] = [src[i] for i in order]
+    data["r"] = [have[i] for i in order]
+
+
 _ASCII_TR = str.maketrans("çğıöşüÇĞİÖŞÜâîû", "cgiosuCGIOSUaiu")
 
 
@@ -10428,7 +10593,7 @@ def _pick_part(data: Dict[str, Any], rows: Sequence[Any], cols: Sequence[str]) -
     if nums:
         out["r"] = [nums[i] for i in keep_r if i < len(nums)]
         if len(keep_r) < len(src):
-            out["ar"] = nums
+            out["ar"] = data.get("ar") or nums           # (a table whose page shows some of its rows: all of the range's)
     if letters:
         out["c"] = [letters[j] for j in keep_c if j < len(letters)]
         if len(keep_c) < width:

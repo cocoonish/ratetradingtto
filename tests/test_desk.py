@@ -608,7 +608,8 @@ def test_the_corner_tells_the_pages_without_a_new_generation(module_service):
         assert not svc.desk.is_admin(user) and not svc.desk.is_admin(None)
     finally:
         svc.remove_listener(heard.append)
-    assert [p["id"] for p in svc.nav()][-2:] == ["social", "agenda"]
+    # (one entry of the Masa group since 28.11.2026: "Masa iletişim", Sosyal and Ajanda its tabs - tto/navmenu.py)
+    assert [p["id"] for p in svc.nav() if p.get("menu") == "masa.iletisim"] == ["social", "agenda"]
     assert {p["group"] for p in svc.nav() if p["id"] in ("social", "agenda")} == {"Masa"}
 
 
