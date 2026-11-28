@@ -10,6 +10,7 @@ import { Grid, copyGrid, findCell, reviveEditor, trackWrite } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
 import { bookBulkForward } from './blotterentry.js';
+import { bookHedge } from '../hedgeislem.js';
 import { quoteButton, quoteRowItems, quoteRows } from '../kotasyon.js';
 import { addButton, loadLayout } from '../layout.js';
 
@@ -721,6 +722,16 @@ export class ViewPage {
           + 'fiyat satırın gösterdiği): önizlemeden sonra "N satırı kaydet". Kaydedilen satırların Tutar\'ı silinir.' }, 'İşleme al');
       b.dataset.action = 'toplu-islem';
       b.addEventListener('click', () => { bookBulkForward(this.ctx); });
+      head.appendChild(b);
+    }
+    if (p.action === 'hedge-islem' && p.data && !p.copy) {
+      // DV01 Risk's "Hedge'i işle" (K5, 28.11.2026: A3): the hedge recommender's rows into Günlük İşlemler's
+      // "Excel'den yapıştır" on OIS - its preview, then "N satırı kaydet" (hedgeislem.js)
+      const b = h('button', { class: 'btn sm', type: 'button', title: 'Önerinin her satırını (aktif, yönü ve yuvarlanmış '
+        + 'nominali olan) Günlük İşlemler\'in "Excel\'den yapıştır" penceresinde OIS olarak açar: vadeli OIS vadesiyle, FRA iki '
+        + 'tarih arası OIS olarak. Önizlemeden sonra "N satırı kaydet".' }, 'Hedge\'i işle');
+      b.dataset.action = 'hedge-islem';
+      b.addEventListener('click', () => { bookHedge(this.ctx); });
       head.appendChild(b);
     }
     if (p.type === 'chart' && p.pick && !p.copy && this.ctx.setInputs) {

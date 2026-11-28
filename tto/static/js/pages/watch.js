@@ -463,7 +463,8 @@ export class WatchPage {
       box.appendChild(fold);
     } else {
       box.appendChild(h('div', { class: 'note' }, 'Piyasa saatleri ' + (cfg.market_open || '') + '–' + (cfg.market_close || '') + ' (masanın iş günleri) · '
-        + cfg.tick_stale + ' sn tick gelmezse veri bayat · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı')
+        + cfg.tick_stale + ' sn tick gelmezse veri bayat · ' + (cfg.quote_old ? cfg.quote_old + ' dk değişmeyen kota soluk' : 'kota soluklaşmaz')
+        + ' · veri akışı alarmı ' + (cfg.feed_alarm ? cfg.feed_minutes + ' dk' : 'kapalı')
         + ' · TLREF ' + (cfg.tlref_alarm ? cfg.tlref_due : 'kapalı') + (cfg.trades_close ? ' · Trades kapanış kaydı ' + cfg.trades_close : '')
         + (cfg.bbg_open ? ' · Bloomberg sorgu saatleri ' + cfg.bbg_open + '–' + cfg.bbg_close : '')
         + ' · ayarları yöneticiler değiştirir.'));
@@ -489,6 +490,10 @@ export class WatchPage {
     const form = h('div', { class: 'desk-settings', id: 'desk-settings' },
       f('Piyasa açılış', time('market_open')), f('Kapanış', time('market_close')),
       f('Trades kapanış kaydı', time('trades_close')), f('Tick gelmezse bayat', n('tick_stale', 'sn')),
+      // a quote's age (marketdata/age.py): a price unchanged this many minutes of the market fades on the pages; 0: never
+      f('Kota değişmezse soluk', h('div', { class: 'lvl' }, h('input', { class: 'inp num', id: 'desk-set-quote_old', inputmode: 'numeric',
+        value: cfg.quote_old === undefined ? '' : String(cfg.quote_old), title: 'Piyasa saatinde bu kadar dakika değişmeyen fiyat soluk görünür; 0: hiç' }),
+      h('span', { class: 'unit muted' }, 'dk'))),
       // when Bloomberg may be asked again (cache first): outside these hours, at weekends and on holidays no refresh
       f('Bloomberg sorgu başlangıcı', time('bbg_open')), f('bitişi', time('bbg_close')),
       h('label', { class: 'check' }, on('feed_alarm'), 'Veri akışı alarmı'), f('akmazsa', n('feed_minutes', 'dk')),

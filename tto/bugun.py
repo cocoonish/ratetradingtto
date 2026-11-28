@@ -651,6 +651,11 @@ class Bugun(object):
         out["checks"] = [c for c in chips if c["code"] != 0]
         out["ok"] = [c["name"] for c in chips if c["code"] == 0]
         out["overall"] = next((c for c in got if c["col"] == "B"), None)
+        q = self.svc.ops.quotes()                # K2's quote age (C4): old prices on the screens, live in market hours
+        if q.get("old"):
+            out["checks"].append({"col": "", "name": "Kota yaşı", "text": "%d eski kota" % q["old"], "code": 2,
+                                  "state": "hata", "rule": "Piyasa saatinde %d dk değişmeyen fiyat eski sayılır." % q["minutes"],
+                                  "href": "", "where": ""})
         return out
 
     def _meeting(self, eng: Dict[str, Any], now: _dt.datetime) -> Dict[str, Any]:

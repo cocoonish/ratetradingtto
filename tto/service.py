@@ -6330,6 +6330,21 @@ class Service(object):
                 cell["tip"] = c["rule"] + (" Durum: %s." % c["state"]) + ("\nTıklayın → %s" % c["where"] if c["where"] else "")
                 if c["col"] != "B" and c["code"] == 0:
                     ok.append(c["name"])
+        # K2's quote age (C4, 28.11.2026): the old prices on the screens as one more chip - red when any (Ops.quotes);
+        # only with prices that have a time (live: none in replay), in market hours and with the setting above 0
+        q = self.ops.quotes()
+        if q.get("minutes") and q.get("market") and q.get("of"):
+            old = int(q.get("old") or 0)
+            tip = ("Piyasa saatinde %d dk değişmeyen fiyat eski sayılır (Ayarlar › Alarmlar)." % q["minutes"]
+                   + (" En eskiler: " + ", ".join("%s %s (%d dk)" % (o["ticker"], o["at"], o["min"]) for o in q["oldest"])
+                      if old else ""))
+            cols = list(cols) + ["Kota yaşı"]
+            data["added"] = int(data.get("added") or 0) + 1
+            for k, row in enumerate(data["rows"]):
+                row.append({"t": "%d eski kota" % old if old else "Kotalar taze", "k": "s", "tip": tip,
+                            "cls": "kchip " + ("k-hata" if old else "k-tamam")} if k == 0 else {"t": "", "k": ""})
+            if not old:
+                ok.append("Kota yaşı")
         data["c"] = list(cols) + ["Tamam"]
         data["added"] = int(data.get("added") or 0) + 1
         for k, row in enumerate(data["rows"]):
