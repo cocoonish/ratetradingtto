@@ -61,15 +61,14 @@ def test_dibs_rv_is_one_menu_entry_with_three_tabs(service):
     entry = [p for p in tahvil if p.get("menu") == dg.MENU_ID]
     assert [(p["id"], p["tab"], p["menu_title"]) for p in entry] == [("dibs-genel", "Genel", "DİBS RV"), ("dibs", "RV hesap tablosu", "DİBS RV"),
                                                                     ("asw", "ASW hesap tablosu", "DİBS RV")]
-    # one entry, where the two pages stood (between DİBS Trading and Manuel Tahvil); the pages keep their titles and addresses
-    # (Kâğıt Fiyatlama, kagitfiyat.py, is the menu's first entry since 19.11.2026; Kâğıt Fiyat Yükleme, fiyatyukleme.py, the
-    # second since 20.11.2026)
+    # one entry, the Tahvil group's last (the menu's reorganization of 28.11.2026, tto/navmenu.py: DİBS Piyasa · DİBS
+    # Fiyatlama · DİBS RV); the pages keep their titles and addresses
     ids = [p["id"] for p in tahvil]
-    assert ids == ["kagit-fiyat", "fiyat-yukleme", "kagitlar", "dibslive", "dibs-genel", "dibs", "asw", "manuel", "ihale", "bulk"]
+    assert ids == ["dibslive", "kagitlar", "bulk", "kagit-fiyat", "manuel", "fiyat-yukleme", "ihale", "dibs-genel", "dibs", "asw"]
     by = {p["id"]: p for p in tahvil}
     assert by["dibs"]["title"] == "DİBS RV" and by["asw"]["title"] == "DİBS ASW" and by["dibs-genel"]["title"] == "DİBS RV · Genel"
     assert by["dibs-genel"]["custom"] and by["dibs"]["sheet"] == "DİBS RV" and by["asw"]["book"] == "asw" and by["dibs"]["tables"]
-    assert not any(p.get("menu") for p in nav if p["id"] not in ("dibs-genel", "dibs", "asw") and p["group"] != "Quant")
+    assert [p["id"] for p in nav if p.get("menu") == dg.MENU_ID] == ["dibs-genel", "dibs", "asw"]
     # the old pages open as before; a launchpad box of them, a cell of them, the card's link to them
     assert any(p["id"] == "B3" for p in service.view(u, "dibs")["panels"]) and any(p["id"] == "tbl" for p in service.view(u, "asw")["panels"])
     got = service.panels(u, [{"view": "dibs", "panel": "B3", "key": "a"}, {"view": "asw", "panel": "chart0", "key": "b"}])["panels"]

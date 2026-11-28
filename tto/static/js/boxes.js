@@ -3,7 +3,7 @@
 // date in one request (/api/panels), whatever pages its tables come from - a browser has six connections to the
 // dashboard, and a launchpad may show tables of ten pages.
 import { api } from './api.js';
-import { h, clear, menu, modal, promptDialog, toast } from './ui.js';
+import { h, clear, menu, modal, promptDialog, toast, waiting } from './ui.js';
 import { Grid, copyGrid, findCell } from './grid.js';
 import { Chart } from './chart.js';
 import { bondCardLinks, bondFlags } from './bonds.js';
@@ -123,7 +123,7 @@ export class PanelBox {
     head.appendChild(this.titleEl);
     head.appendChild(this.src);
     head.appendChild(this.tools);
-    this.body = h('div', { class: 'body' }, h('div', { class: 'loading' }, 'Yükleniyor…'));
+    this.body = h('div', { class: 'body' }, waiting());       // (its first answer on its way)
     this.note = h('div', { class: 'note hidden' });
     this.el.appendChild(head);
     this.el.appendChild(this.body);

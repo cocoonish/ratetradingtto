@@ -13,7 +13,7 @@ const listeners = new Set();
 const chan = typeof window.BroadcastChannel === 'function' ? new BroadcastChannel('tto-layout') : null;
 let pending = 0;                  // saves on their way: an answer is put in place only when it is the last one
 
-const EMPTY = () => ({ launchpads: [], drawer: [], favs: [], landing: '', hidden_pages: [], compact: false, rev: 0 });
+const EMPTY = () => ({ launchpads: [], drawer: [], favs: [], landing: '', hidden_pages: [], compact: false, rev: 0, desk_favs: [] });
 
 function emit() {
   for (const fn of listeners) {
@@ -205,6 +205,23 @@ export function favs() {
 export function toggleFav(id) {
   const now = favs();
   return saveLayout({ favs: now.includes(id) ? now.filter((x) => x !== id) : now.concat([id]) });
+}
+
+/** The desk's default favourites (an administrator sets them; the desk, 28.11.2026): the top bar of everybody who has
+ *  none of their own - until they add or take out one (★ / ☆), their list from then on. */
+export function deskFavs() {
+  return (layout.data && layout.data.desk_favs) || [];
+}
+
+/** Whether the favourites in the top bar are the desk's defaults (this user never chose their own). */
+export function favsAreDesk() {
+  return !!(layout.data && layout.data.favs_desk);
+}
+
+/** An administrator sets the desk's default favourites (``ids``; [] for none); the layout read again. */
+export async function setDeskFavs(ids) {
+  await api.post('/api/layout', { desk_favs: ids });
+  return loadLayout();
 }
 
 export function landing() {

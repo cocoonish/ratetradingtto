@@ -6,7 +6,7 @@
 // with the generation.  This is the frame (a table box's: ⠿, the title, where it comes from, ⋯, ▾ - boxes.js); the kinds and
 // what each draws are in pageboxes.js.  On its own page a box's panel has a table's controls (``boxTools``).
 import { api } from './api.js';
-import { h, clear, menu, promptDialog, toast } from './ui.js';
+import { h, clear, menu, promptDialog, toast, waiting } from './ui.js';
 import { Grid, copyGrid } from './grid.js';
 import { hub, changed, makeBox } from './boxes.js';
 import { WIDTHS, DEFAULT_W, addButton } from './layout.js';
@@ -84,7 +84,7 @@ export class OwnBox {
       head.appendChild(this.handle);
     }
     head.append(this.titleEl, this.src, this.tools);
-    this.body = h('div', { class: 'body' }, h('div', { class: 'loading' }, 'Yükleniyor…'));
+    this.body = h('div', { class: 'body' }, waiting());       // (its first answer on its way)
     this.note = h('div', { class: 'note hidden' });
     this.el.append(head, this.body, this.note);
     this.copyBtn = h('button', { class: 'iconbtn hidden', type: 'button', title: 'Tabloyu kopyala (Excel\'e yapıştırılabilir)' }, 'Kopyala');

@@ -676,6 +676,15 @@ class Store(object):
                            (user, book))
         return {(r["book"], r["cell"]): r["formula"] for r in rows}
 
+    def input_times(self, user: Optional[str] = None) -> Dict[Tuple[str, str], Tuple[str, Optional[str]]]:
+        """When each input was typed last: (book, cell) -> (``updated_at``, who) - a user's personal inputs, or with
+        ``user`` None the desk's (shared) ones, who typed each (the shell's "Girdilerim" and its "dünden" marks)."""
+        if user is None:
+            rows = self._q("SELECT book, cell, updated_at, updated_by FROM shared_inputs")
+            return {(r["book"], r["cell"]): (r["updated_at"], r["updated_by"]) for r in rows}
+        rows = self._q("SELECT book, cell, updated_at FROM user_inputs WHERE user=?", (user,))
+        return {(r["book"], r["cell"]): (r["updated_at"], None) for r in rows}
+
     def formula_users(self) -> List[str]:
         """The users who keep an input typed as a formula."""
         return [r["user"] for r in self._q("SELECT DISTINCT user FROM user_inputs WHERE formula IS NOT NULL")]

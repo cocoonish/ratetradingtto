@@ -43,10 +43,11 @@ def business_before(svc, day):
 
 
 # ---------------------------------------------------------------------------------------------- the page and "nothing"
-def test_the_page_is_in_the_masa_group_right_under_masa(svc):
+def test_the_page_is_first_in_the_masa_group(svc):
+    # (the menu's reorganization of 28.11.2026, tto/navmenu.py: Bugün · Masa · İşlemler · Piyasa hareketi · Masa iletişim)
     pages = svc.nav()
     masa = [p["id"] for p in pages if p.get("group") == "Masa"]
-    assert masa[:2] == ["masa", "bugun"]
+    assert masa[:2] == ["bugun", "masa"]
     page = next(p for p in pages if p["id"] == "bugun")
     assert (page["title"], page["custom"], page["book"]) == ("Bugün", True, None)
 

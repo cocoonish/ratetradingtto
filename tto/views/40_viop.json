@@ -402,6 +402,7 @@
    "title": "VIOP ASK",
    "range": "K19:X29",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
+   "rows": [19, 25, 26, 27, 28, 29],
    "hidden": false,
    "note": "ON karşılık (Excel'deki adı TRY Repo): TRY satırındaki ima faizin (kontratın ask fiyatından, 360 basit, VKGS gün: vade − spot valörü K3) günlük bileşik karşılığı, 360·((1 + TRY·VKGS/360)^(1/VKGS) − 1) - Forward hesaplayıcılarındaki ve altın hesaplayıcısındaki ON karşılığın formülü. Masa → VİOP özetinde ON ask."
   },
@@ -439,6 +440,7 @@
    "title": "OIS",
    "range": "K71:X82",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
+   "rows": [71, 77, 78, 79, 80, 81, 82],
    "hidden": false
   },
   {
@@ -447,6 +449,7 @@
    "title": "ICAP",
    "range": "K84:X95",
    "cols": ["L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
+   "rows": [84, 90, 91, 92, 93, 94, 95],
    "hidden": false
   },
   {
@@ -783,6 +786,7 @@
    "type": "table",
    "title": "VIOP XAUTRY BID",
    "range": "K45:O58",
+   "cols": ["L", "M", "N", "O"],
    "hidden": false
   },
   {
@@ -790,6 +794,7 @@
    "type": "table",
    "title": "VIOP XAUTRY ASK",
    "range": "Q45:U58",
+   "cols": ["R", "S", "T", "U"],
    "hidden": false
   },
   {
@@ -797,6 +802,7 @@
    "type": "table",
    "title": "VIOP XAUUSD",
    "range": "K60:O68",
+   "cols": ["L", "M", "N", "O"],
    "hidden": false
   },
   {
@@ -978,6 +984,7 @@
   {
    "id": "main",
    "title": "Kontratlar",
+   "note": "Dört kontrat tablosunun ortak satırları - 1st / 2nd Date, VKGS, Spot, USD - VIOP BID'de bir kez; VIOP ASK, OIS ve ICAP yalnız kendi satırlarını gösterir (sütunlar aynı kontratlar).",
    "panels": [
     "B1",
     "B32",

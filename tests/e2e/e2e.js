@@ -1062,8 +1062,10 @@ async function clipAfter(page, action) {
     // runs (the limit itself is checked further down)
     await api(page, 'ayşe yilmaz', 'POST', '/api/broker/settings', { stale_minutes: 1440 });
     await open(page, 'broker');
-    check('Broker Chat is a page of the desk, next to the blotter',
-      await page.evaluate(() => { const a = [...document.querySelectorAll('#nav .nav-item')].map((x) => x.dataset.page); return a.indexOf('broker') === a.indexOf('blotter') + 1; })
+    check('Broker Chat is a page of the desk: a tab of İşlemler with the blotter (the menu of 28.11.2026)',
+      await page.evaluate(() => { const a = document.querySelector('#nav .nav-item[data-page="masa.islemler"]');
+        return !!a && a.dataset.tabs === 'blotter trades broker' && a.classList.contains('active')
+          && [...document.querySelectorAll('#page-tabs button')].map((b) => b.dataset.page).join() === 'blotter,trades,broker'; })
       && /Henüz kota yok/.test(await page.textContent('#broker-board-panel')) && await page.isDisabled('#broker-save'));
     const CHAT = ['10:23:58 3y5y ois /-75 offer', '10:29:57 1y5y ois -64/-60', '12:11:55 9x12m ois fra 33.80/34.10', '12:15:38 18m ois 35.03/35.23',
       '12:18:04 2y3y4y ois 12/ bid', 'MIKE REES', '18m ois 10/14', '13:33:59', '18m ois taken at 14', '13:41:09', 'ref 18m ois offer', '13:55:37',
@@ -1256,7 +1258,7 @@ async function clipAfter(page, action) {
     await page.waitForSelector('#nav-chat-missing', { timeout: 30000 });
     check('a trade of the desk in the chat that is not in the blotter: "1 işlem girilmedi" on Broker Chat in the menu',
       deskLine.json.saved === 1 && (await page.textContent('#nav-chat-missing')).trim() === '1 işlem girilmedi'
-      && await page.evaluate(() => !!document.querySelector('#nav .nav-item[data-page="broker"] #nav-chat-missing')), await page.textContent('#nav-chat-missing'));
+      && await page.evaluate(() => !!document.querySelector('#nav .nav-item[data-tabs~="broker"] #nav-chat-missing')), await page.textContent('#nav-chat-missing'));
     await page.click('#nav-chat-missing');
     await page.waitForSelector('#chat-recon-table');
     await shot(page, '04c-chat-recon');
@@ -1783,7 +1785,8 @@ async function clipAfter(page, action) {
     const gone = await page.evaluate(async () => {
       const pic = await fetch('/api/image?book=tto&sheet=' + encodeURIComponent('Ivır Zıvır') + '&i=0');
       const sheets = (await (await fetch('/api/sheets?book=tto')).json()).sheets.map((x) => x.name);
-      return { nav: [...document.querySelectorAll('#nav .nav-item')].map((a) => a.dataset.page), pic: pic.status, sheets };
+      return { nav: [...document.querySelectorAll('#nav .nav-item')].flatMap((a) => (a.dataset.tabs ? a.dataset.tabs.split(' ') : [a.dataset.page])),
+        pic: pic.status, sheets };
     });
     check('the four sheets the desk dropped are gone: no page, not in the sheet explorer',
       !['ivir', 'mobil', 'ypdibs', 'iyix'].some((p) => gone.nav.includes(p)) && gone.pic === 404
@@ -2420,15 +2423,18 @@ async function clipAfter(page, action) {
     await viopOnGrid('B5');
     await viopOnGrid('B7');
     const viopOn = await page.evaluate(() => {
-      const side = (id, rateRow, daysRow, onRow) => {
+      const side = (id, rateRow, daysRow, onRow, daysFrom) => {
         const d = window.tto.state.page.items.get(id).grid.data;
-        const at = (r, c) => (d.rows[d.r.indexOf(r)] || [])[d.c.indexOf(c)] || {};
+        const dd = window.tto.state.page.items.get(daysFrom || id).grid.data;
+        const at = (r, c, x = d) => (x.rows[x.r.indexOf(r)] || [])[x.c.indexOf(c)] || {};
         const cols = d.c.filter((c) => c.length === 1 && c >= 'M');                          // M:X, the twelve contracts
         return { label: (at(onRow, 'L').t || '').trim(), note: ((document.querySelector('#content .panel[data-panel="' + id + '"] .note') || {}).textContent || ''),
-          cells: cols.map((c) => ({ c, rate: at(rateRow, c).v, days: at(daysRow, c).v, on: at(onRow, c).v,
+          cells: cols.map((c) => ({ c, rate: at(rateRow, c).v, days: at(daysRow, c, dd).v, on: at(onRow, c).v,
             rt: (at(rateRow, c).t || '').trim(), t: (at(onRow, c).t || '').trim() })) };
       };
-      return { bid: side('B5', 13, 10, 17), ask: side('B7', 25, 22, 29) };
+      // (VIOP ASK shows its own rows since 28.11.2026 - the rows the four tables share once, in VIOP BID: its VKGS days, the
+      // same, are VIOP BID's row 10)
+      return { bid: side('B5', 13, 10, 17), ask: side('B7', 25, 10, 29, 'B5') };
     });
     const viopOnOf = (rate, days) => 360 * (Math.pow(1 + rate * days / 360, 1 / days) - 1);    // simple ACT/360 -> compounded daily
     const viopOnSide = (s) => s.label === 'ON karşılık' && s.cells.length === 12 && s.cells.every((x) => typeof x.on === 'number'
@@ -3047,8 +3053,8 @@ async function clipAfter(page, action) {
       const b = document.getElementById('hesap-ind');
       return { hidden: b.classList.contains('hidden'), text: (document.getElementById('hesap-text') || {}).textContent, tip: b.title };
     });
-    check('"Hesap" in the top bar while something runs: each one\'s count and the time left ("Quant 14/26 · ML 240/480 · geri test 12/25 · ~3 dk")',
-      !ind.hidden && ind.text === planted.text && ind.tip.startsWith('Quant tam hesap: 14 / 26 adım · şu an Makine öğrenmesi · 10:42:05\'ten beri · ~3 dk\n'), ind);
+    check('"Hesap" in the top bar while something runs, short (28.11.2026): the first one\'s count, how many more, the time left ("Quant 14/26 +2 · ~3 dk"), each in the tooltip',
+      !ind.hidden && ind.text === 'Quant 14/26 +2 · ~3 dk' && ind.tip.startsWith('Quant tam hesap: 14 / 26 adım · şu an Makine öğrenmesi · 10:42:05\'ten beri · ~3 dk\n'), ind);
     await page.click('#hesap-ind');
     await page.waitForSelector('#hesap-list table tbody tr');
     const hesapRows = await page.$$eval('#hesap-list table tbody tr', (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent)));
@@ -3406,8 +3412,8 @@ async function clipAfter(page, action) {
     const prB0 = await prBuckets();
     const prQ0 = await prQuotes();
     const prA0 = await prApi();
-    check('Fiyatlama: in TRY Faiz right after OIS · PPK; it opens on a TRY OIS 1Y - both curves\' mids, the desk\'s OIS buckets ON … 10Y '
-      + '(ON / 1W / 2W no quote of the curve: –)', prMenu[0] === 'ois' && prMenu[1] === 'fiyatlama' && /^TRY OIS 1Y · PAY/.test(await prLabel())
+    check('Fiyatlama: in TRY Faiz the entry after OIS · PPK (its tabs Fiyatlama · Swaption · Nakit akışı, 28.11.2026); it opens on a TRY OIS 1Y - both curves\' mids, the desk\'s OIS buckets ON … 10Y '
+      + '(ON / 1W / 2W no quote of the curve: –)', prMenu.slice(0, 5).join() === 'ois,mpc,fiyatlama,swaption,tmois' && /^TRY OIS 1Y · PAY/.test(await prLabel())
       && Object.keys(prB0).join(' ') === 'ON 1W 2W 1M 2M 3M 6M 9M 1Y 18M 2Y 3Y 4Y 5Y 6Y 7Y 8Y 9Y 10Y' && prB0.ON[0] === '–'
       && prB0['1Y'][0].startsWith('+') && prB0['5Y'][0] === '0,00', { prMenu, prB0 });
     // the desk's layout review (27.11.2026): the tiles, the schedule and Toplu fiyatlama in one column beside the DV01 buckets -
@@ -3567,9 +3573,9 @@ async function clipAfter(page, action) {
     const swpt0 = await swptApi({ expiry: '1Y', tenor: '2Y' });
     const swptR0 = await swptReal();
     const swptDates = await page.textContent('#swpt-dates');
-    check('Swaption: in TRY Faiz right after Fiyatlama; 1Y × 2Y on Fiyatlama\'s TRY OIS 1Y × 3Y - the forward on both curves (yours first), '
+    check('Swaption: in TRY Faiz a tab of Fiyatlama, right after it; 1Y × 2Y on Fiyatlama\'s TRY OIS 1Y × 3Y - the forward on both curves (yours first), '
       + 'the expiry 03.11.2027 (the business day before the start), 250 business days; the realized table\'s four windows say why there is '
-      + 'no vol: the recorded closes stop at 1Y (18M, 2Y, 3Y missing)', swptMenu.slice(0, 3).join() === 'ois,fiyatlama,swaption'
+      + 'no vol: the recorded closes stop at 1Y (18M, 2Y, 3Y missing)', swptMenu.slice(2, 4).join() === 'fiyatlama,swaption'
       && swpt0.underlying === 'TRY OIS 1Y × 3Y' && (await swptTile('swpt-fwd')) === swptPct(swpt0.forward.boot)
       && (await swptTile('swpt-fwd-other')) === swptPct(swpt0.forward.ppk) && /opsiyon vadesi 03\.11\.2027/.test(swptDates) && /250 iş günü/.test(swptDates)
       && Object.keys(swptR0).join() === '20,60,120,250' && Object.values(swptR0).every((r) => r[2] === '–')
@@ -4635,10 +4641,10 @@ async function clipAfter(page, action) {
     });
     const kfSeen = await kfRead();
     const kfF = kfApi.rows.find((r) => r.isin === 'TRT150328T24') || {};
-    check('Kâğıt Fiyatlama: first in Tahvil; every bond of the trading list in the details - a fixed coupon bond with its fair (compound, simple, price), '
+    check('Kâğıt Fiyatlama: the first tab of Tahvil\'s DİBS Fiyatlama (28.11.2026); every bond of the trading list in the details - a fixed coupon bond with its fair (compound, simple, price), '
       + 'its quote (bid / ask, 10 bp wide), the good levels (Al ≥ fair + 2σ, Sat ≤ fair − 2σ: the buy level\'s price under fair\'s), σ '
       + 'its 1–3Y floor (the history short), no backtest yet, and how it was priced; the TLREF floaters counted with why under the table',
-      kfSeen.menu[0] === 'kagit-fiyat' && kfSeen.rows === kfApi.rows.filter((r) => r.kind === 'S' || r.kind === 'B').length && kfSeen.rows >= 15
+      kfSeen.menu.slice(3, 7).join() === 'kagit-fiyat,manuel,fiyat-yukleme,ihale' && kfSeen.rows === kfApi.rows.filter((r) => r.kind === 'S' || r.kind === 'B').length && kfSeen.rows >= 15
       && kfSeen.priced >= 12
       && kfF.priced && kfSeen.fixed.fair === kfFmt(kfF.fair.yield) && kfSeen.fixed.simple === kfFmt(kfF.fair.simple)
       && kfSeen.fixed.bid === kfFmt(kfF.quote.bid.yield) && kfSeen.fixed.ask === kfFmt(kfF.quote.ask.yield) && kfF.quote.width === 10
@@ -4745,13 +4751,13 @@ async function clipAfter(page, action) {
     console.log('kagit fiyat yukleme');
     await open(page, 'fiyat-yukleme');
     await page.waitForSelector('#fy-list-table');
-    const fyMenu = await page.evaluate(() => window.tto.state.pages.filter((p) => p.group === 'Tahvil').map((p) => p.id).slice(0, 2));
+    const fyMenu = await page.evaluate(() => window.tto.state.pages.filter((p) => p.menu === 'tahvil.fiyatlama').map((p) => p.id + ':' + p.tab));
     await page.fill('#fy-add-text', 'TRB100227T13\nTRT130127T11');
     await page.click('#fy-add');
     await page.waitForFunction(() => document.querySelectorAll('#fy-list-table tr.fy-item').length === 2, null, { timeout: 20000 }).catch(() => {});
     const fyList = await page.evaluate(() => [...document.querySelectorAll('#fy-list-table tr.fy-item')].map((tr) => [...tr.children].slice(0, 5).map((td) => td.textContent).join('|')));
-    check('Kâğıt Fiyat Yükleme: right after Kâğıt Fiyatlama in Tahvil; two bonds added as a pasted list, each with its description and maturity',
-      fyMenu.join() === 'kagit-fiyat,fiyat-yukleme' && fyList.join(' / ') === 'TRB100227T13|10.02.27 Bono|TURKTB 0 02/10/27|10.02.2027|Bono / '
+    check('Kâğıt Fiyat Yükleme: a tab of DİBS Fiyatlama ("Sabah fiyat dosyası", after Kâğıt Fiyatlama and Manuel Tahvil); two bonds added as a pasted list, each with its description and maturity',
+      fyMenu.join() === 'kagit-fiyat:Adil fiyat · AL/SAT,manuel:Tek kâğıt,fiyat-yukleme:Sabah fiyat dosyası,ihale:İhale' && fyList.join(' / ') === 'TRB100227T13|10.02.27 Bono|TURKTB 0 02/10/27|10.02.2027|Bono / '
         + 'TRT130127T11|13.01.27 TLREF|TURKGB Float 01/13/27|13.01.2027|TLREF', { fyMenu, fyList });
     await page.click('#fy-mode-ihale');
     await page.fill('#fy-text', 'Auction prices:\n10/02/2027zc.t1   31.700\n13/01/27 TLREF.t1   100.500\n08/05/2030 cpi.t1   95.000\n** Min 50 mio, Increment 1 mio');
@@ -5452,10 +5458,11 @@ async function clipAfter(page, action) {
     await open(page, 'masa');
     await pageD.fill('#chat-text', 'PPK 14:00\'te');
     await pageD.press('#chat-text', 'Enter');
-    await page.waitForSelector('#nav .nav-item[data-page="social"] .nav-count', { timeout: 15000 });
-    check('on another page the menu counts the messages not read', (await page.textContent('#nav .nav-item[data-page="social"] .nav-count')) === '1');
+    // (Sosyal and Ajanda: tabs of "Masa iletişim" since 28.11.2026 - each its own count on the entry)
+    await page.waitForSelector('#nav .nav-item[data-tabs~="social"] .nav-count[data-for="social"]', { timeout: 15000 });
+    check('on another page the menu counts the messages not read', (await page.textContent('#nav .nav-item[data-tabs~="social"] .nav-count[data-for="social"]')) === '1');
     await open(page, 'social');
-    check('... and the count goes when the chat is read', await page.locator('#nav .nav-item[data-page="social"] .nav-count').count() === 0);
+    check('... and the count goes when the chat is read', await page.locator('#nav .nav-item[data-tabs~="social"] .nav-count[data-for="social"]').count() === 0);
     await pageD.hover('#chat-log .msg.mine:last-child');
     await pageD.click('#chat-log .msg.mine:last-child .del');
     await pageD.click('.modal .mfoot .btn.primary');
@@ -5494,9 +5501,9 @@ async function clipAfter(page, action) {
     const groups = await page.evaluate(() => [...document.querySelectorAll('#agenda-list .agenda-day')].map((s) => s.dataset.group));
     check('a deadline not met comes first, then today, then the days ahead', late.status === 200 && groups[0] === 'late' && groups[1] === 'today'
       && /Aylık rapor/.test(await page.textContent('#agenda-list .agenda-day.late')), groups);
-    await page.waitForSelector('#nav .nav-item[data-page="agenda"] .nav-count.alert', { timeout: 15000 });
+    await page.waitForSelector('#nav .nav-item[data-tabs~="agenda"] .nav-count.alert[data-for="agenda"]', { timeout: 15000 });
     check('the menu counts today\'s items and the deadline not met (red)',
-      Number(await page.textContent('#nav .nav-item[data-page="agenda"] .nav-count')) >= 1);
+      Number(await page.textContent('#nav .nav-item[data-tabs~="agenda"] .nav-count[data-for="agenda"]')) >= 1);
     await pageD.waitForFunction(() => /Aylık rapor/.test(document.getElementById('agenda-list').textContent), null, { timeout: 15000 });
     check('one\'s own item is nobody else\'s', !/bankayı ara/.test(await pageD.textContent('#agenda-list')));
     await pageD.check('#agenda-list .agenda-day.late tr[data-id] input[type=checkbox]');
@@ -5993,7 +6000,7 @@ async function clipAfter(page, action) {
       }) }));
     const siraSets = ((siraApi.json || {}).sira || {}).sets || [];
     check('Carry + momentum: the fourth tab of Sinyaller; each set\'s basket card and ranking table under its read line, the backtest per set',
-      sira.tabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi' && sira.on.join() === 'quant-sira' && siraApi.status === 200 && siraSets.length === 6
+      sira.tabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi,VİOP' && sira.on.join() === 'quant-sira' && siraApi.status === 200 && siraSets.length === 6
       && SIRA_SETS.every((id) => sira.panels.some((p) => p.id === id && p.read.length >= 40 && p.under && p.card && p.table))
       && sira.panels.some((p) => p.id === 'quant-sira-backtest' && p.read.length >= 40 && p.under)
       && siraSets.every((s) => s.ok || (s.why && sira.panels.some((p) => p.id === 'quant-sira-' + s.id && p.why === s.why))), { sira, sets: siraSets.map((s) => [s.id, s.ok, s.why]) });
@@ -6394,7 +6401,7 @@ async function clipAfter(page, action) {
     }));
     const trendTabs = await page.evaluate(() => [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent));
     check('Trend: a tab of Sinyaller; its table lists every instrument of the universe (the recorded month is too short for a line: each says why), each table\'s read line under its title',
-      trendApi.status === 200 && trRows.length > 0 && trendShown === trRows.length && trendTabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi'
+      trendApi.status === 200 && trRows.length > 0 && trendShown === trRows.length && trendTabs.join(',') === 'Sinyaller,Gün içi,Model,Trend,Carry + momentum,Makine öğrenmesi,VİOP'
       && trRows.every((r) => r.sid || /^geçmiş kısa: \d+ gün \(en az 63\)$|^seviye oynamıyor/.test(r.why))
       && ['quant-trend-table', 'quant-trend-chart', 'quant-trend-buckets', 'quant-trend-groups'].every((id) => trendRead.some((p) => p.id === id && p.read.length >= 40 && p.under)),
     { rows: trRows.length, shown: trendShown, tabs: trendTabs, read: trendRead.map((p) => p.id + ':' + p.read.length), first: trRows[0] });
@@ -7150,13 +7157,14 @@ async function clipAfter(page, action) {
     await shot(popBox, '44-pop-box');
     await popBox.close();
 
-    // ------------------------------------------------------------------ the quant menu: four entries with tabs
+    // ------------------------------------------------------------------ the quant menu: three entries with tabs (28.11.2026)
     console.log('quant menu');
     const quantMenu = await page.evaluate(() => {
       const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Quant');
       return g ? [...g.querySelectorAll('.nav-item')].map((a) => a.textContent.trim() + ':' + (a.dataset.tabs || '').split(' ').filter(Boolean).length) : null;
     });
-    check('the quant menu: four entries - Sinyaller (6 tabs: Trend, Carry + momentum and Makine öğrenmesi among them), Faiz (9: DİBS switch among them), FX (4: Opsiyon → spot among them), VİOP', JSON.stringify(quantMenu) === '["Sinyaller:6","Faiz:9","FX:4","VİOP:0"]', quantMenu);
+    check('the quant menu: three entries - Sinyaller (7 tabs: Trend, Carry + momentum, Makine öğrenmesi and VİOP among them), Faiz analizleri (9: DİBS switch among them), FX analizleri (4: Opsiyon → spot among them)',
+      JSON.stringify(quantMenu) === '["Sinyaller:7","Faiz analizleri:9","FX analizleri:4"]', quantMenu);
     await open(page, 'quant-regime');                                       // an address of before
     const onTab = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent),
       on: [...document.querySelectorAll('#page-tabs button.on')].map((b) => b.dataset.page), lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page) }));
@@ -7735,14 +7743,14 @@ async function clipAfter(page, action) {
     await page.click('.menu >> text=Menüyü düzenle…');
     await page.waitForSelector('#menu-edit');
     const editable = await page.evaluate(() => [...document.querySelectorAll('#menu-edit input')].map((b) => b.dataset.page));
-    await page.locator('#menu-edit input[data-page="heat"]').uncheck();
+    await page.locator('#menu-edit input[data-page="masa.piyasa"]').uncheck();
     await page.locator('#menu-edit input[data-page="quant.fx"]').uncheck();
     await page.click('#menu-edit-save');
-    await page.waitForFunction(() => !document.querySelector('#nav .nav-item[data-page="heat"]') && !document.querySelector('#nav .nav-item[data-page="quant.fx"]'),
+    await page.waitForFunction(() => !document.querySelector('#nav .nav-item[data-page="masa.piyasa"]') && !document.querySelector('#nav .nav-item[data-page="quant.fx"]'),
       null, { timeout: 10000 });
     const hiddenSaved = await savedLayout((l) => (l.hidden_pages || []).length === 2);
-    check('"Menüyü düzenle…": a page and a quant entry out of the menu (an administrator\'s pages listed for her), kept with the account',
-      JSON.stringify(hiddenSaved.hidden_pages) === '["heat","quant.fx"]' && editable.includes('users') && editable.includes('quant.faiz')
+    check('"Menüyü düzenle…": an entry and a quant entry out of the menu (an administrator\'s pages listed for her), kept with the account',
+      JSON.stringify(hiddenSaved.hidden_pages) === '["masa.piyasa","quant.fx"]' && editable.includes('users') && editable.includes('quant.faiz')
       && editable.includes('launchpad') && !editable.includes('quant-pca'), { hidden: hiddenSaved.hidden_pages, editable: editable.length });
     await page.keyboard.press('Control+k');
     await page.keyboard.type('Eğri Hareketi');
@@ -7753,7 +7761,8 @@ async function clipAfter(page, action) {
     await page.reload();
     await page.waitForFunction(() => window.tto && window.tto.state.page && window.tto.state.page.ready, null, { timeout: 90000 });
     check('... a hidden page still opens from Ctrl+K (and its own address); after a reload the menu is still the user\'s',
-      heatOpen === 'heat' && await page.evaluate(() => window.tto.state.pageId) === 'heat' && await page.locator('#nav .nav-item[data-page="heat"]').count() === 0
+      heatOpen === 'heat' && await page.evaluate(() => window.tto.state.pageId) === 'heat' && await page.locator('#nav .nav-item[data-page="masa.piyasa"]').count() === 0
+      && await page.locator('#nav .nav-item[data-tabs~="heat"]').count() === 0
       && await page.locator('#nav .nav-item[data-page="quant.fx"]').count() === 0, heatOpen);
     // another user's menu is their own: Zeynep sees every page; an administrator's pages are not in hers to list
     const ctxM = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -7763,7 +7772,7 @@ async function clipAfter(page, action) {
     await pageM.click('#btn-user');
     await pageM.click('.menu >> text=Menüyü düzenle…');
     await pageM.waitForSelector('#menu-edit');
-    const hers = await pageM.evaluate(() => ({ nav: !!document.querySelector('#nav .nav-item[data-page="heat"]'),
+    const hers = await pageM.evaluate(() => ({ nav: !!document.querySelector('#nav .nav-item[data-page="masa.piyasa"]'),
       users: !!document.querySelector('#menu-edit input[data-page="users"]') }));
     check('... another user\'s menu is their own; the administrators\' pages stay theirs', hers.nav && !hers.users, hers);
     await ctxM.close();
@@ -7772,7 +7781,7 @@ async function clipAfter(page, action) {
     await page.waitForSelector('#menu-edit');
     await page.click('#menu-edit-all');
     await page.click('#menu-edit-save');
-    await page.waitForFunction(() => !!document.querySelector('#nav .nav-item[data-page="heat"]') && !!document.querySelector('#nav .nav-item[data-page="quant.fx"]'),
+    await page.waitForFunction(() => !!document.querySelector('#nav .nav-item[data-page="masa.piyasa"]') && !!document.querySelector('#nav .nav-item[data-page="quant.fx"]'),
       null, { timeout: 10000 });
     check('"Hepsini göster": the pages back in the menu', (await savedLayout((l) => !(l.hidden_pages || []).length)).hidden_pages.length === 0);
 
@@ -7794,8 +7803,8 @@ async function clipAfter(page, action) {
     const retToday = !!(bgStatus.ret && bgStatus.ret.updated_at && bgStatus.ret.updated_at.slice(0, 10) === bgStatus.server_date);
     // (the to-dos first, in columns - the desk, 27.11.2026: RET, the chat's trades not entered, the agenda, then the trades,
     // the quant's lines, the DİBS bonds)
-    check('Bugün: in the Masa group right under Masa; six blocks in columns, the things to do first, each with its content or a plain "nothing"',
-      bgSeen.menu.join() === 'masa,bugun' && bgSeen.cards.join() === 'bugun-ret,bugun-chat,bugun-agenda,bugun-trades,bugun-quant,bugun-dibs'
+    check('Bugün: first of the Masa group (the menu of 28.11.2026), Masa under it; six blocks in columns, the things to do first, each with its content or a plain "nothing"',
+      bgSeen.menu.join() === 'bugun,masa' && bgSeen.cards.join() === 'bugun-ret,bugun-chat,bugun-agenda,bugun-trades,bugun-quant,bugun-dibs'
       && bgSeen.cols.length >= 1 && bgSeen.cols[0].slice(0, 3).join() === 'ret,chat,agenda'
       && bgSeen.each.every(Boolean) && bgSeen.agenda && bgSeen.errs === 0, bgSeen);
     check('... the RET block says what the header\'s dot says (loaded today or not)', /^Bugün yüklendi/.test(bgSeen.ret) === retToday,
@@ -7845,9 +7854,9 @@ async function clipAfter(page, action) {
       const duzenMasaMenu = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-group')].map((g) => ({
         t: (g.querySelector('.gt') || {}).textContent || '', items: [...g.querySelectorAll('.nav-item')].map((a) => a.dataset.page) })));
       const duzenMasaGroup = (t) => duzenMasaMenu.find((g) => g.t === t) || { items: [] };
-      check('duzen-masa: a group of one entry joins its neighbour - DV01 Risk closes TRY Faiz, USD · FOMC closes FX ("FX · USD")',
+      check('duzen-masa / kabuk: the groups as the server orders them (the menu of 28.11.2026) - DV01 Risk closes TRY Faiz, FX · USD is Spot / FX (its tabs) and USD · FOMC',
         !duzenMasaMenu.some((g) => g.t === 'Risk' || g.t === 'USD Faiz') && duzenMasaGroup('TRY Faiz').items.slice(-1)[0] === 'dv01'
-        && duzenMasaGroup('FX · USD').items.join() === 'fx,fxvol,usd', duzenMasaMenu.map((g) => g.t + ':' + g.items.length));
+        && duzenMasaGroup('FX · USD').items.join() === 'fx.spot,usd', duzenMasaMenu.map((g) => g.t + ':' + g.items.length));
       const duzenMasaTahvil = () => page.evaluate(() => {
         const g = [...document.querySelectorAll('#nav .nav-group')].find((x) => (x.querySelector('.gt') || {}).textContent === 'Tahvil');
         return g ? { folded: g.classList.contains('folded'), shown: [...g.querySelectorAll('.nav-item')].filter((a) => a.offsetParent !== null).length,
@@ -8193,6 +8202,136 @@ async function clipAfter(page, action) {
       duzenL1Top.top <= 52 && duzenL1Top.find <= 40 && duzenL1Top.open >= 200 && !duzenL1Top.lang && duzenL1Top.bar <= 30
       && duzenL1Top.more === '+' + (29 - duzenL1Top.shown) && duzenL1Top.shown < 29 && duzenL1Top.all === 29 && duzenL1Top.less === 'daha az'
       && duzenL1Top.again === duzenL1Top.shown, duzenL1Top);
+
+    // ------------------------------------------------------------------ the shell (K1: the desk's batch of 28.11.2026)
+    console.log('kabuk');
+    {
+      // R · B8: the menu's groups and entries (tabs counted), every entry its hint; Araçlar last, folded until opened
+      const kabukMenu = await page.evaluate(() => [...document.querySelectorAll('#nav .nav-group')].map((g) => ({
+        t: (g.querySelector('.gt') || {}).textContent || '', folded: g.classList.contains('folded'),
+        items: [...g.querySelectorAll('.nav-item')].map((a) => a.dataset.page + (a.dataset.tabs ? ':' + a.dataset.tabs.split(' ').length : '')),
+        hints: [...g.querySelectorAll('.nav-item')].every((a) => (a.title || '').length > 10) })));
+      const kabukG = (t) => kabukMenu.find((g) => g.t === t) || { items: [] };
+      check('kabuk · R: the menu of 28.11.2026 - Masa 5 entries, TRY Faiz 7, Tahvil 3, FX · USD 2, Quant 3, Araçlar last and folded; every entry its one-line hint',
+        kabukMenu.map((g) => g.t).join('|') === '|Masa|TRY Faiz|Tahvil|FX · USD|Quant|Araçlar'
+        && kabukG('Masa').items.join() === 'bugun,masa,masa.islemler:3,masa.piyasa:3,masa.iletisim:2'
+        && kabukG('TRY Faiz').items.join() === 'faiz.ois:2,faiz.fiyatlama:3,forward,viop,borsa,faiz.carry:3,dv01'
+        && kabukG('Tahvil').items.join() === 'tahvil.piyasa:3,tahvil.fiyatlama:4,tahvil.dibsrv:3'
+        && kabukG('FX · USD').items.join() === 'fx.spot:2,usd' && kabukG('Quant').items.join() === 'quant.sinyal:7,quant.faiz:9,quant.fx:4'
+        && kabukG('Araçlar').folded && kabukMenu.every((g) => g.hints), kabukMenu);
+      await open(page, 'mpc');
+      const kabukMpc = await page.evaluate(() => ({ tabs: [...document.querySelectorAll('#page-tabs button')].map((b) => b.textContent).join(),
+        lit: [...document.querySelectorAll('#nav .nav-item.active')].map((a) => a.dataset.page).join(), title: document.getElementById('page-title').textContent }));
+      check('kabuk · R: an address of before (#/mpc) opens OIS · PPK on its "PPK geçmişi" tab, the entry lit, the page its own title',
+        kabukMpc.tabs === 'OIS · PPK,PPK geçmişi' && kabukMpc.lit === 'faiz.ois' && kabukMpc.title === 'PPK Fiyatlama Geçmişi', kabukMpc);
+      // B3: a page in tabs has its tools at the tab bar's right end
+      await open(page, 'ois');
+      const kabukTools = await page.evaluate(() => {
+        const line = document.querySelector('#content .tabline');
+        const tools = line && line.querySelector(':scope > .page-tools');
+        return { line: !!line, tabs: !!(line && line.querySelector(':scope > .viewtabs button[data-tab]')), tools: !!tools,
+          search: !!(tools && tools.querySelector('input[type=search]')) && !!(tools && tools.querySelector('#hand-mode')),
+          alone: document.querySelectorAll('#content > .pagehost > .page-tools').length, sticky: line ? getComputedStyle(line).position : '' };
+      });
+      check('kabuk · B3: a page in tabs has its tools (Tablo ara · Yardımcı tablolar · Elle değer · Girdilerimi sıfırla · ?) at the tab bar\'s right end, sticky with it - no row of their own',
+        kabukTools.line && kabukTools.tabs && kabukTools.tools && kabukTools.search && kabukTools.alone === 0 && kabukTools.sticky === 'sticky', kabukTools);
+      // B2: a tab's note one line, "devamı" the rest
+      await open(page, 'forward');
+      await tab(page, 'kot');
+      const kabukSecnote = await page.evaluate(() => {
+        const n = document.querySelector('#content .secnote:not(.hidden)');
+        if (!n) return null;
+        return { lines: n.getBoundingClientRect().height / parseFloat(getComputedStyle(n).lineHeight), clamp: n.classList.contains('clamp'),
+          more: !!n.querySelector('.note-more') };
+      });
+      check('kabuk · B2: a tab\'s note is one line ("devamı" the rest)', !!kabukSecnote && kabukSecnote.clamp && kabukSecnote.more
+        && kabukSecnote.lines < 1.6, kabukSecnote);
+      // B15: VİOP Kontratlar - the rows its four tables share, once
+      await open(page, 'viop');
+      await tab(page, 'main');
+      const kabukViop = await page.evaluate(() => Object.fromEntries(['B5', 'B7', 'B12', 'B13'].map((id) => [id,
+        [...document.querySelectorAll('#content .panel[data-panel="' + id + '"] table.grid tr')].map((tr) => ((tr.children[0] || {}).textContent || '').trim())
+          .filter(Boolean)])));
+      check('kabuk · B15: VİOP Kontratlar - 1st / 2nd Date, VKGS, Spot, USD once (VIOP BID); VIOP ASK, OIS and ICAP only their own rows ("rows", the twin of "cols")',
+        kabukViop.B5.slice(0, 5).join() === '1st Date,2nd Dat,VKGS,Spot,USD' && kabukViop.B7.join() === 'TRY,SP,Günlük SP,VIOP Price,ON karşılık'
+        && kabukViop.B12[0] === 'TRY' && kabukViop.B12.slice(-1)[0] === 'OIS vs VIOP' && !kabukViop.B13.includes('VKGS'), kabukViop);
+      // A6: a value typed over a formula, said in the top bar; its list, "Formüle dön"
+      await open(page, 'forward');
+      await tab(page, 'fwd');
+      await page.click('#hand-mode');
+      await typeInto(page, 'EK_FWD!F50', '57');
+      await waitCell(page, 'EK_FWD!F50', "t.trim() === '57,0000'");
+      await page.click('#hand-mode');
+      // (as many as the server lists: an earlier step may have left one of its own)
+      const kabukHand = ((await api(page, 'ayşe yilmaz', 'GET', '/api/my-inputs')).json.inputs || []).filter((x) => x.hand).length;
+      await page.waitForFunction((n) => (document.getElementById('mine-text') || {}).textContent === n + ' elle değer'
+        && !document.getElementById('mine-badge').classList.contains('hidden'), kabukHand, { timeout: 30000 }).catch(() => null);
+      const kabukBadge = await page.textContent('#mine-text');
+      await page.click('#mine-badge');
+      await page.waitForSelector('#mine-hand table tbody tr', { timeout: 20000 });
+      const kabukMine = await page.evaluate(() => [...document.querySelectorAll('#mine-hand table tbody tr')].map((tr) => [...tr.children].map((td) => td.textContent.trim())));
+      const kabukRow = kabukMine.find((r) => r[1] === 'EK_FWD!F50') || [];
+      await page.click('#mine-hand button[data-ref="EK_FWD!F50"]');
+      await page.waitForFunction((n) => (n <= 1 ? document.getElementById('mine-badge').classList.contains('hidden')
+        : document.getElementById('mine-text').textContent === (n - 1) + ' elle değer'), kabukHand, { timeout: 30000 }).catch(() => null);
+      const kabukAfter = await page.evaluate(() => (document.getElementById('mine-badge').classList.contains('hidden') ? '' : document.getElementById('mine-text').textContent));
+      await page.keyboard.press('Escape');
+      check('kabuk · A6: a value typed over a formula is said in the top bar ("N elle değer"); its list names the page and the cell, "Formüle dön" takes it back (one less)',
+        kabukHand >= 1 && kabukBadge === kabukHand + ' elle değer' && kabukMine.length === kabukHand && kabukRow[0] === 'Forward' && kabukRow[2] === '57'
+        && kabukAfter === (kabukHand > 1 ? (kabukHand - 1) + ' elle değer' : ''), { kabukHand, kabukBadge, kabukMine, kabukAfter });
+      // B8: the desk's default favourites (an administrator's) - Zeynep never chose favourites of her own
+      const kabukFavs = await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { desk_favs: ['ois', 'forward'] });
+      const kabukCtx = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+      const kabukPage = await kabukCtx.newPage();
+      kabukPage.on('pageerror', (e) => errors.push('pageerror (kabuk 1366): ' + e.message));
+      await login(kabukPage, 'Zeynep');
+      await kabukPage.waitForSelector('#favs a.fav[data-page="ois"]', { timeout: 20000 }).catch(() => null);
+      const kabukFavsSeen = await kabukPage.evaluate(() => [...document.querySelectorAll('#favs a.fav')].map((a) => a.dataset.page).join());
+      check('kabuk · B8: the desk\'s default favourites (an administrator sets them) in the top bar of a user who never chose her own',
+        kabukFavs.status === 200 && (kabukFavs.json.desk_favs || []).join() === 'ois,forward' && kabukFavsSeen === 'ois,forward', { kabukFavs, kabukFavsSeen });
+      // B10: below 1500 px the menu is a strip that opens over the page
+      await open(kabukPage, 'ois');
+      const kabukSide = await kabukPage.evaluate(() => ({ side: Math.round(document.getElementById('side').getBoundingClientRect().width),
+        content: Math.round(document.getElementById('content').getBoundingClientRect().left) }));
+      await kabukPage.hover('#nav .nav-item.active');
+      await kabukPage.waitForFunction(() => document.getElementById('side').classList.contains('peek'), null, { timeout: 5000 }).catch(() => null);
+      const kabukPeek = await kabukPage.evaluate(() => ({ side: Math.round(document.getElementById('side').getBoundingClientRect().width),
+        content: Math.round(document.getElementById('content').getBoundingClientRect().left),
+        label: getComputedStyle(document.querySelector('#nav .nav-item.active .lbl')).display }));
+      await kabukPage.mouse.move(900, 450);
+      await kabukPage.waitForFunction(() => !document.getElementById('side').classList.contains('peek'), null, { timeout: 5000 }).catch(() => null);
+      const kabukAway = await kabukPage.evaluate(() => document.getElementById('side').classList.contains('peek'));
+      check('kabuk · B10: below 1500 px the menu is a 52 px strip; the mouse on it opens it over the page (its labels, 214 px) - the page keeps its place; away, it folds again',
+        kabukSide.side === 52 && kabukSide.content === 52 && kabukPeek.side === 214 && kabukPeek.content === 52 && kabukPeek.label !== 'none' && !kabukAway,
+        { kabukSide, kabukPeek, kabukAway });
+      // B2: a long note in a table wider than its panel wraps in what is on screen
+      await open(kabukPage, 'forward');
+      await kabukPage.evaluate(() => window.tto.state.page.setTab('kot'));
+      await kabukPage.waitForTimeout(1200);
+      const kabukNotes = await kabukPage.evaluate(() => [...document.querySelectorAll('#content table.grid.notevis td.ovw > .ovt')]
+        .filter((x) => x.offsetParent !== null).map((box) => {
+          const sc = box.closest('.body').getBoundingClientRect();
+          const b = box.getBoundingClientRect();
+          return { inside: b.right <= sc.right + 1 && b.left >= sc.left - 1, w: Math.round(b.width) };
+        }));
+      check('kabuk · B2: a long note in a table wider than its panel wraps in the width on screen (Forward · Kotasyon at 1366 px) - none cut at the panel\'s edge',
+        kabukNotes.length >= 2 && kabukNotes.every((x) => x.inside), kabukNotes);
+      // B9: the page's title never cut while "Hesap" runs
+      await open(kabukPage, 'settings');
+      await kabukPage.evaluate(() => window.tto.progress({ busy: true, eta: '~5 dk', jobs: [
+        { short: 'PPK geçmişi 98/254', title: 'PPK geçmişi', done: 98, total: 254, since: '10:00:00', unit: 'gün', step: '' },
+        { short: 'Quant 3/26', title: 'Quant tam hesap', done: 3, total: 26, since: '10:01:00', unit: 'adım', step: '' }] }));
+      const kabukTitle = await kabukPage.evaluate(() => { const t = document.getElementById('page-title');
+        return { text: t.textContent, cut: t.scrollWidth > t.clientWidth + 1, chip: (document.getElementById('hesap-text') || {}).textContent,
+          user: Math.round(document.getElementById('btn-user').getBoundingClientRect().right), width: window.innerWidth }; });
+      await kabukPage.evaluate(() => window.tto.progress({ busy: false }));
+      check('kabuk · B9: the page\'s title is never cut while "Hesap" runs ("Ayarlar · Toplantı takvimi" at 1366 px); the chip short; the bar inside the window',
+        kabukTitle.text === 'Ayarlar · Toplantı takvimi' && !kabukTitle.cut && kabukTitle.chip === 'PPK geçmişi 98/254 +1 · ~5 dk'
+        && kabukTitle.user <= kabukTitle.width, kabukTitle);
+      await shot(kabukPage, '99-kabuk-1366');
+      await kabukCtx.close();
+      await api(page, 'ayşe yilmaz', 'POST', '/api/layout', { desk_favs: [] });
+    }
 
     // ------------------------------------------------------------------ every page renders
     console.log('all pages');

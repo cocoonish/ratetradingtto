@@ -262,6 +262,16 @@ const noteSizes = window.ResizeObserver ? new ResizeObserver((entries) => {
   els.forEach((el, k) => { if (el.classList.contains('long') !== over[k]) el.classList.toggle('long', over[k]); });
 }) : null;
 
+/**
+ * A page, a panel or a box waiting for its first answer (the desk, 28.11.2026 - B7: "Boş, sıfır ve yükleniyor ayrı
+ * okunsun"): "Hesaplanıyor…" with a small turning mark - never an empty table, nor zeros that read as numbers.  Put it
+ * where the content comes; the content replaces it.  ``text``: another word for the wait ("Vol yüzeyi kuruluyor…").
+ */
+export function waiting(text) {
+  return h('div', { class: 'loading waiting', role: 'status', 'aria-live': 'polite' }, h('span', { class: 'spin', 'aria-hidden': 'true' }),
+    text || 'Hesaplanıyor…');
+}
+
 /** True when keyboard / clipboard events should be left to a form control. */
 export function inFormControl(target) {
   if (!target || !target.tagName) return false;

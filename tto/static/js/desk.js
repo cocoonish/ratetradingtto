@@ -7,6 +7,7 @@
 import { api, session } from './api.js';
 import { h, clear, toast, errorToast, modal } from './ui.js';
 import { playRepeats, stopRepeats } from './agendaalarms.js';
+import { navItemOf } from './menu.js';
 
 const DAYS = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
 const MONTHS = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
@@ -95,11 +96,13 @@ async function loadState() {
 }
 
 function navBadge(page, n, title, alert) {
-  const item = document.querySelector('#nav .nav-item[data-page="' + page + '"]');
+  // (on the menu's line that leads to the page: its own, or the entry it is a tab of - Sosyal and Ajanda are both tabs of
+  // "Masa iletişim" since 28.11.2026: each its own count there)
+  const item = navItemOf(page);
   if (!item) return;
-  let el = item.querySelector('.nav-count');
+  let el = item.querySelector('.nav-count[data-for="' + page + '"]');
   if (!n) { if (el) el.remove(); return; }
-  if (!el) { el = h('span', { class: 'nav-count' }); item.appendChild(el); }
+  if (!el) { el = h('span', { class: 'nav-count' }); el.dataset.for = page; item.appendChild(el); }
   el.textContent = n > 99 ? '99+' : String(n);
   el.title = title;
   el.classList.toggle('alert', !!alert);

@@ -248,7 +248,20 @@ SECTIONS: Dict[str, Callable[[Any], Any]] = {
 
 
 def empty() -> Dict[str, Any]:
-    return {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "compact": False, "rev": 0}
+    return {"launchpads": [], "drawer": [], "favs": [], "landing": "", "hidden_pages": [], "compact": False, "rev": 0,
+            "favs_own": False}
+
+
+#: the desk's default favourites (an administrator sets them; the desk, 28.11.2026: "yöneticinin varsayılan
+#: favorileri"): what a user who never chose favourites of their own sees in the top bar
+DESK_KEY = "layout.desk"
+
+
+def desk_favs(v: Any) -> List[str]:
+    """The desk's default favourites as kept (read leniently: what is not a page's id is left out)."""
+    kept = v.get("favs") if isinstance(v, dict) else None
+    ids = (x for x in (kept if isinstance(kept, list) else []) if isinstance(x, str) and PAGE_ID.match(x))
+    return list(dict.fromkeys(ids))[:MAX_FAVS]
 
 
 def _kept_items(v: Any, limit: int) -> List[Dict[str, Any]]:
@@ -296,11 +309,14 @@ def stored(v: Any) -> Dict[str, Any]:
     out["compact"] = v.get("compact") is True
     rev = v.get("rev")
     out["rev"] = rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
+    # the favourites are the user's own once they changed them (before 28.11.2026: any they kept) - else the desk's
+    out["favs_own"] = v.get("favs_own") is True or bool(out["favs"])
     return out
 
 
 def change(cur: Dict[str, Any], data: Any) -> Dict[str, Any]:
-    """``cur`` with the parts ``data`` sends replaced (``rev`` counts the changes)."""
+    """``cur`` with the parts ``data`` sends replaced (``rev`` counts the changes).  Favourites sent are the user's own
+    from then on (``favs_own``: the desk's defaults no longer stand in for them)."""
     if not isinstance(data, dict):
         raise LayoutError("düzen geçersiz")
     parts = [k for k in data if k in SECTIONS]
@@ -309,6 +325,8 @@ def change(cur: Dict[str, Any], data: Any) -> Dict[str, Any]:
     out = dict(cur)
     for k in parts:
         out[k] = SECTIONS[k](data[k])
+    if "favs" in parts:
+        out["favs_own"] = True
     out["rev"] = int(cur.get("rev") or 0) + 1
     return out
 

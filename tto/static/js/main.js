@@ -44,16 +44,18 @@ import { LaunchpadPage, PopPanelPage } from './pages/launchpad.js';
 import { hub } from './boxes.js';
 import { Drawer } from './drawer.js';
 import { loadLayout, clearLayout, onLayout, launchpads, favs, toggleFav, landing, setLanding, pinToDrawer, addMenu, compact,
-  setCompact } from './layout.js';
+  setCompact, deskFavs, favsAreDesk, setDeskFavs } from './layout.js';
 import './pageboxes.js';                          // (the boxes of the dashboard's own pages join the launchpad's kinds)
 import { boxEvent, PopBoxPage, popBoxHash, popBoxItem } from './pagebox.js';
-import { paintMenu, menuChanged, openedPage, pageTabs, editMenu } from './menu.js';
+import { paintMenu, menuChanged, openedPage, pageTabs, editMenu, navItemOf } from './menu.js';
 import { showProgress, openProgress } from './hesap.js';
+import { paintMine, openMine } from './mine.js';
 import { setupProp, stopProp } from './prop.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { pages: [], page: null, pageId: null, gen: 0, refreshing: false, dirty: false, users: {}, status: null,
-  online: true, booted: false, pending: 0, chatMissing: 0, behind: false, headerGen: 0, headerAs: null, popKey: null };
+  online: true, booted: false, pending: 0, chatMissing: 0, behind: false, headerGen: 0, headerAs: null, popKey: null,
+  mine: { norm: false, hand: 0 } };
 
 // A window of its own (``#/pop/<page>/<table>``, ``#/pop/launchpad/<name>``): a light shell - no menu, no header strip,
 // no alarms or desktop notifications (those are the main window's), the live stream shared with the other tabs.
@@ -75,6 +77,8 @@ const ctx = {
   refreshPage: () => { runRefresh(); },
   setInputs: (book, items) => trackWrite(api.post('/api/inputs', { book, items, adhoc: false, lenient: false })),
   displayName: (key) => state.users[key] || key || '',
+  /** A page's title as the menu has it (the top bar's). */
+  pageTitle: (id) => pageTitle(id),
   openRet: (opts) => openRetEditor(ctx, opts),
   /** "Open the form with these values": a trade to enter, its fields filled from a quote (a matrix row, a chat line, a
    *  price right-clicked) - Günlük İşlemler opens with them and saves nothing (the spec: BlotterPage.takePrefill).  In a
@@ -137,7 +141,7 @@ const ctx = {
   /** How many account requests wait (the badge on "Kullanıcılar" in the menu). */
   setPending: (n) => {
     state.pending = n || 0;
-    const item = document.querySelector('#nav .nav-item[data-page="users"]');
+    const item = navItemOf('users');
     if (!item) return;
     const old = item.querySelector('.nav-count');
     if (old) old.remove();
@@ -149,7 +153,7 @@ const ctx = {
  * İşlemler (from the status).  A click opens their list, wherever one is. */
 function setChatMissing(n) {
   state.chatMissing = n || 0;
-  const item = document.querySelector('#nav .nav-item[data-page="broker"]');
+  const item = navItemOf('broker');                  // (İşlemler: Broker Chat is one of its tabs since 28.11.2026)
   if (!item) return;
   const old = item.querySelector('.nav-count.chat');
   if (old) old.remove();
@@ -200,6 +204,8 @@ async function showLogin(message) {
   if (state.page) { state.page.destroy(); state.page = null; state.pageId = null; }
   if (drawer) drawer.stop();
   clearLayout();
+  state.mine = { norm: false, hand: 0 };               // (the personal badge: the next user's own)
+  paintMine(state.mine);
   scenarios.names = null;                              // (Ctrl+K's: the next user's own)
   scenarios.at = 0;
   $('app').classList.add('hidden');
@@ -335,7 +341,8 @@ async function enter(me) {
 
 // ---------------------------------------------------------------------- navigation
 function buildNav() {
-  // (menu.js: the launchpads first, the groups, quant's pages as four entries with tabs, the user's own menu)
+  // (menu.js: the launchpads first, the server's groups and entries - several pages one entry with tabs, tto/navmenu.py
+  // -, Araçlar last, the user's own menu)
   paintMenu($('nav'), state.pages, session.role === 'admin', state.pageId);
   ctx.setPending(state.pending);
   paintDeskNav();
@@ -640,7 +647,28 @@ function paintFavs() {
   const on = !!state.pageId && favs().includes(state.pageId);
   star.textContent = on ? '★' : '☆';
   star.classList.toggle('on', on);
-  star.title = on ? 'Favorilerinizden çıkarın (üst şerit)' : 'Bu sayfayı üst şeritteki favorilerinize ekleyin';
+  star.title = (on ? 'Favorilerinizden çıkarın (üst şerit)' : 'Bu sayfayı üst şeritteki favorilerinize ekleyin')
+    + (favsAreDesk() ? ' - şeritteki favoriler masanın varsayılanı: ilk değişikliğiniz kendi listeniz olur' : '');
+  box.title = favsAreDesk() ? 'Masanın varsayılan favorileri (yönetici seçer) - ☆ / ★ ile kendi listeniz olur' : '';
+}
+
+/** "Masanın varsayılan favorileri" (administrators; the desk, 28.11.2026 - B8): the favourites in the top bar of
+ *  everybody who never chose their own - the administrator's own favourites made the desk's, or none. */
+function openDeskFavs() {
+  const m = modal({ title: 'Masanın varsayılan favorileri', width: 560 });
+  const names = (ids) => ids.filter((id) => id === 'launchpad' || state.pages.some((p) => p.id === id)).map(pageTitle).join(' · ') || '—';
+  m.body.append(
+    h('p', { class: 'muted', style: { margin: '0 0 10px' } }, 'Kendi favorisini hiç seçmemiş herkesin üst şeridinde bunlar görünür. '
+      + 'Biri ☆ / ★ ile bir sayfa ekleyip çıkardığı an kendi listesi olur; masanınki ona artık gelmez.'),
+    h('p', { id: 'desk-favs-now' }, h('b', null, 'Masanın varsayılanı: '), names(deskFavs())),
+    h('p', null, h('b', null, 'Sizin favorileriniz' + (favsAreDesk() ? ' (masanınki)' : '') + ': '), names(favs())));
+  const set = (ids, done) => setDeskFavs(ids).then(() => { toast(done, 'ok', 3200); m.close(); paintFavs(); }, errorToast);
+  m.foot.append(
+    h('button', { class: 'btn', type: 'button', id: 'desk-favs-clear', onclick: () => set([], 'Masanın varsayılan favorileri kaldırıldı') }, 'Varsayılanı kaldır'),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Vazgeç'),
+    h('button', { class: 'btn primary', type: 'button', id: 'desk-favs-save', onclick: () => set(favs(), 'Favorileriniz masanın varsayılanı oldu') },
+      'Favorilerimi varsayılan yap'));
 }
 
 /** "Açılış sayfası": the page (or launchpad) the dashboard opens on when no address is given. */
@@ -970,6 +998,11 @@ async function loadHeader() {
   // only when it changed since the strip was drawn (the same strip for everybody without inputs of their own)
   const res = await api.get('/api/header', state.headerGen ? { since: state.headerGen, as: state.headerAs } : null);
   state.headerAs = res.as;
+  // the personal-state badge: the values typed over formulas with every answer (none said: none), the normalization with
+  // the strip (said by the curve badge already on PPK basamak)
+  if (!res.unchanged) state.mine.norm = !!(res.mine && res.mine.norm) && !(res.interp && res.interp.norm);
+  state.mine.hand = res.hand || 0;
+  paintMine(state.mine);
   if (res.unchanged) return;
   state.headerGen = res.gen || 0;
   paintInterp(res.interp);
@@ -1082,6 +1115,37 @@ function applyCompact() {
   document.documentElement.classList.toggle('compact', compact());
 }
 
+// ---------------------------------------------------------------------- the menu below 1500 px
+// (the desk, 28.11.2026 - B10: at a laptop's 1366 px the menu's 214 px left 162 px too few for twenty tables, which
+// scrolled sideways by up to that much): below 1500 px the menu is a 52 px strip of its entries that opens over the
+// page - labels, groups, counts - while the mouse is on it (or the keyboard in it), so the page keeps its width.  ⇤ pins
+// it open or folds it at either width; each width keeps its own choice in this browser ('tto.nav' wide, 'tto.nav.narrow').
+const NARROW = 1500;
+const navKey = () => (window.innerWidth < NARROW ? 'tto.nav.narrow' : 'tto.nav');
+
+function applyNav() {
+  const v = store(navKey());
+  $('app').classList.toggle('nav-collapsed', window.innerWidth < NARROW ? v !== '0' : v === '1');
+}
+
+/** The strip opens over the page while the mouse rests on it (a moment first: passing by does not open it), closes when
+ *  it leaves, an entry is chosen or Esc is pressed. */
+function setupNavPeek() {
+  const side = $('side');
+  let timer = null;
+  const strip = () => side.getBoundingClientRect().width < 120;          // (a strip: folded, or a narrow window)
+  const set = (on, ms) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => side.classList.toggle('peek', on && (side.classList.contains('peek') || strip())), ms);
+  };
+  side.addEventListener('mouseenter', () => set(true, 140));
+  side.addEventListener('mouseleave', () => set(false, 260));
+  side.addEventListener('focusin', () => set(true, 0));
+  side.addEventListener('focusout', (e) => { if (!side.contains(e.relatedTarget)) set(false, 0); });
+  side.addEventListener('click', (e) => { if (e.target.closest && e.target.closest('a.nav-item')) set(false, 0); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && side.classList.contains('peek')) set(false, 0); });
+}
+
 let drawer = null;
 
 function boot() {
@@ -1091,7 +1155,8 @@ function boot() {
   else drawer = new Drawer(ctx);
   setLang(store('tto.lang') || 'tr');
   applyFlash(store('tto.flash') !== '0');
-  if (store('tto.nav') === '1') $('app').classList.add('nav-collapsed');
+  applyNav();
+  if (!POP) setupNavPeek();
 
   session.onUnauthorized = () => { showLogin('Oturumunuz sona erdi – tekrar giriş yapın.'); };
   const after = (res) => {
@@ -1130,18 +1195,21 @@ function boot() {
   });
   $('mode-badge').addEventListener('click', () => openStatus(state.status).catch(errorToast));
   $('interp-badge').addEventListener('click', () => ctx.goto('settings', 'interp'));
+  $('mine-badge').addEventListener('click', () => openMine(ctx, state.mine).catch(errorToast));
   $('hesap-ind').addEventListener('click', () => openProgress());
   if (!POP) setupProp();                            // "Prop": the calculator and the prop risk, on every page
   // the favourites on one line: fitted again whenever the room left for them changes - the window, the title, a badge or
   // "Hesap" coming and going (each of them watched: the bar itself keeps its width meanwhile)
   if (window.ResizeObserver) {
     const ro = new ResizeObserver(() => fitFavs());
-    for (const id of ['top', 'page-title', 'favs', 'mode-badge', 'interp-badge', 'asof', 'desk-alarm', 'hesap-ind']) if ($(id)) ro.observe($(id));
+    for (const id of ['top', 'page-title', 'favs', 'mode-badge', 'interp-badge', 'mine-badge', 'asof', 'desk-alarm', 'hesap-ind']) if ($(id)) ro.observe($(id));
   } else watchWidth($('top'), fitFavs);
   $('btn-collapse').addEventListener('click', () => {
     const on = $('app').classList.toggle('nav-collapsed');
-    store('tto.nav', on ? '1' : '0');
+    store(navKey(), on ? '1' : '0');                  // (this width's own choice: a laptop's and a desk screen's apart)
+    $('side').classList.remove('peek');
   });
+  window.addEventListener('resize', debounce(applyNav, 150));
   $('btn-ret').addEventListener('click', () => openRetEditor(ctx));
   const openFair = (e) => { e.stopPropagation(); e.preventDefault(); openRetEditor(ctx, { tab: 'fair' }); };
   $('ret-upd').addEventListener('click', openFair);
@@ -1186,7 +1254,8 @@ function boot() {
         title: 'Açık / koyu tema. Bu tarayıcıda saklanır.', action: () => { toggleTheme(); } },
       { label: 'Senaryolarım', action: () => openScenarios(ctx) },
       { label: 'Şifremi değiştir', action: () => openPasswordDialog() },
-    ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } }] : [],
+    ].concat(session.role === 'admin' ? [{ label: 'Kullanıcılar', action: () => { window.location.hash = '#/users'; } },
+      { label: 'Masanın varsayılan favorileri…', id: 'menu-desk-favs', action: () => openDeskFavs() }] : [],
       [{ sep: true }, { label: 'Çıkış', action: () => signOut() }]));
   });
   $('btn-fav').addEventListener('click', () => {

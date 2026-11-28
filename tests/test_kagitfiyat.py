@@ -1011,11 +1011,14 @@ def test_the_widths_are_the_administrators(svc, seeded):
         svc.kagit_fiyat_widths(a, {"widths": {"3y": 10}})
 
 
-def test_the_page_is_first_in_the_tahvil_menu(svc):
+def test_the_page_is_the_first_tab_of_dibs_fiyatlama(svc):
+    # (the menu's reorganization of 28.11.2026, tto/navmenu.py: DİBS Fiyatlama - Adil fiyat · AL/SAT, Tek kâğıt, Sabah fiyat
+    # dosyası, İhale)
     nav = svc.nav(svc.login("Kâğıt Menü")["user"])
-    tahvil = [p for p in nav if p["group"] == "Tahvil"]
-    assert tahvil[0]["id"] == "kagit-fiyat" and tahvil[0]["title"] == "Kâğıt Fiyatlama" and tahvil[0]["custom"]
-    assert [p["id"] for p in tahvil][1:4] == ["fiyat-yukleme", "kagitlar", "dibslive"]            # (Kâğıt Fiyat Yükleme next)
+    entry = [p for p in nav if p.get("menu") == "tahvil.fiyatlama"]
+    assert entry[0]["id"] == "kagit-fiyat" and entry[0]["title"] == "Kâğıt Fiyatlama" and entry[0]["custom"]
+    assert entry[0]["group"] == "Tahvil" and entry[0]["tab"] == "Adil fiyat · AL/SAT"
+    assert [p["id"] for p in entry][1:] == ["manuel", "fiyat-yukleme", "ihale"]
     assert kf.menu([{"id": "usd", "title": "USD", "group": "USD"}]) == [{"id": "usd", "title": "USD", "group": "USD"}]
 
 

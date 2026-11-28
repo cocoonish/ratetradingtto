@@ -26,16 +26,15 @@ def test_status_and_navigation(service):
     assert "blotter" in ids and "masa" in ids and "forward" in ids and "usd" in ids
     # the pages of the workbooks, the blotter and the dashboard's own pages (matrix, meeting pricing, spreads, settings)
     custom = [p["id"] for p in pages if p.get("custom")]
-    # (the quant pages in the order of their four menu entries: Sinyaller, Faiz, FX, VİOP - see menu.js)
-    # (Fiyatlama first: right after OIS · PPK in TRY Faiz - pricing.py - and Swaption right after it - swaption.py; DİBS RV ·
-    # Genel next: the Tahvil menu entry with tabs puts it before its workbook tabs - dibsgenel.py; Bugün, the morning screen,
-    # first of the desk's own pages: right under Masa in the menu - bugun.py; Kâğıt Fiyatlama the Tahvil menu's first entry -
-    # kagitfiyat.py - and Kâğıt Fiyat Yükleme right after it - fiyatyukleme.py)
-    assert custom == ["fiyatlama", "swaption", "kagit-fiyat", "fiyat-yukleme", "dibs-genel", "bugun", "watch", "heat", "blotter", "broker", "trades", "eod", "mpc", "vol", "spreads", "settings", "fx", "fxvol",
-                      "quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira", "quant-ml",
+    # (in the menu's order - tto/navmenu.py, the desk's reorganization of 28.11.2026: Masa (Bugün, Masa, İşlemler, Piyasa
+    # hareketi, Masa iletişim), TRY Faiz (OIS · PPK + PPK geçmişi, Fiyatlama + Swaption + Nakit akışı, …, Carry & Roll +
+    # Realized vol + Spread geçmişi), Tahvil (DİBS Piyasa, DİBS Fiyatlama, DİBS RV), FX · USD, Quant (Sinyaller - VİOP its
+    # last tab -, Faiz analizleri, FX analizleri), Araçlar last)
+    assert custom == ["bugun", "blotter", "trades", "broker", "heat", "eod", "watch", "social", "agenda", "mpc", "fiyatlama", "swaption",
+                      "vol", "spreads", "kagit-fiyat", "fiyat-yukleme", "dibs-genel", "fx", "fxvol",
+                      "quant", "quant-intraday", "quant-model", "quant-trend", "quant-sira", "quant-ml", "quant-viop",
                       "quant-pca", "quant-pairs", "quant-corr", "quant-regime", "quant-curve", "quant-dibssw", "quant-path", "quant-wirp", "quant-lead",
-                      "quant-fx", "quant-macro", "quant-opt", "quant-optspot",
-                      "quant-viop", "social", "agenda"]
+                      "quant-fx", "quant-macro", "quant-opt", "quant-optspot", "settings"]
     assert len(ids) == len(set(ids)) == len(VIEW_IDS) + 40
 
 

@@ -4,7 +4,8 @@
 // copies ("Geçici kopya aç" in its "+ Launchpad" menu): "… · kopya 2" right under it, with inputs of its own.
 import { openAddIsin, bondCardLinks, bondFlags } from '../bonds.js';
 import { api } from '../api.js';
-import { h, clear, toast, errorToast, confirmDialog, menu, fitOneLine, watchWidth, foldNote } from '../ui.js';
+import { h, clear, toast, errorToast, confirmDialog, menu, fitOneLine, watchWidth, foldNote, waiting } from '../ui.js';
+import { dayTime } from '../mine.js';
 import { Grid, copyGrid, findCell, reviveEditor, trackWrite } from '../grid.js';
 import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
@@ -68,14 +69,17 @@ export class ViewPage {
     this.book = null;
     this.dead = false;
     this.keepAlive = true;               // kept with the last pages opened: back in view as it was (tab, scroll)
+    this.staleInputs = [];               // the page's market levels typed on an earlier day (checkStale)
+    this.staleAt = 0;
   }
 
   async load() {
     clear(this.host);
-    this.host.appendChild(h('div', { class: 'loading' }, 'Hesaplanıyor…'));
+    this.host.appendChild(waiting());              // (the page's first answer on its way: "Hesaplanıyor…")
     const data = await this.fetch();
     if (this.dead) return;
     this.build(data);
+    this.checkStale(true);
   }
 
   /** The page: all of it, or (``extra``: {since, panels}) the panels asked for that changed since a generation. */
@@ -104,6 +108,7 @@ export class ViewPage {
   async refresh() {
     const ids = (this.placed || []).filter((id) => this.items.has(id));
     if (!ids.length || this.dead) return;
+    this.checkStale();                                // (at most once a minute: the market levels typed on an earlier day)
     const since = Math.min(...ids.map((id) => this.items.get(id).gen || 0));
     const had = this.as;
     const data = await this.fetch({ since, panels: ids.join(','), as: had });
@@ -245,6 +250,10 @@ export class ViewPage {
     this.overChip = h('button', { class: 'btn sm warnchip hidden', type: 'button', id: 'hand-values',
       title: 'Bu sayfada formülün yerine elle yazdığınız değerler var. Tıklayın: hepsi formüle döner.' });
     this.overChip.addEventListener('click', () => this.restoreFormulas());
+    // the market levels of this page typed on an earlier day (the desk, 28.11.2026 - A7): "N girdi dünden · temizle"
+    this.staleChip = h('button', { class: 'btn sm warnchip hidden', type: 'button', id: 'stale-inputs' });
+    this.staleChip.addEventListener('click', () => this.clearStale());
+    this.paintStale();
     // what the colours of the cells mean: one click away, behind "?" (the desk, 27.11.2026: a lighter top of the page) -
     // and how long the page took, said there
     const legend = h('div', { class: 'legend' },
@@ -266,8 +275,11 @@ export class ViewPage {
       menu(r.right - 290, r.bottom + 4, [{ header: 'Hücre renkleri' }, { node: legend },
         { node: h('div', { class: 'mh legend-ms' }, 'Sayfa ' + data.ms + ' ms\'de hesaplandı') }], 'legend-pop');
     });
-    this.host.appendChild(h('div', { class: 'page-tools' }, search, allBtn, handBtn, resetBtn, this.overChip, h('span', { class: 'grow' }),
-      legendBtn));
+    // a page in tabs has its tools at the tab bar's empty right end (the desk, 28.11.2026 - B3: one row less above the
+    // tables, and in sight with the tab bar while the page scrolls); a page without tabs keeps them on a row of their own
+    const tools = h('div', { class: 'page-tools' }, search, allBtn, handBtn, resetBtn, this.overChip, this.staleChip,
+      h('span', { class: 'grow' }), legendBtn);
+    if (!this.sections.length) this.host.appendChild(tools);
 
     if (data.links && data.links.length) {
       // the workbook's own "go to" links: other pages, straight to the table they point at - on one line, "+N" the rest
@@ -301,10 +313,14 @@ export class ViewPage {
     this.tabBtns = new Map();
     for (const s of this.sections) this.tabBtns.set(s.id, this.tabButton(s.id, s.title, s.panels.length));
     if (this.sections.length) this.tabBtns.set(ALL, this.tabButton(ALL, 'Tümü', this.ids.length));
-    this.secNote = h('div', { class: 'secnote hidden' });
+    // the tab's note: one line, "devamı" the rest (the desk, 28.11.2026 - B2: a tab's note took several lines over its
+    // tables)
+    this.secText = h('span', { class: 'sn-text' });
+    this.secNote = h('div', { class: 'secnote hidden' }, this.secText);
+    this.secFold = foldNote(this.secNote);
     this.wrap = h('div', { class: 'panels' });
     if (this.pinned.length) this.host.appendChild(this.pinWrap);
-    if (this.sections.length) this.host.appendChild(this.tabBar);
+    if (this.sections.length) this.host.appendChild(h('div', { class: 'tabline' }, this.tabBar, tools));
     this.host.appendChild(this.secNote);
     this.host.appendChild(this.wrap);
     this.layout();
@@ -385,8 +401,14 @@ export class ViewPage {
     if (!shown) this.wrap.appendChild(h('div', { class: 'empty' }, q ? 'Aramayla eşleşen tablo yok' : 'Bu sekmede tablo yok'));
     for (const [id, b] of this.tabBtns) b.classList.toggle('on', !q && id === this.tab);
     this.tabBar.classList.toggle('searching', !!q);
-    this.secNote.textContent = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
-    this.secNote.classList.toggle('hidden', !this.secNote.textContent);
+    const said = q ? 'Arama sonucu: tüm sekmelerdeki eşleşen tablolar' : note;
+    if (this.secText.textContent !== said) {
+      this.secText.textContent = said;
+      this.secNote.classList.remove('open');           // (another tab's note: folded to its line again)
+      this.secFold.more.textContent = 'devamı';
+    }
+    this.secNote.classList.toggle('hidden', !said);
+    this.secFold.check();
     this.placed = placed;
     this.dedupeNotes();
     reviveEditor();                    // (a cell typed into whose table left the page: its editor goes on in a bar of its own)
@@ -463,6 +485,60 @@ export class ViewPage {
       toast((res.reset || 0) + ' hücre formüle döndü', 'ok');
       this.ctx.refreshNow();
     } catch (err) { errorToast(err); }
+  }
+
+  /**
+   * The market levels on this page typed on an earlier day (the desk, 28.11.2026 - A7: a spot, a spread, a meeting's
+   * rate, a quote, a pasted DV01 left from yesterday - tto/myinputs.py; never a setting): the user's own and the desk's
+   * (the manual spot), from /api/my-inputs - asked when the page is built and then at most once a minute (``force``: now).
+   */
+  async checkStale(force) {
+    const now = Date.now();
+    if (!force && this.staleAt && now - this.staleAt < 60000) return;
+    this.staleAt = now;
+    let data;
+    try { data = await api.get('/api/my-inputs'); } catch (err) { return; }
+    if (this.dead) return;
+    const here = (x) => x.old && x.market && (x.pages || []).some((p) => p.view === this.id);
+    this.staleInputs = (data.inputs || []).filter(here).concat((data.desk || []).filter(here));
+    this.paintStale();
+  }
+
+  paintStale() {
+    if (!this.staleChip) return;
+    const items = this.staleInputs || [];
+    const n = items.length;
+    this.staleChip.classList.toggle('hidden', !n);
+    this.staleChip.textContent = n ? n + ' girdi dünden · temizle' : '';
+    this.staleChip.title = n ? 'Bu sayfada bugünden önce yazılmış piyasa girdileri (ayarlar değil):\n'
+      + items.slice(0, 12).map((x) => '• ' + x.market + ' · ' + x.ref + ' = ' + x.value + ' · ' + dayTime(x.at)
+        + (x.shared ? ' · ortak' + (x.by ? ' (' + this.ctx.displayName(x.by) + ')' : '') : '')).join('\n')
+      + (n > 12 ? '\n…' : '') + '\nTıklayın: silinir, hücreler varsayılanına (formülüne / piyasaya) döner.' : '';
+  }
+
+  /** "temizle": the stale levels of the page taken back to their defaults (asked first; the desk's own for everybody). */
+  async clearStale() {
+    const items = this.staleInputs || [];
+    if (!items.length) return;
+    const shared = items.filter((x) => x.shared).length;
+    const ok = await confirmDialog('Dünden kalan girdiler', items.length + ' piyasa girdisi bugünden önce yazılmış ('
+      + items.slice(0, 6).map((x) => x.market + ' ' + x.ref + ', ' + dayTime(x.at)).join('; ') + (items.length > 6 ? ' …' : '')
+      + '). Silinir; hücreler varsayılanına - formülüne, piyasaya - döner.'
+      + (shared ? ' ' + shared + ' tanesi masanın ortak girdisi (manuel spot): herkes için döner.' : ''), 'Temizle');
+    if (!ok) return;
+    try {
+      const groups = new Map();
+      for (const x of items) {
+        const k = x.book + '|' + (x.shared ? '1' : '');
+        if (!groups.has(k)) groups.set(k, { book: x.book, shared: !!x.shared, refs: [] });
+        groups.get(k).refs.push(x.ref);
+      }
+      let n = 0;
+      for (const g of groups.values()) n += ((await trackWrite(api.post('/api/reset', g))) || {}).reset || 0;
+      toast(n + ' girdi temizlendi: varsayılanına döndü', 'ok', 3200);
+      this.ctx.refreshNow();
+    } catch (err) { errorToast(err); }
+    this.checkStale(true);
   }
 
   /**

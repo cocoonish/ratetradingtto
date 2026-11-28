@@ -251,6 +251,15 @@ function prepare(data, wrap = true) {
   return data;
 }
 
+/** The element a table scrolls sideways in (a panel's body, a box's): its nearest ancestor that scrolls. */
+function scrollerOf(el) {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowX;
+    if (o === 'auto' || o === 'scroll') return p;
+  }
+  return null;
+}
+
 /** A cell's text into its <td>: a long note that wraps (``ovw``) in a box of its own that gives the table no width. */
 function fillText(td, cell) {
   const t = cell.t || '';
@@ -420,9 +429,45 @@ export class Grid {
     if (this.columns) this.columns.mount(this.opts.tools);
     this.update(this.opts.data, false);
     if (window.ResizeObserver) {
-      // column widths change with the content and when a collapsed panel opens: re-pin the frozen columns
-      this._ro = new ResizeObserver(() => this._freeze());
+      // column widths change with the content and when a collapsed panel opens: re-pin the frozen columns; the table or
+      // the panel it scrolls in changes width: its long notes wrap in what is on screen (_noteWidth)
+      this._ro = new ResizeObserver(() => { this._freeze(); this._noteWidth(); });
       this._ro.observe(this.el);
+    }
+  }
+
+  /**
+   * A long note that runs over a row (``ovw``: prepare) wraps in the part of the table that is on screen while the table
+   * is wider than the panel it scrolls in (the desk, 28.11.2026 - B2: it wrapped in the table's whole width and was cut at
+   * the panel's edge - Kotasyon, TOPLU FORWARD, FSS, ÇAPRAZ, DİBS Trading's Valörler): the table ``notevis``, each note
+   * its ``--note-w`` - the width on screen right of where it starts (a note starting mid-table too), at least 200 px -
+   * and the note stays at the left of the screen while the table scrolls sideways (app.css, sticky).  None while the
+   * table fits.
+   */
+  _noteWidth() {
+    const el = this.el;
+    const tds = el.isConnected ? el.querySelectorAll('td.ovw') : [];
+    if (!tds.length) {
+      if (this._visKey) { el.classList.remove('notevis'); this._visKey = null; }
+      return;
+    }
+    if (!this._scroller || !this._scroller.contains(el)) {
+      this._scroller = scrollerOf(el);
+      if (this._scroller && this._ro) this._ro.observe(this._scroller);
+    }
+    const sc = this._scroller;
+    if (!sc) return;
+    const width = el.offsetWidth;
+    const over = width > sc.clientWidth + 1;
+    const key = over ? sc.clientWidth + ':' + width : '';
+    if (key === (this._visKey || '')) return;
+    this._visKey = key || null;
+    el.classList.toggle('notevis', over);
+    if (!over) return;
+    const left0 = el.getBoundingClientRect().left;
+    for (const td of tds) {
+      const at = Math.max(0, td.getBoundingClientRect().left - left0);
+      td.style.setProperty('--note-w', Math.max(200, sc.clientWidth - 16 - at) + 'px');
     }
   }
 
@@ -575,6 +620,8 @@ export class Grid {
       editing.pts = [];
       paintPoint(editing);
     }
+    this._visKey = null;                  // (new cells: the long notes' widths again)
+    this._noteWidth();
     if (this.opts.onBuild) this.opts.onBuild(this);
   }
 

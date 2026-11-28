@@ -1,6 +1,7 @@
 // "Hesap" (tto/progress.py): where the long calculations are - the quant fit, the ML family's models, the backtest, the
-// history sync.  In the top bar only while one runs ("Hesap · Quant 14/26 · ML 240/480 · geri test 12/25 · ~3 dk"); a
-// click lists each job with its step, done / total, since when and the time left.  It follows the status the shell
+// history sync.  In the top bar only while one runs, short ("Hesap Quant 14/26 +2 · ~3 dk": the first job, how many more,
+// the time left - the desk, 28.11.2026); its tooltip and a click list each job with its step, done / total, since when
+// and the time left.  It follows the status the shell
 // polls (every 15 s, and on a reconnect) and, while something runs, asks /api/progress every few seconds - nothing at
 // all when idle.
 import { api } from './api.js';
@@ -22,7 +23,9 @@ export function showProgress(v) {
     b.classList.toggle('hidden', !view);
     clear(b);
     if (view) {
-      b.append(h('span', { class: 'hs-dot' }), h('span', { class: 'hs-lbl' }, 'Hesap'), h('span', { class: 'hs-txt', id: 'hesap-text' }, view.text));
+      // short (the desk, 28.11.2026 - B9: the page's title was cut while "Hesap" said every job): the first job's count,
+      // how many more, the time left - every job in the tooltip and a click away
+      b.append(h('span', { class: 'hs-dot' }), h('span', { class: 'hs-lbl' }, 'Hesap'), h('span', { class: 'hs-txt', id: 'hesap-text' }, shortText(view)));
       b.title = view.jobs.map(line).join('\n') + '\n\nAyrıntı için tıklayın';
     } else {
       b.title = '';
@@ -41,6 +44,13 @@ async function poll() {
   } catch (err) {
     if (view) timer = setTimeout(poll, EVERY);   // (the server or the network gone a moment: ask again)
   }
+}
+
+/** The chip's text: the first job's count, "+N" the others, the time left ("Quant 14/26 +2 · ~3 dk"). */
+export function shortText(v) {
+  const jobs = (v && v.jobs) || [];
+  const first = jobs.length ? (jobs[0].short || jobs[0].name || jobs[0].title || '') : (v && v.text) || '';
+  return first + (jobs.length > 1 ? ' +' + (jobs.length - 1) : '') + (v && v.eta ? ' · ' + v.eta : '');
 }
 
 /** One job in a line: "Quant tam hesap: 14 / 26 adım · şu an Trend · 10:42:05'ten beri · ~3 dk". */
