@@ -127,6 +127,9 @@ RULES = (
     Rule("mpc_days", "PPK fiyatlama geçmişi", "gün", key=("day",), history=True, day="day"),
     Rule("mpc_values", "PPK fiyatlama geçmişinin değerleri", "değer", key=("day", "meeting"), group="day", history=True,
          day="day"),
+    # (the quote log, tto/quotelog.py: a quote's status changes - the later wins)
+    Rule("quote_log", "verilen kotalar", "kota", birth=("created_at", "created_by"), newer="updated_at", day="quote_date",
+         json=("payload",)),
 )
 
 

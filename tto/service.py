@@ -27,6 +27,7 @@ from . import auth
 from . import blotter as bl
 from . import ppkcurve as pk
 from . import pricing as pr
+from . import quotelog as ql
 from . import bonds as bd
 from . import borsaspread as bsp
 from . import brokerchat as bc
@@ -2208,7 +2209,7 @@ class Service(object):
 
         row, part = number(row), number(part)
 
-        def run() -> str:
+        def run() -> Tuple[str, Optional[Dict[str, Any]]]:
             calc = self._calc(user, book)
             fmts = book.model.numfmts
 
@@ -2217,13 +2218,27 @@ class Service(object):
                 st = book.model.sheets[si].styles.get(rc, 0)
                 return calc.get(si, *divmod(rc, COLS)), (fmts[st] if st < len(fmts) else "General")
 
-            return qt.quote_text(p["client_quote"], read, sheet, lang, serial_to_date(book.engine.clock.today()), row, part)
+            text = qt.quote_text(p["client_quote"], read, sheet, lang, serial_to_date(book.engine.clock.today()), row, part)
+            # the quote log (tto/quotelog.py): every copy is a quote given - its levels as the table has them now
+            try:
+                rec = ql.from_table(p["client_quote"], read, sheet, row, part, text,
+                                    {"page": v["id"], "panel": str(panel_id), "panel_title": str(p.get("title") or "")})
+            except Exception:  # noqa: BLE001 - the copy stands without its record
+                log.warning("kotasyon defteri: %s / %s okunamadı", v["id"], panel_id, exc_info=True)
+                rec = None
+            return text, rec
 
         try:
-            text = self.et.call(run)
+            text, rec = self.et.call(run)
         except qt.QuoteError as exc:
             raise ServiceError(str(exc))
-        return {"text": text, "language": lang, "view": v["id"], "panel": panel_id, "row": row, "part": part}
+        out = {"text": text, "language": lang, "view": v["id"], "panel": panel_id, "row": row, "part": part}
+        if rec is not None:
+            try:
+                out["log_id"] = self.store.add_quote_log(self.today_iso(), rec, "open", user)
+            except Exception:  # noqa: BLE001 - the copy stands without its record
+                log.warning("kotasyon defteri: kayıt yazılamadı", exc_info=True)
+        return out
 
     def _panel(self, p, v, book, calc, R, loc, overlay, user, sheet, charts, show_hidden, explorer) -> Dict[str, Any]:
         """One panel of a page as the browser draws it."""
@@ -8299,7 +8314,284 @@ class Service(object):
             out["error"] = str(exc)
         # the Toplu box: its lines off the same curves (each its own error; the page's instrument's error not theirs)
         out["bulk"] = pr.bulk(inputs, curves, method)
+        asset = inputs["asset"]
+        if "error" not in out and out.get("label"):
+            out["hedges"] = pr.hedges(out, curves)              # C3: each bucket's opposite TRY OIS (OIS / FRA only)
+            if asset == pr.FX:
+                # the forward card (28.11.2026): every source at the value date, the ladder, the quote
+                try:
+                    out["card"] = self._forward_card(user, book, calc, inputs, curves, out["methods"][0], out["size"]["size"])
+                except (pr.PricingError, ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
+                    log.warning("forward kartı: %s", exc, exc_info=True)
+                    out["card"] = {"error": "forward kartı hesaplanamadı: %s" % exc}
+        if asset != pr.FX:
+            self._drop_fwd_layers(user, book)
         return out
+
+    # ------------------------------------------------------------------ Fiyatlama: the forward card (28.11.2026)
+    #: FORWARD KOTASYON's matrices (EK_FWD, extras._tto_forward / _tto_fwd_eur): the general row, the rows a date can
+    #: be evaluated in (their valör B is an input), the curve's cell - and the columns read: A label, B valör, C days,
+    #: D / E spread, H / I puan, J / K fwd, L OIS %, M / N TRY %, O USD / EUR %, R / S RET %, V / W market spread (bp)
+    FWD_MATRIX = {"USDTRY": (ex.FWD_ALL, ex.FWD_ROWS, 2), "EURTRY": (ex.FWD_EUR_ALL, ex.FWD_EUR_ROWS, ex.FWD_EUR_ALL - 2)}
+    FWD_COLS = {"label": 1, "valor": 2, "days": 3, "sp_bid": 4, "sp_ask": 5, "pts_bid": 8, "pts_ask": 9, "fwd_bid": 10,
+                "fwd_ask": 11, "ois": 12, "try_bid": 13, "try_ask": 14, "ccy": 15, "ret_bid": 18, "ret_ask": 19,
+                "mkt_bid": 22, "mkt_ask": 23}
+    #: the columns a date's evaluation reads that depend on the valör only (a user's "Elle değer" on one of them, or on a
+    #: helper X..AL, makes the row unusable for another date)
+    FWD_PURE = (3, 12, 15, 18, 19, 22, 23) + tuple(range(24, 39))
+    #: the VİOP sheet's contracts: columns M … X; rows 1 (the ticker, one column to the left), 9 expiry, 10 VKGS, 13 / 25
+    #: implied TRY bid / ask (decimal), 14 / 26 points, 16 / 28 price bid / ask
+    VIOP_CONTRACTS = (13, 24)
+    VIOP_ROW = {"expiry": 9, "days": 10, "try_bid": 13, "pts_bid": 14, "px_bid": 16, "try_ask": 25, "pts_ask": 26, "px_ask": 28}
+    #: the layers a user's forward card is evaluated in at most (10 dates each)
+    FWD_LAYERS = 3
+
+    def _fwd_layer_keys(self, user: str) -> List[Tuple[str, str, int]]:
+        return [("pricing-fwd", user, k) for k in range(self.FWD_LAYERS)]
+
+    def _drop_fwd_layers(self, user: str, book, keep: int = 0) -> None:
+        for key in self._fwd_layer_keys(user)[keep:]:
+            book.engine.drop_layer(key)
+
+    def _forward_card(self, user: str, book, calc, inputs: Dict[str, Any], curves: "pr.Curves", method: str,
+                      size: Optional[float]) -> Dict[str, Any]:
+        """The forward card of the user's FX forward (:func:`tto.pricing.forward_card`): FORWARD KOTASYON's own row at
+        every date it shows - the value date, the ladder's tenors and PPK meetings - read from the user's matrix where
+        one of its rows is at that date (as they see it), else evaluated in a layer of the engine over the user's
+        calculation with a row's valör set to the date (``engine.layer``: nothing of the user's changes, nothing is
+        kept); RET, the market's spread, the USD / EUR rate from the same row; VİOP's contracts; Fiyatlama's offshore
+        curve (the user's ``method``) for the offshore mid.  Calculation thread."""
+        mk = curves.mk
+        f = inputs["by"][pr.FX]
+        deal = pr.instrument(pr.FX, f, mk)
+        pair = deal.pair
+        idx = book.model.sheet_index
+        si = idx[ex.FWD_SHEET]
+        gen_row, (r1, r2), curve_row = self.FWD_MATRIX[pair]
+        c = self.FWD_COLS
+        num = lambda v: v if type(v) is float and v == v else None          # noqa: E731
+        gen = pr.FwdGeneral(curve=str(calc.get(si, curve_row, 2) or ""), mode=str(calc.get(si, gen_row, 2) or ""),
+                            spread_bid=num(calc.get(si, gen_row, 4)), spread_ask=num(calc.get(si, gen_row, 5)),
+                            spot_bid=num(calc.get(si, gen_row, 6)), spot_ask=num(calc.get(si, gen_row, 7)))
+        # the meetings (Motor's list from MPC1: name, decision day, the implied step OIS_MAIN!R shows)
+        mo, oi = idx["Motor"], idx["OIS_MAIN"]
+        meetings = []
+        for k in range(80):
+            day, eff = num(calc.get(mo, 5 + k, 2)), num(calc.get(mo, 5 + k, 3))
+            if day is None or eff is None or eff >= 99999:
+                break
+            meetings.append({"name": calc.get(mo, 5 + k, 1), "date": day, "step": num(calc.get(oi, 10 + k, 18))})
+        ladder = pr.ladder_dates(deal.start, deal.end, mk.holidays[pair], meetings)
+        dates = sorted({deal.end} | {r["date"] for r in ladder})
+        # the user's own matrix rows by their valör (read as they see them)
+        own_rows: Dict[float, int] = {}
+        for r in range(r1, r2 + 1):
+            v = num(calc.get(si, r, c["valor"]))
+            if v is not None and v not in own_rows:
+                own_rows[v] = r
+        ov = self._overlay(user, book) if user else {}
+        free = [r for r in range(r1, r2 + 1) if not any((si, r * COLS + col) in ov for col in self.FWD_PURE)]
+
+        def point(src, r: int, day: float, own: bool) -> pr.FwdPoint:
+            g = lambda key: num(src.get(si, r, c[key]))                    # noqa: E731
+            mine = None
+            if own:
+                mine = {k: g(k) for k in ("try_bid", "try_ask", "fwd_bid", "fwd_ask", "pts_bid", "pts_ask", "sp_bid", "sp_ask")}
+                mine["label"] = str(src.get(si, r, c["label"]) or "")
+            return pr.FwdPoint(date=day, days=g("days"), ois=g("ois"), ccy=g("ccy"), ret_bid=g("ret_bid"), ret_ask=g("ret_ask"),
+                               mkt_bid=g("mkt_bid"), mkt_ask=g("mkt_ask"), own=mine)
+
+        points: Dict[float, pr.FwdPoint] = {}
+        todo = []
+        for day in dates:
+            if day in own_rows:
+                points[day] = point(calc, own_rows[day], day, True)
+            else:
+                todo.append(day)
+        if todo and not free:
+            raise pr.PricingError("FORWARD KOTASYON'un satırlarında elle değer var: tarih hesaplanamadı")
+        batches = [todo[k:k + len(free)] for k in range(0, len(todo), len(free))] if todo else []
+        if len(batches) > self.FWD_LAYERS:
+            batches = batches[:self.FWD_LAYERS]                 # (the farthest ladder rows left out: never the valör)
+            if deal.end in todo and not any(deal.end in b for b in batches):
+                batches[-1][-1] = deal.end
+        parent = calc
+        for k, days in enumerate(batches):
+            layer = book.engine.layer(self._fwd_layer_keys(user)[k], parent,
+                                      {(si, r * COLS + c["valor"]): float(day) for r, day in zip(free, days)})
+            for r, day in zip(free, days):
+                points[day] = point(layer, r, day, False)
+        self._drop_fwd_layers(user, book, keep=len(batches))
+        # VİOP's USDTRY contracts (none for EURTRY)
+        contracts = []
+        if pair == "USDTRY" and "VIOP" in idx:
+            vi = idx["VIOP"]
+            for col in range(self.VIOP_CONTRACTS[0], self.VIOP_CONTRACTS[1] + 1):
+                got = {k: num(calc.get(vi, r, col)) for k, r in self.VIOP_ROW.items()}
+                ticker = calc.get(vi, 1, col - 1)
+                got["name"] = str(ticker).replace(" Curncy", "").strip() if isinstance(ticker, str) else ""
+                if got["expiry"] is not None and got["try_bid"] is not None and got["try_ask"] is not None:
+                    contracts.append(got)
+        off = curves.curve(pr.OFF, method)
+        off_mids = {day: ((pr.forward(deal, off), (off.df(deal.start - deal.spot) / off.df(deal.end - deal.spot) - 1.0)
+                           * 360.0 / (deal.end - deal.start)) if off is not None and day == deal.end
+                          else pr.off_mid(deal, day, off, mk))
+                    for day in points}
+        card = pr.forward_card(deal, gen, points, contracts, off_mids, ladder, f.get("source") or pr.DEFAULT_SOURCE,
+                               f["side"], size)
+        card["label"] = deal.label
+        card["client"] = f.get("client") or ""
+        card["sources_text"] = pr.SOURCE_TEXT
+        return card
+
+    def pricing_quote(self, user: Optional[str], body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Fiyatlama's forward card, "Kotasyon kopyala" / "Done" / "Done değil": the picked source's quote of the user's FX
+        forward priced now, as text to send (``language`` tr / en), logged in the quote log (tto/quotelog.py) with the
+        client typed - ``status`` "open" (a copy; default), or "done" / "not_done" when the trader says so without having
+        copied it.  ``source``: another source than the one kept (the card's own choice is kept with the inputs)."""
+        key = self.require_user(user)
+        b = body if isinstance(body, dict) else {}
+        status = str(b.get("status") or "open")
+        if status not in ql.STATUSES:
+            raise ServiceError("durum open, done ya da not_done olmalı")
+        fields = {k: b[k] for k in ("source", "client") if b.get(k) is not None}
+        # (the card's client / source kept with the FX forward's inputs; the page's instrument as it is)
+        stored = pr.clean_inputs({"by": {pr.FX: fields}} if fields else None, self.store.get(self.PRICING_KEY + key))
+        if fields:
+            self.store.put(self.PRICING_KEY + key, stored)
+        inputs = dict(stored, asset=pr.FX)
+        got = self.et.call(self._pricing, key, inputs)
+        card = got.get("card")
+        if got.get("error") or not card or card.get("error"):
+            raise ServiceError(got.get("error") or (card or {}).get("error") or "forward kartı yok")
+        lang = "en" if str(b.get("language") or "").lower() == "en" else "tr"
+        f = inputs["by"][pr.FX]
+        label = pr.when_label(pr.parse_when(f["end"]) or ("d", card["valor"]))
+        today = date_to_serial(_dt.date.today())
+        text = pr.card_quote_text(card, label, lang, today)
+        q = next(s for s in card["sources"] if s["id"] == card["picked"])
+        deal = card["deal"]
+        rec = {"product": "FX forward", "instrument": "%s forward %s" % (card["pair"], label), "pair": card["pair"],
+               "side": deal["side"], "source": "Fiyatlama · forward kartı · %s" % pr.SOURCE_TEXT[card["picked"]],
+               "page": "fiyatlama", "client": f.get("client") or "", "size": deal.get("amount"), "value_date": card["valor"],
+               "levels": {"bid": q["fwd"].get("bid"), "ask": q["fwd"].get("ask"), "unit": "kur", "kind": "outright",
+                          "text": pr._fmt(q["fwd"].get("bid"), 4, "tr") + " / " + pr._fmt(q["fwd"].get("ask"), 4, "tr")},
+               "text": text}
+        rec, _ = ql.clean_new(rec)
+        rec["spot"] = deal.get("spot")
+        rec["level"] = deal.get("level")
+        qid = self.store.add_quote_log(self.today_iso(), rec, status, key)
+        return {"text": text, "language": lang, "id": qid, "quote": self.store.quote_log_item(qid), "card": card}
+
+    # ------------------------------------------------------------------ Fiyatlama: Pozisyona ekle (deneme) - C3
+    def pricing_trial(self, user: Optional[str]) -> Dict[str, Any]:
+        """"Pozisyona ekle (deneme)": DV01 Risk's buckets + the user's Fiyatlama instrument, before and after - the total
+        DV01, the four VaRs and the PPK decision risk - by DV01 Risk's own formulas in a layer of the engine over the
+        user's calculation (tto/pricing.py ``TRIAL_TEXT``); nothing is saved."""
+        key = self.require_user(user)
+        inputs = pr.clean_inputs(None, self.store.get(self.PRICING_KEY + key))
+        return self.et.call(self._pricing_trial, key, inputs)
+
+    def _pricing_trial(self, user: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        got = self._pricing(user, inputs)
+        if got.get("error") or not got.get("label"):
+            return {"available": False, "error": got.get("error") or "fiyatlanan işlem yok"}
+        book = self.books.get("tto")
+        idx = book.model.sheet_index
+        if pr.DV01_SHEET not in idx:
+            return {"available": False, "error": "DV01 Risk sayfası yok"}
+        si = idx[pr.DV01_SHEET]
+        calc = self._calc(user, book)
+        num = lambda v: v if type(v) is float and v == v else None          # noqa: E731
+        col = pr.DV01_COL
+        n = pr.DV01_LAST - pr.DV01_FIRST + 1
+        sign = num(calc.get(si, *pr.DV01_SIGN)) or 1.0
+        buckets = [(str(calc.get(si, pr.DV01_FIRST + k, col["name"]) or ""), num(calc.get(si, pr.DV01_FIRST + k, col["days"])))
+                   for k in range(n)]
+        method = got["methods"][0]
+        usdtry = got["usdtry"]
+        pillars = [(b["name"], b["day"] if b["day"] is not None else 0.0, (b["dv01"].get(method) or 0.0) * usdtry)
+                   for b in got["buckets"]["rows"] if b.get("pillar")]
+        deal = pr.to_buckets(pillars, buckets)                # TL/bp, + = gains when rates rise
+        family = got["family"]
+        ov = self._overlay(user, book)
+        eng = book.engine
+        add: Dict[Tuple[int, int], Any] = {}
+        cols = [col["tlref"], col["dv01"]] if family == pr.ON else [col["offshore"]]
+        for k, d in enumerate(deal):
+            if not d:
+                continue
+            for cc in cols:
+                r = (pr.DV01_FIRST if cc == col["dv01"] else pr.VAR_FIRST) + k
+                rc = r * COLS + cc
+                if cc == col["dv01"] and rc in eng.fml[si] and (si, rc) not in ov and rc not in eng.input_value[si]:
+                    continue                                   # (a formula default - Onshore + TLREF: it follows the column)
+                add[(si, rc)] = (num(calc.get(si, r, cc)) or 0.0) + d / sign
+        key = ("pricing-trial", user)
+        after = eng.layer(key, calc, add)
+        try:
+            def read(src) -> Dict[str, Any]:
+                out = {"buckets": [(num(src.get(si, pr.DV01_FIRST + k, col["dv01"])) or 0.0) * sign for k in range(n)],
+                       "total": num(src.get(si, *pr.DV01_TOTAL)),
+                       "var": [{"name": str(src.get(si, r, 23) or ""), "dv01": num(src.get(si, r, 24)), "var": num(src.get(si, r, 25))}
+                               for r in range(pr.VAR_ROWS[0], pr.VAR_ROWS[1] + 1)],
+                       "var_status": str(src.get(si, *pr.VAR_STATUS) or ""), "ppk": []}
+                for r in range(pr.PPK_ROWS[0], pr.PPK_ROWS[1] + 1):
+                    name = src.get(si, r, 2)
+                    if not isinstance(name, str) or not name.strip():
+                        continue
+                    out["ppk"].append({"name": name, "date": num(src.get(si, r, 3)), "period": num(src.get(si, r, 6)),
+                                       "decision": num(src.get(si, r, 7)), "pnl25": num(src.get(si, r, 10))})
+                return out
+            before, then = read(calc), read(after)
+        finally:
+            eng.drop_layer(key)
+        rows = [{"name": buckets[k][0], "before": before["buckets"][k], "deal": deal[k], "after": then["buckets"][k]}
+                for k in range(n)]
+        var = [dict(b, dv01_after=a["dv01"], var_after=a["var"]) for b, a in zip(before["var"], then["var"])]
+        ppk = [dict(b, decision_after=a["decision"], pnl25_after=a["pnl25"], period_after=a["period"])
+               for b, a in zip(before["ppk"], then["ppk"])]
+        return {"available": True, "label": got["label"], "side": got["side"], "family": family, "method": method,
+                "usdtry": usdtry, "sign": sign, "buckets": rows, "total": {"before": before["total"], "after": then["total"]},
+                "deal_total": sum(deal), "var": var, "var_status": then["var_status"], "ppk": ppk, "text": pr.TRIAL_TEXT,
+                "columns": "TLREF + Pozisyon" if family == pr.ON else "Offshore", "saved": False}
+
+    # ================================================================== Kotasyon defteri (quotelog.py)
+    def quote_log_add(self, user: Optional[str], payload: Any) -> Dict[str, Any]:
+        """``POST /api/quote-log``: a quote given (tto/quotelog.py) - ``{id, quote}``."""
+        key = self.require_user(user)
+        try:
+            rec, status = ql.clean_new(payload)
+        except ql.QuoteLogError as exc:
+            raise ServiceError(str(exc))
+        qid = self.store.add_quote_log(self.today_iso(), rec, status, key)
+        return {"id": qid, "quote": self.store.quote_log_item(qid)}
+
+    def quote_log_set(self, user: Optional[str], qid: Any, payload: Any) -> Dict[str, Any]:
+        """``POST /api/quote-log/{id}``: a quote done / not done / open again, the trade it became, its client."""
+        key = self.require_user(user)
+        try:
+            status, fields = ql.clean_update(payload)
+        except ql.QuoteLogError as exc:
+            raise ServiceError(str(exc))
+        got = self.store.set_quote_log(int(qid), status, fields, key)
+        if got is None:
+            raise ServiceError("kota bulunamadı: %s" % qid, 404)
+        return {"quote": got}
+
+    def quote_log(self, user: Optional[str], query: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """``GET /api/quote-log?from=&to=``: the quotes of the days (today without them) and the hit ratio by client and
+        by product (tto/quotelog.py)."""
+        self.require_user(user)
+        q = query or {}
+        today = self.today_iso()
+        try:
+            first, last = ql.period(q.get("from"), q.get("to"), today)
+        except ql.QuoteLogError as exc:
+            raise ServiceError(str(exc))
+        quotes = self.store.quote_log(first, last)
+        return {"from": first, "to": last, "today": today, "quotes": quotes, "hit": ql.hit(quotes),
+                "statuses": dict(ql.STATUS_TEXT)}
 
     # ================================================================== Swaption (swaption.py)
     #: forward histories kept, by expiry × tenor and what they are made of (a page refresh builds none again)
