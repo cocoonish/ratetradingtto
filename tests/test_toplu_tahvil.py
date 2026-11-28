@@ -224,14 +224,16 @@ def test_dibs_rv_results_on_the_first_screen(service):
 
 
 def test_bond_pages_are_shorter(service):
-    """B17: DİBS ASW's two ASW charts side by side, its history a full-width bar when folded; Hazine İhalesi's blocks folded to
-    their ISIN row while it is empty (an ISIN typed opens it), the realized nominal typed beside the bids."""
+    """B17: DİBS ASW's two ASW charts side by side, its history a full-width bar when folded; Hazine İhalesi's Kâğıt 2 / 3
+    folded to their ISIN row while it is empty (an ISIN typed opens it; the desk: "boş Kâğıt 2 / 3 ISIN satırına katlı" -
+    Kâğıt 1, where the desk starts, always open), the realized nominal typed beside the bids."""
     s = service
     assert not vpanel("asw", "chart0").get("wide") and not vpanel("asw", "chartfx").get("wide")
     assert vpanel("asw", "hist").get("wide") and vpanel("asw", "hist").get("collapsed")
     for pid in ("H1", "H2", "H3"):
         assert vpanel("ihale", pid)["cols"][:7] == ["A", "B", "C", "D", "E", "P", "F"]
     u = s.login("Toplu Tahvil İhale")["user"]
+    assert "bonds" not in vpanel("ihale", "H1") and set(range(9, 16)) <= set(page_panel(s, u, "ihale", "H1")["data"]["r"])
     for pid, isin_row in (("H2", 27), ("H3", 47)):
         p = page_panel(s, u, "ihale", pid)
         assert p["data"]["r"] == [isin_row - 1, isin_row, isin_row + 1], (pid, p["data"]["r"])

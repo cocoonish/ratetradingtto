@@ -117,7 +117,7 @@ def test_the_page_sends_every_row_and_how_to_fold_them(service):
 def test_the_auctions_typed_realized_nominal_is_beside_the_bids_result(service):
     """The inputs first (28.11.2026, B17: "1366'da girdiler önce"): the realized nominal typed after the auction (P) right of
     the bids' inputs; the bid's result (L) and the nominal used (Q) after the bids' figures.  (A block shows its rows once
-    its ISIN is typed: folded to its ISIN row before - test_toplu_tahvil.)"""
+    its ISIN is typed - Kâğıt 2 / 3 folded to their ISIN row before, test_toplu_tahvil.)"""
     for pid in ("H1", "H2", "H3"):
         assert panel("ihale", pid)["cols"] == ["A", "B", "C", "D", "E", "P", "F", "G", "H", "I", "J", "K", "L", "Q", "M", "N", "O"]
     u = service.login("Düzen İhale")["user"]

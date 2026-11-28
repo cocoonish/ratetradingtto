@@ -3003,8 +3003,8 @@ The bond side of it (builder K6; the menu itself - DİBS Piyasa / DİBS Fiyatlam
   Son işlem tarihi, Fiyat durumu last; Ayarlar in two panels. Tüm Kâğıtlar: Tür, Kalan gün, Kaynak (and the ISIN, now in the
   name's tip) hidden by default.
 - **B17.** DİBS ASW's OIS and FX "ASW — kalan vade" charts side by side, its folded history a full-width bar; Genel's empty
-  switch / pair one line; Hazine İhalesi's blocks folded to their ISIN row while it is empty, the inputs first (the realized
-  nominal beside the bids).
+  switch / pair one line; Hazine İhalesi's Kâğıt 2 / 3 folded to their ISIN row while it is empty (Kâğıt 1 always open),
+  the inputs first (the realized nominal beside the bids).
 - **C10, the quote ticket at any value date.** The bond card's Kâğıt Fiyatlama block (`/api/kagit-fiyat?ticket=1`) and
   Manuel Tahvil (its sheet's own block): value date, nominal, centre, spread → bid / ask yields (compound, simple), clean and
   dirty prices, the amount, DV01, the OIS hedge nominal; Kopyala; İşlem gir.
