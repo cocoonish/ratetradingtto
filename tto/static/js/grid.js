@@ -8,6 +8,7 @@ import { raw } from './format.js';
 import { Columns, captionKey, columnOrder, markGaps, uniqueKeys } from './columns.js';
 import { decimalItems, decimalsTip } from './decimals.js';
 import { workbookRef, canPoint, isFormula } from './pointing.js';
+import { markQuote, quoteTip } from './quoteage.js';
 
 const hooks = {
   // async (book, items, adhoc, lenient, copy) -> result   (lenient: cells that are not inputs are skipped; copy: the id of
@@ -146,6 +147,8 @@ function tipOf(cell) {
   else if (cell.ao) tip = 'Hesaplanan: bu satırda yazılan değer ' + cell.ao + ', bu hücre ondan hesaplanır. Buraya yazarsanız '
     + 'yazılan değer bu olur.' + (tip ? '\n' + tip : '');
   if (cell.ro) tip = 'Kopyada salt okunur: ' + cell.ro + (tip ? '\n' + tip : '');
+  const qa = quoteTip(cell);                            // (a market cell: when its price last changed - quoteage.js)
+  if (qa) tip = tip ? tip + '\n' + qa : qa;
   const dp = decimalsTip(cell);                         // (the decimals this user set for the cell)
   if (dp) tip = tip ? tip + '\n' + dp : dp;
   return tip;
@@ -169,6 +172,7 @@ function typedNote(grid, i, j, cell) {
 
 /** What a table cell shows: its text - or, for a tick box, the box (kept when the cell is drawn again: its state set). */
 function fillCell(grid, td, cell) {
+  markQuote(td, cell);                               // (a market cell: its price's time kept, faded when old)
   if (!isTick(cell)) {
     if (cell) fillText(td, cell);                    // (a long note across the row wraps: the core's fillText)
     else td.textContent = '';
@@ -721,7 +725,7 @@ export class Grid {
         // it; a date typed as a shortcut: what was typed; a two-way table's row typed into or back to its default)
         if (cell.ff || before.ff || (cell.tip || '') !== (before.tip || '') || typedDates.size
             || (cell.an || '') !== (before.an || '') || (cell.ao || '') !== (before.ao || '')
-            || cell.dp !== before.dp || cell.dpc !== before.dpc) td.title = titleOf(this, i, j, cell);
+            || cell.dp !== before.dp || cell.dpc !== before.dpc || (cell.qa || 0) !== (before.qa || 0)) td.title = titleOf(this, i, j, cell);
         td.style.backgroundColor = cell.heat ? heatStyle(cell.heat) : '';
         if (typeof cell.bar === 'number') td.style.setProperty('--bar', cell.bar + '%');
         else td.style.removeProperty('--bar');
