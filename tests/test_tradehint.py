@@ -71,7 +71,7 @@ def test_the_tables_that_take_part():
     names = {"%s/%s" % (v["id"], p["id"]) for v, p in HINTED}
     assert names == {"masa/EKS", "masa/EKSE", "masa/B3", "masa/B8", "masa/B10", "masa/B15", "masa/B22", "forward/FR1",
                      "forward/FR2", "forward/EKF1", "forward/EKF5", "forward/B19", "forward/BK1", "ois/B3", "ois/B13", "dibs/B3",
-                     "dibslive/L1", "kagitlar/U1", "asw/tbl"}
+                     "dibslive/L1", "kagitlar/U1", "asw/tbl", "dv01/B14"}
     with pytest.raises(ValueError):
         th.parse("sp mid")
     assert th.parse("try ask") == ("try", "ask") and th.parse("ois") == ("ois", None)

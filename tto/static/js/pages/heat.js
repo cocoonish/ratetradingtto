@@ -59,7 +59,9 @@ export class HeatPage {
       });
       this.seg.appendChild(b);
     }
-    const ref = h('button', { class: 'btn', type: 'button', id: 'heat-ref', title: 'Şimdiki seviyeleri referans al (ör. sabah toplantısı); "Referans"a göre değişim o andan beri gösterilir' }, 'Referansı şimdi al');
+    // one reference for Eğri Hareketi and İzleme (the desk, 28.11.2026: A11 - there were two buttons and two records)
+    const ref = h('button', { class: 'btn', type: 'button', id: 'heat-ref', title: 'Şimdiki seviyeleri referans al (ör. sabah toplantısı); "Referans"a göre değişim '
+      + 'o andan beri gösterilir - İzleme\'deki kalemlerin referansı da aynı anda alınır (Bugün\'deki düğme de aynısı)' }, 'Referansı şimdi al');
     ref.addEventListener('click', () => this.takeRef());
     this.info = h('span', { class: 'muted', id: 'heat-info' });
     this.legend = h('span', { class: 'heat-legend', id: 'heat-legend' });
@@ -142,8 +144,8 @@ export class HeatPage {
 
   async takeRef() {
     try {
-      const r = await api.post('/api/heat/ref', {});
-      toast(r.count + ' noktanın referansı alındı (' + r.at + ')', 'ok');
+      const r = await api.post('/api/watch/reference', {});
+      toast('Referans alındı (' + r.at + '): ' + r.count + ' nokta, İzleme\'de ' + r.taken + ' kalem', 'ok');
       if (this.basis !== 'ref') {
         this.basis = 'ref';
         try { localStorage.setItem(KEY, 'ref'); } catch (x) { /* not kept */ }

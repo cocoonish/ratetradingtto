@@ -96,8 +96,10 @@ export class WatchPage {
     });
     const add = h('button', { class: 'btn primary', type: 'button', id: 'watch-add', title: 'VİOP kontratı, kâğıt, OIS, offshore, masa özeti, ifade ya da hücre: izle ya da alarm kur' }, 'Ekle · alarm kur…');
     add.addEventListener('click', () => openWatchDialog(this.ctx));
-    const base = h('button', { class: 'btn', type: 'button', id: 'watch-base', title: 'Her kalemin şimdiki seviyesini referans al: değişim ayrıca bundan sonrası için de gösterilir (ör. sabah toplantısı)' }, 'Referansı şimdi al');
-    base.addEventListener('click', () => this.takeBase(null));
+    // one reference for İzleme and Eğri Hareketi (the desk, 28.11.2026: A11 - there were two buttons and two records)
+    const base = h('button', { class: 'btn', type: 'button', id: 'watch-base', title: 'Her kalemin ve Eğri Hareketi\'nin noktalarının şimdiki seviyesini referans al: '
+      + 'değişim ayrıca bundan sonrası için de gösterilir (ör. sabah toplantısı) - Eğri Hareketi\'nde ve Bugün\'de de aynı referans' }, 'Referansı şimdi al');
+    base.addEventListener('click', () => this.takeReference());
     this.perm = h('button', { class: 'btn', type: 'button', id: 'watch-perm', title: 'Alarm çalınca tarayıcı bildirimi göster' }, 'Bildirimlere izin ver');
     this.perm.addEventListener('click', () => { askPermission(); setTimeout(() => this.permState(), 800); });
     tools.appendChild(preset);
@@ -542,6 +544,9 @@ export class WatchPage {
 
   addPreset(group) { return this.act('/api/watch/preset', { group }, (r) => r.added + ' kalem eklendi'); }
   takeBase(id) { return this.act('/api/watch/base', { id }, (r) => r.taken + ' kalemin referansı alındı'); }
+  takeReference() {
+    return this.act('/api/watch/reference', {}, (r) => 'Referans alındı (' + r.at + '): ' + r.taken + ' kalem, Eğri Hareketi\'nde ' + r.count + ' nokta');
+  }
   move(it, by) { return this.act('/api/watch/update', { id: it.id, move: by }); }
 
   async remove(it) {

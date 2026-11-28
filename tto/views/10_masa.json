@@ -430,6 +430,7 @@
    "type": "table",
    "title": "Kontrol",
    "range": "B3:L3",
+   "kontrol": true,
    "hidden": false
   },
   {

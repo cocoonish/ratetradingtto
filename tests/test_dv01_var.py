@@ -269,7 +269,7 @@ def test_the_page_shows_the_var_tab(svc, filled):
     _paste(svc, user, "AA", [1000.0 * (i + 1) for i in range(20)])
     view = svc.view(user, "dv01")
     sec = next(s for s in view["sections"] if s["id"] == "var")
-    assert sec["title"] == "VaR" and sec["panels"] == ["V1", "V2", "V3"]
+    assert sec["title"] == "VaR" and sec["panels"] == ["V1", "V2", "V3", "V6"]
     panels = {p["id"]: p for p in view["panels"]}
     grid = panels["V3"]["data"]
     assert grid["c"] == ["W", "AA", "X", "Y", "Z", "AB", "AC", "AD", "AE", "AF", "AG"]
@@ -279,7 +279,12 @@ def test_the_page_shows_the_var_tab(svc, filled):
     assert grid["r"][-1] == ex.VAR_TOTAL
     summary = panels["V2"]["data"]
     names = [row[0].get("t") if isinstance(row[0], dict) else row[0] for row in summary["rows"][1:]]
-    assert names == ["Offshore", "Onshore", "OIS (TLREF)", "Onshore + OIS"]
+    assert names == ["Offshore", "Onshore", "OIS (TLREF)", "Onshore + OIS", "Hedge sonrası · Pozisyon + önerilen hedge"]
+    # (28.11.2026) each bucket's contribution and the hedge's buckets: their own table on the tab
+    v6 = panels["V6"]["data"]
+    assert v6["c"] == ["W", "AL", "AM", "AN", "AO", "AP", "AQ", "AR"] and v6["r"][-1] == ex.VAR_TOTAL
+    assert [x.get("t") for x in v6["rows"][0]] == ["Kova", "Katkı offshore", "Katkı onshore", "Katkı TLREF",
+                                                    "Katkı onshore + TLREF", "Pozisyon (C × C3)", "Önerilen hedge", "Hedge sonrası"]
     params = panels["V1"]["data"]
     texts = [x.get("t") if isinstance(x, dict) else x for x in params["rows"][0]]
     assert texts[:2] == ["Güven düzeyi", "99,0%"] or texts[:2] == ["Güven düzeyi", "%99,0"]
@@ -295,6 +300,121 @@ def test_the_window_list_matches_the_page():
     item = next(i for i in view["inputs"] if i["range"] == "AB29")
     assert item["kind"] == "list" and item["options"] == [label for label, _ in ex.VAR_WINDOWS]
     assert ex.VAR_WINDOW_DEFAULT in item["options"]
+
+
+# ---------------------------------------------------------------------------------------------- 28.11.2026
+# The desk: "A - Yildizlilari yap. B - Hepsini yap. C - 2-3-4-5-8-10-12-13-16" - C8 (each bucket's contribution, a VaR
+# line after the hedge) and B7 (a VaR without a paste says "pozisyon yok").
+def test_each_buckets_contribution_adds_up_to_the_var(svc, filled):
+    """z·√h·dᵢ(Σd)ᵢ/√(dᵀΣd) of each bucket of each book, worked out by hand; they add up to the book's VaR (Toplam)."""
+    defs, _, levels = filled
+    user = "var-katki"
+    rng = random.Random(23)
+    dv = {col: [rng.choice((-1, 1)) * rng.randint(1000, 500000) for _ in BUCKETS] for col in ("AA", "X", "Y")}
+    for col, values in dv.items():
+        _paste(svc, user, col, values)
+    dv["Z"] = [x + y for x, y in zip(dv["X"], dv["Y"])]
+    z = NormalDist().inv_cdf(0.99)
+    cov = {"off": _cov(defs, levels, "off", 250)[0], "ois": _cov(defs, levels, "ois", 250)[0]}
+    for (name, dvc, var, _, _, _), col in zip(ex.VAR_BOOKS, ex.VAR_CONTRIB):
+        c = cov["off"] if dvc == "AA" else cov["ois"]
+        d = dv[dvc]
+        total = _var(d, c, z, 1)
+        sd = [sum(c[i][j] * d[j] for j in range(20)) for i in range(20)]
+        parts = [cell(svc, "DV01_RISK!%s%d" % (col, ex.VAR_FIRST + i), user) for i in range(20)]
+        for i in range(20):
+            assert _close(parts[i], z * z * d[i] * sd[i] / total), (name, BUCKETS[i])
+        assert _close(sum(parts), total) and _close(cell(svc, "DV01_RISK!%s%d" % (col, ex.VAR_TOTAL), user), total), name
+        assert _close(cell(svc, "DV01_RISK!%s%d" % (var, ex.VAR_TOTAL), user), total)
+
+
+def _tent(m, j):
+    """A leg ``m`` months out in VaR bucket j, linear between its neighbours (blotter.bucket_split's rule), by hand."""
+    ms = ex.VAR_BUCKET_MONTHS
+    if m <= 0:
+        return 0.0
+    if m <= ms[j]:
+        return 1.0 if j == 0 else max(0.0, (m - ms[j - 1]) / (ms[j] - ms[j - 1]))
+    return 1.0 if j == len(ms) - 1 else max(0.0, (ms[j + 1] - m) / (ms[j + 1] - ms[j]))
+
+
+def test_the_var_after_the_hedge(svc, filled):
+    """The Pozisyon tab's buckets (C × C3, their default the paste's Onshore + TLREF) with the hedge recommender's
+    suggestion in the same buckets - a spot start on its end month, an FRA on its two legs (the end G/(G−F) of its DV01, the
+    start −F·DF(F)/DF(G)/(G−F)), a month between two buckets split linearly - and the VaR of both on the OIS curve's moves,
+    by hand: in the summary's last line and in "Hedge etkisi" (before / after)."""
+    defs, _, levels = filled
+    user = "var-hedge"
+    x = [20000.0 * (i + 1) * (1 if i % 3 else -1) for i in range(20)]
+    y = [-5000.0 * (i + 1) for i in range(20)]
+    _paste(svc, user, "X", x)
+    _paste(svc, user, "Y", y)
+    svc.set_inputs(user, "tto", [{"ref": "DV01_RISK!C101", "value": "1"}, {"ref": "DV01_RISK!C94", "value": "1"}])   # FRA 3x6, OIS 18M
+    pos = [a + b for a, b in zip(x, y)]
+    assert [cell(svc, "DV01_RISK!%s%d" % (ex.VAR_POS, ex.VAR_FIRST + i), user) for i in range(20)] == pytest.approx(pos)
+    h = [0.0] * 20
+    for r in range(ex.HEDGE_FIRST, ex.HEDGE_LAST + 1):
+        k = cell(svc, "DV01_RISK!K%d" % r, user) or 0.0
+        start, end = (cell(svc, "DV01_RISK!%s%d" % (c, r), user) for c in "DE")
+        f, g = (cell(svc, "DV01_RISK!%s%d" % (c, r), user) for c in "FG")
+        af, ag = (cell(svc, "DV01_RISK!%s%d" % (c, r), user) for c in ("AF", "AG"))
+        for j in range(20):
+            w = g / (g - f) * _tent(end, j)
+            if f:
+                w -= f * math.exp(af - ag) / (g - f) * _tent(start, j)
+            assert _close(cell(svc, "DV01_RISK!%s%d" % (ex._col_after(ex.HEDGE_W_COL, j), r), user), w), (r, j)
+            h[j] += k * w
+    fra = ex.HEDGE_LAST - 1                                     # FRA 3x6: its two legs, 3M and 6M
+    assert cell(svc, "DV01_RISK!%s%d" % (ex._col_after(ex.HEDGE_W_COL, BUCKETS.index("3M")), fra), user) < 0 < \
+        cell(svc, "DV01_RISK!%s%d" % (ex._col_after(ex.HEDGE_W_COL, BUCKETS.index("6M")), fra), user)
+    m18 = 94                                                     # OIS 18M: half 1Y, half 2Y
+    assert [cell(svc, "DV01_RISK!%s%d" % (ex._col_after(ex.HEDGE_W_COL, BUCKETS.index(b)), m18), user) for b in ("1Y", "2Y")] == [0.5, 0.5]
+    assert cell(svc, "DV01_RISK!K101", user) != 0.0
+    got = [cell(svc, "DV01_RISK!%s%d" % (ex.VAR_HEDGE, ex.VAR_FIRST + i), user) for i in range(20)]
+    for j in range(20):
+        assert _close(got[j], h[j]), BUCKETS[j]
+    k_sum = sum(cell(svc, "DV01_RISK!K%d" % r, user) or 0.0 for r in range(ex.HEDGE_FIRST, ex.HEDGE_LAST + 1))
+    after = [a + b for a, b in zip(pos, h)]
+    assert _close(cell(svc, "DV01_RISK!%s%d" % (ex.VAR_AFTER, ex.VAR_TOTAL), user), sum(after))
+    assert _close(cell(svc, "DV01_RISK!D105", user), sum(pos) + k_sum)                 # (the workbook's own "Sonra")
+    z = NormalDist().inv_cdf(0.99)
+    ois, _ = _cov(defs, levels, "ois", 250)
+    before_var, after_var = _var(pos, ois, z, 1), _var(after, ois, z, 1)
+    assert _close(cell(svc, "DV01_RISK!%s%d" % (ex.VAR_POS_SD, ex.VAR_TOTAL), user), before_var)
+    assert _close(cell(svc, "DV01_RISK!%s%d" % (ex.VAR_AFTER_SD, ex.VAR_TOTAL), user), after_var)
+    assert _close(before_var, cell(svc, "DV01_RISK!AG%d" % ex.VAR_TOTAL, user))           # (C is the paste's Onshore + TLREF)
+    r60 = ex.VAR_HEDGE_ROW
+    assert cell(svc, "DV01_RISK!W%d" % r60, user) == "Hedge sonrası · Pozisyon + önerilen hedge"
+    assert _close(cell(svc, "DV01_RISK!X%d" % r60, user), sum(after)) and _close(cell(svc, "DV01_RISK!Y%d" % r60, user), after_var)
+    own = z * sum(abs(after[i]) * math.sqrt(ois[i][i]) for i in range(20))
+    assert _close(cell(svc, "DV01_RISK!Z%d" % r60, user), own) and _close(cell(svc, "DV01_RISK!AA%d" % r60, user), own - after_var)
+    r109 = ex.HEDGE_VAR_ROW
+    assert _close(cell(svc, "DV01_RISK!C%d" % r109, user), before_var) and _close(cell(svc, "DV01_RISK!D%d" % r109, user), after_var)
+    assert after_var < before_var                                   # (the hedge takes risk away)
+    # a bucket DV01 typed over its default: the Pozisyon the hedge hedges is that one
+    svc.set_inputs(user, "tto", [{"ref": "DV01_RISK!C16", "value": "0"}])
+    assert cell(svc, "DV01_RISK!%s%d" % (ex.VAR_POS, ex.VAR_FIRST + 10), user) == 0.0
+    assert not _close(cell(svc, "DV01_RISK!%s%d" % (ex.VAR_POS_SD, ex.VAR_TOTAL), user), before_var)
+
+
+def test_a_book_without_a_paste_says_pozisyon_yok(svc, filled):
+    """Nothing pasted for a book: no block of zeros - its buckets' VaRs and contributions empty, its Toplam and its line
+    of the summary "pozisyon yok"; a book pasted beside it reads as before."""
+    user = "var-yok"
+    _paste(svc, user, "Y", [12000.0 * (i + 1) for i in range(20)])
+    flags = {name: cell(svc, "DV01_RISK!%s%d" % (sd, ex.VAR_HAS_ROW), user) for name, _, _, sd, _, _ in ex.VAR_BOOKS}
+    assert flags == {"Offshore": 0.0, "Onshore": 0.0, "OIS (TLREF)": 20.0, "Onshore + OIS": 20.0}
+    for name, dv, var, _, _, _ in ex.VAR_BOOKS[:2]:
+        assert cell(svc, "DV01_RISK!%s%d" % (var, ex.VAR_TOTAL), user) == "pozisyon yok", name
+        assert all(cell(svc, "DV01_RISK!%s%d" % (var, ex.VAR_FIRST + i), user) == "" for i in range(20)), name
+    assert cell(svc, "DV01_RISK!AA33", user) is None and cell(svc, "DV01_RISK!X33", user) is None     # (empty, not 0)
+    assert cell(svc, "DV01_RISK!AL%d" % ex.VAR_TOTAL, user) == "pozisyon yok" and cell(svc, "DV01_RISK!AL33", user) == ""
+    s = ex.VAR_SUMMARY
+    assert (cell(svc, "DV01_RISK!Y%d" % (s + 1), user), cell(svc, "DV01_RISK!Z%d" % (s + 1), user)) == ("pozisyon yok", "")
+    assert isinstance(cell(svc, "DV01_RISK!AF%d" % ex.VAR_TOTAL, user), float)           # (TLREF's, pasted)
+    nobody = "var-hic"
+    assert cell(svc, "DV01_RISK!%s%d" % (ex.VAR_POS_SD, ex.VAR_TOTAL), nobody) == "pozisyon yok"
+    assert cell(svc, "DV01_RISK!D%d" % ex.HEDGE_VAR_ROW, nobody) == "pozisyon yok"
 
 
 # ---------------------------------------------------------------------------------------------- the workbook
@@ -317,7 +437,10 @@ def test_nothing_else_changes_in_the_workbook():
     old, new = _model(False), _model(True)
     assert set(new.sheet_index) - set(old.sheet_index) == {ex.VAR_SHEET}
     own = set()
-    for rng in ("W29:AM29", "W32:AK53", "W55:AA59"):
+    # (28.11.2026: the books' flags, the contributions and the VaR after the hedge - in the summary and in "Hedge etkisi" -,
+    # the hedge's instruments in the VaR buckets and their OIS tenor, the page's one-line summary)
+    for rng in ("W29:AM29", "W32:AK53", "W55:AA59", "AH30:AT30", "AL32:AT53", "W60:AA60", "B109:D109", "AE87:AE102",
+                "ER86:FK102", ex.DV01_SUMMARY):
         r1, c1, r2, c2 = (int(x) for x in _rng(rng))
         own |= {(r, c) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)}
     for sh in old.sheets:

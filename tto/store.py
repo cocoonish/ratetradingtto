@@ -746,6 +746,19 @@ class Store(object):
                 raise
         self._told(user, True)
 
+    def input_stamp(self, user: str, book: str, cells: List[str]) -> Optional[str]:
+        """When the user last wrote any of these inputs (``"2026-11-28 09:12:33"``; ``None``: they hold none of them) -
+        DV01 Risk's "yapıştırıldı" (one row back: SQLite takes the latest, indexed by user, book and cell)."""
+        stamps = []
+        cells = list(cells)
+        for i in range(0, len(cells), 400):
+            chunk = cells[i:i + 400]
+            rows = self._q("SELECT MAX(updated_at) AS at FROM user_inputs WHERE user=? AND book=? AND cell IN (%s)"
+                           % ",".join("?" for _ in chunk), (user, book) + tuple(chunk))
+            if rows and rows[0]["at"]:
+                stamps.append(rows[0]["at"])
+        return max(stamps) if stamps else None
+
     # ------------------------------------------------------------------ named scenarios
     def scenarios(self, user: str) -> List[Dict[str, Any]]:
         rows = self._q("SELECT id, name, payload, created_at, updated_at FROM scenarios WHERE user=? ORDER BY name", (user,))

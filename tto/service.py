@@ -2325,6 +2325,11 @@ class Service(object):
                     self._universe_columns(book, user, entry["data"], loc)
                 elif p.get("append") == "borsa_spread":
                     self._borsa_spread_columns(book, calc, user, entry["data"], loc, p["range"])
+                elif p.get("append") == "dv01_paste":
+                    self._dv01_paste_column(user, entry["data"])
+                if p.get("kontrol"):
+                    # Masa's Kontrol strip: each chip leads to the table it checks, its rule in its tooltip (K5)
+                    self._kontrol_chips(book, calc, entry["data"])
                 if p.get("cols") and entry["data"].get("added"):
                     # the dashboard's own columns added above, named in "cols" by their caption, where the page lists
                     # them (Borsa Swap: the spreads right after BID % / ASK %); one it does not name stays at the end
@@ -6090,6 +6095,88 @@ class Service(object):
         self.store.put("desk.notes:%s" % self.today_iso(), note)
         self.bump()
         return note
+
+    # ================================================================== the morning meeting, DV01 Risk (28.11.2026, K5)
+    def watch_reference(self, user: str) -> Dict[str, Any]:
+        """"Referansı şimdi al" - İzleme's and Eğri Hareketi's reference at once (``Watch.reference``; the desk: A11)."""
+        user = self.require_user(user)
+        res = self.et.call(self.watch.reference, user)
+        self.bump()
+        return res
+
+    def _kontrol_chips(self, book: Book, calc: Calc, data: Optional[Dict[str, Any]]) -> None:
+        """Masa's Kontrol strip (``bugun.KONTROL``; the desk, 28.11.2026: A10): each chip's state (``kchip`` and
+        ``k-tamam`` / ``k-uyari`` / ``k-hata``: below 1500 px only those not "tamam" show), its rule and where it leads in
+        its tooltip, a click on it to the table it checks (``golink`` and ``go:#/<page>?p=<panel>``: golink.js), and a
+        last cell "N tamam" (shown below 1500 px)."""
+        from .bugun import KONTROL_SHEET, kontrol_read
+        if not data or not data.get("rows") or KONTROL_SHEET not in book.model.sheet_index:
+            return
+        si = book.model.sheet_index[KONTROL_SHEET]
+        chips = {c["col"]: c for c in kontrol_read(lambda addr: calc.get(si, *divmod(parse_a1(addr), COLS)))}
+        cols = data.get("c") or []
+        ok = []
+        for row in data["rows"]:
+            for j, cell in enumerate(row):
+                c = chips.get(cols[j]) if j < len(cols) else None
+                if c is None or not isinstance(cell, dict) or cell.get("sk"):
+                    continue
+                state = {0: "tamam", 1: "uyari", 2: "hata"}.get(c["code"], "hata")
+                cls = ["kchip", "k-" + state] + (["kchip-all"] if c["col"] == "B" else [])
+                if c["href"]:
+                    cls += ["golink", "go:" + c["href"]]
+                cell["cls"] = " ".join(cls)
+                cell["tip"] = c["rule"] + (" Durum: %s." % c["state"]) + ("\nTıklayın → %s" % c["where"] if c["where"] else "")
+                if c["col"] != "B" and c["code"] == 0:
+                    ok.append(c["name"])
+        data["c"] = list(cols) + ["Tamam"]
+        data["added"] = int(data.get("added") or 0) + 1
+        for k, row in enumerate(data["rows"]):
+            row.append({"t": "%d tamam" % len(ok), "k": "s", "cls": "kchip-sum", "tip": "Tamam olan kontroller: "
+                        + (", ".join(ok) or "yok") + " (geniş ekranda hepsi şeritte)"} if k == 0 else {"t": "", "k": ""})
+
+    def _dv01_paste_column(self, user: Optional[str], data: Optional[Dict[str, Any]]) -> None:
+        """DV01 Risk's pinned Parametreler: when the user last pasted their position - "yapıştırıldı 28.11 09:12", red when
+        not today (``varrisk.paste_stamp``; the desk, 28.11.2026: A8) - a column of its own at the row's end."""
+        from . import varrisk as vr
+        if not data or not data.get("rows"):
+            return
+        st = vr.paste_stamp(self.store, user, self.today_iso())
+        tip = ("Pozisyonun (VaR sekmesindeki Onshore / TLREF / Offshore kolonları, Pozisyon'daki C) en son yazıldığı an: %s%s"
+               % (st["at"], "" if st["today"] else " - bugün değil: dünkü pozisyon olabilir") if st["at"]
+               else "Pozisyon yapıştırılmadı: Murex'in Onshore / TLREF kolonlarını VaR sekmesine yapıştırın")
+        cell = {"t": st["text"], "k": "s", "b": 1, "tip": tip, "cls": "dv01-paste"}
+        if st["at"] and not st["today"]:
+            cell["c"] = "neg"
+        elif not st["at"]:
+            cell["c"] = "mute"
+        data["c"] = list(data.get("c") or []) + ["Yapıştırma"]
+        data["added"] = int(data.get("added") or 0) + 1
+        for k, row in enumerate(data["rows"]):
+            row.append(cell if k == 0 else {"t": "", "k": ""})
+
+    def dv01_hedge(self, user: Optional[str], lang: Optional[str] = None) -> Dict[str, Any]:
+        """DV01 Risk's "Hedge'i işle" (the desk, 28.11.2026: A3): the hedge recommender's suggestion of ``user``'s own
+        position as Günlük İşlemler's OIS paste (``varrisk.hedge_paste``) - the text the dialog opens with.  Nothing is
+        priced or saved here."""
+        user = self.require_user(user)
+        return self.et.call(self._dv01_hedge, user, lang or self.settings.locale)
+
+    def _dv01_hedge(self, user: str, lang: str) -> Dict[str, Any]:
+        from . import varrisk as vr
+        book = self._book("tto")
+        if "DV01_RISK" not in book.model.sheet_index:
+            raise ServiceError("DV01 Risk sayfası yok", 404)
+        calc = self._calc(user, book)
+        si = book.model.sheet_index["DV01_RISK"]
+
+        def get(addr: str) -> Any:
+            return calc.get(si, *divmod(parse_a1(addr), COLS))
+
+        rows = [{"name": get("B%d" % r), "active": get("C%d" % r), "start": get("D%d" % r), "end": get("E%d" % r),
+                 "f": get("F%d" % r), "g": get("G%d" % r), "rate": get("J%d" % r), "dv01": get("K%d" % r),
+                 "side": get("L%d" % r), "nominal": get("N%d" % r)} for r in range(ex.HEDGE_FIRST, ex.HEDGE_LAST + 1)]
+        return vr.hedge_paste(rows, get("I3"), lang)
 
     # ================================================================== TRY rates two ways: bootstrap and PPK steps
     #: how many states of calculations the curves are kept for (a user's, a copy's)

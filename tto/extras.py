@@ -5159,7 +5159,10 @@ def _tto_auction(model: Model) -> None:
 # ---------------------------------------------------------------------------------------------- DV01 risk: no position
 #: the position cells of the DV01 risk sheet: the bucket DV01s (TL/bp) and the paste area beside them (Onshore /
 #: TLREF).  The file keeps the desk's positions of the day it was saved - nobody's position today - so the sheet
-#: opens at zero; each user's own (personal) position is typed or pasted over it and kept as before.
+#: opens without one; each user's own (personal) position is typed or pasted over it and kept as before.  The bucket
+#: DV01s open at zero; the paste area empty (the desk, 28.11.2026, B7 of the proposals: a VaR without a paste says
+#: "pozisyon yok" instead of a block of zeros) - and, since the same day, the bucket DV01s are the paste area's
+#: Onshore + TLREF until something is typed there (:data:`DV01_DEFAULT_NAME`).
 DV01_POSITIONS = ("C6:C25", "X33:Y52")
 
 
@@ -5173,13 +5176,63 @@ def _dv01_zero_check(model: Model) -> None:
 
 def _tto_dv01_zero(model: Model) -> None:
     sh = model.sheet("DV01_RISK")
-    for rng in DV01_POSITIONS:
+    for k, rng in enumerate(DV01_POSITIONS):
         r1, c1, r2, c2 = parse_range(rng)
         for r in range(r1, r2 + 1):
             for c in range(c1, c2 + 1):
                 rc = r * COLS + c
-                if rc not in sh.fml:                        # a formula would stay a formula (there is none today)
+                if rc in sh.fml:                            # a formula would stay a formula (there is none today)
+                    continue
+                if k == 0:
                     sh.consts[rc] = 0.0
+                else:
+                    sh.consts.pop(rc, None)                 # (the paste area: empty input cells, where to paste)
+
+
+# ---------------------------------------------------------------------------------------------- DV01 risk: Pozisyon
+#: The Pozisyon tab's bucket DV01s (C6:C25) default to the paste area's Onshore + TLREF (Z33:Z52 = X + Y, Murex's two
+#: TRY columns, pasted once on the VaR tab).  The desk, 28.11.2026, asked whether the default should be the Onshore
+#: column (as the file of 03.11 had it: C6:C25 = X33:X52, bucket for bucket) or Onshore + TLREF: "Onshore + tlref".  A
+#: value typed or pasted into C wins (Delete: back to the default) - nothing flows the other way: the VaR's four books
+#: read their own paste area only.
+DV01_DEFAULT_NAME = "DV01 Pozisyon varsayılanı"
+DV01_DEFAULT_FIRST, DV01_PASTE_FIRST = 6, 33
+#: the workbook's how-to above Özet (DV01_RISK!B2), as it is said now
+DV01_HOWTO_OLD = "C sütununa bucket DV01'leri yapıştır"
+DV01_HOWTO = ("C sütunu (kova par DV01'leri, TL/bp: par kota +1bp → PV değişimi, payer +) varsayılan olarak VaR sekmesindeki "
+              "Onshore + TLREF'tir (X + Y): Murex'in iki TRY kolonunu oraya bir kez yapıştırın. C'ye yazılan ya da "
+              "yapıştırılan kazanır; silince varsayılana döner. İşaret tersse C3 = −1.")
+
+
+def dv01_bucket_labels() -> List[str]:
+    """The Pozisyon tab's bucket labels (DV01_RISK!B6:B25), the VaR paste area's (W33:W52) without the slash."""
+    return [b.replace("/", "") for b in VAR_BUCKETS]
+
+
+def _dv01_default_check(model: Model) -> None:
+    """The bucket table and the paste area as the workbook has them: the same 20 buckets in the same order, C6:C25
+    values (no formula), Z33:Z52 = X + Y."""
+    _need_sheets(model, "DV01_RISK")
+    _need_captions(model, [("DV01_RISK", "B5", "Bucket"), ("DV01_RISK", "C5", "DV01 (TL/bp)"),
+                           ("DV01_RISK", "X32", "Onshore"), ("DV01_RISK", "Y32", "TLREF")]
+                   + [("DV01_RISK", "B%d" % (DV01_DEFAULT_FIRST + i), b) for i, b in enumerate(dv01_bucket_labels())]
+                   + [("DV01_RISK", "W%d" % (DV01_PASTE_FIRST + i), b) for i, b in enumerate(VAR_BUCKETS)])
+    sh = model.sheet("DV01_RISK")
+    for i in range(len(VAR_BUCKETS)):
+        r = DV01_PASTE_FIRST + i
+        _need_formula(model, "DV01_RISK", "Z%d" % r, "X%d+Y%d" % (r, r))
+        if parse_a1("C%d" % (DV01_DEFAULT_FIRST + i)) in sh.fml:
+            raise ValueError("DV01_RISK!C%d bir formül: kova DV01'i değil" % (DV01_DEFAULT_FIRST + i))
+
+
+def _tto_dv01_default(model: Model) -> None:
+    b = SheetBuilder(model, "DV01_RISK")
+    for i in range(len(VAR_BUCKETS)):
+        # (its look kept: still the input it was, now "filled by the workbook until typed over")
+        b.patch("C%d" % (DV01_DEFAULT_FIRST + i), "=Z%d" % (DV01_PASTE_FIRST + i))
+    howto = b.sheet.consts.get(parse_a1("B2"))
+    if isinstance(howto, str) and howto.startswith(DV01_HOWTO_OLD):
+        b.sheet.consts[parse_a1("B2")] = DV01_HOWTO
 
 
 # ---------------------------------------------------------------------------------------------- DV01 risk: VaR
@@ -5209,6 +5262,32 @@ VAR_OIS_COL, VAR_OFF_COL = 3, 25                  # C, Y (1-based)
 #: the books of the summary: (name, its DV01 column, its VaR column, its Σd helper, the curve's σ column, moves used)
 VAR_BOOKS = (("Offshore", "AA", "AD", "AH", "AB", "$AK$29"), ("Onshore", "X", "AE", "AI", "AC", "$AL$29"),
              ("OIS (TLREF)", "Y", "AF", "AJ", "AC", "$AL$29"), ("Onshore + OIS", "Z", "AG", "AK", "AC", "$AL$29"))
+#: (28.11.2026) each book's buckets' contribution to its VaR, in VAR_BOOKS' order (the desk: "C - ... 8": proposal C8,
+#: "Kova başına katkı z√h·dᵢ(Σd)ᵢ/√(dᵀΣd) (toplamı VaR'a eşit)"); the row whose book columns count the non-zero DV01s
+#: pasted (a book without one says "pozisyon yok" - B7)
+VAR_CONTRIB = ("AL", "AM", "AN", "AO")
+VAR_HAS_ROW = 30
+#: the VaR after the hedge (C8: "Hedge önericinin hedge sonrası kovalarıyla bir VaR satırı"): the Pozisyon tab's buckets
+#: (C × C3, what the hedge recommender hedges), the recommended hedge in the same buckets, their sum; the Σd of the first
+#: and the last (helpers) - on the OIS curve's moves, the hedge's instruments being OIS
+VAR_POS, VAR_HEDGE, VAR_AFTER, VAR_POS_SD, VAR_AFTER_SD = "AP", "AQ", "AR", "AS", "AT"
+VAR_HEDGE_ROW = 60                                # the summary's line after the hedge (W60:AA60)
+HEDGE_FIRST, HEDGE_LAST = 88, 102                 # the hedge recommender's instruments (DV01_RISK!B88:O102)
+HEDGE_VAR_ROW = 109                               # "Hedge etkisi"'s VaR line (B109:D109)
+#: the hedge instruments' DV01 in the VaR buckets: one column a bucket (ER:FK), the buckets' labels and months above
+HEDGE_W_COL, HEDGE_W_LABEL, HEDGE_W_MONTHS = "ER", 86, 87
+#: an instrument's OIS tenor ("1M", "1Y", "18M"; a forward-start one: none) - the table's "İşlem gir" reads it
+HEDGE_TENOR_COL = "AE"
+#: the page's one-line summary (proposal B13: "Toplam par DV01, TLREF yolu, VaR (Onshore + OIS / Offshore), hedge sonrası
+#: Σ|risk|, açıklanamayan P&L, yapıştırma saati" - the time of the paste is the pinned Parametreler's): captions on its first
+#: row, the figures on the second
+DV01_SUMMARY = "B147:G148"
+DV01_SUMMARY_CELLS = (("Par DV01 (TL/bp)", "=$C$29", "C29"), ("TLREF yolu (TL/bp)", "=$C$30", "C30"),
+                      ("VaR Onshore + OIS", "=$Y$59", "C29"), ("VaR Offshore", "=$Y$56", "C29"),
+                      ("Hedge sonrası Σ|risk|", "=$D$108", "D108"), ("Açıklanamayan P&L (TL)", "=$C$142", "C139"))
+#: a VaR bucket's months for the hedge's split (history.tenor_months; S/N as T/N)
+VAR_BUCKET_MONTHS = (0.01, 0.02, 0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 6.0, 9.0, 12.0, 24.0, 36.0, 48.0, 60.0, 72.0, 84.0, 96.0,
+                     108.0, 120.0)
 
 
 def var_stat_cells() -> Dict[str, Any]:
@@ -5239,8 +5318,43 @@ def _var_check(model: Model) -> None:
         if any(parse_a1("%s%d" % (c, r)) in sh.fml for c in "XY"):
             raise ValueError("DV01_RISK!X%d:Y%d yapıştırma alanı değil" % (r, r))
     for rng in ("W%d:AM%d" % (VAR_PARAM, VAR_PARAM), "W32", "AA32:AK52", "W%d:AK%d" % (VAR_TOTAL, VAR_TOTAL),
-                "W%d:AA%d" % (VAR_SUMMARY, VAR_SUMMARY + 4)):
+                "W%d:AA%d" % (VAR_SUMMARY, VAR_SUMMARY + 4),
+                # (28.11.2026: the books' flags, the contributions and the VaR after the hedge, its line in the summary
+                # and in "Hedge etkisi", the hedge instruments in the VaR buckets, the page's one-line summary)
+                "AH%d:AT%d" % (VAR_HAS_ROW, VAR_HAS_ROW), "AL32:AT%d" % VAR_TOTAL, "W%d:AA%d" % (VAR_HEDGE_ROW, VAR_HEDGE_ROW),
+                "B%d:D%d" % (HEDGE_VAR_ROW, HEDGE_VAR_ROW), "%s87:%s%d" % (HEDGE_TENOR_COL, HEDGE_TENOR_COL, HEDGE_LAST),
+                "%s%d:%s%d" % (HEDGE_W_COL, HEDGE_W_LABEL, _col_after(HEDGE_W_COL, 19), HEDGE_LAST), DV01_SUMMARY):
         _need_empty(model, "DV01_RISK", rng)
+    # the hedge recommender as the VaR after it reads it: its instruments' months, days, ln DFs, DV01, side, nominal
+    _need_captions(model, [("DV01_RISK", "B84", "Hedge önerici"), ("DV01_RISK", "D87", "Baş. (ay)"),
+                           ("DV01_RISK", "E87", "Bitiş (ay)"), ("DV01_RISK", "F87", "Baş. gün"), ("DV01_RISK", "G87", "Bitiş gün"),
+                           ("DV01_RISK", "J87", "Faiz (eğri)"), ("DV01_RISK", "K87", "Önerilen DV01 (TL/bp)"),
+                           ("DV01_RISK", "L87", "Yön"), ("DV01_RISK", "N87", "Yuvarlanmış nominal"),
+                           ("DV01_RISK", "B104", "Hedge etkisi"), ("DV01_RISK", "B108", "Tüm dönemler Σ|risk|"),
+                           ("DV01_RISK", "B29", "Par paralel DV01 (bucket toplamı)"),
+                           ("DV01_RISK", "B30", "TLREF yolu +1bp (tüm ON eğrisi)"), ("DV01_RISK", "B142", "Açıklanamayan")])
+    for r in range(HEDGE_FIRST, HEDGE_LAST + 1):
+        for col, piece in (("F", "SPOTDATE"), ("G", "SPOTDATE"), ("AF", "BOOT_LNDF"), ("AG", "BOOT_LNDF")):
+            _need_formula(model, "DV01_RISK", "%s%d" % (col, r), piece)
+    _need_formula(model, "DV01_RISK", "K%d" % HEDGE_FIRST, "MMULT")
+    for addr, piece in (("C29", "C26"), ("C30", "AJ2:DL2"), ("D108", "AJ$85"), ("C142", "C140")):
+        _need_formula(model, "DV01_RISK", addr, piece)
+
+
+def _col_after(col: str, n: int) -> str:
+    """The column ``n`` to the right of ``col`` ("ER", 19 -> "FK")."""
+    from .xl.tokenizer import col_to_index
+    return index_to_col(col_to_index(col) + n)
+
+
+def _tent(x: str, j: int, months: Sequence[float]) -> str:
+    """The share of a leg ``x`` months out (a formula's text) in the j-th bucket of ``months``: linear in months between
+    its two neighbours (``blotter.bucket_split``'s rule, over the VaR buckets), the first and the last bucket taking what
+    lies beyond them; no leg (0 months: a spot start) none."""
+    mj = months[j]
+    left = "1" if j == 0 else "MAX(0,(%s-%g)/%g)" % (x, months[j - 1], mj - months[j - 1])
+    right = "1" if j == len(months) - 1 else "MAX(0,(%g-%s)/%g)" % (months[j + 1], x, months[j + 1] - mj)
+    return "IF(%s<=0,0,IF(%s<=%g,%s,%s))" % (x, x, mj, left, right)
 
 
 def _tto_dv01_var(model: Model) -> None:
@@ -5323,20 +5437,25 @@ def _tto_dv01_var(model: Model) -> None:
         b.set("%s32" % col, caption, like="B5")
     paste, num = sh.styles.get(parse_a1("C6"), 0), sh.styles.get(parse_a1("L6"), 0)
     first, end = VAR_FIRST, VAR_FIRST + 19
+    # each book's non-zero DV01s (a book without one - nothing pasted - says "pozisyon yok", not a block of zeros: B7)
+    h = VAR_HAS_ROW
+    for _, dv, _, sd, _, _ in VAR_BOOKS:
+        b.set("%s%d" % (sd, h), "=SUMPRODUCT(ISNUMBER($%(dv)s$%(a)d:$%(dv)s$%(z)d)*($%(dv)s$%(a)d:$%(dv)s$%(z)d<>0))"
+              % {"dv": dv, "a": first, "z": end}, fmt="0")
     for i in range(20):
         r = VAR_FIRST + i
-        f = {"r": r, "i": i + 1, "p": p, "off": cov["off"], "ois": cov["ois"], "a": first, "z": end}
+        f = {"r": r, "i": i + 1, "p": p, "h": h, "off": cov["off"], "ois": cov["ois"], "a": first, "z": end}
         sh.styles[parse_a1("W%d" % r)] = sh.styles.get(parse_a1("B6"), 0)
         for col in "XY":
             sh.styles[parse_a1("%s%d" % (col, r))] = paste
         sh.styles[parse_a1("Z%d" % r)] = num
-        b.set("AA%d" % r, 0.0, like="C6")
+        b.set("AA%d" % r, None, like="C6")                  # (empty: where to paste, as X and Y)
         b.set("AB%d" % r, '=IF($AK$%(p)d<2,"",SQRT(MAX(0,INDEX(%(off)s,($AJ$%(p)d-1)*20+%(i)d,%(i)d))))' % f, fmt="0.0")
         b.set("AC%d" % r, '=IF($AL$%(p)d<2,"",SQRT(MAX(0,INDEX(%(ois)s,($AJ$%(p)d-1)*20+%(i)d,%(i)d))))' % f, fmt="0.0")
         for _, dv, var, sd, sigma, _ in VAR_BOOKS:
-            g = dict(f, dv=dv, sigma=sigma)
-            b.set("%s%d" % (var, r), '=IF(AND(ISNUMBER(%(sigma)s%(r)d),ISNUMBER($AM$%(p)d)),$AM$%(p)d*ABS(N(%(dv)s%(r)d))'
-                                     '*%(sigma)s%(r)d,"")' % g, like="L6")
+            g = dict(f, dv=dv, sigma=sigma, sd=sd)
+            b.set("%s%d" % (var, r), '=IF($%(sd)s$%(h)d=0,"",IF(AND(ISNUMBER(%(sigma)s%(r)d),ISNUMBER($AM$%(p)d)),'
+                                     '$AM$%(p)d*ABS(N(%(dv)s%(r)d))*%(sigma)s%(r)d,""))' % g, like="L6")
         for _, dv, _, sd, sigma, n in VAR_BOOKS:
             g = dict(f, dv=dv, n=n, curve=cov["off"] if dv == "AA" else cov["ois"])
             b.set("%s%d" % (sd, r), "=IF(%(n)s<2,0,SUMPRODUCT(INDEX(%(curve)s,($AJ$%(p)d-1)*20+%(i)d,0),"
@@ -5344,10 +5463,13 @@ def _tto_dv01_var(model: Model) -> None:
     t = VAR_TOTAL
     b.set("W%d" % t, "Toplam", like="B26")
     for _, dv, var, sd, _, n in VAR_BOOKS:
-        g = {"dv": dv, "var": var, "sd": sd, "n": n, "p": p, "a": first, "z": end}
+        g = {"dv": dv, "var": var, "sd": sd, "n": n, "p": p, "h": h, "a": first, "z": end}
         b.set("%s%d" % (dv, t), "=SUM(%(dv)s%(a)d:%(dv)s%(z)d)" % g, like="C26")
-        b.set("%s%d" % (var, t), '=IF(AND(%(n)s>=2,ISNUMBER($AM$%(p)d)),$AM$%(p)d*SQRT(MAX(0,SUMPRODUCT($%(dv)s$%(a)d:'
-                                 '$%(dv)s$%(z)d,$%(sd)s$%(a)d:$%(sd)s$%(z)d))),"")' % g, like="C26")
+        b.set("%s%d" % (var, t), '=IF($%(sd)s$%(h)d=0,"pozisyon yok",IF(AND(%(n)s>=2,ISNUMBER($AM$%(p)d)),$AM$%(p)d*SQRT('
+                                 'MAX(0,SUMPRODUCT($%(dv)s$%(a)d:$%(dv)s$%(z)d,$%(sd)s$%(a)d:$%(sd)s$%(z)d))),""))' % g,
+              like="C26")
+    _var_contributions(b, p, h, first, end)
+    _var_after_hedge(b, p, cov["ois"], first, end)
     # ---- the summary: each book's DV01, VaR (correlated), its buckets' own VaRs added up, the difference
     s = VAR_SUMMARY
     for k, caption in enumerate(("VaR", "DV01 toplamı (TL/bp)", "VaR (TL)", "Kova VaR'ları toplamı (TL)",
@@ -5361,6 +5483,96 @@ def _tto_dv01_var(model: Model) -> None:
         b.set("Y%d" % r, "=$%(var)s$%(t)d" % g, like="C29")
         b.set("Z%d" % r, '=IF(ISNUMBER($%(var)s$%(t)d),SUM($%(var)s$%(a)d:$%(var)s$%(z)d),"")' % g, like="C29")
         b.set("AA%d" % r, '=IF(ISNUMBER($%(var)s$%(t)d),Z%(r)d-Y%(r)d,"")' % g, like="C29")
+    # (28.11.2026) the line after the hedge: the Pozisyon tab's buckets with the recommended hedge, on the OIS curve
+    r = VAR_HEDGE_ROW
+    g = {"t": t, "a": first, "z": end, "after": VAR_AFTER, "sdv": VAR_AFTER_SD}
+    b.set("W%d" % r, "Hedge sonrası · Pozisyon + önerilen hedge", like="B29")
+    b.set("X%d" % r, "=$%(after)s$%(t)d" % g, like="C29")
+    b.set("Y%d" % r, "=$%(sdv)s$%(t)d" % g, like="C29")
+    b.set("Z%d" % r, '=IF(ISNUMBER($%(sdv)s$%(t)d),$AM$%(p)d*SUMPRODUCT(ABS($%(after)s$%(a)d:$%(after)s$%(z)d),'
+                     '$AC$%(a)d:$AC$%(z)d),"")' % dict(g, p=p), like="C29")
+    b.set("AA%d" % r, '=IF(ISNUMBER($%(sdv)s$%(t)d),Z%(r)d-Y%(r)d,"")' % dict(g, r=r), like="C29")
+    _dv01_summary(b)
+
+
+def _var_contributions(b: SheetBuilder, p: int, h: int, first: int, end: int) -> None:
+    """Each book's buckets' contribution to its VaR (C8): z√h·dᵢ(Σd)ᵢ/√(dᵀΣd) - (z√h)²·dᵢ(Σd)ᵢ/VaR - which add up to the
+    VaR itself (Toplam), so that a bucket's share of the risk, correlations counted, reads off the table; a book without
+    a position (B7) or without history leaves them empty."""
+    t = VAR_TOTAL
+    for (name, dv, var, sd, _, _), col in zip(VAR_BOOKS, VAR_CONTRIB):
+        b.set("%s32" % col, "Katkı " + {"Offshore": "offshore", "Onshore": "onshore", "OIS (TLREF)": "TLREF",
+                                        "Onshore + OIS": "onshore + TLREF"}[name], like="B5")
+        for i in range(20):
+            r = first + i
+            b.set("%s%d" % (col, r), '=IF(AND(ISNUMBER($%(var)s$%(t)d),N($%(var)s$%(t)d)>0),$AM$%(p)d^2*N(%(dv)s%(r)d)*'
+                                     '%(sd)s%(r)d/$%(var)s$%(t)d,"")' % {"var": var, "t": t, "p": p, "dv": dv, "sd": sd, "r": r},
+                  like="L6")
+        b.set("%s%d" % (col, t), '=IF(ISNUMBER($%(var)s$%(t)d),SUM(%(c)s%(a)d:%(c)s%(z)d),$%(var)s$%(t)d)'
+              % {"var": var, "t": t, "c": col, "a": first, "z": end}, like="C26")
+
+
+def _var_after_hedge(b: SheetBuilder, p: int, ois: str, first: int, end: int) -> None:
+    """The VaR of the Pozisyon tab's buckets - what the hedge recommender hedges: C × C3, its default the paste's Onshore
+    + TLREF - before and after its recommended hedge, on the OIS curve's moves (the hedge's instruments are OIS) with the
+    VaR's own window, confidence and horizon.
+
+    The hedge in the VaR's buckets: an instrument's recommended DV01 (K) on its end month, a forward-start one's (an FRA)
+    on its two legs as Günlük İşlemler books an FRA - the two spot swaps of one nominal (``blotter.ois_legs``), their
+    annuities single-period as the recommender prices the FRA itself (O): the end leg K·G/(G−F), the start leg
+    −K·F·DF(F)/DF(G)/(G−F) -, each month split between its two buckets linearly (``blotter.bucket_split``'s rule)."""
+    t, w0 = VAR_TOTAL, HEDGE_W_COL
+    labels = [_col_after(w0, j) for j in range(20)]
+    for j, (bucket, months) in enumerate(zip(VAR_BUCKETS, VAR_BUCKET_MONTHS)):
+        b.set("%s%d" % (labels[j], HEDGE_W_LABEL), bucket, like="B5")
+        b.set("%s%d" % (labels[j], HEDGE_W_MONTHS), months, fmt="0.00")
+        for r in range(HEDGE_FIRST, HEDGE_LAST + 1):
+            g = {"r": r, "e": _tent("N($E%d)" % r, j, VAR_BUCKET_MONTHS), "d": _tent("N($D%d)" % r, j, VAR_BUCKET_MONTHS)}
+            b.set("%s%d" % (labels[j], r), "=IFERROR(IF(N($G%(r)d)<=N($F%(r)d),0,$G%(r)d/($G%(r)d-$F%(r)d)*%(e)s-IF(N($F%(r)d)=0,"
+                                          "0,IFERROR($F%(r)d*EXP($AF%(r)d-$AG%(r)d),$F%(r)d)/($G%(r)d-$F%(r)d)*%(d)s)),0)" % g,
+                  fmt="0.000")
+    # each instrument's OIS tenor (a spot start: "1M" … "10Y", "18M"; a forward start: none) - "İşlem gir"
+    b.set("%s87" % HEDGE_TENOR_COL, "OIS vadesi", like="B87")
+    for r in range(HEDGE_FIRST, HEDGE_LAST + 1):
+        b.set("%s%d" % (HEDGE_TENOR_COL, r), '=IF(AND(N($D%(r)d)=0,N($E%(r)d)>0,N($E%(r)d)=INT(N($E%(r)d))),'
+                                             'IF(MOD($E%(r)d,12)=0,$E%(r)d/12&"Y",$E%(r)d&"M"),"")' % {"r": r})
+    captions = ((VAR_POS, "Pozisyon (C × C3)"), (VAR_HEDGE, "Önerilen hedge"), (VAR_AFTER, "Hedge sonrası"),
+                (VAR_POS_SD, "Σd pozisyon"), (VAR_AFTER_SD, "Σd hedge sonrası"))
+    for col, caption in captions:
+        b.set("%s32" % col, caption, like="B5")
+    h, block = VAR_HAS_ROW, "$%s$%d:$%s$%d" % (w0, HEDGE_FIRST, labels[-1], HEDGE_LAST)
+    b.set("%s%d" % (VAR_POS, h), "=SUMPRODUCT(ISNUMBER($%(c)s$%(a)d:$%(c)s$%(z)d)*($%(c)s$%(a)d:$%(c)s$%(z)d<>0))"
+          % {"c": VAR_POS, "a": first, "z": end}, fmt="0")
+    for i in range(20):
+        r = first + i
+        g = {"r": r, "i": i + 1, "p": p, "ois": ois, "a": first, "z": end, "pos": VAR_POS, "hedge": VAR_HEDGE,
+             "after": VAR_AFTER, "c": DV01_DEFAULT_FIRST + i, "block": block, "k1": HEDGE_FIRST, "k2": HEDGE_LAST}
+        b.set("%s%d" % (VAR_POS, r), "=N($C$3)*N($C%(c)d)" % g, like="C29")
+        b.set("%s%d" % (VAR_HEDGE, r), "=SUMPRODUCT($K$%(k1)d:$K$%(k2)d,INDEX(%(block)s,0,%(i)d))" % g, like="C29")
+        b.set("%s%d" % (VAR_AFTER, r), "=%(pos)s%(r)d+%(hedge)s%(r)d" % g, like="C29")
+        for sd, dv in ((VAR_POS_SD, VAR_POS), (VAR_AFTER_SD, VAR_AFTER)):
+            b.set("%s%d" % (sd, r), "=IF($AL$%(p)d<2,0,SUMPRODUCT(INDEX(%(ois)s,($AJ$%(p)d-1)*20+%(i)d,0),"
+                                    "TRANSPOSE($%(dv)s$%(a)d:$%(dv)s$%(z)d)))" % dict(g, dv=dv), fmt="0")
+    for col in (VAR_POS, VAR_HEDGE, VAR_AFTER):
+        b.set("%s%d" % (col, t), "=SUM(%(c)s%(a)d:%(c)s%(z)d)" % {"c": col, "a": first, "z": end}, like="C26")
+    for sd, dv in ((VAR_POS_SD, VAR_POS), (VAR_AFTER_SD, VAR_AFTER)):
+        b.set("%s%d" % (sd, t), '=IF($%(pos)s$%(h)d=0,"pozisyon yok",IF(AND($AL$%(p)d>=2,ISNUMBER($AM$%(p)d)),$AM$%(p)d*'
+                                'SQRT(MAX(0,SUMPRODUCT($%(dv)s$%(a)d:$%(dv)s$%(z)d,$%(sd)s$%(a)d:$%(sd)s$%(z)d))),""))'
+              % {"pos": VAR_POS, "h": h, "p": p, "dv": dv, "sd": sd, "a": first, "z": end}, like="C26")
+    # "Hedge etkisi": the VaR before and after, beside the DV01 and the Σ|risk| it shows
+    r = HEDGE_VAR_ROW
+    b.set("B%d" % r, "VaR (OIS eğrisi; VaR sekmesinin güven, ufuk ve penceresi)", like="B108")
+    b.set("C%d" % r, "=$%s$%d" % (VAR_POS_SD, t), like="C108")
+    b.set("D%d" % r, "=$%s$%d" % (VAR_AFTER_SD, t), like="D108")
+
+
+def _dv01_summary(b: SheetBuilder) -> None:
+    """The page's one-line summary (B13), pinned beside the parameters: each figure the cell of its own tab says."""
+    r1, c1, r2, _ = parse_range(DV01_SUMMARY)
+    for k, (caption, formula, like) in enumerate(DV01_SUMMARY_CELLS):
+        col = index_to_col(c1 + k)
+        b.set("%s%d" % (col, r1), caption, like="B5")
+        b.set("%s%d" % (col, r2), formula, like=like)
 
 
 # ---------------------------------------------------------------------------------------------- VİOP matrix DV01s
@@ -8630,6 +8842,7 @@ _BUILDERS: Dict[str, Tuple[Tuple[str, Callable[[Model], None], Callable[[Model],
             (UNI_ON_NAME, _universe_on_check, _tto_universe_on),
             (CARRY_SHEET, _carry_check, _tto_carry),
             ("Motor gün sayıları", _desk_days_check, _tto_desk_days), ("DV01 pozisyonu sıfır", _dv01_zero_check, _tto_dv01_zero),
+            (DV01_DEFAULT_NAME, _dv01_default_check, _tto_dv01_default),
             ("VİOP matris DV01'leri", _viop_dv01_check, _tto_viop_dv01), (VIOP_ON_NAME, _viop_on_check, _tto_viop_on),
             (LOOK_NAME, _look_check, _tto_look),
             (AUC_SHEET, _auction_check, _tto_auction), (EMPTY_NAME, _empty_check, _tto_empty),

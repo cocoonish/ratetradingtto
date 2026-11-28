@@ -23,10 +23,16 @@ The covariances go into EK_VAR as shared values, uncounted (as tto/interp.py wri
 market, no input of the desk's); the workbook's own formulas (``extras._tto_dv01_var``) weigh each user's DV01s with the
 window, the confidence and the horizon they chose.  Made again when the history changed (``History.rev``) or the day
 did - on the calculation thread, when a calculation of the TRY workbook is asked for (``Service._calc``).
+
+DV01 Risk's server side of the desk's decisions of 28.11.2026 lives here too: when a user last pasted their position
+(:func:`paste_stamp` - "yapıştırıldı 28.11 09:12", A8) and the hedge recommender's suggestion as Günlük İşlemler's OIS
+paste (:func:`hedge_paste` - "Hedge'i işle", A3).
 """
 from __future__ import annotations
 
+import csv
 import datetime as _dt
+import io
 import threading
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
@@ -43,6 +49,101 @@ OIS_SOURCES: Dict[str, Source] = {"O/N": "TLREF", "S/N": "TLREF", "3W": ("2W", "
 OFF_SOURCES: Dict[str, Source] = {"S/N": "T/N", "3W": ("2W", "1M")}
 #: calendar days of closes read back from today: the longest window's business days and room for holidays and gaps
 LOOKBACK_DAYS = 800
+#: DV01 Risk's pasted position - the paste area's Onshore / TLREF and Offshore columns and the Pozisyon tab's bucket DV01s
+#: typed over their default: when a user last wrote any of them is "yapıştırıldı 28.11 09:12" (the desk, 28.11.2026: A8,
+#: "bir kez yapıştır, ne zaman yapıştırıldığını göster" - red when it is not today's)
+PASTE_SHEET, PASTE_RANGES = "DV01_RISK", ("X33:Y52", "AA33:AA52", "C6:C25")
+
+
+def paste_cells() -> List[str]:
+    """The pasted position's cells as the store keeps a user's inputs (``"DV01_RISK!X33"``)."""
+    from .xl.model import COLS, a1, parse_range
+    out: List[str] = []
+    for rng in PASTE_RANGES:
+        r1, c1, r2, c2 = parse_range(rng)
+        out.extend("%s!%s" % (PASTE_SHEET, a1(r * COLS + c)) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1))
+    return out
+
+
+#: "Hedge'i işle" (the desk, 28.11.2026: A3, "DV01 Risk'in hedge önerisini tek tıkla işle"): the hedge recommender's rows
+#: as Günlük İşlemler's "Excel'den yapıştır" reads OIS (entry.read_paste: these headers name its fields)
+HEDGE_HEAD = ("Yön", "Vade", "Başlangıç (MPC)", "Bitiş (MPC)", "Oran (%)", "Nominal (TL)", "Not")
+HEDGE_NOTE = "DV01 Risk hedge önerisi"
+
+
+def _number_text(v: float, digits: int, lang: str) -> str:
+    """A number as the user types it: thousands grouped, ``digits`` decimals ("tr": 1.234,5 - "en": 1,234.5)."""
+    text = "{:,.{}f}".format(v, digits)
+    return text if lang == "en" else text.replace(",", "\0").replace(".", ",").replace("\0", ".")
+
+
+def hedge_paste(rows: Sequence[Dict[str, Any]], spot: Any, lang: str = "tr") -> Dict[str, Any]:
+    """The hedge recommender's suggestion (DV01_RISK!B88:O102 as the user sees it: ``name``, ``active``, ``start`` /
+    ``end`` months, ``f`` / ``g`` days from the spot ``spot`` (a serial), ``rate`` the instrument's rate on the curve (a
+    fraction), ``dv01``, ``side`` PAY / RECEIVE, ``nominal`` the rounded nominal) as an OIS paste: a line an active
+    instrument with a side and a rounded nominal - an outright by its tenor (a spot start: "1M" … "10Y"), a forward start
+    (an FRA of the recommender) as a swap between its two dates, paid once at its end (Günlük İşlemler's two-date OIS:
+    the period the recommender priced, single-period as it prices it) - at the curve's rate, its nominal, a note naming
+    the instrument and its DV01.  Nothing is priced or saved: the dialog's preview and save are the paste's own."""
+    from .blotter import month_label
+    from .xl.values import serial_to_date
+    lines: List[List[str]] = []
+    skipped: List[str] = []
+    def text(v: Any) -> str:
+        return " ".join(v.split()) if isinstance(v, str) else ""             # (an error - the recommender's #NUM! - is none)
+
+    for row in rows:
+        side, name = text(row.get("side")).upper(), text(row.get("name"))
+        active = row.get("active")
+        active = active != 0 if type(active) in (int, float) else text(active) not in ("", "0")
+        if not active or side not in ("PAY", "RECEIVE"):
+            continue                                       # (not used, or nothing suggested: "–", none worked out)
+        nominal, rate = row.get("nominal"), row.get("rate")
+        if type(nominal) is not float or abs(nominal) < 0.5 or type(rate) is not float:
+            skipped.append(name or "?")
+            continue
+        start, end = row.get("start"), row.get("end")
+        f, g = row.get("f"), row.get("g")
+        tenor = a = b = ""
+        if type(start) is float and start > 0:
+            if type(spot) is not float or type(f) is not float or type(g) is not float or g <= f:
+                skipped.append(name)
+                continue
+            a = serial_to_date(spot + f).strftime("%d.%m.%Y")
+            b = serial_to_date(spot + g).strftime("%d.%m.%Y")
+        elif type(end) is float and end > 0 and end == int(end):
+            tenor = month_label(int(end))
+        else:
+            skipped.append(name)
+            continue
+        dv01 = row.get("dv01")
+        note = "%s · %s%s" % (HEDGE_NOTE, name, " · DV01 %s TL/bp" % _number_text(dv01, 0, lang) if type(dv01) is float else "")
+        if a:
+            note += " · iki tarih arası OIS (FRA)"
+        lines.append([side, tenor, a, b, _number_text(rate * 100.0, 4, lang), _number_text(abs(nominal), 0, lang), note])
+    buf = io.StringIO()
+    out = csv.writer(buf, delimiter="\t", quotechar='"', lineterminator="\n")
+    for line in [list(HEDGE_HEAD)] + lines:
+        out.writerow(line)
+    if lines:
+        said = ("DV01 Risk'in hedge önericisinden %d satır: aktif ve önerisi olan her enstrüman, yönü, eğrideki faizi ve "
+                "yuvarlanmış nominaliyle (vadeli OIS vadesiyle, ileri başlangıçlı olan - FRA - iki tarih arası OIS olarak)%s. "
+                "Karşı tarafı yazıp önizlemeden sonra kaydedin."
+                % (len(lines), " · alınmayan: %s" % ", ".join(skipped) if skipped else ""))
+    else:
+        said = ("Hedge önericide işlenecek satır yok%s: aktif (1) bir enstrümanın önerisi (Yön PAY / RECEIVE) ve sıfır olmayan "
+                "yuvarlanmış nominali olmalı" % (" (alınmayan: %s)" % ", ".join(skipped) if skipped else ""))
+    return {"kind": "ois", "text": buf.getvalue().rstrip("\n") if lines else "", "taken": len(lines),
+            "skipped": skipped, "said": said}
+
+
+def paste_stamp(store: Any, user: Optional[str], today: str) -> Dict[str, Any]:
+    """When ``user`` last pasted (or typed) their DV01 position: ``{"at": "2026-11-28 09:12:33" | None, "today": bool,
+    "text": "yapıştırıldı 28.11 09:12" | "yapıştırma yok"}`` - ``today`` the desk's day (ISO)."""
+    at = store.input_stamp(user, "tto", paste_cells()) if user else None
+    if not at:
+        return {"at": None, "today": False, "text": "yapıştırma yok"}
+    return {"at": at, "today": at[:10] == today, "text": "yapıştırıldı %s.%s %s" % (at[8:10], at[5:7], at[11:16])}
 
 
 def curve_levels(tenors: Sequence[Tuple[str, float, Dict[str, float]]]) -> Dict[str, Dict[str, float]]:

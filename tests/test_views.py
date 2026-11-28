@@ -491,7 +491,8 @@ def test_inputs_typed_beside_a_table_are_its_own(service):
     finally:
         service.reset_inputs(user, "tto", ["OIS_MAIN!F2"])
     assert cell(service, "OIS_MAIN!F2", user) == 1000.0
-    assert service.view(user, "dv01")["pinned"] == ["B2"]
+    # (the parameters and, since 28.11.2026, the one-line summary beside them - the desk's B13)
+    assert service.view(user, "dv01")["pinned"] == ["B2", "S1"]
     carry = next(p for p in service.view(user, "carry")["panels"] if p["id"] == "CP2")["data"]
     on = {(r, col) for r, row in zip(carry["r"], carry["rows"]) for col, c in zip(carry["c"], row) if c.get("i")}
     assert {(2, "F"), (2, "H"), (3, "H"), (3, "J"), (4, "B"), (4, "D"), (4, "F")} <= on   # DV01, lot, C+R, horizons
@@ -563,6 +564,11 @@ REFERENCE = {
 #: (page, panel) -> [(what the note names, sheet ranges)]
 _POSITION = ("Pozisyon", ["DV01_RISK!C6:C25", "DV01_RISK!K6:K25", "DV01_RISK!Q6:Q25"])    # bucket DV01s, pivots, rates
 _HEDGE = ("Hedge", ["DV01_RISK!C85:G85", "DV01_RISK!C88:E102"])                           # the hedge instruments
+#: (28.11.2026) the VaR's window, confidence and horizon - "Hedge etkisi"'s VaR line reads them -, the paste and its
+#: parameters (the pinned summary), the daily P&L's inputs (its unexplained P&L)
+_VAR_PARAMS = ("VaR", ["DV01_RISK!X29", "DV01_RISK!Z29", "DV01_RISK!AB29"])
+_VAR_PASTE = ("VaR", ["DV01_RISK!X29", "DV01_RISK!Z29", "DV01_RISK!AB29", "DV01_RISK!X33:Y52", "DV01_RISK!AA33:AA52"])
+_PNL = ("Günlük P&L", ["DV01_RISK!C112", "DV01_RISK!I112", "DV01_RISK!F120:F134", "DV01_RISK!C140", "DV01_RISK!C141"])
 #: DİBS RV's bond rows two-way: a yield, spread, carry or the yield's O/N equivalent typed in a row is kept in its stores
 #: (YF:YL, YQ) - typed on DİBS RV as the manual clean price is (test_kagit_twoway.py, test_kagit_on.py)
 _RV_TYPED = ["DİBS RV!N5:N54", "DİBS RV!YF5:YL54", "DİBS RV!YQ5:YQ54"]
@@ -583,7 +589,13 @@ NAMED = {
     ("masa", "B17D"): [("VİOP", ["VIOP!AF331:AI338"])],
     ("dv01", "B9"): [_POSITION, _HEDGE],
     ("dv01", "B10"): [_POSITION, _HEDGE],
-    **{("dv01", pid): [_POSITION] for pid in ("B2", "B11", "B13", "B14", "B16", "B17", "B18")},
+    **{("dv01", pid): [_POSITION] for pid in ("B2", "B11", "B13", "B14", "B17", "B18")},
+    # (28.11.2026) the VaR after the hedge - the Pozisyon's buckets and the recommender's suggestion - in the VaR tab's
+    # summary and its bucket table, and in "Hedge etkisi" with the VaR's parameters; the pinned one-line summary
+    ("dv01", "B16"): [_POSITION, _VAR_PARAMS],
+    ("dv01", "V2"): [_POSITION, _HEDGE],
+    ("dv01", "V6"): [_POSITION, _HEDGE],
+    ("dv01", "S1"): [_POSITION, _HEDGE, _VAR_PASTE, _PNL],
     **{("motor", pid): [("C & R", ["OIS_MAIN!B4:F4", "EK_CARRY!B2"])] for pid in ("B4", "B5", "B6", "B7")},
 }
 

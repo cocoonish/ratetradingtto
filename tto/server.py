@@ -863,6 +863,11 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         return ok(await call(svc().bulk_from_forward, _user(request), _lang(request)))
 
     @handler
+    async def dv01_hedge(request: Request):
+        # DV01 Risk's "Hedge'i işle": the hedge recommender's rows as the OIS paste dialog's text (nothing saved here; K5)
+        return ok(await call(svc().dv01_hedge, _user(request), _lang(request)))
+
+    @handler
     async def trade_prefill(request: Request):
         # a price of a page right-clicked ("İşlem gir"): the trade Günlük İşlemler's form is filled with (nothing saved)
         return ok(await call(svc().trade_prefill, _user(request), await _body(request), _lang(request)))
@@ -983,6 +988,9 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
                                  int(move) if isinstance(move, (int, float)) else None))
         if what == "base":
             return ok(await call(s.watch_base, u, data.get("id") or None))
+        if what == "reference":
+            # "Referansı şimdi al": İzleme's and Eğri Hareketi's reference at once (K5, 28.11.2026)
+            return ok(await call(s.watch_reference, u))
         if what == "history":
             return ok(await call(s.watch_history, u, subject))
         raise ServiceError("bilinmeyen işlem: %s" % what, 404)
@@ -1444,6 +1452,7 @@ def create_app(service: Optional[Service] = None, settings: Optional[Settings] =
         Route("/api/blotter/templates/{tid:int}", blotter_template, methods=["POST", "DELETE"]),
         Route("/api/blotter/bulk/preview", bulk_preview, methods=["POST"]),
         Route("/api/blotter/bulk/toplu-forward", bulk_from_forward),
+        Route("/api/dv01/hedge", dv01_hedge),
         Route("/api/blotter/bulk", bulk_save, methods=["POST"]),
         Route("/api/trade/prefill", trade_prefill, methods=["POST"]),
         Route("/api/history/status", history_status),
