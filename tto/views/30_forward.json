@@ -1033,7 +1033,7 @@
    "scope": "user",
    "group": "ekfwd-spread",
    "kind": "number",
-   "label": "Spread bid / ask (bp), 'Tümü' — general OIS spread of the bid and of the ask side (formula default: MASA!I60)"
+   "label": "Spread bid / ask (bp), 'Tümü' — general OIS spread of the bid and of the ask side (formula default: MASA!I60; a Genişlik (bp) typed, EK_FWD!I4: MASA!I60 ∓ width/2)"
   },
   {
    "range": "EK_FWD!B5:B14",

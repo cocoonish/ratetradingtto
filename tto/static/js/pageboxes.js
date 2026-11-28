@@ -9,8 +9,7 @@
 //   wirp            TCMB WIRP's meeting table (TCMB or the Fed)
 //   fx-summary      FX's pair summary (carry, expected drift, buffer, verdict)
 // Registered with the launchpad's kinds of items (boxes.js BOX_TYPES); the server checks them (tto/layout.py ITEM_TYPES).
-import { api } from './api.js';
-import { h, clear, modal, toast, errorToast } from './ui.js';
+import { h, clear, modal, toast } from './ui.js';
 import { plainData } from './grid.js';
 import { isoToTr, num } from './format.js';
 import { BOX_TYPES } from './boxes.js';

@@ -1309,10 +1309,10 @@ export class SettingsPage {
       if (r.ppk) return '';
       if (r.computed) {
         return r.value === null || r.value === undefined ? (r.on ? 'eğri okunamadı' : '')
-          : 'par ' + pct(r.value, 4) + ' · sıfır ' + pct(r.zero, 4);
+          : 'par ' + pct(r.value, 2) + ' · sıfır ' + pct(r.zero, 2);
       }
       if (r.error && r.on) return r.error;
-      return pct(r.value, 4);
+      return pct(r.value, 2);
     };
     const valueTip = r.computed && typeof r.df === 'number'
       ? 'DF ' + num(r.df, 9) + (r.schedule ? ' · kuponlar ' + r.schedule : '') + ' (' + (this.points.mode_text || '') + ')'

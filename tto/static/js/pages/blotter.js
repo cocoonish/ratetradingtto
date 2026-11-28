@@ -1221,7 +1221,7 @@ export class BlotterPage {
       const rows = [];
       for (const k of ['RET', 'OIS', 'ICAP', 'VIOP', 'BBG']) {
         const t = q.table[k];
-        if (t && (typeof t.bid === 'number' || typeof t.ask === 'number')) rows.push([k, n(t.bid, 4), n(t.mid, 4), n(t.ask, 4)]);
+        if (t && (typeof t.bid === 'number' || typeof t.ask === 'number')) rows.push([k === 'ICAP' ? 'Offshore' : k, n(t.bid, 4), n(t.mid, 4), n(t.ask, 4)]);
       }
       if (typeof q.ret_bid === 'number' && q.table.RET) rows.push(['RET faizi', p(q.ret_bid, 3), p(q.ret_mid, 3), p(q.ret_ask, 3)]);
       if (rows.length) {

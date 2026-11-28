@@ -341,7 +341,7 @@ export class FxVolPage {
     if (this.grids[id]) this.grids[id].replace(data);
     else {
       clear(body);
-      const g = new Grid({ data, editable: false, name: 'fxvol/' + id, tools: toolsOf(body) });
+      const g = new Grid({ data, editable: false, name: 'fxvol/' + id, tools: toolsOf(body), freeze: id === 'summary' ? 1 : 0 });
       if (onRow) {
         g.el.classList.add('pickable');
         g.el.addEventListener('click', (e) => {

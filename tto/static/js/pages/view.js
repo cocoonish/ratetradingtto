@@ -11,6 +11,7 @@ import { Chart, chartTable } from '../chart.js';
 import { openQuoteMessage, openTradeDialog } from '../quote.js';
 import { bookBulkForward } from './blotterentry.js';
 import { bookHedge } from '../hedgeislem.js';
+import { glossaryNode } from '../glossary.js';
 import { quoteButton, quoteRowItems, quoteRows } from '../kotasyon.js';
 import { addButton, loadLayout } from '../layout.js';
 
@@ -273,7 +274,7 @@ export class ViewPage {
       title: 'Hücre renkleri: kişisel / ortak girdi, otomatik, formüllü, elle değer, iki yönlü' }, '?');
     legendBtn.addEventListener('click', () => {
       const r = legendBtn.getBoundingClientRect();
-      menu(r.right - 290, r.bottom + 4, [{ header: 'Hücre renkleri' }, { node: legend },
+      menu(r.right - 290, r.bottom + 4, [{ header: 'Hücre renkleri' }, { node: legend }, { header: 'Eğri adları' }, { node: glossaryNode() },
         { node: h('div', { class: 'mh legend-ms' }, 'Sayfa ' + data.ms + ' ms\'de hesaplandı') }], 'legend-pop');
     });
     // a page in tabs has its tools at the tab bar's empty right end (the desk, 28.11.2026 - B3: one row less above the
